@@ -1,0 +1,34 @@
+[versions]
+exposed = "0.53.0"
+docker-java = "3.4.0"
+dotenv = "6.4.2"
+h2 = "2.4.240"
+h2-r2dbc = "1.1.0.RELEASE"
+hikaricp = "5.1.0"
+jedis = "5.1.5"
+jbcrypt = "0.4"
+kotlin = "2.4.0"
+logback = "1.5.35"
+postgresql = "42.7.11"
+
+[libraries]
+docker-java = { module = "com.github.docker-java:docker-java", version.ref = "docker-java" }
+dotenv = { module = "io.github.cdimascio:dotenv-kotlin", version.ref = "dotenv" }
+docker-java-transport-httpclient5 = { module = "com.github.docker-java:docker-java-transport-httpclient5", version.ref = "docker-java" }
+exposed-core = { module = "org.jetbrains.exposed:exposed-core", version.ref = "exposed" }
+exposed-dao = { module = "org.jetbrains.exposed:exposed-dao", version.ref = "exposed" }
+exposed-jdbc = { module = "org.jetbrains.exposed:exposed-jdbc", version.ref = "exposed" }
+exposed-java-time = { module = "org.jetbrains.exposed:exposed-java-time", version.ref = "exposed" }
+exposed-r2dbc = { module = "org.jetbrains.exposed:exposed-r2dbc", version.ref = "exposed" }
+h2database-h2 = { module = "com.h2database:h2", version.ref = "h2" }
+h2database-r2dbc = { module = "io.r2dbc:r2dbc-h2", version.ref = "h2-r2dbc" }
+hikaricp = { module = "com.zaxxer:HikariCP", version.ref = "hikaricp" }
+jedis = { module = "redis.clients:jedis", version.ref = "jedis" }
+jbcrypt = { module = "org.mindrot:jbcrypt", version.ref = "jbcrypt" }
+logback-classic = { module = "ch.qos.logback:logback-classic", version.ref = "logback" }
+postgresql = { module = "org.postgresql:postgresql", version.ref = "postgresql" }
+
+[plugins]
+kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
+kotlin-multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
+kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
