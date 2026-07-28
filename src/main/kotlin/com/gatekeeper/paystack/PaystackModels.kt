@@ -7,7 +7,8 @@ import kotlinx.serialization.Serializable
 data class PaystackInitializeRequest(
     val email: String,
     val amount: Long, // in kobo
-    val metadata: Map<String, String> = emptyMap()
+    val metadata: Map<String, String> = emptyMap(),
+    @SerialName("callback_url") val callbackUrl: String? = null
 )
 
 @Serializable
@@ -43,4 +44,17 @@ data class PaystackWebhookData(
 @Serializable
 data class PaystackCustomer(
     val email: String
+)
+
+@Serializable
+data class PaystackVerifyResponse(
+    val status: Boolean,
+    val message: String = "",
+    val data: PaystackVerifyData? = null
+)
+
+@Serializable
+data class PaystackVerifyData(
+    val status: String,
+    val reference: String
 )

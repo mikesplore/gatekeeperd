@@ -37,6 +37,12 @@ fun Application.configurePaystackWebhookRoutes() {
                 return@post
             }
 
+            if (AppConfig.paystackSecretKey.isBlank()) {
+                logger.error("Webhook received but PAYSTACK_SECRET_KEY is not configured")
+                call.respondError(HttpStatusCode.ServiceUnavailable, "paystack_not_configured", "Paystack is not configured")
+                return@post
+            }
+
             if (!verifySignature(rawBody, signature, AppConfig.paystackSecretKey)) {
                 logger.warn("Webhook signature verification failed")
                 call.respondError(HttpStatusCode.Unauthorized, "invalid_signature", "Webhook signature verification failed")
@@ -56,6 +62,11 @@ fun Application.configurePaystackWebhookRoutes() {
             }
 
             val data = event.data
+            if (!data.status.equals("success", ignoreCase = true)) {
+                logger.info("Ignoring webhook with non-success status=${data.status}, ref=${data.reference}")
+                return@post call.respond(HttpStatusCode.OK, mapOf("status" to "ignored"))
+            }
+
             val reference = data.reference
             val projectSlug = data.metadata["project_slug"]
 
@@ -84,7 +95,8 @@ fun Application.configurePaystackWebhookRoutes() {
                     PaymentRepository.create(
                         projectId = project.id,
                         paystackReference = reference,
-                        amount = BigDecimal.valueOf(data.amount),
+                        authorizationUrl = null,
+                        amount = koboToNaira(data.amount),
                         status = "success",
                         rawWebhookPayload = rawBody
                     )
@@ -110,12 +122,24 @@ private fun verifySignature(rawBody: String, signature: String, secretKey: Strin
         val mac = Mac.getInstance("HmacSHA512")
         mac.init(SecretKeySpec(secretKey.toByteArray(), "HmacSHA512"))
         val expected = bytesToHex(mac.doFinal(rawBody.toByteArray()))
-        expected == signature
+        constantTimeEquals(expected, signature)
     } catch (e: Exception) {
         logger.error("Signature verification error", e)
         false
     }
 }
+
+private fun constantTimeEquals(a: String, b: String): Boolean {
+    if (a.length != b.length) return false
+    var result = 0
+    for (i in a.indices) {
+        result = result or (a[i].code xor b[i].code)
+    }
+    return result == 0
+}
+
+private fun koboToNaira(amountKobo: Long): BigDecimal =
+    BigDecimal.valueOf(amountKobo).movePointLeft(2)
 
 private fun bytesToHex(bytes: ByteArray): String {
     return bytes.joinToString("") { "%02x".format(it) }

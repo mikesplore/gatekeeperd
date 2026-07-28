@@ -6,6 +6,10 @@ import io.ktor.server.plugins.contentnegotiation.*
 
 fun Application.configureSerialization() {
     install(ContentNegotiation) {
-        json()
+        json(kotlinx.serialization.json.Json {
+            ignoreUnknownKeys = true
+            coerceInputValues = true
+            encodeDefaults = true
+        })
     }
 }

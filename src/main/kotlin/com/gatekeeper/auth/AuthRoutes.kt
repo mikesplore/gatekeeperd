@@ -1,5 +1,6 @@
 package com.gatekeeper.auth
 
+import com.gatekeeper.api.InputValidators
 import com.gatekeeper.api.respondError
 import com.gatekeeper.db.tables.Users
 import com.gatekeeper.plugins.JwtConfig
@@ -11,7 +12,6 @@ import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.Json
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
 import org.jetbrains.exposed.sql.selectAll
 import org.jetbrains.exposed.sql.transactions.transaction
@@ -19,7 +19,6 @@ import org.mindrot.jbcrypt.BCrypt
 import org.slf4j.LoggerFactory
 
 private val logger = LoggerFactory.getLogger("com.gatekeeper.auth.AuthRoutes")
-private val json = Json { ignoreUnknownKeys = true }
 
 @Serializable
 data class LoginRequest(val email: String, val password: String)
@@ -38,7 +37,7 @@ fun Application.configureAuthRoutes() {
     routing {
         post("/api/auth/login") {
             val body = try {
-                json.decodeFromString<LoginRequest>(call.receiveText())
+                call.receive<LoginRequest>()
             } catch (e: Exception) {
                 call.respondError(HttpStatusCode.BadRequest, "invalid_request", "The request body could not be parsed")
                 return@post
@@ -49,26 +48,32 @@ fun Application.configureAuthRoutes() {
                 return@post
             }
 
+            val email = body.email.lowercase().trim()
+            if (!InputValidators.isValidEmail(email)) {
+                call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Enter a valid email address")
+                return@post
+            }
+
             val user = transaction {
-                Users.selectAll().where { Users.email eq body.email.lowercase().trim() }
+                Users.selectAll().where { Users.email eq email }
                     .singleOrNull()
             }
 
             if (user == null) {
-                logger.warn("Login attempt for unknown email: ${body.email}")
-                call.respondError(HttpStatusCode.Unauthorized, "invalid_credentials", "Invalid email or password")
+                logger.warn("Login attempt for unknown email: $email")
+                call.respondError(HttpStatusCode.BadRequest, "invalid_credentials", "Invalid email or password")
                 return@post
             }
 
             val passwordHash = user[Users.passwordHash]
             if (!BCrypt.checkpw(body.password, passwordHash)) {
-                logger.warn("Failed login attempt for: ${body.email}")
+                logger.warn("Failed login attempt for: $email")
                 call.respondError(HttpStatusCode.BadRequest, "invalid_credentials", "Invalid email or password")
                 return@post
             }
 
-            val token = JwtConfig.createToken(body.email, user[Users.role])
-            logger.info("Successful login: ${body.email} (account created ${user[Users.createdAt]})")
+            val token = JwtConfig.createToken(email, user[Users.role])
+            logger.info("Successful login: $email (account created ${user[Users.createdAt]})")
             call.respond(LoginResponse(token))
         }
 

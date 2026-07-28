@@ -22,8 +22,13 @@ fun Application.configureMonitoring() {
     }
 
     install(StatusPages) {
-        exception<SerializationException> { call, _ ->
-            call.respondError(HttpStatusCode.BadRequest, "invalid_request", "The request body could not be parsed")
+        exception<SerializationException> { call, ex ->
+            logger.error("JSON serialization failed for ${call.request.httpMethod.value} ${call.request.path()}", ex)
+            call.respondError(
+                HttpStatusCode.InternalServerError,
+                "serialization_error",
+                "Failed to encode or decode JSON for this request"
+            )
         }
         exception<NotFoundException> { call, ex ->
             call.respondError(HttpStatusCode.NotFound, "not_found", ex.message ?: "Resource not found")

@@ -26,7 +26,8 @@ Get a JWT token for admin endpoints.
 ```
 
 **Notes:**
-- Default admin is seeded on first startup if no users exist.
+- On first startup, if no users exist, an admin is created from `ADMIN_EMAIL` and `ADMIN_PASSWORD` in `.env`.
+- If those env vars are missing on a fresh database, no admin user is created and login will fail until you set them and restart.
 - Token expires in 24 hours.
 - Include token in `Authorization: Bearer <token>` header for protected routes.
 
@@ -85,6 +86,32 @@ Gate check endpoint called by Traefik ForwardAuth. Never expose this to the publ
 **Notes:**
 - This endpoint must NOT be internet-reachable. Only Traefik on the internal Docker network should call it.
 - Redis cache TTL is 60 seconds. Admin actions explicitly delete the cache for instant propagation.
+
+### GET /api/gate/auth?project={slug}
+Lightweight gate check for **nginx `auth_request` only**. Returns empty body.
+
+**Responses:**
+- `200 OK` — project is active; nginx should proxy to the client app
+- `403 Forbidden` — project is blocked or unknown; pair with `error_page 403 = @paywall` and serve `/api/gate/check` from a named location for the paywall body
+
+**Why this exists:** nginx `auth_request` treats `402` as an internal error and returns **500** to the client. Only `401` and `403` are valid deny codes for the auth subrequest. Use `/api/gate/auth` for the subrequest and `/api/gate/check` for the paywall response.
+
+See `docs/nginx-client-gating.md` for a full nginx example.
+
+### GET /api/gate/paywall?project={slug}
+HTML payment page for blocked clients. Shows project name, domain, amount due, due date, and a **Pay Now** button.
+
+**Response:** `402 Payment Required`, `Content-Type: text/html`
+
+### GET /api/gate/pay?project={slug}
+Public payment initiation for a suspended project. Creates a Paystack checkout session and redirects the browser to Paystack.
+
+**Response:** `302` redirect to Paystack, or `4xx/5xx` JSON error if Paystack is not configured.
+
+**Requires:** project is blocked, `amount_due` and `client_email` set, `PAYSTACK_SECRET_KEY` and `GATEKEEPER_PUBLIC_URL` in env.
+
+### GET /api/gate/payment/callback?project={slug}&reference={ref}
+Paystack browser return URL after payment. Shows a thank-you page telling the client their site will be back online shortly. Project activation is handled by the Paystack webhook.
 
 ---
 
@@ -192,6 +219,15 @@ Update project fields.
 ```
 
 **Response:** Updated project object.
+
+### DELETE /api/admin/projects/{slug}
+Delete a project registration and its related payments and audit log entries.
+
+**Response:** `204 No Content`
+
+**Notes:**
+- Does not stop or remove the client container — that remains a manual DevOps step.
+- Clears the Redis gate cache for the slug so nginx/Traefik will treat the slug as unknown until re-registered.
 
 ### POST /api/admin/projects/{slug}/block
 Manually block a project.

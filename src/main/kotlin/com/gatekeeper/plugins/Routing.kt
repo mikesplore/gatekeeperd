@@ -3,6 +3,8 @@ package com.gatekeeper.plugins
 import com.gatekeeper.api.respondError
 import com.gatekeeper.config.AppConfig
 import com.gatekeeper.docker.DockerService
+import com.gatekeeper.docker.PullImageRequest
+import com.gatekeeper.api.InputValidators
 import io.ktor.http.*
 import io.ktor.server.application.*
 import io.ktor.server.auth.*
@@ -13,6 +15,19 @@ import org.slf4j.LoggerFactory
 import java.lang.Runtime
 
 private val logger = LoggerFactory.getLogger("com.gatekeeper.plugins.Routing")
+
+private suspend fun ApplicationCall.requireContainerName(): String? {
+    val name = parameters["name"]
+    if (name.isNullOrBlank()) {
+        respondError(HttpStatusCode.BadRequest, "missing_container_name", "Missing container name path parameter")
+        return null
+    }
+    if (!InputValidators.isValidContainerName(name)) {
+        respondError(HttpStatusCode.BadRequest, "invalid_container_name", "Invalid container name")
+        return null
+    }
+    return name
+}
 
 fun Application.configureRouting() {
     val internalNetwork = AppConfig.internalNetwork
@@ -57,11 +72,7 @@ fun Application.configureRouting() {
                     call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available")
                     return@get
                 }
-                val name = call.parameters["name"]
-                if (name == null) {
-                    call.respondError(HttpStatusCode.BadRequest, "missing_container_name", "Missing container name path parameter")
-                    return@get
-                }
+                val name = call.requireContainerName() ?: return@get
                 val container = svc.getContainer(name)
                 if (container != null) {
                     call.respond(container)
@@ -76,11 +87,7 @@ fun Application.configureRouting() {
                     call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available")
                     return@post
                 }
-                val name = call.parameters["name"]
-                if (name == null) {
-                    call.respondError(HttpStatusCode.BadRequest, "missing_container_name", "Missing container name path parameter")
-                    return@post
-                }
+                val name = call.requireContainerName() ?: return@post
                 try {
                     svc.startContainer(name)
                     call.respond(mapOf("status" to "started", "container" to name))
@@ -99,11 +106,7 @@ fun Application.configureRouting() {
                     call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available")
                     return@post
                 }
-                val name = call.parameters["name"]
-                if (name == null) {
-                    call.respondError(HttpStatusCode.BadRequest, "missing_container_name", "Missing container name path parameter")
-                    return@post
-                }
+                val name = call.requireContainerName() ?: return@post
                 try {
                     svc.stopContainer(name)
                     call.respond(mapOf("status" to "stopped", "container" to name))
@@ -122,11 +125,7 @@ fun Application.configureRouting() {
                     call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available")
                     return@post
                 }
-                val name = call.parameters["name"]
-                if (name == null) {
-                    call.respondError(HttpStatusCode.BadRequest, "missing_container_name", "Missing container name path parameter")
-                    return@post
-                }
+                val name = call.requireContainerName() ?: return@post
                 try {
                     svc.restartContainer(name)
                     call.respond(mapOf("status" to "restarted", "container" to name))
@@ -145,11 +144,7 @@ fun Application.configureRouting() {
                     call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available")
                     return@get
                 }
-                val name = call.parameters["name"]
-                if (name == null) {
-                    call.respondError(HttpStatusCode.BadRequest, "missing_container_name", "Missing container name path parameter")
-                    return@get
-                }
+                val name = call.requireContainerName() ?: return@get
                 val health = svc.containerHealth(name)
                 call.respond(mapOf("container" to name, "health" to health))
             }
@@ -171,18 +166,17 @@ fun Application.configureRouting() {
                     return@post
                 }
                 val body = try {
-                    call.receiveText()
+                    call.receive<PullImageRequest>()
                 } catch (e: Exception) {
-                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "The request body could not be read")
+                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "The request body could not be parsed")
                     return@post
                 }
-                // Simple JSON parse: {"image":"name","tag":"latest"}
-                val image = Regex("\"image\"\\s*:\\s*\"([^\"]+)\"").find(body)?.groupValues?.getOrNull(1)
-                if (image == null) {
-                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Image name is required")
+                val image = body.image.trim()
+                if (image.isBlank() || !InputValidators.isValidImageName(image)) {
+                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "A valid image name is required")
                     return@post
                 }
-                val tag = Regex("\"tag\"\\s*:\\s*\"([^\"]+)\"").find(body)?.groupValues?.getOrNull(1) ?: "latest"
+                val tag = body.tag.trim().ifBlank { "latest" }
                 try {
                     svc.pullImage(image, tag)
                     call.respond(mapOf("status" to "pulled", "image" to "$image:$tag"))

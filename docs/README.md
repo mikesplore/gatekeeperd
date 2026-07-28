@@ -2,140 +2,214 @@
 
 ## Overview
 
-Gatekeeperd is a **Ktor-based payment gating engine** for Docker-hosted client projects. It acts as a Traefik ForwardAuth middleware, intercepting incoming requests and returning either a 200 OK (active/paying clients) or a 402 Payment Required paywall (overdue/non-paying clients). Payment processing is handled via Paystack webhooks. Redis provides fast caching of project gating status, PostgreSQL stores project/payment/audit data long-term.
+Gatekeeperd is a **Ktor-based payment gating engine** for client projects on a VPS. It does not replace your reverse proxy — nginx or Traefik stays in front. Gatekeeperd answers one question per request: **should this traffic reach the client app?**
+
+- **Active / paying** → `200 OK`, proxy forwards to the client container or process
+- **Blocked / overdue** → `402 Payment Required` with HTML paywall (browser) or JSON (API clients)
+- **Payment via Paystack** → webhook activates the project; Redis cache invalidated instantly
+
+PostgreSQL stores projects, payments, audit log, and admin users. Redis caches gate status (60s TTL). Paystack handles checkout and payment confirmation.
 
 ---
 
 ## Architecture
 
+### With nginx (current production pattern)
+
 ```
-                ┌──────────────┐
-                │   Internet   │
-                └──────┬───────┘
-                       │
-                  ┌────▼────┐
-                  │  Traefik │  (reverse proxy, TLS termination)
-                  │  v3.1    │
-                  └────┬────┘
-                       │
-             ┌─────────▼──────────┐
-             │  /api/gate/check   │  ← ForwardAuth middleware
-             │  (Gatekeeperd)     │
-             └─────────┬──────────┘
-                       │
-             ┌─────────▼──────────┐
-             │  Client Container  │  ← only reached if gate returns 200
-             │  (app/vm/site)     │
-             └────────────────────┘
+Internet
+    │
+    ▼
+nginx (client domain, e.g. acw.example.com)
+    │
+    ├─ auth_request → GET /api/gate/auth?project={slug}   (403 = deny)
+    │                      Gatekeeperd
+    │
+    ├─ on deny → /api/gate/paywall?project={slug}         (402 HTML paywall)
+    │
+    ├─ /api/gate/* proxied to Gatekeeperd                 (Pay Now, callback)
+    │
+    └─ on allow → client app (e.g. localhost:9921)
 ```
 
-## Source Layout
+See [nginx-client-gating.md](nginx-client-gating.md) for a full site config.
+
+### With Traefik (alternative)
+
+Traefik ForwardAuth calls `/api/gate/check?project={slug}` — returns `200` or `402` with paywall body directly.
+
+---
+
+## Client payment flow
+
+1. Client visits site → nginx blocks → paywall page (project name, amount due, due date)
+2. **Pay Now** → `GET /api/gate/pay?project={slug}` → redirect to Paystack checkout
+3. After payment → thank-you page at `/api/gate/payment/callback`
+4. Paystack webhook → `POST /api/paystack/webhook` → project set to `active`
+
+No admin action required to generate payment links for blocked clients.
+
+---
+
+## Source layout
 
 ```
 src/main/kotlin/com/gatekeeper/
-├── Application.kt                 # Entry point — wires all plugins, routes, and startup jobs
+├── Application.kt              # Entry point, plugin wiring, initial admin seed
 ├── config/
-│   └── AppConfig.kt               # Reads .env / system env → typed properties
+│   └── AppConfig.kt            # .env / environment → typed config
 ├── api/
-│   └── ErrorResponse.kt           # Uniform error + payment-required response types
-├── plugins/                       # Ktor plugins installed at startup
-│   ├── Serialization.kt           # ContentNegotiation + kotlinx.json
-│   ├── Monitoring.kt              # CallLogging + StatusPages (global error handler)
-│   ├── Security.kt                # CORS, DefaultHeaders, JWT auth
-│   ├── Database.kt                # HikariCP pool + Exposed init + schema creation
-│   ├── Redis.kt                   # JedisPool singleton
-│   └── Routing.kt                 # Health check + Docker container admin endpoints
-├── docker/
-│   ├── DockerService.kt           # Wraps docker-java for container/network management
-│   └── DockerModels.kt            # ContainerInfo, NetworkInfo, GateResult (sealed class)
+│   ├── ErrorResponse.kt        # Uniform error + payment-required JSON
+│   ├── InputValidators.kt      # Slug, email, container name, date validation
+│   └── dto/ApiDtos.kt          # Serializable admin API response types
+├── plugins/
+│   ├── Serialization.kt        # kotlinx.serialization JSON
+│   ├── Monitoring.kt           # CallLogging + StatusPages
+│   ├── Security.kt             # CORS, JWT auth
+│   ├── Database.kt             # HikariCP + Exposed schema
+│   ├── Redis.kt                # Jedis pool
+│   └── Routing.kt              # Health + JWT Docker admin routes
 ├── gate/
-│   ├── GateService.kt             # Core gating logic (Redis→Postgres→FAIL_MODE)
-│   ├── GateRoutes.kt              # GET /api/gate/check endpoint
-│   └── PaywallTemplates.kt        # HTML + JSON blocked-project responses
+│   ├── GateService.kt          # Redis → Postgres → FAIL_MODE logic
+│   ├── GateResult.kt           # Active / Blocked / Unknown
+│   ├── GateRoutes.kt           # /api/gate/* public gating + payment routes
+│   ├── PaywallInfo.kt          # Paywall display model
+│   └── PaywallTemplates.kt     # HTML paywall + thank-you pages
 ├── auth/
-│   └── AuthRoutes.kt              # POST /api/auth/login (BCrypt + JWT)
+│   └── AuthRoutes.kt           # POST /api/auth/login, GET /api/auth/me
 ├── admin/
-│   └── ProjectAdminRoutes.kt      # JWT-protected CRUD + block/unblock
+│   └── ProjectAdminRoutes.kt   # JWT CRUD, block/unblock, delete, payment init
+├── paystack/
+│   ├── PaystackClient.kt       # Initialize + verify transactions
+│   ├── PaystackModels.kt       # Request/response DTOs
+│   ├── PaystackWebhookRoutes.kt
+│   └── ProjectPaymentService.kt
+├── docker/
+│   ├── DockerService.kt
+│   ├── DockerModels.kt
+│   └── PullImageRequest.kt
+├── scheduler/
+│   └── AutoBlockerJob.kt         # Auto-block past due_date + grace period
 └── db/
-    ├── tables/
-    │   ├── Projects.kt            # projects table
-    │   ├── Payments.kt            # payments table
-    │   ├── AuditLog.kt            # audit_log table
-    │   └── Users.kt               # users table (admin accounts)
+    ├── tables/                 # projects, payments, audit_log, users
     └── repositories/
-        ├── ProjectRepository.kt   # + create/update/updateStatus/findPastDue + Redis invalidation
-        ├── PaymentRepository.kt   # payment CRUD + markSuccess
-        └── AuditRepository.kt     # audit log queries
 ```
 
-## Key Data Flow — Gate Check
+---
+
+## API surface
+
+| Prefix | Auth | Purpose |
+|--------|------|---------|
+| `/api/health` | None | Liveness check |
+| `/api/auth/login` | None | Admin JWT login |
+| `/api/auth/me` | JWT | Admin profile |
+| `/api/gate/auth` | None | nginx auth_request subrequest (200/403) |
+| `/api/gate/check` | None | Traefik ForwardAuth / JSON gate check (200/402) |
+| `/api/gate/paywall` | None | HTML paywall page |
+| `/api/gate/pay` | None | Start Paystack checkout (suspended projects only) |
+| `/api/gate/payment/callback` | None | Post-payment thank-you page |
+| `/api/paystack/webhook` | HMAC signature | Payment confirmation → unblock |
+| `/api/admin/*` | JWT | Projects, Docker, audit, payments |
+
+Full reference: [API.md](API.md)
+
+---
+
+## Gate check data flow
 
 ```
 GET /api/gate/check?project={slug}
          │
          ▼
-  ┌──────────────────┐
-  │ Redis cache hit?  │──Yes──► Return cached status
-  └────────┬─────────┘          (active → 200, blocked → 402)
-           │ No
-           ▼
-  ┌──────────────────┐
-  │ Postgres query    │──Found──► Cache in Redis (TTL 60s)
-  │ by slug           │          Return status (200 / 402)
-  └────────┬─────────┘
-           │ Not found
-           ▼
-  ┌──────────────────┐
-  │ Both unreachable? │──Yes──► Apply FAIL_MODE env var
-  └──────────────────┘          (open → 200, closed → 402)
-                                Log CRITICAL alert
+  Redis cache hit?  ──Yes──► active → 200, blocked → 402
+         │ No
+         ▼
+  Postgres by slug  ──Found──► cache in Redis (60s), return status
+         │ Not found
+         ▼
+  Redis + Postgres both down?  ──► FAIL_MODE (open → 200, closed → 402)
 ```
 
-## Redis Key Scheme
+**Redis key:** `project:status:{slug}` → `"active"` | `"blocked"`, TTL 60s. Explicit delete on block/unblock/webhook/delete.
 
-| Key | Value | TTL |
-|-----|-------|-----|
-| `project:status:{slug}` | `"active"` or `"blocked"` | 60s |
+---
 
-Short TTL ensures self-healing if cache invalidation is missed. Explicit deletes on admin/webhook status changes provide instant propagation.
+## Environment variables
 
-## Dependencies
+Copy [.env.example](../.env.example) to `.env`. Required vars have no safe defaults.
 
-| Category | Library | Purpose |
-|----------|---------|---------|
-| Server | Ktor (Netty) | HTTP framework |
-| DB | Exposed + PostgreSQL | ORM + persistence |
-| Cache | Jedis (Redis) | Status caching |
-| Docker | docker-java | Container/network management |
-| Auth | JWT (auth0) + jbcrypt | Admin API auth |
-| Payments | Paystack API (via Ktor Client) | Payment link generation + webhook handling |
-| Config | dotenv-kotlin | Environment variable loading |
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `DB_URL` | Yes | Postgres JDBC URL |
+| `DB_USER` | Yes | Postgres user |
+| `DB_PASSWORD` | Yes | Postgres password |
+| `REDIS_HOST` | Yes | Redis host |
+| `REDIS_PORT` | No | Default `6379` |
+| `JWT_SECRET` | Yes | HMAC256 signing secret |
+| `JWT_ISSUER` | No | Default `gatekeeperd` |
+| `JWT_AUDIENCE` | No | Default `gatekeeperd-admin` |
+| `ADMIN_EMAIL` | First boot | Initial admin email (only when users table is empty) |
+| `ADMIN_PASSWORD` | First boot | Initial admin password (min 8 chars) |
+| `PAYSTACK_SECRET_KEY` | Payments | Paystack secret key |
+| `PAYSTACK_PUBLIC_KEY` | Payments | Paystack public key |
+| `GATEKEEPER_PUBLIC_URL` | Payments | Public HTTPS base URL, e.g. `https://gateapi.example.com` |
+| `SUPPORT_CONTACT_EMAIL` | No | Shown on paywall pages |
+| `CORS_ALLOWED_ORIGINS` | No | Comma-separated admin dashboard origins |
+| `DOCKER_SOCKET` | No | Default `unix:///var/run/docker.sock` |
+| `GATEKEEPER_INTERNAL_NETWORK` | No | Default `gatekeeper-internal` |
+| `DEFAULT_GRACE_PERIOD_DAYS` | No | Default `3` |
+| `FAIL_MODE` | No | `open` or `closed` |
 
-## Environment Variables
+**Paystack dashboard (not env vars):**
+- Webhook: `{GATEKEEPER_PUBLIC_URL}/api/paystack/webhook`
+- Browser callback is set per transaction by the app: `{GATEKEEPER_PUBLIC_URL}/api/gate/payment/callback?project={slug}`
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `DB_URL` | `jdbc:postgresql://localhost:5432/gatekeeper` | Postgres JDBC URL |
-| `DB_USER` | `gatekeeper` | DB user |
-| `DB_PASSWORD` | `changeme` | DB password |
-| `REDIS_HOST` | `localhost` | Redis host |
-| `REDIS_PORT` | `6379` | Redis port |
-| `JWT_SECRET` | `changeme-use-a-long-random-string` | HMAC256 secret |
-| `JWT_ISSUER` | `gatekeeperd` | JWT issuer claim |
-| `JWT_AUDIENCE` | `gatekeeperd-admin` | JWT audience claim |
-| `PAYSTACK_SECRET_KEY` | `sk_live_xxx` | Paystack API secret |
-| `PAYSTACK_PUBLIC_KEY` | `pk_live_xxx` | Paystack API public key |
-| `DOCKER_SOCKET` | `unix:///var/run/docker.sock` | Docker daemon socket |
-| `GATEKEEPER_INTERNAL_NETWORK` | `gatekeeper-internal` | Docker network for inter-container comms |
-| `DEFAULT_GRACE_PERIOD_DAYS` | `3` | Days past due_date before auto-block |
-| `FAIL_MODE` | `open` | `open` → allow traffic on outage; `closed` → block |
+---
 
-## Phase Status
+## Deployment
+
+| Step | Where | Command |
+|------|-------|---------|
+| Build image | Dev machine | `./build.sh` |
+| Push to registry | Dev machine | `./push.sh` |
+| Deploy | VPS | `./deploy.sh` (pull + start postgres, redis, gatekeeperd) |
+| Fresh DB | VPS | `./deploy.sh --fresh` |
+
+Gatekeeperd API is typically exposed at a subdomain (e.g. `gateapi.example.com`) via nginx — see [nginx-reverse-proxy.md](nginx-reverse-proxy.md). Client sites get gating via [nginx-client-gating.md](nginx-client-gating.md).
+
+Details: [staging-deployment.md](staging-deployment.md)
+
+---
+
+## Related repos
+
+| Repo | Role |
+|------|------|
+| **gatekeeperd** (this) | Backend API + gating engine |
+| **gatekeeperd-frontend** | React admin dashboard (Vercel) |
+
+---
+
+## Docs index
+
+| File | Contents |
+|------|----------|
+| [API.md](API.md) | REST endpoints, request/response shapes |
+| [nginx-client-gating.md](nginx-client-gating.md) | Gate client apps behind nginx |
+| [nginx-reverse-proxy.md](nginx-reverse-proxy.md) | Expose gatekeeperd API behind nginx + SSL |
+| [staging-deployment.md](staging-deployment.md) | VPS deploy workflow |
+| [backend-development-plan.md](backend-development-plan.md) | Original phased build plan (historical) |
+
+---
+
+## Phase status
 
 | Phase | Description | Status |
 |-------|-------------|--------|
-| 0 | Project setup, deps, infra (Docker Compose) | ✅ Done |
-| 1 | Foundation + Docker integration (Ktor bootstrap, DockerService, networking) | ✅ Done |
-| 2 | **Gatekeeper Core** (gate/check, Redis caching, PaywallTemplates, FAIL_MODE) | ✅ Done |
-| 3 | **Data & Auth** (full DB schema, repositories, JWT auth, admin CRUD) | ✅ Done |
-| 4 | **Paystack & Automation** (payment links, webhooks, auto-blocker, notifications) | ✅ Done |
+| 0 | Project setup, deps, infra | ✅ Done |
+| 1 | Docker integration, admin container API | ✅ Done |
+| 2 | Gate core (check, Redis, paywall, FAIL_MODE) | ✅ Done |
+| 3 | DB schema, JWT auth, admin CRUD | ✅ Done |
+| 4 | Paystack, webhooks, auto-blocker | ✅ Done |
+| 5 | nginx gating, self-service paywall, input validation | ✅ Done |

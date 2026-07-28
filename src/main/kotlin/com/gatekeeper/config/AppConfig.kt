@@ -44,6 +44,15 @@ object AppConfig {
     val paystackSecretKey: String = optionalSetting("PAYSTACK_SECRET_KEY", "")
     val paystackPublicKey: String = optionalSetting("PAYSTACK_PUBLIC_KEY", "")
 
+    /** Public URL of gatekeeperd (e.g. https://gateapi.mikesplore.me) — used for Paystack callbacks */
+    val publicBaseUrl: String = optionalSetting("GATEKEEPER_PUBLIC_URL", "")
+
+    val supportContactEmail: String = optionalSetting("SUPPORT_CONTACT_EMAIL", "support@gatekeeper.local")
+
+    /** Used once on first startup when the users table is empty */
+    val adminEmail: String = optionalSetting("ADMIN_EMAIL", "")
+    val adminPassword: String = optionalSetting("ADMIN_PASSWORD", "")
+
     // Docker & Infrastructure
     val dockerSocket: String = optionalSetting("DOCKER_SOCKET", "unix:///var/run/docker.sock")
     val internalNetwork: String = optionalSetting("GATEKEEPER_INTERNAL_NETWORK", "gatekeeper-internal")

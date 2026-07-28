@@ -1,8 +1,10 @@
 package com.gatekeeper.gate
 
 import com.gatekeeper.config.AppConfig
+import com.gatekeeper.db.repositories.PaymentRepository
 import com.gatekeeper.db.repositories.ProjectRepository
-import com.gatekeeper.docker.GateResult
+import com.gatekeeper.gate.PaywallInfo
+import com.gatekeeper.gate.GateResult
 import com.gatekeeper.plugins.RedisService
 import org.slf4j.LoggerFactory
 
@@ -13,6 +15,14 @@ object GateService {
     private const val REDIS_KEY_PREFIX = "project:status:"
     private const val REDIS_TTL_SECONDS = 60
 
+    private fun blockedResult(project: ProjectRepository.ProjectRecord): GateResult.Blocked =
+        GateResult.Blocked(
+            type = project.type,
+            paymentLink = PaymentRepository.findLatestPendingAuthorizationUrl(project.id),
+            projectName = project.name,
+            paywall = PaywallInfo.from(project)
+        )
+
     fun check(slug: String): GateResult {
         try {
             val cached = RedisService.get("$REDIS_KEY_PREFIX$slug")
@@ -22,11 +32,7 @@ object GateService {
                     "blocked", "manual_block" -> {
                         val project = ProjectRepository.findBySlug(slug)
                         if (project != null) {
-                            GateResult.Blocked(
-                                type = project.type,
-                                paymentLink = null,
-                                projectName = project.name
-                            )
+                            blockedResult(project)
                         } else {
                             GateResult.Unknown("unknown project")
                         }
@@ -58,16 +64,8 @@ object GateService {
 
             return when (project.status) {
                 "active" -> GateResult.Active
-                "blocked", "manual_block" -> GateResult.Blocked(
-                    type = project.type,
-                    paymentLink = null,
-                    projectName = project.name
-                )
-                else -> GateResult.Blocked(
-                    type = project.type,
-                    paymentLink = null,
-                    projectName = project.name
-                )
+                "blocked", "manual_block" -> blockedResult(project)
+                else -> blockedResult(project)
             }
         } catch (e: Exception) {
             logger.error("Postgres unavailable for gate check (slug=$slug): ${e.message}")
@@ -81,11 +79,11 @@ object GateService {
             }
             "closed" -> {
                 logger.error("CRITICAL: FAIL_MODE=closed — blocking traffic for slug=$slug due to DB outage")
-                GateResult.Blocked(type = "backend", paymentLink = null, projectName = slug)
+                GateResult.Blocked(type = "backend", paymentLink = null, projectName = slug, paywall = null)
             }
             else -> {
                 logger.error("CRITICAL: Unknown FAIL_MODE=${AppConfig.failMode}, defaulting to closed")
-                GateResult.Blocked(type = "backend", paymentLink = null, projectName = slug)
+                GateResult.Blocked(type = "backend", paymentLink = null, projectName = slug, paywall = null)
             }
         }
     }

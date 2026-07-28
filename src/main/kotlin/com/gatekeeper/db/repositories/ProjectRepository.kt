@@ -1,6 +1,7 @@
 package com.gatekeeper.db.repositories
 
 import com.gatekeeper.db.tables.AuditLog
+import com.gatekeeper.db.tables.Payments
 import com.gatekeeper.db.tables.ProjectStatus
 import com.gatekeeper.db.tables.ProjectType
 import com.gatekeeper.db.tables.Projects
@@ -151,6 +152,19 @@ object ProjectRepository {
                 it[AuditLog.actor] = actor
                 it[AuditLog.reason] = reason
             }
+        }
+    }
+
+    fun delete(slug: String): Boolean {
+        return transaction {
+            val project = Projects.selectAll().where { Projects.slug eq slug }.singleOrNull()
+                ?: return@transaction false
+
+            Payments.deleteWhere { Payments.projectId eq project[Projects.id] }
+            AuditLog.deleteWhere { AuditLog.projectId eq project[Projects.id] }
+            Projects.deleteWhere { Projects.slug eq slug } > 0
+        }.also { deleted ->
+            if (deleted) invalidateCache(slug)
         }
     }
 

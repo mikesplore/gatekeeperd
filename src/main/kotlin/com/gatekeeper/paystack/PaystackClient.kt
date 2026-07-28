@@ -5,9 +5,12 @@ import com.gatekeeper.db.repositories.PaymentRepository
 import com.gatekeeper.db.tables.Projects
 import io.ktor.client.*
 import io.ktor.client.call.*
-import io.ktor.client.plugins.*
+import io.ktor.client.plugins.contentnegotiation.*
+import io.ktor.client.plugins.defaultRequest
 import io.ktor.client.request.*
 import io.ktor.http.*
+import io.ktor.serialization.kotlinx.json.*
+import kotlinx.serialization.json.Json
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
 import org.jetbrains.exposed.sql.selectAll
 import org.jetbrains.exposed.sql.transactions.transaction
@@ -21,12 +24,16 @@ object PaystackClient {
     private val baseUrl = "https://api.paystack.co"
 
     private val http = HttpClient {
-        install(io.ktor.client.plugins.contentnegotiation.ContentNegotiation) {
-            kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+        install(ContentNegotiation) {
+            json(
+                Json {
+                    ignoreUnknownKeys = true
+                    encodeDefaults = false
+                }
+            )
         }
         defaultRequest {
             header("Authorization", "Bearer ${AppConfig.paystackSecretKey}")
-            header("Content-Type", "application/json")
         }
     }
 
@@ -36,13 +43,15 @@ object PaystackClient {
     suspend fun initializePayment(
         email: String,
         amountNaira: BigDecimal,
-        projectSlug: String
+        projectSlug: String,
+        callbackUrl: String? = null
     ): Result<String> {
         val amountKobo = (amountNaira * BigDecimal(100)).toLong()
         val request = PaystackInitializeRequest(
             email = email,
             amount = amountKobo,
-            metadata = mapOf("project_slug" to projectSlug)
+            metadata = mapOf("project_slug" to projectSlug),
+            callbackUrl = callbackUrl
         )
 
         return try {
@@ -61,6 +70,7 @@ object PaystackClient {
                     PaymentRepository.create(
                         projectId = project[Projects.id],
                         paystackReference = body.data.reference,
+                        authorizationUrl = body.data.authorization_url,
                         amount = amountNaira,
                         status = "pending",
                         rawWebhookPayload = null
@@ -74,6 +84,21 @@ object PaystackClient {
             }
         } catch (e: Exception) {
             logger.error("Error initializing Paystack payment", e)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun verifyTransaction(reference: String): Result<PaystackVerifyData> {
+        return try {
+            val response = http.get("$baseUrl/transaction/verify/$reference")
+            val body = response.body<PaystackVerifyResponse>()
+            if (body.status && body.data != null) {
+                Result.success(body.data)
+            } else {
+                Result.failure(Exception(body.message.ifBlank { "Unable to verify payment" }))
+            }
+        } catch (e: Exception) {
+            logger.error("Error verifying Paystack payment ref=$reference", e)
             Result.failure(e)
         }
     }

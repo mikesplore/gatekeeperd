@@ -14,6 +14,7 @@ object PaymentRepository {
         val id: UUID,
         val projectId: UUID,
         val paystackReference: String,
+        val authorizationUrl: String?,
         val amount: BigDecimal,
         val status: String,
         val paidAt: LocalDateTime?,
@@ -38,9 +39,22 @@ object PaymentRepository {
         }
     }
 
+    fun findLatestPendingAuthorizationUrl(projectId: UUID): String? {
+        return transaction {
+            Payments.selectAll()
+                .where { (Payments.projectId eq projectId) and (Payments.status eq "pending") }
+                .orderBy(Payments.createdAt, SortOrder.DESC)
+                .limit(1)
+                .singleOrNull()
+                ?.get(Payments.authorizationUrl)
+                ?.takeIf { it.isNotBlank() }
+        }
+    }
+
     fun create(
         projectId: UUID,
         paystackReference: String,
+        authorizationUrl: String?,
         amount: BigDecimal,
         status: String,
         rawWebhookPayload: String? = null
@@ -51,6 +65,7 @@ object PaymentRepository {
                 it[Payments.id] = id
                 it[Payments.projectId] = projectId
                 it[Payments.paystackReference] = paystackReference
+                it[Payments.authorizationUrl] = authorizationUrl
                 it[Payments.amount] = amount
                 it[Payments.status] = status
                 it[Payments.rawWebhookPayload] = rawWebhookPayload
@@ -72,6 +87,7 @@ object PaymentRepository {
         id = this[Payments.id],
         projectId = this[Payments.projectId],
         paystackReference = this[Payments.paystackReference],
+        authorizationUrl = this[Payments.authorizationUrl],
         amount = this[Payments.amount],
         status = this[Payments.status],
         paidAt = this[Payments.paidAt],

@@ -7,6 +7,7 @@ object Payments : Table("payments") {
     val id = uuid("id").autoGenerate()
     val projectId = uuid("project_id").references(Projects.id)
     val paystackReference = text("paystack_reference").uniqueIndex()
+    val authorizationUrl = text("authorization_url").nullable()
     val amount = decimal("amount", 12, 2)
     val status = text("status")
     val paidAt = datetime("paid_at").nullable()

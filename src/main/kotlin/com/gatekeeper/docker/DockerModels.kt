@@ -20,9 +20,3 @@ data class NetworkInfo(
     val driver: String,
     val scope: String
 )
-
-sealed class GateResult {
-    object Active : GateResult()
-    data class Blocked(val type: String, val paymentLink: String?, val projectName: String?) : GateResult()
-    data class Unknown(val reason: String) : GateResult()
-}

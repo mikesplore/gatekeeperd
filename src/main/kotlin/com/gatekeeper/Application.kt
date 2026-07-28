@@ -1,5 +1,6 @@
 package com.gatekeeper
 
+import com.gatekeeper.api.InputValidators
 import com.gatekeeper.admin.configureProjectAdminRoutes
 import com.gatekeeper.auth.configureAuthRoutes
 import com.gatekeeper.config.AppConfig
@@ -48,7 +49,7 @@ fun Application.module() {
     configureProjectAdminRoutes()
     configurePaystackWebhookRoutes()
 
-    seedDefaultAdmin()
+    seedInitialAdmin()
 
     val appScope = CoroutineScope(SupervisorJob())
     AutoBlockerJob.start(appScope)
@@ -58,30 +59,47 @@ fun Application.module() {
     }
 }
 
-private fun seedDefaultAdmin() {
+private fun seedInitialAdmin() {
     val logger = LoggerFactory.getLogger("com.gatekeeper.Application")
     try {
         val count: Long = transaction {
             Users.selectAll().count()
         }
-        if (count == 0L) {
-            val defaultEmail = "mikesplore@gmail.com"
-            val defaultPassword = "mikesplore"
-            val hash = BCrypt.hashpw(defaultPassword, BCrypt.gensalt(12))
-            transaction {
-                com.gatekeeper.db.tables.Users.insert { stmt ->
-                    stmt[Users.email] = defaultEmail
-                    stmt[Users.passwordHash] = hash
-                    stmt[Users.role] = "admin"
-                }
-            }
-            logger.warn("=================================================================")
-            logger.warn("DEFAULT ADMIN USER CREATED — change this immediately!")
-            logger.warn("Email:    $defaultEmail")
-            logger.warn("Password: $defaultPassword")
-            logger.warn("=================================================================")
+        if (count > 0L) {
+            return
         }
+
+        val email = AppConfig.adminEmail.trim().lowercase()
+        val password = AppConfig.adminPassword
+
+        if (email.isBlank() || password.isBlank()) {
+            logger.error(
+                "No admin users in database and ADMIN_EMAIL/ADMIN_PASSWORD are not set. " +
+                    "Set both in .env and restart, or insert a user manually."
+            )
+            return
+        }
+
+        if (!InputValidators.isValidEmail(email)) {
+            logger.error("ADMIN_EMAIL is not a valid email address — admin user was not created")
+            return
+        }
+
+        if (password.length < 8) {
+            logger.error("ADMIN_PASSWORD must be at least 8 characters — admin user was not created")
+            return
+        }
+
+        val hash = BCrypt.hashpw(password, BCrypt.gensalt(12))
+        transaction {
+            Users.insert { stmt ->
+                stmt[Users.email] = email
+                stmt[Users.passwordHash] = hash
+                stmt[Users.role] = "admin"
+            }
+        }
+        logger.info("Initial admin user created for {}", email)
     } catch (e: Exception) {
-        logger.error("Failed to seed default admin user", e)
+        logger.error("Failed to seed initial admin user", e)
     }
 }

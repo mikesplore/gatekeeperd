@@ -162,8 +162,12 @@ docker run -d \
   -e JWT_SECRET="${JWT_SECRET:?JWT_SECRET is required in .env}" \
   -e JWT_ISSUER="${JWT_ISSUER:-gatekeeperd}" \
   -e JWT_AUDIENCE="${JWT_AUDIENCE:-gatekeeperd-admin}" \
+  -e ADMIN_EMAIL="${ADMIN_EMAIL:-}" \
+  -e ADMIN_PASSWORD="${ADMIN_PASSWORD:-}" \
   -e PAYSTACK_SECRET_KEY="${PAYSTACK_SECRET_KEY:-}" \
   -e PAYSTACK_PUBLIC_KEY="${PAYSTACK_PUBLIC_KEY:-}" \
+  -e GATEKEEPER_PUBLIC_URL="${GATEKEEPER_PUBLIC_URL:-}" \
+  -e SUPPORT_CONTACT_EMAIL="${SUPPORT_CONTACT_EMAIL:-support@gatekeeper.local}" \
   -e DOCKER_SOCKET="${DOCKER_SOCKET:-unix:///var/run/docker.sock}" \
   -e GATEKEEPER_INTERNAL_NETWORK="${GATEKEEPER_INTERNAL_NETWORK:-gatekeeper-internal}" \
   -e DEFAULT_GRACE_PERIOD_DAYS="${DEFAULT_GRACE_PERIOD_DAYS:-3}" \

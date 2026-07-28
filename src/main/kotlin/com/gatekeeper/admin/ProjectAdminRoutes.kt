@@ -1,10 +1,17 @@
 package com.gatekeeper.admin
 
+import com.gatekeeper.api.dto.AuditLogResponse
+import com.gatekeeper.api.dto.PaymentResponse
+import com.gatekeeper.api.dto.ProjectDetailResponse
+import com.gatekeeper.api.dto.ProjectResponse
+import com.gatekeeper.api.dto.StatusChangeResponse
+import com.gatekeeper.api.dto.toResponse
+import com.gatekeeper.api.InputValidators
 import com.gatekeeper.api.respondError
 import com.gatekeeper.db.repositories.AuditRepository
 import com.gatekeeper.db.repositories.PaymentRepository
 import com.gatekeeper.db.repositories.ProjectRepository
-import com.gatekeeper.paystack.PaystackClient
+import com.gatekeeper.paystack.ProjectPaymentService
 import io.ktor.http.*
 import io.ktor.server.application.*
 import io.ktor.server.auth.*
@@ -12,13 +19,10 @@ import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.Json
 import org.slf4j.LoggerFactory
 import java.math.BigDecimal
-import java.time.LocalDate
 
 private val logger = LoggerFactory.getLogger("com.gatekeeper.admin.ProjectAdminRoutes")
-private val json = Json { ignoreUnknownKeys = true; coerceInputValues = true }
 
 @Serializable
 data class CreateProjectRequest(
@@ -62,7 +66,7 @@ fun Application.configureProjectAdminRoutes() {
     routing {
         authenticate("auth-jwt") {
             get("/api/admin/projects") {
-                val projects = ProjectRepository.findAll()
+                val projects = ProjectRepository.findAll().map { it.toResponse() }
                 call.respond(projects)
             }
 
@@ -79,17 +83,20 @@ fun Application.configureProjectAdminRoutes() {
                 }
                 val payments = PaymentRepository.findByProjectId(project.id)
                 val auditLog = AuditRepository.findByProjectId(project.id)
-                call.respond(mapOf(
-                    "project" to project,
-                    "payments" to payments,
-                    "audit_log" to auditLog
-                ))
+                call.respond(
+                    ProjectDetailResponse(
+                        project = project.toResponse(),
+                        payments = payments.map { it.toResponse() },
+                        audit_log = auditLog.map { it.toResponse() }
+                    )
+                )
             }
 
             post("/api/admin/projects") {
                 val body = try {
-                    json.decodeFromString<CreateProjectRequest>(call.receiveText())
+                    call.receive<CreateProjectRequest>()
                 } catch (e: Exception) {
+                    logger.warn("Failed to parse create project request", e)
                     call.respondError(HttpStatusCode.BadRequest, "invalid_request", "The request body could not be parsed")
                     return@post
                 }
@@ -103,22 +110,47 @@ fun Application.configureProjectAdminRoutes() {
                     return@post
                 }
 
+                val slug = InputValidators.normalizeSlug(body.slug)
+                if (slug == null) {
+                    call.respondError(
+                        HttpStatusCode.BadRequest,
+                        "invalid_request",
+                        "slug must be 2-64 lowercase letters, numbers, or hyphens"
+                    )
+                    return@post
+                }
+
+                if (!InputValidators.isValidContainerName(body.containerName)) {
+                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "containerName contains invalid characters")
+                    return@post
+                }
+
                 if (body.type.lowercase() !in listOf("frontend", "backend")) {
                     call.respondError(HttpStatusCode.BadRequest, "invalid_request", "type must be 'frontend' or 'backend'")
                     return@post
                 }
 
-                val existing = ProjectRepository.findBySlug(body.slug)
+                val existing = ProjectRepository.findBySlug(slug)
                 if (existing != null) {
                     call.respondError(HttpStatusCode.Conflict, "project_exists", "A project with this slug already exists")
                     return@post
                 }
 
-                val dueDate = body.dueDate?.let { LocalDate.parse(it) }
+                val dueDate = InputValidators.parseDueDate(body.dueDate)
+                if (body.dueDate?.isNotBlank() == true && dueDate == null) {
+                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "dueDate must be ISO format YYYY-MM-DD")
+                    return@post
+                }
+
+                if (body.clientEmail?.isNotBlank() == true && !InputValidators.isValidEmail(body.clientEmail)) {
+                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "clientEmail is not a valid email address")
+                    return@post
+                }
+
                 val amountDue = body.amountDue?.let { BigDecimal.valueOf(it) }
 
                 val project = ProjectRepository.create(
-                    slug = body.slug.lowercase().trim(),
+                    slug = slug,
                     name = body.name.trim(),
                     domain = body.domain.trim(),
                     containerName = body.containerName.trim(),
@@ -131,8 +163,8 @@ fun Application.configureProjectAdminRoutes() {
                     gracePeriodDays = body.gracePeriodDays
                 )
 
-                logger.info("Project created: ${body.slug}")
-                call.respond(HttpStatusCode.Created, project)
+                logger.info("Project created: $slug")
+                call.respond(HttpStatusCode.Created, project.toResponse())
             }
 
             patch("/api/admin/projects/{slug}") {
@@ -143,13 +175,33 @@ fun Application.configureProjectAdminRoutes() {
                 }
 
                 val body = try {
-                    json.decodeFromString<UpdateProjectRequest>(call.receiveText())
+                    call.receive<UpdateProjectRequest>()
                 } catch (e: Exception) {
+                    logger.warn("Failed to parse update project request", e)
                     call.respondError(HttpStatusCode.BadRequest, "invalid_request", "The request body could not be parsed")
                     return@patch
                 }
 
-                val dueDate = body.dueDate?.let { LocalDate.parse(it) }
+                if (body.type != null && !InputValidators.isValidProjectType(body.type)) {
+                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "type must be 'frontend' or 'backend'")
+                    return@patch
+                }
+
+                if (body.containerName != null && !InputValidators.isValidContainerName(body.containerName)) {
+                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "containerName contains invalid characters")
+                    return@patch
+                }
+
+                if (body.clientEmail?.isNotBlank() == true && !InputValidators.isValidEmail(body.clientEmail)) {
+                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "clientEmail is not a valid email address")
+                    return@patch
+                }
+
+                val dueDate = InputValidators.parseDueDate(body.dueDate)
+                if (body.dueDate?.isNotBlank() == true && dueDate == null) {
+                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "dueDate must be ISO format YYYY-MM-DD")
+                    return@patch
+                }
                 val amountDue = body.amountDue?.let { BigDecimal.valueOf(it) }
 
                 val project = ProjectRepository.update(
@@ -173,7 +225,24 @@ fun Application.configureProjectAdminRoutes() {
 
                 ProjectRepository.invalidateCache(slug)
                 logger.info("Project updated: $slug")
-                call.respond(project)
+                call.respond(project.toResponse())
+            }
+
+            delete("/api/admin/projects/{slug}") {
+                val slug = call.parameters["slug"]
+                if (slug == null) {
+                    call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing slug path parameter")
+                    return@delete
+                }
+
+                val deleted = ProjectRepository.delete(slug)
+                if (!deleted) {
+                    call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
+                    return@delete
+                }
+
+                logger.info("Project deleted: $slug")
+                call.respond(HttpStatusCode.NoContent)
             }
 
             post("/api/admin/projects/{slug}/block") {
@@ -183,9 +252,15 @@ fun Application.configureProjectAdminRoutes() {
                     return@post
                 }
                 val body = try {
-                    json.decodeFromString<StatusChangeRequest>(call.receiveText())
+                    call.receive<StatusChangeRequest>()
                 } catch (e: Exception) {
                     call.respondError(HttpStatusCode.BadRequest, "invalid_request", "A reason is required")
+                    return@post
+                }
+
+                val reason = InputValidators.requireNonBlank(body.reason, "reason")
+                if (reason == null) {
+                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "A non-empty reason is required")
                     return@post
                 }
 
@@ -198,11 +273,11 @@ fun Application.configureProjectAdminRoutes() {
                 val principal = call.principal<io.ktor.server.auth.jwt.JWTPrincipal>()
                 val actor = principal?.payload?.subject ?: "unknown"
 
-                ProjectRepository.updateStatus(project.id, "manual_block", actor, body.reason)
+                ProjectRepository.updateStatus(project.id, "manual_block", actor, reason)
                 ProjectRepository.invalidateCache(slug)
 
                 logger.info("Project blocked: $slug by $actor")
-                call.respond(mapOf("status" to "blocked", "slug" to slug))
+                call.respond(StatusChangeResponse(status = "blocked", slug = slug))
             }
 
             post("/api/admin/projects/{slug}/unblock") {
@@ -212,9 +287,15 @@ fun Application.configureProjectAdminRoutes() {
                     return@post
                 }
                 val body = try {
-                    json.decodeFromString<StatusChangeRequest>(call.receiveText())
+                    call.receive<StatusChangeRequest>()
                 } catch (e: Exception) {
                     call.respondError(HttpStatusCode.BadRequest, "invalid_request", "A reason is required")
+                    return@post
+                }
+
+                val reason = InputValidators.requireNonBlank(body.reason, "reason")
+                if (reason == null) {
+                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "A non-empty reason is required")
                     return@post
                 }
 
@@ -227,11 +308,11 @@ fun Application.configureProjectAdminRoutes() {
                 val principal = call.principal<io.ktor.server.auth.jwt.JWTPrincipal>()
                 val actor = principal?.payload?.subject ?: "unknown"
 
-                ProjectRepository.updateStatus(project.id, "active", actor, body.reason)
+                ProjectRepository.updateStatus(project.id, "active", actor, reason)
                 ProjectRepository.invalidateCache(slug)
 
                 logger.info("Project unblocked: $slug by $actor")
-                call.respond(mapOf("status" to "active", "slug" to slug))
+                call.respond(StatusChangeResponse(status = "active", slug = slug))
             }
 
             post("/api/admin/projects/{slug}/payment/initialize") {
@@ -241,7 +322,7 @@ fun Application.configureProjectAdminRoutes() {
                     return@post
                 }
                 val body = try {
-                    json.decodeFromString<InitializePaymentRequest>(call.receiveText())
+                    call.receive<InitializePaymentRequest>()
                 } catch (e: Exception) {
                     call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Email is required")
                     return@post
@@ -262,10 +343,15 @@ fun Application.configureProjectAdminRoutes() {
                     return@post
                 }
 
-                val result = PaystackClient.initializePayment(
-                    email = body.email.ifBlank { project.clientEmail },
-                    amountNaira = project.amountDue,
-                    projectSlug = project.slug
+                val emailOverride = body.email.trim().ifBlank { null }
+                if (emailOverride != null && !InputValidators.isValidEmail(emailOverride)) {
+                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "email is not a valid email address")
+                    return@post
+                }
+
+                val result = ProjectPaymentService.initializeForProject(
+                    project = project,
+                    emailOverride = emailOverride
                 )
 
                 result.fold(
@@ -285,7 +371,7 @@ fun Application.configureProjectAdminRoutes() {
 
             get("/api/admin/audit") {
                 val limit = call.request.queryParameters["limit"]?.toIntOrNull() ?: 100
-                val auditLog = AuditRepository.findAll(limit.coerceIn(1, 500))
+                val auditLog = AuditRepository.findAll(limit.coerceIn(1, 500)).map { it.toResponse() }
                 call.respond(auditLog)
             }
 
@@ -300,7 +386,7 @@ fun Application.configureProjectAdminRoutes() {
                     call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
                     return@get
                 }
-                val auditLog = AuditRepository.findByProjectId(project.id)
+                val auditLog = AuditRepository.findByProjectId(project.id).map { it.toResponse() }
                 call.respond(auditLog)
             }
         }
