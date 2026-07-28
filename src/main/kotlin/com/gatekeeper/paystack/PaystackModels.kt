@@ -21,9 +21,9 @@ data class PaystackInitializeResponse(
 @Serializable
 data class PaystackInitializeData(
     val reference: String,
-    val amount: Long,
-    val currency: String,
-    val authorization_url: String
+    val authorization_url: String,
+    val amount: Long? = null,
+    val currency: String? = null
 )
 
 @Serializable
