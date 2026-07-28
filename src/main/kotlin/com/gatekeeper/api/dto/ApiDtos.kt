@@ -1,0 +1,100 @@
+package com.gatekeeper.api.dto
+
+import com.gatekeeper.db.repositories.AuditRepository
+import com.gatekeeper.db.repositories.PaymentRepository
+import com.gatekeeper.db.repositories.ProjectRepository
+import kotlinx.serialization.Serializable
+
+@Serializable
+data class ProjectResponse(
+    val id: String,
+    val slug: String,
+    val name: String,
+    val domain: String,
+    val containerName: String,
+    val type: String,
+    val status: String,
+    val clientName: String? = null,
+    val clientEmail: String? = null,
+    val paystackCustomerCode: String? = null,
+    val amountDue: Double? = null,
+    val currency: String,
+    val dueDate: String? = null,
+    val gracePeriodDays: Int,
+    val createdAt: String,
+    val updatedAt: String
+)
+
+@Serializable
+data class PaymentResponse(
+    val id: String,
+    val projectId: String,
+    val paystackReference: String,
+    val amount: Double,
+    val status: String,
+    val paidAt: String? = null,
+    val rawWebhookPayload: String? = null,
+    val createdAt: String
+)
+
+@Serializable
+data class AuditLogResponse(
+    val id: String,
+    val projectId: String? = null,
+    val action: String,
+    val actor: String,
+    val reason: String? = null,
+    val createdAt: String
+)
+
+@Serializable
+data class ProjectDetailResponse(
+    val project: ProjectResponse,
+    val payments: List<PaymentResponse>,
+    val audit_log: List<AuditLogResponse>
+)
+
+@Serializable
+data class StatusChangeResponse(
+    val status: String,
+    val slug: String
+)
+
+fun ProjectRepository.ProjectRecord.toResponse(): ProjectResponse = ProjectResponse(
+    id = id.toString(),
+    slug = slug,
+    name = name,
+    domain = domain,
+    containerName = containerName,
+    type = type,
+    status = status,
+    clientName = clientName,
+    clientEmail = clientEmail,
+    paystackCustomerCode = paystackCustomerCode,
+    amountDue = amountDue?.toDouble(),
+    currency = currency,
+    dueDate = dueDate?.toString(),
+    gracePeriodDays = gracePeriodDays,
+    createdAt = createdAt.toString(),
+    updatedAt = updatedAt.toString()
+)
+
+fun PaymentRepository.PaymentRecord.toResponse(): PaymentResponse = PaymentResponse(
+    id = id.toString(),
+    projectId = projectId.toString(),
+    paystackReference = paystackReference,
+    amount = amount.toDouble(),
+    status = status,
+    paidAt = paidAt?.toString(),
+    rawWebhookPayload = rawWebhookPayload,
+    createdAt = createdAt.toString()
+)
+
+fun AuditRepository.AuditRecord.toResponse(): AuditLogResponse = AuditLogResponse(
+    id = id.toString(),
+    projectId = projectId?.toString(),
+    action = action,
+    actor = actor,
+    reason = reason,
+    createdAt = createdAt.toString()
+)
