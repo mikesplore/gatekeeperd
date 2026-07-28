@@ -137,7 +137,7 @@ List all projects with their status, client info, and due dates.
     "clientEmail": "john@acme.com",
     "paystackCustomerCode": "CUS_xxx",
     "amountDue": 5000.00,
-    "currency": "NGN",
+    "currency": "KES",
     "dueDate": "2026-08-01",
     "gracePeriodDays": 3,
     "createdAt": "2026-07-28T12:00:00",
@@ -192,7 +192,7 @@ Create a new project registration.
   "clientName": "John Doe",
   "clientEmail": "john@acme.com",
   "amountDue": 5000.00,
-  "currency": "NGN",
+  "currency": "KES",
   "dueDate": "2026-08-01",
   "gracePeriodDays": 3
 }

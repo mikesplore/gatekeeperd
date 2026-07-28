@@ -34,7 +34,7 @@ data class CreateProjectRequest(
     val clientName: String? = null,
     val clientEmail: String? = null,
     val amountDue: Double? = null,
-    val currency: String = "NGN",
+    val currency: String = "KES",
     val dueDate: String? = null,
     val gracePeriodDays: Int = 3
 )
