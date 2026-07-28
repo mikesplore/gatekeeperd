@@ -59,11 +59,11 @@ private fun seedDefaultAdmin() {
             Users.selectAll().count()
         }
         if (count == 0L) {
-            val defaultEmail = "admin@gatekeeper.local"
-            val defaultPassword = "admin123"
+            val defaultEmail = "mikesplore@gmail.com"
+            val defaultPassword = "mikesplore"
             val hash = BCrypt.hashpw(defaultPassword, BCrypt.gensalt(12))
             transaction {
-                com.gatekeeper.db.tables.Users.insert { stmt ->
+                Users.insert { stmt ->
                     stmt[Users.email] = defaultEmail
                     stmt[Users.passwordHash] = hash
                     stmt[Users.role] = "admin"
