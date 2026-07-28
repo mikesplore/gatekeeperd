@@ -15,11 +15,14 @@ data class ContainerInfo(
 
 @Serializable
 data class NetworkInfo(
-    val name: String
+    val id: String,
+    val name: String,
+    val driver: String,
+    val scope: String
 )
 
 sealed class GateResult {
-    data object Active : GateResult()
-    data class Blocked(val type: String, val paymentLink: String? = null, val projectName: String? = null) : GateResult()
-    data class Unknown(val message: String) : GateResult()
+    object Active : GateResult()
+    data class Blocked(val type: String, val paymentLink: String?, val projectName: String?) : GateResult()
+    data class Unknown(val reason: String) : GateResult()
 }

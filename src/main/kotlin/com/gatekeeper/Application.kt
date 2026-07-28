@@ -47,7 +47,7 @@ fun Application.module() {
     val appScope = CoroutineScope(SupervisorJob())
     AutoBlockerJob.start(appScope)
 
-    environment.monitor.subscribe(ApplicationStopping) {
+    monitor.subscribe(ApplicationStopping) {
         runCatching { PaystackClient.close() }
     }
 }

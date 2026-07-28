@@ -70,10 +70,17 @@ class DockerService(dockerSocketPath: String) {
         logger.info("Image pulled: $fullName")
     }
 
-    fun listNetworks(): List<String> {
+    fun listNetworks(): List<NetworkInfo> {
         return client.listNetworksCmd()
             .exec()
-            .map { it.name }
+            .map { net ->
+                NetworkInfo(
+                    id = net.id ?: "",
+                    name = net.name ?: "",
+                    driver = net.driver ?: "",
+                    scope = net.scope ?: ""
+                )
+            }
     }
 
     fun createNetworkIfMissing(name: String) {

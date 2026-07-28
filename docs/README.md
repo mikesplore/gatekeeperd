@@ -33,7 +33,7 @@ Gatekeeperd is a **Ktor-based payment gating engine** for Docker-hosted client p
 
 ```
 src/main/kotlin/com/gatekeeper/
-├── Application.kt                 # Entry point — main() and Ktor module wiring
+├── Application.kt                 # Entry point — wires all plugins, routes, and startup jobs
 ├── config/
 │   └── AppConfig.kt               # Reads .env / system env → typed properties
 ├── plugins/                       # Ktor plugins installed at startup
