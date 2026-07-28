@@ -22,10 +22,11 @@ services:
 
   postgres:
     image: postgres:16
+    env_file: .env
     environment:
       POSTGRES_DB: gatekeeper
-      POSTGRES_USER: mike
-      POSTGRES_PASSWORD: mikemike
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
     volumes:
       - pgdata:/var/lib/postgresql/data
     networks:

@@ -54,23 +54,30 @@ docker-compose up -d
 
 ## Option 2: Using the deployment script (Recommended)
 
-The `deploy.sh` script handles everything automatically: creating network, pulling images, and starting all containers in the correct order.
+### On your dev machine (build + push)
 
 ```bash
-# Make sure you have the latest image
 ./build.sh
 ./push.sh
-
-# Deploy everything
-./deploy.sh
 ```
 
-This will:
+### On the VPS (pull + run)
+
+Copy only `deploy.sh` and `.env` to the server — no Dockerfile or source code needed.
+
+```bash
+chmod +x deploy.sh
+./deploy.sh          # pulls mikesplore/gatekeeperd:1.0.0-SNAPSHOT from Docker Hub
+./deploy.sh --fresh  # also resets the postgres volume (use when DB credentials changed)
+```
+
+Use `./deploy.sh --fresh` when DB credentials changed since the first deploy.
 1. Create the `gatekeeper-internal` network if it doesn't exist
-2. Create the `pgdata` volume for postgres
-3. Pull all required images (postgres, redis, gatekeeperd)
+2. Create the `pgdata` volume for postgres (or reset it with `--fresh`)
+3. Pull the app image from Docker Hub (postgres + redis too)
 4. Stop and remove existing containers if they exist
-5. Start postgres, wait for it to be ready, then start redis and gatekeeperd
+5. Start postgres, verify credentials, then start redis and gatekeeperd
+6. Wait for `/api/health` to respond
 
 To stop all services:
 ```bash

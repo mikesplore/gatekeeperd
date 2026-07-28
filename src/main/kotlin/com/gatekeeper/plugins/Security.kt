@@ -42,10 +42,13 @@ fun Application.configureSecurity() {
         allowMethod(HttpMethod.Delete)
         allowHeader(HttpHeaders.Authorization)
         allowHeader(HttpHeaders.ContentType)
-        allowHost("http://localhost:5173")
-        allowHost("https://gatekeeperd.mikesplore.me")
-        allowHost("http://gatekeeperd.mikesplore.me")
+        allowHeader(HttpHeaders.Accept)
         allowCredentials = true
+        allowNonSimpleContentTypes = true
+
+        AppConfig.corsAllowedHosts.forEach { entry ->
+            allowHost(entry.host, schemes = entry.schemes)
+        }
     }
 
     authentication {

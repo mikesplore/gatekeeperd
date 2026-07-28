@@ -484,6 +484,6 @@ Common error codes:
 
 4. **Polling for status:** After a payment is completed, poll `/api/admin/projects/{slug}` or `/api/gate/check?project={slug}` every few seconds to see the status change from `blocked` to `active`. The webhook typically processes within 1-5 seconds.
 
-5. **CORS:** CORS is configured with `anyHost()` for development. For production, restrict allowed origins in `Security.kt`.
+5. **CORS:** Set `CORS_ALLOWED_ORIGINS` in `.env` to a comma-separated list of frontend origins (include the scheme), e.g. `https://gatekeeperd.mikesplore.me`. The API must be rebuilt and redeployed after changing this.
 
 6. **Content types:** Frontend projects receive HTML paywalls. Backend/API projects receive JSON. Use the `type` field from the project to determine which format to expect.

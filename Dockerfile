@@ -3,7 +3,7 @@ WORKDIR /app
 COPY build.gradle.kts settings.gradle.kts gradle.properties ./
 COPY gradle ./gradle
 COPY src ./src
-RUN gradle build --no-daemon -x test
+RUN gradle buildFatJar --no-daemon -x test
 
 FROM eclipse-temurin:21-jre
 WORKDIR /app

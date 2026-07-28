@@ -63,7 +63,7 @@ fun Application.configureAuthRoutes() {
             val passwordHash = user[Users.passwordHash]
             if (!BCrypt.checkpw(body.password, passwordHash)) {
                 logger.warn("Failed login attempt for: ${body.email}")
-                call.respondError(HttpStatusCode.Unauthorized, "invalid_credentials", "Invalid email or password")
+                call.respondError(HttpStatusCode.BadRequest, "invalid_credentials", "Invalid email or password")
                 return@post
             }
 

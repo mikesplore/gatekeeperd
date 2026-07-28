@@ -1,42 +1,96 @@
 package com.gatekeeper.config
 
-import io.github.cdimascio.dotenv.Dotenv
 import io.github.cdimascio.dotenv.dotenv
 import org.slf4j.LoggerFactory
 
 object AppConfig {
     private val logger = LoggerFactory.getLogger(AppConfig::class.java)
 
-    private val dotenv = dotenv()
+    private val dotenv by lazy {
+        dotenv {
+            ignoreIfMissing = true
+        }
+    }
 
-    // Database
-    val dbUrl: String = dotenv["DB_URL"] ?: "jdbc:postgresql://localhost:5432/gatekeeper"
-    val dbUser: String = dotenv["DB_USER"] ?: "gatekeeper"
-    val dbPassword: String = dotenv["DB_PASSWORD"] ?: "changeme"
+    private fun requiredSetting(key: String): String {
+        val value = System.getenv(key)?.takeIf { it.isNotBlank() }
+            ?: dotenv[key]?.takeIf { it.isNotBlank() }
+        require(!value.isNullOrBlank()) {
+            "Missing required configuration '$key'. Set it in the environment or .env file."
+        }
+        return value
+    }
+
+    private fun optionalSetting(key: String, default: String): String =
+        System.getenv(key)?.takeIf { it.isNotBlank() }
+            ?: dotenv[key]?.takeIf { it.isNotBlank() }
+            ?: default
+
+    // Database — no hardcoded credentials; must come from env / .env
+    val dbUrl: String = requiredSetting("DB_URL")
+    val dbUser: String = requiredSetting("DB_USER")
+    val dbPassword: String = requiredSetting("DB_PASSWORD")
 
     // Redis
-    val redisHost: String = dotenv["REDIS_HOST"] ?: "localhost"
-    val redisPort: Int = (dotenv["REDIS_PORT"] ?: "6379").toInt()
+    val redisHost: String = requiredSetting("REDIS_HOST")
+    val redisPort: Int = optionalSetting("REDIS_PORT", "6379").toInt()
 
     // JWT Auth
-    val jwtSecret: String = dotenv["JWT_SECRET"] ?: "changeme-use-a-long-random-string"
-    val jwtIssuer: String = dotenv["JWT_ISSUER"] ?: "gatekeeperd"
-    val jwtAudience: String = dotenv["JWT_AUDIENCE"] ?: "gatekeeperd-admin"
+    val jwtSecret: String = requiredSetting("JWT_SECRET")
+    val jwtIssuer: String = optionalSetting("JWT_ISSUER", "gatekeeperd")
+    val jwtAudience: String = optionalSetting("JWT_AUDIENCE", "gatekeeperd-admin")
 
     // Paystack
-    val paystackSecretKey: String = dotenv["PAYSTACK_SECRET_KEY"] ?: "sk_live_xxx"
-    val paystackPublicKey: String = dotenv["PAYSTACK_PUBLIC_KEY"] ?: "pk_live_xxx"
+    val paystackSecretKey: String = optionalSetting("PAYSTACK_SECRET_KEY", "")
+    val paystackPublicKey: String = optionalSetting("PAYSTACK_PUBLIC_KEY", "")
 
     // Docker & Infrastructure
-    val dockerSocket: String = dotenv["DOCKER_SOCKET"] ?: "unix:///var/run/docker.sock"
-    val internalNetwork: String = dotenv["GATEKEEPER_INTERNAL_NETWORK"] ?: "gatekeeper-internal"
+    val dockerSocket: String = optionalSetting("DOCKER_SOCKET", "unix:///var/run/docker.sock")
+    val internalNetwork: String = optionalSetting("GATEKEEPER_INTERNAL_NETWORK", "gatekeeper-internal")
 
     // Business Logic
-    val defaultGracePeriodDays: Int = (dotenv["DEFAULT_GRACE_PERIOD_DAYS"] ?: "3").toInt()
-    val failMode: String = dotenv["FAIL_MODE"] ?: "open"
+    val defaultGracePeriodDays: Int = optionalSetting("DEFAULT_GRACE_PERIOD_DAYS", "3").toInt()
+    val failMode: String = optionalSetting("FAIL_MODE", "open")
 
-    /** Print all loaded config keys (redacted values) for debugging */
+    /** Parsed from CORS_ALLOWED_ORIGINS — comma-separated full origins or bare hostnames */
+    val corsAllowedHosts: List<CorsHost> by lazy {
+        parseCorsOrigins(
+            optionalSetting(
+                "CORS_ALLOWED_ORIGINS",
+                "https://gatekeeperd.mikesplore.me,http://localhost:5173,http://localhost:8080"
+            )
+        )
+    }
+
+    data class CorsHost(val host: String, val schemes: List<String>)
+
+    private fun parseCorsOrigins(raw: String): List<CorsHost> {
+        return raw.split(",")
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .map { origin ->
+                if (origin.contains("://")) {
+                    val uri = java.net.URI(origin)
+                    val port = uri.port
+                    val host = when {
+                        port <= 0 -> uri.host
+                        (uri.scheme == "http" && port == 80) -> uri.host
+                        (uri.scheme == "https" && port == 443) -> uri.host
+                        else -> "${uri.host}:$port"
+                    }
+                    CorsHost(host, listOf(uri.scheme))
+                } else {
+                    CorsHost(origin, listOf("http", "https"))
+                }
+            }
+    }
+
     fun logConfig() {
+        val source = when {
+            System.getenv("DB_URL") != null -> "environment"
+            dotenv["DB_URL"]?.isNotBlank() == true -> ".env file"
+            else -> "unknown"
+        }
         val entries = linkedMapOf<String, String>()
         entries["DB_URL"] = dbUrl
         entries["DB_USER"] = dbUser
@@ -49,7 +103,8 @@ object AppConfig {
         entries["GATEKEEPER_INTERNAL_NETWORK"] = internalNetwork
         entries["FAIL_MODE"] = failMode
         entries["DEFAULT_GRACE_PERIOD_DAYS"] = defaultGracePeriodDays.toString()
-        logger.info("AppConfig loaded (source: .env / system env):")
+        entries["CORS_ALLOWED_ORIGINS"] = corsAllowedHosts.joinToString(", ") { "${it.schemes.first()}://${it.host}" }
+        logger.info("AppConfig loaded (source: $source):")
         entries.forEach { (key, value) ->
             logger.info("  $key = $value")
         }

@@ -15,6 +15,7 @@ import com.gatekeeper.plugins.configureSecurity
 import com.gatekeeper.plugins.configureSerialization
 import com.gatekeeper.scheduler.AutoBlockerJob
 import io.ktor.server.application.*
+import io.ktor.server.engine.*
 import io.ktor.server.netty.*
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
@@ -25,8 +26,13 @@ import org.mindrot.jbcrypt.BCrypt
 import org.slf4j.LoggerFactory
 
 fun main(args: Array<String>) {
-    EngineMain.main(args)
+    val port = args.portArg() ?: System.getenv("PORT")?.toIntOrNull() ?: 8080
+    embeddedServer(Netty, port = port, host = "0.0.0.0", module = Application::module)
+        .start(wait = true)
 }
+
+private fun Array<String>.portArg(): Int? =
+    firstOrNull { it.startsWith("-port=") }?.substringAfter("=")?.toIntOrNull()
 
 fun Application.module() {
     AppConfig.logConfig()
@@ -63,7 +69,7 @@ private fun seedDefaultAdmin() {
             val defaultPassword = "mikesplore"
             val hash = BCrypt.hashpw(defaultPassword, BCrypt.gensalt(12))
             transaction {
-                Users.insert { stmt ->
+                com.gatekeeper.db.tables.Users.insert { stmt ->
                     stmt[Users.email] = defaultEmail
                     stmt[Users.passwordHash] = hash
                     stmt[Users.role] = "admin"
