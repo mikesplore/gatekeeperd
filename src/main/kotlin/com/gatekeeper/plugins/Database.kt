@@ -1,7 +1,10 @@
 package com.gatekeeper.plugins
 
 import com.gatekeeper.config.AppConfig
+import com.gatekeeper.db.tables.AuditLog
+import com.gatekeeper.db.tables.Payments
 import com.gatekeeper.db.tables.Projects
+import com.gatekeeper.db.tables.Users
 import com.zaxxer.hikari.HikariConfig
 import com.zaxxer.hikari.HikariDataSource
 import io.ktor.server.application.*
@@ -31,7 +34,7 @@ object DatabaseFactory {
         dataSource = HikariDataSource(config)
         Database.connect(dataSource)
         transaction {
-            SchemaUtils.createMissingTablesAndColumns(Projects)
+            SchemaUtils.createMissingTablesAndColumns(Users, Projects, Payments, AuditLog)
         }
 
         logger.info("Database connected: $url")

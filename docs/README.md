@@ -50,8 +50,20 @@ src/main/kotlin/com/gatekeeper/
 │   ├── GateService.kt             # Core gating logic (Redis→Postgres→FAIL_MODE)
 │   ├── GateRoutes.kt              # GET /api/gate/check endpoint
 │   └── PaywallTemplates.kt        # HTML + JSON blocked-project responses
-└── db/tables/
-    └── Projects.kt                # Exposed table definition for projects
+├── auth/
+│   └── AuthRoutes.kt              # POST /api/auth/login (BCrypt + JWT)
+├── admin/
+│   └── ProjectAdminRoutes.kt      # JWT-protected CRUD + block/unblock
+└── db/
+    ├── tables/
+    │   ├── Projects.kt            # projects table
+    │   ├── Payments.kt            # payments table
+    │   ├── AuditLog.kt            # audit_log table
+    │   └── Users.kt               # users table (admin accounts)
+    └── repositories/
+        ├── ProjectRepository.kt   # + create/update/updateStatus/findPastDue + Redis invalidation
+        ├── PaymentRepository.kt   # payment CRUD + markSuccess
+        └── AuditRepository.kt     # audit log queries
 ```
 
 ## Key Data Flow — Gate Check
@@ -123,5 +135,5 @@ Short TTL ensures self-healing if cache invalidation is missed. Explicit deletes
 | 0 | Project setup, deps, infra (Docker Compose) | ✅ Done |
 | 1 | Foundation + Docker integration (Ktor bootstrap, DockerService, networking) | ✅ Done |
 | 2 | **Gatekeeper Core** (gate/check, Redis caching, PaywallTemplates, FAIL_MODE) | ✅ Done |
-| 3 | Data & Auth (full DB schema, repositories, JWT auth, admin CRUD) | 🔜 Upcoming |
-| 4 | Paystack & Automation (payment links, webhooks, auto-blocker, notifications) | 🔜 Upcoming |
+| 3 | **Data & Auth** (full DB schema, repositories, JWT auth, admin CRUD) | ✅ Done |
+| 4 | **Paystack & Automation** (payment links, webhooks, auto-blocker, notifications) | ✅ Done |
