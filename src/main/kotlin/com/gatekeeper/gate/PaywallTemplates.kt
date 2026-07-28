@@ -1,5 +1,8 @@
 package com.gatekeeper.gate
 
+import com.gatekeeper.api.PaymentRequiredResponse
+import com.gatekeeper.api.paymentRequiredResponse
+
 /**
  * Simple server-rendered templates for blocked project responses.
  * No templating engine — just string substitution for v1.
@@ -93,8 +96,6 @@ object PaywallTemplates {
     /**
      * JSON response for backend API projects.
      */
-    fun jsonBlocked(projectName: String, paymentLink: String?): String {
-        val link = paymentLink ?: ""
-        return """{"error":"payment_required","message":"Access to this API is suspended pending payment.","payment_link":"$link","contact":"support@gatekeeper.local"}"""
-    }
+    fun jsonBlocked(paymentLink: String?): PaymentRequiredResponse =
+        paymentRequiredResponse(paymentLink)
 }

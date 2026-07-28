@@ -36,6 +36,8 @@ src/main/kotlin/com/gatekeeper/
 ├── Application.kt                 # Entry point — wires all plugins, routes, and startup jobs
 ├── config/
 │   └── AppConfig.kt               # Reads .env / system env → typed properties
+├── api/
+│   └── ErrorResponse.kt           # Uniform error + payment-required response types
 ├── plugins/                       # Ktor plugins installed at startup
 │   ├── Serialization.kt           # ContentNegotiation + kotlinx.json
 │   ├── Monitoring.kt              # CallLogging + StatusPages (global error handler)

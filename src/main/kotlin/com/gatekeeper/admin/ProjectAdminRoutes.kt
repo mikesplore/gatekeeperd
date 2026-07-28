@@ -1,5 +1,6 @@
 package com.gatekeeper.admin
 
+import com.gatekeeper.api.respondError
 import com.gatekeeper.db.repositories.AuditRepository
 import com.gatekeeper.db.repositories.PaymentRepository
 import com.gatekeeper.db.repositories.ProjectRepository
@@ -15,7 +16,6 @@ import kotlinx.serialization.json.Json
 import org.slf4j.LoggerFactory
 import java.math.BigDecimal
 import java.time.LocalDate
-import java.util.*
 
 private val logger = LoggerFactory.getLogger("com.gatekeeper.admin.ProjectAdminRoutes")
 private val json = Json { ignoreUnknownKeys = true; coerceInputValues = true }
@@ -61,20 +61,20 @@ data class StatusChangeRequest(val reason: String)
 fun Application.configureProjectAdminRoutes() {
     routing {
         authenticate("auth-jwt") {
-            // List all projects
             get("/api/admin/projects") {
                 val projects = ProjectRepository.findAll()
                 call.respond(projects)
             }
 
-            // Get single project with payment history and audit log
             get("/api/admin/projects/{slug}") {
-                val slug = call.parameters["slug"] ?: return@get call.respond(
-                    HttpStatusCode.BadRequest, mapOf("error" to "missing slug")
-                )
+                val slug = call.parameters["slug"]
+                if (slug == null) {
+                    call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing slug path parameter")
+                    return@get
+                }
                 val project = ProjectRepository.findBySlug(slug)
                 if (project == null) {
-                    call.respond(HttpStatusCode.NotFound, mapOf("error" to "project not found"))
+                    call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
                     return@get
                 }
                 val payments = PaymentRepository.findByProjectId(project.id)
@@ -86,29 +86,31 @@ fun Application.configureProjectAdminRoutes() {
                 ))
             }
 
-            // Create project
             post("/api/admin/projects") {
                 val body = try {
                     json.decodeFromString<CreateProjectRequest>(call.receiveText())
                 } catch (e: Exception) {
-                    call.respond(HttpStatusCode.BadRequest, mapOf("error" to "invalid_request: ${e.message}"))
+                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "The request body could not be parsed")
                     return@post
                 }
 
                 if (body.slug.isBlank() || body.name.isBlank() || body.domain.isBlank() || body.containerName.isBlank()) {
-                    call.respond(HttpStatusCode.BadRequest, mapOf("error" to "slug, name, domain, and containerName are required"))
+                    call.respondError(
+                        HttpStatusCode.BadRequest,
+                        "invalid_request",
+                        "slug, name, domain, and containerName are required"
+                    )
                     return@post
                 }
 
                 if (body.type.lowercase() !in listOf("frontend", "backend")) {
-                    call.respond(HttpStatusCode.BadRequest, mapOf("error" to "type must be 'frontend' or 'backend'"))
+                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "type must be 'frontend' or 'backend'")
                     return@post
                 }
 
-                // Check for duplicate slug
                 val existing = ProjectRepository.findBySlug(body.slug)
                 if (existing != null) {
-                    call.respond(HttpStatusCode.Conflict, mapOf("error" to "project with this slug already exists"))
+                    call.respondError(HttpStatusCode.Conflict, "project_exists", "A project with this slug already exists")
                     return@post
                 }
 
@@ -133,16 +135,17 @@ fun Application.configureProjectAdminRoutes() {
                 call.respond(HttpStatusCode.Created, project)
             }
 
-            // Update project
             patch("/api/admin/projects/{slug}") {
-                val slug = call.parameters["slug"] ?: return@patch call.respond(
-                    HttpStatusCode.BadRequest, mapOf("error" to "missing slug")
-                )
+                val slug = call.parameters["slug"]
+                if (slug == null) {
+                    call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing slug path parameter")
+                    return@patch
+                }
 
                 val body = try {
                     json.decodeFromString<UpdateProjectRequest>(call.receiveText())
                 } catch (e: Exception) {
-                    call.respond(HttpStatusCode.BadRequest, mapOf("error" to "invalid_request: ${e.message}"))
+                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "The request body could not be parsed")
                     return@patch
                 }
 
@@ -164,7 +167,7 @@ fun Application.configureProjectAdminRoutes() {
                 )
 
                 if (project == null) {
-                    call.respond(HttpStatusCode.NotFound, mapOf("error" to "project not found"))
+                    call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
                     return@patch
                 }
 
@@ -173,21 +176,22 @@ fun Application.configureProjectAdminRoutes() {
                 call.respond(project)
             }
 
-            // Block project
             post("/api/admin/projects/{slug}/block") {
-                val slug = call.parameters["slug"] ?: return@post call.respond(
-                    HttpStatusCode.BadRequest, mapOf("error" to "missing slug")
-                )
+                val slug = call.parameters["slug"]
+                if (slug == null) {
+                    call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing slug path parameter")
+                    return@post
+                }
                 val body = try {
                     json.decodeFromString<StatusChangeRequest>(call.receiveText())
                 } catch (e: Exception) {
-                    call.respond(HttpStatusCode.BadRequest, mapOf("error" to "reason required"))
+                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "A reason is required")
                     return@post
                 }
 
                 val project = ProjectRepository.findBySlug(slug)
                 if (project == null) {
-                    call.respond(HttpStatusCode.NotFound, mapOf("error" to "project not found"))
+                    call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
                     return@post
                 }
 
@@ -201,21 +205,22 @@ fun Application.configureProjectAdminRoutes() {
                 call.respond(mapOf("status" to "blocked", "slug" to slug))
             }
 
-            // Unblock project
             post("/api/admin/projects/{slug}/unblock") {
-                val slug = call.parameters["slug"] ?: return@post call.respond(
-                    HttpStatusCode.BadRequest, mapOf("error" to "missing slug")
-                )
+                val slug = call.parameters["slug"]
+                if (slug == null) {
+                    call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing slug path parameter")
+                    return@post
+                }
                 val body = try {
                     json.decodeFromString<StatusChangeRequest>(call.receiveText())
                 } catch (e: Exception) {
-                    call.respond(HttpStatusCode.BadRequest, mapOf("error" to "reason required"))
+                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "A reason is required")
                     return@post
                 }
 
                 val project = ProjectRepository.findBySlug(slug)
                 if (project == null) {
-                    call.respond(HttpStatusCode.NotFound, mapOf("error" to "project not found"))
+                    call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
                     return@post
                 }
 
@@ -229,31 +234,36 @@ fun Application.configureProjectAdminRoutes() {
                 call.respond(mapOf("status" to "active", "slug" to slug))
             }
 
-            // Initialize payment link for a project
             post("/api/admin/projects/{slug}/payment/initialize") {
-                val slug = call.parameters["slug"] ?: return@post call.respond(
-                    HttpStatusCode.BadRequest, mapOf("error" to "missing slug")
-                )
+                val slug = call.parameters["slug"]
+                if (slug == null) {
+                    call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing slug path parameter")
+                    return@post
+                }
                 val body = try {
                     json.decodeFromString<InitializePaymentRequest>(call.receiveText())
                 } catch (e: Exception) {
-                    call.respond(HttpStatusCode.BadRequest, mapOf("error" to "email required"))
+                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Email is required")
                     return@post
                 }
 
                 val project = ProjectRepository.findBySlug(slug)
                 if (project == null) {
-                    call.respond(HttpStatusCode.NotFound, mapOf("error" to "project not found"))
+                    call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
                     return@post
                 }
 
                 if (project.amountDue == null || project.clientEmail == null) {
-                    call.respond(HttpStatusCode.BadRequest, mapOf("error" to "project has no amount_due or client_email"))
+                    call.respondError(
+                        HttpStatusCode.BadRequest,
+                        "invalid_request",
+                        "Project has no amount_due or client_email configured"
+                    )
                     return@post
                 }
 
                 val result = PaystackClient.initializePayment(
-                    email = body.email.ifBlank { project.clientEmail!! },
+                    email = body.email.ifBlank { project.clientEmail },
                     amountNaira = project.amountDue,
                     projectSlug = project.slug
                 )
@@ -264,26 +274,30 @@ fun Application.configureProjectAdminRoutes() {
                     },
                     onFailure = { err ->
                         logger.error("Failed to initialize payment for $slug", err)
-                        call.respond(HttpStatusCode.BadGateway, mapOf("error" to (err.message ?: "paystack_error")))
+                        call.respondError(
+                            HttpStatusCode.BadGateway,
+                            "paystack_error",
+                            err.message ?: "Failed to initialize payment with Paystack"
+                        )
                     }
                 )
             }
 
-            // Global audit log (most recent entries across all projects)
             get("/api/admin/audit") {
                 val limit = call.request.queryParameters["limit"]?.toIntOrNull() ?: 100
                 val auditLog = AuditRepository.findAll(limit.coerceIn(1, 500))
                 call.respond(auditLog)
             }
 
-            // Get audit log for a project
             get("/api/admin/projects/{slug}/audit") {
-                val slug = call.parameters["slug"] ?: return@get call.respond(
-                    HttpStatusCode.BadRequest, mapOf("error" to "missing slug")
-                )
+                val slug = call.parameters["slug"]
+                if (slug == null) {
+                    call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing slug path parameter")
+                    return@get
+                }
                 val project = ProjectRepository.findBySlug(slug)
                 if (project == null) {
-                    call.respond(HttpStatusCode.NotFound, mapOf("error" to "project not found"))
+                    call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
                     return@get
                 }
                 val auditLog = AuditRepository.findByProjectId(project.id)

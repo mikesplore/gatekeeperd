@@ -1,5 +1,6 @@
 package com.gatekeeper.paystack
 
+import com.gatekeeper.api.respondError
 import com.gatekeeper.config.AppConfig
 import com.gatekeeper.db.repositories.PaymentRepository
 import com.gatekeeper.db.repositories.ProjectRepository
@@ -25,20 +26,20 @@ fun Application.configurePaystackWebhookRoutes() {
                 call.receiveText()
             } catch (e: Exception) {
                 logger.error("Failed to read webhook body", e)
-                call.respond(HttpStatusCode.BadRequest, mapOf("error" to "invalid_body"))
+                call.respondError(HttpStatusCode.BadRequest, "invalid_request", "The request body could not be read")
                 return@post
             }
 
             val signature = call.request.headers["x-paystack-signature"]
             if (signature == null) {
                 logger.warn("Webhook missing signature")
-                call.respond(HttpStatusCode.Unauthorized, mapOf("error" to "missing_signature"))
+                call.respondError(HttpStatusCode.Unauthorized, "missing_signature", "Missing x-paystack-signature header")
                 return@post
             }
 
             if (!verifySignature(rawBody, signature, AppConfig.paystackSecretKey)) {
                 logger.warn("Webhook signature verification failed")
-                call.respond(HttpStatusCode.Unauthorized, mapOf("error" to "invalid_signature"))
+                call.respondError(HttpStatusCode.Unauthorized, "invalid_signature", "Webhook signature verification failed")
                 return@post
             }
 

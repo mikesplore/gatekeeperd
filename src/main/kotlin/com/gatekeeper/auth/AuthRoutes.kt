@@ -1,5 +1,6 @@
 package com.gatekeeper.auth
 
+import com.gatekeeper.api.respondError
 import com.gatekeeper.db.tables.Users
 import com.gatekeeper.plugins.JwtConfig
 import io.ktor.http.*
@@ -39,12 +40,12 @@ fun Application.configureAuthRoutes() {
             val body = try {
                 json.decodeFromString<LoginRequest>(call.receiveText())
             } catch (e: Exception) {
-                call.respond(HttpStatusCode.BadRequest, mapOf("error" to "invalid_request"))
+                call.respondError(HttpStatusCode.BadRequest, "invalid_request", "The request body could not be parsed")
                 return@post
             }
 
             if (body.email.isBlank() || body.password.isBlank()) {
-                call.respond(HttpStatusCode.BadRequest, mapOf("error" to "email and password required"))
+                call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Email and password are required")
                 return@post
             }
 
@@ -55,14 +56,14 @@ fun Application.configureAuthRoutes() {
 
             if (user == null) {
                 logger.warn("Login attempt for unknown email: ${body.email}")
-                call.respond(HttpStatusCode.Unauthorized, mapOf("error" to "invalid_credentials"))
+                call.respondError(HttpStatusCode.Unauthorized, "invalid_credentials", "Invalid email or password")
                 return@post
             }
 
             val passwordHash = user[Users.passwordHash]
             if (!BCrypt.checkpw(body.password, passwordHash)) {
                 logger.warn("Failed login attempt for: ${body.email}")
-                call.respond(HttpStatusCode.Unauthorized, mapOf("error" to "invalid_credentials"))
+                call.respondError(HttpStatusCode.Unauthorized, "invalid_credentials", "Invalid email or password")
                 return@post
             }
 
@@ -74,13 +75,20 @@ fun Application.configureAuthRoutes() {
         authenticate("auth-jwt") {
             get("/api/auth/me") {
                 val principal = call.principal<JWTPrincipal>()
-                    ?: return@get call.respond(HttpStatusCode.Unauthorized, mapOf("error" to "unauthorized"))
+                if (principal == null) {
+                    call.respondError(HttpStatusCode.Unauthorized, "unauthorized", "Authentication required")
+                    return@get
+                }
                 val email = principal.payload.subject
 
                 val user = transaction {
                     Users.selectAll().where { Users.email eq email.lowercase().trim() }
                         .singleOrNull()
-                } ?: return@get call.respond(HttpStatusCode.NotFound, mapOf("error" to "user not found"))
+                }
+                if (user == null) {
+                    call.respondError(HttpStatusCode.NotFound, "user_not_found", "User not found")
+                    return@get
+                }
 
                 call.respond(
                     UserProfileResponse(

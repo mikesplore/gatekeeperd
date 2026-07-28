@@ -2,6 +2,7 @@ package com.gatekeeper.plugins
 
 import com.auth0.jwt.JWT
 import com.auth0.jwt.algorithms.Algorithm
+import com.gatekeeper.api.respondError
 import com.gatekeeper.config.AppConfig
 import io.ktor.http.*
 import io.ktor.server.application.*
@@ -58,6 +59,9 @@ fun Application.configureSecurity() {
                 if (credential.payload.audience.contains(AppConfig.jwtAudience)) {
                     JWTPrincipal(credential.payload)
                 } else null
+            }
+            challenge { _, _ ->
+                call.respondError(HttpStatusCode.Unauthorized, "unauthorized", "Authentication required")
             }
         }
     }

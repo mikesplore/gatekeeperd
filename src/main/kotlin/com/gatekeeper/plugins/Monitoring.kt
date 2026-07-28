@@ -1,5 +1,6 @@
 package com.gatekeeper.plugins
 
+import com.gatekeeper.api.respondError
 import io.ktor.http.*
 import io.ktor.server.application.*
 import io.ktor.server.plugins.calllogging.*
@@ -22,14 +23,14 @@ fun Application.configureMonitoring() {
 
     install(StatusPages) {
         exception<SerializationException> { call, _ ->
-            call.respond(HttpStatusCode.BadRequest, mapOf("error" to "invalid_request"))
+            call.respondError(HttpStatusCode.BadRequest, "invalid_request", "The request body could not be parsed")
         }
         exception<NotFoundException> { call, ex ->
-            call.respond(HttpStatusCode.NotFound, mapOf("error" to (ex.message ?: "not_found")))
+            call.respondError(HttpStatusCode.NotFound, "not_found", ex.message ?: "Resource not found")
         }
         exception<Throwable> { call, ex ->
             logger.error("Unhandled exception", ex)
-            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "internal_server_error"))
+            call.respondError(HttpStatusCode.InternalServerError, "internal_server_error", "An unexpected error occurred")
         }
     }
 }

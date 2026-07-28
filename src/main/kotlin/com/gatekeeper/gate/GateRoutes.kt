@@ -1,5 +1,6 @@
 package com.gatekeeper.gate
 
+import com.gatekeeper.api.respondError
 import com.gatekeeper.docker.GateResult
 import io.ktor.http.*
 import io.ktor.server.application.*
@@ -11,7 +12,7 @@ fun Application.configureGateRoutes() {
         get("/api/gate/check") {
             val slug = call.request.queryParameters["project"]
             if (slug.isNullOrBlank()) {
-                call.respond(HttpStatusCode.BadRequest, mapOf("error" to "missing project slug"))
+                call.respondError(HttpStatusCode.BadRequest, "missing_project_slug", "Missing project slug query parameter")
                 return@get
             }
 
@@ -27,19 +28,17 @@ fun Application.configureGateRoutes() {
                             call.response.header(HttpHeaders.ContentType, ContentType.Text.Html.toString())
                             call.respond(HttpStatusCode.PaymentRequired, PaywallTemplates.htmlPaywall(projectName, paymentLink))
                         }
-                        "backend" -> {
-                            call.response.header(HttpHeaders.ContentType, ContentType.Application.Json.toString())
-                            call.respond(HttpStatusCode.PaymentRequired, PaywallTemplates.jsonBlocked(projectName, paymentLink))
-                        }
                         else -> {
-                            call.respond(HttpStatusCode.PaymentRequired, PaywallTemplates.jsonBlocked(projectName, paymentLink))
+                            call.respond(HttpStatusCode.PaymentRequired, PaywallTemplates.jsonBlocked(paymentLink))
                         }
                     }
                 }
                 is GateResult.Unknown -> {
-                    // Unknown project — fail closed (misconfiguration)
-                    call.response.header(HttpHeaders.ContentType, ContentType.Application.Json.toString())
-                    call.respond(HttpStatusCode.PaymentRequired, """{"error":"unknown_project","message":"The requested project is not recognized."}""")
+                    call.respondError(
+                        HttpStatusCode.PaymentRequired,
+                        "unknown_project",
+                        "The requested project is not recognized."
+                    )
                 }
             }
         }

@@ -1,5 +1,6 @@
 package com.gatekeeper.plugins
 
+import com.gatekeeper.api.respondError
 import com.gatekeeper.config.AppConfig
 import com.gatekeeper.docker.DockerService
 import io.ktor.http.*
@@ -43,7 +44,7 @@ fun Application.configureRouting() {
             get("/api/admin/containers") {
                 val svc = dockerService
                 if (svc == null) {
-                    call.respond(HttpStatusCode.ServiceUnavailable, mapOf("error" to "Docker not available"))
+                    call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available")
                     return@get
                 }
                 val containers = svc.listContainers(all = true)
@@ -53,79 +54,132 @@ fun Application.configureRouting() {
             get("/api/admin/containers/{name}") {
                 val svc = dockerService
                 if (svc == null) {
-                    call.respond(HttpStatusCode.ServiceUnavailable, mapOf("error" to "Docker not available"))
+                    call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available")
                     return@get
                 }
-                val name = call.parameters["name"] ?: return@get call.respond(
-                    HttpStatusCode.BadRequest,
-                    mapOf("error" to "missing container name")
-                )
+                val name = call.parameters["name"]
+                if (name == null) {
+                    call.respondError(HttpStatusCode.BadRequest, "missing_container_name", "Missing container name path parameter")
+                    return@get
+                }
                 val container = svc.getContainer(name)
                 if (container != null) {
                     call.respond(container)
                 } else {
-                    call.respond(HttpStatusCode.NotFound, mapOf("error" to "container not found"))
+                    call.respondError(HttpStatusCode.NotFound, "container_not_found", "Container not found")
                 }
             }
 
             post("/api/admin/containers/{name}/start") {
-                val svc = dockerService ?: return@post call.respond(HttpStatusCode.ServiceUnavailable, mapOf("error" to "Docker not available"))
-                val name = call.parameters["name"] ?: return@post call.respond(HttpStatusCode.BadRequest, mapOf("error" to "missing container name"))
+                val svc = dockerService
+                if (svc == null) {
+                    call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available")
+                    return@post
+                }
+                val name = call.parameters["name"]
+                if (name == null) {
+                    call.respondError(HttpStatusCode.BadRequest, "missing_container_name", "Missing container name path parameter")
+                    return@post
+                }
                 try {
                     svc.startContainer(name)
                     call.respond(mapOf("status" to "started", "container" to name))
                 } catch (e: Exception) {
-                    call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.message ?: "failed to start")))
+                    call.respondError(
+                        HttpStatusCode.InternalServerError,
+                        "container_start_failed",
+                        e.message ?: "Failed to start container"
+                    )
                 }
             }
 
             post("/api/admin/containers/{name}/stop") {
-                val svc = dockerService ?: return@post call.respond(HttpStatusCode.ServiceUnavailable, mapOf("error" to "Docker not available"))
-                val name = call.parameters["name"] ?: return@post call.respond(HttpStatusCode.BadRequest, mapOf("error" to "missing container name"))
+                val svc = dockerService
+                if (svc == null) {
+                    call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available")
+                    return@post
+                }
+                val name = call.parameters["name"]
+                if (name == null) {
+                    call.respondError(HttpStatusCode.BadRequest, "missing_container_name", "Missing container name path parameter")
+                    return@post
+                }
                 try {
                     svc.stopContainer(name)
                     call.respond(mapOf("status" to "stopped", "container" to name))
                 } catch (e: Exception) {
-                    call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.message ?: "failed to stop")))
+                    call.respondError(
+                        HttpStatusCode.InternalServerError,
+                        "container_stop_failed",
+                        e.message ?: "Failed to stop container"
+                    )
                 }
             }
 
             post("/api/admin/containers/{name}/restart") {
-                val svc = dockerService ?: return@post call.respond(HttpStatusCode.ServiceUnavailable, mapOf("error" to "Docker not available"))
-                val name = call.parameters["name"] ?: return@post call.respond(HttpStatusCode.BadRequest, mapOf("error" to "missing container name"))
+                val svc = dockerService
+                if (svc == null) {
+                    call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available")
+                    return@post
+                }
+                val name = call.parameters["name"]
+                if (name == null) {
+                    call.respondError(HttpStatusCode.BadRequest, "missing_container_name", "Missing container name path parameter")
+                    return@post
+                }
                 try {
                     svc.restartContainer(name)
                     call.respond(mapOf("status" to "restarted", "container" to name))
                 } catch (e: Exception) {
-                    call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.message ?: "failed to restart")))
+                    call.respondError(
+                        HttpStatusCode.InternalServerError,
+                        "container_restart_failed",
+                        e.message ?: "Failed to restart container"
+                    )
                 }
             }
 
             get("/api/admin/containers/{name}/health") {
-                val svc = dockerService ?: return@get call.respond(HttpStatusCode.ServiceUnavailable, mapOf("error" to "Docker not available"))
-                val name = call.parameters["name"] ?: return@get call.respond(HttpStatusCode.BadRequest, mapOf("error" to "missing container name"))
+                val svc = dockerService
+                if (svc == null) {
+                    call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available")
+                    return@get
+                }
+                val name = call.parameters["name"]
+                if (name == null) {
+                    call.respondError(HttpStatusCode.BadRequest, "missing_container_name", "Missing container name path parameter")
+                    return@get
+                }
                 val health = svc.containerHealth(name)
                 call.respond(mapOf("container" to name, "health" to health))
             }
 
             get("/api/admin/networks") {
-                val svc = dockerService ?: return@get call.respond(HttpStatusCode.ServiceUnavailable, mapOf("error" to "Docker not available"))
+                val svc = dockerService
+                if (svc == null) {
+                    call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available")
+                    return@get
+                }
                 val networks = svc.listNetworks()
                 call.respond(networks)
             }
 
             post("/api/admin/images/pull") {
-                val svc = dockerService ?: return@post call.respond(HttpStatusCode.ServiceUnavailable, mapOf("error" to "Docker not available"))
+                val svc = dockerService
+                if (svc == null) {
+                    call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available")
+                    return@post
+                }
                 val body = try {
                     call.receiveText()
                 } catch (e: Exception) {
-                    call.respond(HttpStatusCode.BadRequest, mapOf("error" to "invalid body"))
+                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "The request body could not be read")
                     return@post
                 }
                 // Simple JSON parse: {"image":"name","tag":"latest"}
                 val image = Regex("\"image\"\\s*:\\s*\"([^\"]+)\"").find(body)?.groupValues?.getOrNull(1)
                 if (image == null) {
-                    call.respond(HttpStatusCode.BadRequest, mapOf("error" to "image required"))
+                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Image name is required")
                     return@post
                 }
                 val tag = Regex("\"tag\"\\s*:\\s*\"([^\"]+)\"").find(body)?.groupValues?.getOrNull(1) ?: "latest"
@@ -133,7 +187,11 @@ fun Application.configureRouting() {
                     svc.pullImage(image, tag)
                     call.respond(mapOf("status" to "pulled", "image" to "$image:$tag"))
                 } catch (e: Exception) {
-                    call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.message ?: "failed to pull")))
+                    call.respondError(
+                        HttpStatusCode.InternalServerError,
+                        "image_pull_failed",
+                        e.message ?: "Failed to pull image"
+                    )
                 }
             }
         }

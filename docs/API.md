@@ -68,11 +68,19 @@ Gate check endpoint called by Traefik ForwardAuth. Never expose this to the publ
     {
       "error": "payment_required",
       "message": "Access to this API is suspended pending payment.",
+      "timestamp": "2026-07-28T12:00:00",
       "payment_link": "https://paystack.com/pay/xxxx",
       "contact": "support@gatekeeper.local"
     }
     ```
-- `402` with JSON `{"error":"unknown_project","message":"The requested project is not recognized."}` for unrecognized slugs (fail-closed)
+- `402` with JSON for unrecognized slugs (fail-closed):
+  ```json
+  {
+    "error": "unknown_project",
+    "message": "The requested project is not recognized.",
+    "timestamp": "2026-07-28T12:00:00"
+  }
+  ```
 
 **Notes:**
 - This endpoint must NOT be internet-reachable. Only Traefik on the internal Docker network should call it.
@@ -425,21 +433,44 @@ Paystack webhook handler. Verifies HMAC-SHA512 signature via `x-paystack-signatu
 
 ## Error Format
 
-All errors return JSON:
+All error responses return JSON with a consistent shape:
+
 ```json
 {
   "error": "error_code",
-  "message": "Human-readable description"
+  "message": "Human-readable description",
+  "timestamp": "2026-07-28T12:00:00"
+}
+```
+
+Payment-required responses for blocked backend projects extend this format:
+
+```json
+{
+  "error": "payment_required",
+  "message": "Access to this API is suspended pending payment.",
+  "timestamp": "2026-07-28T12:00:00",
+  "payment_link": "https://paystack.com/pay/xxxx",
+  "contact": "support@gatekeeper.local"
 }
 ```
 
 Common error codes:
 - `invalid_request` — malformed JSON or missing fields
-- `missing slug` — required path parameter missing
-- `project not found` — slug does not exist
+- `missing_slug` — required path parameter missing
+- `missing_project_slug` — gate check missing `project` query parameter
+- `missing_container_name` — Docker route missing container name
+- `project_not_found` — slug does not exist
+- `container_not_found` — Docker container not found
+- `docker_unavailable` — Docker socket not reachable
 - `invalid_credentials` — wrong email/password
+- `unauthorized` — missing or invalid JWT
+- `user_not_found` — authenticated user no longer exists
 - `missing_signature` / `invalid_signature` — webhook auth failure
-- `payment_required` — gate blocked the project
+- `paystack_error` — Paystack API call failed
+- `internal_server_error` — unhandled server error
+- `payment_required` — gate blocked the project (backend JSON paywall)
+- `unknown_project` — unrecognized slug on gate check (fail-closed)
 
 ---
 
