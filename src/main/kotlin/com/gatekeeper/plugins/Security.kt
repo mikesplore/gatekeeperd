@@ -42,7 +42,10 @@ fun Application.configureSecurity() {
         allowMethod(HttpMethod.Delete)
         allowHeader(HttpHeaders.Authorization)
         allowHeader(HttpHeaders.ContentType)
-        anyHost()
+        allowHost("http://localhost:5173")
+        allowHost("https://gatekeeperd.mikesplore.me")
+        allowHost("http://gatekeeperd.mikesplore.me")
+        allowCredentials = true
     }
 
     authentication {
