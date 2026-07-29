@@ -111,7 +111,7 @@ Public payment initiation for a suspended project. Creates a Paystack checkout s
 **Requires:** project is blocked, `amount_due` and `client_email` set, `PAYSTACK_SECRET_KEY` and `GATEKEEPER_PUBLIC_URL` in env.
 
 ### GET /api/gate/payment/callback?project={slug}&reference={ref}
-Paystack browser return URL after payment. Shows a thank-you page telling the client their site will be back online shortly. Project activation is handled by the Paystack webhook.
+Paystack browser return URL after payment. Redirects the browser to the project domain. Project activation is handled by the Paystack webhook.
 
 **Note:** when a payment is confirmed, Gatekeeper clears the project's `due_date` and sets the project back to `active`. That stops overdue tracking until an admin assigns a new due date.
 

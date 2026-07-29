@@ -9,6 +9,9 @@ import io.ktor.http.*
 import io.ktor.server.application.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
+import org.slf4j.LoggerFactory
+
+private val logger = LoggerFactory.getLogger("com.gatekeeper.gate.GateRoutes")
 
 private suspend fun ApplicationCall.requireProjectSlug(): String? {
     val raw = request.queryParameters["project"]
@@ -32,7 +35,16 @@ private fun ApplicationCall.prefersHtml(): Boolean {
 private fun isSuspended(status: String): Boolean =
     status.lowercase() in listOf("blocked", "manual_block")
 
-private suspend fun ApplicationCall.respondBlocked(result: GateResult.Blocked, slug: String) {
+private fun projectRedirectUrl(domain: String): String {
+    val trimmed = domain.trim()
+    return when {
+        trimmed.startsWith("http://", ignoreCase = true) -> trimmed
+        trimmed.startsWith("https://", ignoreCase = true) -> trimmed
+        else -> "https://$trimmed"
+    }
+}
+
+private suspend fun ApplicationCall.respondBlocked(result: GateResult.Blocked) {
     val paywall = result.paywall
     if (prefersHtml() && paywall != null) {
         response.header(HttpHeaders.ContentType, ContentType.Text.Html.withCharset(Charsets.UTF_8).toString())
@@ -59,7 +71,7 @@ fun Application.configureGateRoutes() {
             val slug = call.requireProjectSlug() ?: return@get
             when (val result = GateService.check(slug)) {
                 is GateResult.Active -> call.respond(HttpStatusCode.OK, "")
-                is GateResult.Blocked -> call.respondBlocked(result, slug)
+                is GateResult.Blocked -> call.respondBlocked(result)
                 is GateResult.Unknown -> call.respondError(
                     HttpStatusCode.PaymentRequired,
                     "unknown_project",
@@ -138,11 +150,13 @@ fun Application.configureGateRoutes() {
                 .map { it.status.equals("success", ignoreCase = true) }
                 .getOrDefault(false)
 
-            call.response.header(HttpHeaders.ContentType, ContentType.Text.Html.withCharset(Charsets.UTF_8).toString())
-            call.respond(
-                HttpStatusCode.OK,
-                PaywallTemplates.paymentSuccessPage(project.name, project.domain, verified)
-            )
+            if (verified) {
+                logger.info("Payment callback verified for ${project.slug}, ref=$reference")
+            } else {
+                logger.warn("Payment callback could not be verified for ${project.slug}, ref=$reference")
+            }
+
+            call.respondRedirect(projectRedirectUrl(project.domain), permanent = false)
         }
     }
 }

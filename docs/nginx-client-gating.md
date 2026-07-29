@@ -9,9 +9,10 @@ Gate client apps behind nginx using gatekeeperd. nginx stays the reverse proxy; 
 | `/api/gate/auth?project={slug}` | nginx `auth_request` subrequest | **403** when blocked (empty body) |
 | `/api/gate/paywall?project={slug}` | Paywall page shown to clients | **402** HTML with amount, due date, Pay Now |
 | `/api/gate/pay?project={slug}` | Client clicks Pay Now | Redirect to Paystack checkout |
-| `/api/gate/payment/callback?project={slug}` | Paystack return URL | Thank-you HTML page |
+| `/api/gate/payment/callback?project={slug}` | Paystack return URL | Redirect to project domain |
 
 nginx `auth_request` only accepts **401** or **403** as deny codes. Never use `/api/gate/check` for the auth subrequest.
+The `/api/gate/` location is a separate bypass path for payment and callback traffic, so those requests do not pass through `auth_request`.
 
 ## Example: `acw.mikesplore.me`
 
@@ -65,6 +66,12 @@ server {
 }
 ```
 
+That is the working split:
+- `location /` protects the client app with `auth_request`
+- `location = /gatekeeper-auth-acw` performs the internal allow/deny check
+- `location @gatekeeper_paywall_acw` serves the paywall body
+- `location /api/gate/` bypasses the guard so Pay Now, callback, and related gate endpoints stay reachable
+
 Apply:
 
 ```bash
@@ -88,7 +95,7 @@ Register the callback URL in Paystack dashboard:
 https://gateapi.mikesplore.me/api/paystack/webhook
 ```
 
-(webhook for activation; Paystack also uses `callback_url` from each transaction for the browser thank-you page)
+(webhook for activation; Paystack also uses `callback_url` from each transaction for the browser redirect)
 
 ## Verify
 
@@ -102,7 +109,7 @@ curl -i -H "Accept: application/json" "https://acw.mikesplore.me/api/v1/health" 
 
 1. Client visits site → nginx blocks → shows paywall (project name, amount, due date)
 2. Client clicks **Pay Now** → `/api/gate/pay?project=acw` → Paystack checkout
-3. After payment → thank-you page → webhook activates project → site works again
+3. After payment → browser redirects to project domain → webhook activates project → site works again
 
 No admin action required to generate a link.
 

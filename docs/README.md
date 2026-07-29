@@ -22,12 +22,14 @@ Internet
     ▼
 nginx (client domain, e.g. acw.example.com)
     │
-    ├─ auth_request → GET /api/gate/auth?project={slug}   (403 = deny)
-    │                      Gatekeeperd
+    ├─ location / → auth_request /gatekeeper-auth-acw
+    │     └─ GET /api/gate/auth?project={slug}             (403 = deny)
+    │                          Gatekeeperd
     │
-    ├─ on deny → /api/gate/paywall?project={slug}         (402 HTML paywall)
+    ├─ on deny → @gatekeeper_paywall_acw → /api/gate/paywall?project={slug}
+    │                                               (402 HTML paywall)
     │
-    ├─ /api/gate/* proxied to Gatekeeperd                 (Pay Now, callback)
+    ├─ /api/gate/* proxied to Gatekeeperd                 (Pay Now, callback bypass auth_request)
     │
     └─ on allow → client app (e.g. localhost:9921)
 ```
@@ -44,7 +46,7 @@ Traefik ForwardAuth calls `/api/gate/check?project={slug}` — returns `200` or 
 
 1. Client visits site → nginx blocks → paywall page (project name, amount due, due date)
 2. **Pay Now** → `GET /api/gate/pay?project={slug}` → redirect to Paystack checkout
-3. After payment → thank-you page at `/api/gate/payment/callback`
+3. After payment → browser redirects to the project domain from `/api/gate/payment/callback`
 4. Paystack webhook → `POST /api/paystack/webhook` → project set to `active` and `due_date` cleared
 5. With `due_date = null`, the auto-blocker stops tracking the project until an admin sets a new due date
 6. If the payment is later reversed, Gatekeeper re-blocks the project and restores `due_date` to that reversal day
@@ -76,7 +78,7 @@ src/main/kotlin/com/gatekeeper/
 │   ├── GateResult.kt           # Active / Blocked / Unknown
 │   ├── GateRoutes.kt           # /api/gate/* public gating + payment routes
 │   ├── PaywallInfo.kt          # Paywall display model
-│   └── PaywallTemplates.kt     # HTML paywall + thank-you pages
+│   └── PaywallTemplates.kt     # HTML paywall
 ├── auth/
 │   └── AuthRoutes.kt           # POST /api/auth/login, GET /api/auth/me
 ├── admin/
@@ -110,7 +112,7 @@ src/main/kotlin/com/gatekeeper/
 | `/api/gate/check` | None | Traefik ForwardAuth / JSON gate check (200/402) |
 | `/api/gate/paywall` | None | HTML paywall page |
 | `/api/gate/pay` | None | Start Paystack checkout (suspended projects only) |
-| `/api/gate/payment/callback` | None | Post-payment thank-you page |
+| `/api/gate/payment/callback` | None | Post-payment redirect |
 | `/api/paystack/webhook` | HMAC signature | Payment confirmation → unblock |
 | `/api/admin/*` | JWT | Projects, Docker, audit, payments |
 
