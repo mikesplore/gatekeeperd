@@ -32,9 +32,60 @@ data class PaymentResponse(
     val paystackReference: String,
     val amount: Double,
     val status: String,
+    val gatewayStatus: String,
+    val verifiedVia: String? = null,
     val paidAt: String? = null,
     val rawWebhookPayload: String? = null,
     val createdAt: String
+)
+
+@Serializable
+data class PaymentAdminResponse(
+    val id: String,
+    val projectId: String,
+    val projectName: String,
+    val projectSlug: String,
+    val paystackReference: String,
+    val amount: Double,
+    val gatewayStatus: String,
+    val verifiedVia: String? = null,
+    val paidAt: String? = null,
+    val createdAt: String
+)
+
+@Serializable
+data class PaymentsListResponse(
+    val payments: List<PaymentAdminResponse>,
+    val total: Long,
+    val limit: Int,
+    val offset: Int
+)
+
+@Serializable
+data class OverdueProjectResponse(
+    val slug: String,
+    val name: String,
+    val clientName: String? = null,
+    val clientEmail: String? = null,
+    val dueDate: String,
+    val daysOverdue: Long,
+    val gracePeriodDays: Int,
+    val willAutoBlockOn: String,
+    val amountDue: Double
+)
+
+@Serializable
+data class RevenueMonthResponse(
+    val month: String,
+    val amount: Double
+)
+
+@Serializable
+data class RevenueReportResponse(
+    val totalThisMonth: Double,
+    val totalLastMonth: Double,
+    val currency: String,
+    val byMonth: List<RevenueMonthResponse>
 )
 
 @Serializable
@@ -85,6 +136,8 @@ fun PaymentRepository.PaymentRecord.toResponse(): PaymentResponse = PaymentRespo
     paystackReference = paystackReference,
     amount = amount.toDouble(),
     status = status,
+    gatewayStatus = gatewayStatus,
+    verifiedVia = verifiedVia,
     paidAt = paidAt?.toString(),
     rawWebhookPayload = rawWebhookPayload,
     createdAt = createdAt.toString()

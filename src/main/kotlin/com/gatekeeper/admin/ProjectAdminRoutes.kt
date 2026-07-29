@@ -130,7 +130,7 @@ fun Application.configureProjectAdminRoutes() {
                     return@post
                 }
 
-                val existing = ProjectRepository.findBySlug(slug)
+                val existing = ProjectRepository.findBySlug(slug, includeArchived = true)
                 if (existing != null) {
                     call.respondError(HttpStatusCode.Conflict, "project_exists", "A project with this slug already exists")
                     return@post
@@ -235,13 +235,20 @@ fun Application.configureProjectAdminRoutes() {
                     return@delete
                 }
 
-                val deleted = ProjectRepository.delete(slug)
-                if (!deleted) {
+                val principal = call.principal<io.ktor.server.auth.jwt.JWTPrincipal>()
+                val actor = principal?.payload?.subject ?: "unknown"
+
+                val archived = ProjectRepository.archive(
+                    slug = slug,
+                    actor = actor,
+                    reason = "Archived via admin API"
+                )
+                if (!archived) {
                     call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
                     return@delete
                 }
 
-                logger.info("Project deleted: $slug")
+                logger.info("Project archived: $slug by $actor")
                 call.respond(HttpStatusCode.NoContent)
             }
 

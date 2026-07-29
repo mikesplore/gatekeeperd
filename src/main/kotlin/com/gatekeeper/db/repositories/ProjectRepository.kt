@@ -1,7 +1,6 @@
 package com.gatekeeper.db.repositories
 
 import com.gatekeeper.db.tables.AuditLog
-import com.gatekeeper.db.tables.Payments
 import com.gatekeeper.db.tables.ProjectStatus
 import com.gatekeeper.db.tables.ProjectType
 import com.gatekeeper.db.tables.Projects
@@ -37,11 +36,14 @@ object ProjectRepository {
         val updatedAt: LocalDateTime
     )
 
-    fun findBySlug(slug: String): ProjectRecord? {
+    fun findBySlug(slug: String, includeArchived: Boolean = false): ProjectRecord? {
         return transaction {
-            Projects.selectAll().where { Projects.slug eq slug }
-                .singleOrNull()
-                ?.toProjectRecord()
+            val row = if (includeArchived) {
+                Projects.selectAll().where { Projects.slug eq slug }
+            } else {
+                Projects.selectAll().where { (Projects.slug eq slug) and Projects.deletedAt.isNull() }
+            }
+            row.singleOrNull()?.toProjectRecord()
         }
     }
 
@@ -53,9 +55,14 @@ object ProjectRepository {
         }
     }
 
-    fun findAll(): List<ProjectRecord> {
+    fun findAll(includeArchived: Boolean = false): List<ProjectRecord> {
         return transaction {
-            Projects.selectAll().orderBy(Projects.createdAt, SortOrder.DESC)
+            val query = if (includeArchived) {
+                Projects.selectAll()
+            } else {
+                Projects.selectAll().where { Projects.deletedAt.isNull() }
+            }
+            query.orderBy(Projects.createdAt, SortOrder.DESC)
                 .map { it.toProjectRecord() }
         }
     }
@@ -114,7 +121,9 @@ object ProjectRepository {
         gracePeriodDays: Int?
     ): ProjectRecord? {
         return transaction {
-            val existing = Projects.selectAll().where { Projects.slug eq slug }.singleOrNull() ?: return@transaction null
+            val existing = Projects.selectAll()
+                .where { (Projects.slug eq slug) and Projects.deletedAt.isNull() }
+                .singleOrNull() ?: return@transaction null
             Projects.update({ Projects.slug eq slug }) {
                 name?.let { v -> it[Projects.name] = v }
                 domain?.let { v -> it[Projects.domain] = v }
@@ -155,18 +164,33 @@ object ProjectRepository {
         }
     }
 
-    fun delete(slug: String): Boolean {
+    fun archive(slug: String, actor: String, reason: String?): Boolean {
         return transaction {
-            val project = Projects.selectAll().where { Projects.slug eq slug }.singleOrNull()
+            val project = Projects.selectAll()
+                .where { (Projects.slug eq slug) and Projects.deletedAt.isNull() }
+                .singleOrNull()
                 ?: return@transaction false
 
-            Payments.deleteWhere { Payments.projectId eq project[Projects.id] }
-            AuditLog.deleteWhere { AuditLog.projectId eq project[Projects.id] }
-            Projects.deleteWhere { Projects.slug eq slug } > 0
-        }.also { deleted ->
-            if (deleted) invalidateCache(slug)
+            val now = LocalDateTime.now()
+            Projects.update({ Projects.id eq project[Projects.id] }) {
+                it[Projects.deletedAt] = now
+                it[Projects.status] = ProjectStatus.BLOCKED
+                it[Projects.updatedAt] = now
+            }
+            AuditLog.insert {
+                it[AuditLog.projectId] = project[Projects.id]
+                it[AuditLog.action] = "project_archived"
+                it[AuditLog.actor] = actor
+                it[AuditLog.reason] = reason ?: "Project archived (soft delete)"
+            }
+            true
+        }.also { archived ->
+            if (archived) invalidateCache(slug)
         }
     }
+
+    @Deprecated("Use archive — hard delete removed to preserve payment/audit history", ReplaceWith("archive(slug, actor, reason)"))
+    fun delete(slug: String): Boolean = archive(slug, "system", "legacy delete call")
 
     fun invalidateCache(slug: String) {
         try {
@@ -176,12 +200,81 @@ object ProjectRepository {
         }
     }
 
+    data class OverdueProject(
+        val slug: String,
+        val name: String,
+        val clientName: String?,
+        val clientEmail: String?,
+        val dueDate: LocalDate,
+        val daysOverdue: Long,
+        val gracePeriodDays: Int,
+        val willAutoBlockOn: LocalDate,
+        val amountDue: BigDecimal?
+    )
+
+    fun findOverdue(asOf: LocalDate): List<OverdueProject> {
+        return transaction {
+            Projects.selectAll()
+                .where {
+                    Projects.deletedAt.isNull() and
+                        (Projects.status eq ProjectStatus.ACTIVE) and
+                        Projects.dueDate.isNotNull() and
+                        (Projects.dueDate less asOf)
+                }
+                .map { row ->
+                    val dueDate = row[Projects.dueDate]!!
+                    val grace = row[Projects.gracePeriodDays]
+                    OverdueProject(
+                        slug = row[Projects.slug],
+                        name = row[Projects.name],
+                        clientName = row[Projects.clientName],
+                        clientEmail = row[Projects.clientEmail],
+                        dueDate = dueDate,
+                        daysOverdue = java.time.temporal.ChronoUnit.DAYS.between(dueDate, asOf),
+                        gracePeriodDays = grace,
+                        willAutoBlockOn = dueDate.plusDays(grace.toLong()),
+                        amountDue = row[Projects.amountDue]
+                    )
+                }
+                .sortedByDescending { it.daysOverdue }
+        }
+    }
+
+    fun setStatusOnly(id: UUID, newStatus: String) {
+        transaction {
+            Projects.update({ Projects.id eq id }) {
+                it[Projects.status] = ProjectStatus.valueOf(newStatus.uppercase())
+            }
+        }
+    }
+
+    fun setStatusAndClearDueDate(id: UUID, newStatus: String) {
+        transaction {
+            Projects.update({ Projects.id eq id }) {
+                it[Projects.status] = ProjectStatus.valueOf(newStatus.uppercase())
+                it[Projects.dueDate] = null
+                it[Projects.updatedAt] = LocalDateTime.now()
+            }
+        }
+    }
+
+    fun setStatusAndDueDate(id: UUID, newStatus: String, dueDate: LocalDate) {
+        transaction {
+            Projects.update({ Projects.id eq id }) {
+                it[Projects.status] = ProjectStatus.valueOf(newStatus.uppercase())
+                it[Projects.dueDate] = dueDate
+                it[Projects.updatedAt] = LocalDateTime.now()
+            }
+        }
+    }
+
     fun findPastDue(asOf: LocalDate): List<ProjectRecord> {
         return transaction {
             Projects.selectAll()
                 .where {
-                    (Projects.status eq ProjectStatus.ACTIVE) and
-                    Projects.dueDate.isNotNull()
+                    Projects.deletedAt.isNull() and
+                        (Projects.status eq ProjectStatus.ACTIVE) and
+                        Projects.dueDate.isNotNull()
                 }
                 .map { it.toProjectRecord() }
                 .filter { record ->

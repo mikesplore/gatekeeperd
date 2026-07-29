@@ -45,7 +45,9 @@ Traefik ForwardAuth calls `/api/gate/check?project={slug}` — returns `200` or 
 1. Client visits site → nginx blocks → paywall page (project name, amount due, due date)
 2. **Pay Now** → `GET /api/gate/pay?project={slug}` → redirect to Paystack checkout
 3. After payment → thank-you page at `/api/gate/payment/callback`
-4. Paystack webhook → `POST /api/paystack/webhook` → project set to `active`
+4. Paystack webhook → `POST /api/paystack/webhook` → project set to `active` and `due_date` cleared
+5. With `due_date = null`, the auto-blocker stops tracking the project until an admin sets a new due date
+6. If the payment is later reversed, Gatekeeper re-blocks the project and restores `due_date` to that reversal day
 
 No admin action required to generate payment links for blocked clients.
 

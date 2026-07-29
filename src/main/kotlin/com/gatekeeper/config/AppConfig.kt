@@ -61,6 +61,11 @@ object AppConfig {
     val defaultGracePeriodDays: Int = optionalSetting("DEFAULT_GRACE_PERIOD_DAYS", "3").toInt()
     val failMode: String = optionalSetting("FAIL_MODE", "open")
 
+    val reconciliationStaleMinutes: Long =
+        optionalSetting("RECONCILIATION_STALE_MINUTES", "30").toLong()
+    val reconciliationIntervalMinutes: Long =
+        optionalSetting("RECONCILIATION_INTERVAL_MINUTES", "15").toLong()
+
     /** Parsed from CORS_ALLOWED_ORIGINS — comma-separated full origins or bare hostnames */
     val corsAllowedHosts: List<CorsHost> by lazy {
         parseCorsOrigins(

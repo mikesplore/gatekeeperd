@@ -1,6 +1,7 @@
 package com.gatekeeper
 
 import com.gatekeeper.api.InputValidators
+import com.gatekeeper.admin.configurePaymentAdminRoutes
 import com.gatekeeper.admin.configureProjectAdminRoutes
 import com.gatekeeper.auth.configureAuthRoutes
 import com.gatekeeper.config.AppConfig
@@ -15,6 +16,7 @@ import com.gatekeeper.plugins.configureRouting
 import com.gatekeeper.plugins.configureSecurity
 import com.gatekeeper.plugins.configureSerialization
 import com.gatekeeper.scheduler.AutoBlockerJob
+import com.gatekeeper.scheduler.ReconciliationJob
 import io.ktor.server.application.*
 import io.ktor.server.engine.*
 import io.ktor.server.netty.*
@@ -47,12 +49,14 @@ fun Application.module() {
     configureGateRoutes()
     configureAuthRoutes()
     configureProjectAdminRoutes()
+    configurePaymentAdminRoutes()
     configurePaystackWebhookRoutes()
 
     seedInitialAdmin()
 
     val appScope = CoroutineScope(SupervisorJob())
     AutoBlockerJob.start(appScope)
+    ReconciliationJob.start(appScope)
 
     monitor.subscribe(ApplicationStopping) {
         runCatching { PaystackClient.close() }

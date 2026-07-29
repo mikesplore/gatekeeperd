@@ -1,0 +1,83 @@
+package com.gatekeeper.admin
+
+import com.gatekeeper.api.InputValidators
+import com.gatekeeper.api.dto.*
+import com.gatekeeper.api.respondError
+import com.gatekeeper.db.repositories.PaymentRepository
+import com.gatekeeper.db.repositories.ProjectRepository
+import io.ktor.http.*
+import io.ktor.server.application.*
+import io.ktor.server.auth.*
+import io.ktor.server.response.*
+import io.ktor.server.routing.*
+import java.time.LocalDate
+
+fun Application.configurePaymentAdminRoutes() {
+    routing {
+        authenticate("auth-jwt") {
+            get("/api/admin/payments") {
+                val status = call.request.queryParameters["status"]
+                val projectSlug = call.request.queryParameters["project_slug"]
+                val from = InputValidators.parseDueDate(call.request.queryParameters["from"])
+                val to = InputValidators.parseDueDate(call.request.queryParameters["to"])
+                val limit = call.request.queryParameters["limit"]?.toIntOrNull()?.coerceIn(1, 500) ?: 100
+                val offset = call.request.queryParameters["offset"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0
+
+                val (rows, total) = PaymentRepository.findAllFiltered(status, projectSlug, from, to, limit, offset)
+                call.respond(
+                    PaymentsListResponse(
+                        payments = rows.map { it.toAdminResponse() },
+                        total = total,
+                        limit = limit,
+                        offset = offset
+                    )
+                )
+            }
+
+            get("/api/admin/projects/overdue") {
+                val overdue = ProjectRepository.findOverdue(LocalDate.now()).map { it.toOverdueResponse() }
+                call.respond(overdue)
+            }
+
+            get("/api/admin/revenue") {
+                val months = call.request.queryParameters["months"]?.toIntOrNull()?.coerceIn(1, 24) ?: 6
+                val (thisMonth, lastMonth) = PaymentRepository.revenueTotals()
+                val byMonth = PaymentRepository.revenueByMonth(months)
+                val currency = ProjectRepository.findAll().firstOrNull()?.currency ?: "KES"
+                call.respond(
+                    RevenueReportResponse(
+                        totalThisMonth = thisMonth.toDouble(),
+                        totalLastMonth = lastMonth.toDouble(),
+                        currency = currency,
+                        byMonth = byMonth.map { RevenueMonthResponse(it.month, it.amount.toDouble()) }
+                    )
+                )
+            }
+        }
+    }
+}
+
+private fun PaymentRepository.PaymentWithProject.toAdminResponse() = PaymentAdminResponse(
+    id = payment.id.toString(),
+    projectId = payment.projectId.toString(),
+    projectName = projectName,
+    projectSlug = projectSlug,
+    paystackReference = payment.paystackReference,
+    amount = payment.amount.toDouble(),
+    gatewayStatus = payment.gatewayStatus,
+    verifiedVia = payment.verifiedVia,
+    paidAt = payment.paidAt?.toString(),
+    createdAt = payment.createdAt.toString()
+)
+
+private fun ProjectRepository.OverdueProject.toOverdueResponse() = OverdueProjectResponse(
+    slug = slug,
+    name = name,
+    clientName = clientName,
+    clientEmail = clientEmail,
+    dueDate = dueDate.toString(),
+    daysOverdue = daysOverdue,
+    gracePeriodDays = gracePeriodDays,
+    willAutoBlockOn = willAutoBlockOn.toString(),
+    amountDue = amountDue?.toDouble() ?: 0.0
+)

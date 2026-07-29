@@ -56,5 +56,6 @@ data class PaystackVerifyResponse(
 @Serializable
 data class PaystackVerifyData(
     val status: String,
-    val reference: String
+    val reference: String,
+    val amount: Long? = null
 )

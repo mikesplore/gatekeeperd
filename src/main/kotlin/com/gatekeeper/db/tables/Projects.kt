@@ -20,6 +20,7 @@ object Projects : Table("projects") {
     val currency = text("currency").default("KES")
     val dueDate = date("due_date").nullable()
     val gracePeriodDays = integer("grace_period_days").default(3)
+    val deletedAt = datetime("deleted_at").nullable()
     val createdAt = datetime("created_at").defaultExpression(CurrentDateTime)
     val updatedAt = datetime("updated_at").defaultExpression(CurrentDateTime)
 

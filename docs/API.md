@@ -113,6 +113,8 @@ Public payment initiation for a suspended project. Creates a Paystack checkout s
 ### GET /api/gate/payment/callback?project={slug}&reference={ref}
 Paystack browser return URL after payment. Shows a thank-you page telling the client their site will be back online shortly. Project activation is handled by the Paystack webhook.
 
+**Note:** when a payment is confirmed, Gatekeeper clears the project's `due_date` and sets the project back to `active`. That stops overdue tracking until an admin assigns a new due date.
+
 ---
 
 ## Admin Endpoints (JWT Required)
@@ -221,13 +223,15 @@ Update project fields.
 **Response:** Updated project object.
 
 ### DELETE /api/admin/projects/{slug}
-Delete a project registration and its related payments and audit log entries.
+Archive a project (soft delete). Sets `deleted_at`, blocks gating, and **preserves** payments, payment events, and audit log for reporting.
 
 **Response:** `204 No Content`
 
 **Notes:**
 - Does not stop or remove the client container — that remains a manual DevOps step.
-- Clears the Redis gate cache for the slug so nginx/Traefik will treat the slug as unknown until re-registered.
+- Clears the Redis gate cache; the slug behaves as unknown to nginx/Traefik after archive.
+- The slug stays reserved while archived (cannot create a new project with the same slug).
+- Writes an audit log entry with action `project_archived`.
 
 ### POST /api/admin/projects/{slug}/block
 Manually block a project.
@@ -319,6 +323,79 @@ Get the most recent audit log entries across all projects (JWT required).
 - `limit` (optional, default `100`, max `500`) — number of entries to return
 
 **Response:** Same array format as project audit log above.
+
+### GET /api/admin/payments
+List all payments across projects with filters and pagination (JWT required).
+
+**Query parameters (all optional):**
+- `status` — filter by `gateway_status` (`pending`, `success`, `failed`, `abandoned`, `reversed`)
+- `project_slug` — filter to one project
+- `from`, `to` — ISO date range on `paid_at` (falls back to `created_at` when pending)
+- `limit` (default `100`, max `500`)
+- `offset` (default `0`)
+
+**Response:**
+```json
+{
+  "payments": [
+    {
+      "id": "uuid",
+      "projectId": "uuid",
+      "projectName": "Acme Corp",
+      "projectSlug": "acme-corp",
+      "paystackReference": "ref_xxx",
+      "amount": 5000.00,
+      "gatewayStatus": "success",
+      "verifiedVia": "webhook",
+      "paidAt": "2026-07-28T12:00:00",
+      "createdAt": "2026-07-28T11:00:00"
+    }
+  ],
+  "total": 1,
+  "limit": 100,
+  "offset": 0
+}
+```
+
+### GET /api/admin/projects/overdue
+Active projects past their due date, sorted by days overdue descending (JWT required).
+
+**Response:**
+```json
+[
+  {
+    "slug": "acme-corp",
+    "name": "Acme Corp",
+    "clientName": "John Doe",
+    "clientEmail": "john@acme.com",
+    "dueDate": "2026-07-20",
+    "daysOverdue": 8,
+    "gracePeriodDays": 3,
+    "willAutoBlockOn": "2026-07-23",
+    "amountDue": 5000.00
+  }
+]
+```
+
+### GET /api/admin/revenue
+Revenue summary from successful payments (JWT required).
+
+**Query parameters:**
+- `period` — `month` (only supported value for now)
+- `months` (default `6`) — number of months in the chart series
+
+**Response:**
+```json
+{
+  "totalThisMonth": 15000.00,
+  "totalLastMonth": 9000.00,
+  "currency": "KES",
+  "byMonth": [
+    { "month": "2026-02", "amount": 3000.00 },
+    { "month": "2026-07", "amount": 15000.00 }
+  ]
+}
+```
 
 ---
 
@@ -461,9 +538,13 @@ Paystack webhook handler. Verifies HMAC-SHA512 signature via `x-paystack-signatu
 - `401 Unauthorized` — signature missing or invalid
 
 **Notes:**
-- Only `charge.success` events are processed. All other events return 200 with no action.
-- On success: marks payment as `success`, sets project to `active`, writes audit log, deletes Redis cache.
-- Must respond quickly (Paystack retries on timeout). Slow work should be done in background.
+- Handles `charge.success`, `charge.failed`, `charge.reversed`, and `transfer.reversed`.
+- Every webhook is logged to `payment_events` before business logic runs.
+- On `charge.success`: marks payment success, clears the project's `due_date`, activates project, writes audit log, invalidates Redis cache.
+- On `charge.failed`: records failure; does **not** change project status.
+- On reversal: re-blocks the project if the reversed payment had been successful and restores `due_date` to the reversal day.
+- A reconciliation job also verifies stale pending payments via Paystack's verify API (`RECONCILIATION_STALE_MINUTES`, `RECONCILIATION_INTERVAL_MINUTES`).
+- Must respond quickly (Paystack retries on timeout).
 
 ---
 

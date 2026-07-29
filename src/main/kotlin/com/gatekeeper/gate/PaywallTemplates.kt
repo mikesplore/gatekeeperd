@@ -8,7 +8,7 @@ import java.math.BigDecimal
 import java.time.format.DateTimeFormatter
 
 /**
- * Server-rendered HTML matching the Gatekeeper admin UI (shadcn neutral theme).
+ * Server-rendered payment wall matching the Gatekeeper admin UI purple theme.
  */
 object PaywallTemplates {
 
@@ -16,7 +16,7 @@ object PaywallTemplates {
 
     fun htmlPaywall(info: PaywallInfo, payEnabled: Boolean): String {
         val amountLabel = formatAmount(info.amountDue, info.currency)
-        val dueLabel = info.dueDate?.format(dateFormatter) ?: "Not set"
+        val dueLabel = info.dueDate?.format(dateFormatter)
         val payUrl = "/api/gate/pay?project=${encode(info.slug)}"
         val payDisabledReason = when {
             !ProjectPaymentService.isPaystackConfigured() ->
@@ -33,42 +33,34 @@ object PaywallTemplates {
             body = """
     <div class="page">
         <div class="card">
-            <div class="card-header">
-                <div class="brand-row">
-                    <span class="brand">Gatekeeper</span>
-                    <span class="badge badge-blocked">Suspended</span>
-                </div>
-                <div class="icon-wrap icon-wrap-warning">${iconLock()}</div>
-                <h1 class="card-title">Payment required</h1>
-                <p class="card-description">
-                    Access to <strong>${escapeHtml(info.name)}</strong> is suspended until payment is received.
-                </p>
+            <div class="status-strip blocked">
+                <span>${iconDot()}Suspended</span>
+                <span class="brand">Gatekeeper</span>
             </div>
-            <div class="card-content">
-                <div class="details-grid">
-                    ${detailRow("Project", escapeHtml(info.name))}
-                    ${detailRow("Domain", escapeHtml(info.domain))}
-                    ${detailRow("Due date", dueLabel)}
-                </div>
+            <div class="hero">
+                <div class="glyph">${iconLock()}</div>
+                <p class="project-name">${escapeHtml(info.name)}</p>
+                <p class="project-domain">${escapeHtml(info.domain)}</p>
 
-                <div class="stat-card">
-                    <p class="stat-label">Amount due</p>
-                    <p class="stat-value">$amountLabel</p>
+                <div class="amount-block">
+                    <p class="amount-label">Amount due</p>
+                    <p class="amount-value"${if (info.amountDue == null) " style=\"font-size:1.75rem;\"" else ""}>$amountLabel</p>
+                    ${if (dueLabel != null) """<p class="amount-due">Due <strong>$dueLabel</strong></p>""" else ""}
                 </div>
-
+            </div>
+            <div class="actions">
                 ${if (showPayButton) """
-                <a href="$payUrl" class="btn btn-primary">Pay now</a>
-                <p class="helper-text">You will be redirected to Paystack to complete payment securely.</p>
+                <a href="$payUrl" class="btn">${iconCard()}Pay now</a>
+                <p class="helper-text">You'll be redirected to Paystack to complete payment securely.</p>
                 """ else """
-                <span class="btn btn-primary btn-disabled">Pay now unavailable</span>
+                <span class="btn btn-disabled">Pay now unavailable</span>
                 <p class="helper-text helper-text-error">${escapeHtml(payDisabledReason ?: "Payment is currently unavailable.")}</p>
                 """}
-
-                <p class="footer-text">
-                    Questions? Contact
-                    <a href="mailto:${escapeHtml(AppConfig.supportContactEmail)}" class="link">${escapeHtml(AppConfig.supportContactEmail)}</a>
-                </p>
             </div>
+            <p class="footer-text">
+                Questions? Contact
+                <a href="mailto:${escapeHtml(AppConfig.supportContactEmail)}" class="link">${escapeHtml(AppConfig.supportContactEmail)}</a>
+            </p>
         </div>
     </div>
             """.trimIndent()
@@ -76,10 +68,16 @@ object PaywallTemplates {
     }
 
     fun paymentSuccessPage(projectName: String, projectDomain: String, verified: Boolean): String {
-        val message = if (verified) {
-            "Your payment was received successfully."
+        val statusLabel = if (verified) "Payment received" else "Processing payment"
+        val noticeTitle = if (verified) {
+            "$projectName will be back online shortly."
         } else {
-            "Your payment is being confirmed. This usually takes a few seconds."
+            "We're confirming your payment."
+        }
+        val noticeBody = if (verified) {
+            "You can close this page and retry your site in a minute."
+        } else {
+            "This usually takes a few seconds. Refresh this page shortly."
         }
 
         return pageShell(
@@ -87,32 +85,23 @@ object PaywallTemplates {
             body = """
     <div class="page">
         <div class="card">
-            <div class="card-header card-header-center">
-                <div class="brand-row brand-row-center">
-                    <span class="brand">Gatekeeper</span>
-                    <span class="badge badge-active">Payment received</span>
-                </div>
-                <div class="icon-wrap icon-wrap-success">${iconCheckCircle()}</div>
-                <h1 class="card-title">Thank you for your payment</h1>
-                <p class="card-description">$message</p>
+            <div class="status-strip active">
+                <span>${iconDot()}$statusLabel</span>
+                <span class="brand">Gatekeeper</span>
             </div>
-            <div class="card-content">
-                <div class="details-grid">
-                    ${detailRow("Project", escapeHtml(projectName))}
-                    ${detailRow("Domain", escapeHtml(projectDomain))}
-                    ${detailRow("Status", if (verified) "Confirmed" else "Processing")}
-                </div>
-
-                <div class="notice-card">
-                    <p class="notice-title">${escapeHtml(projectName)} will be back online shortly.</p>
-                    <p class="notice-body">You can close this page and retry your site in a minute.</p>
-                </div>
-
-                <p class="footer-text">
-                    Need help? Contact
-                    <a href="mailto:${escapeHtml(AppConfig.supportContactEmail)}" class="link">${escapeHtml(AppConfig.supportContactEmail)}</a>
-                </p>
+            <div class="hero">
+                <div class="glyph glyph-success">${iconCheckCircle()}</div>
+                <p class="project-name">${escapeHtml(projectName)}</p>
+                <p class="project-domain">${escapeHtml(projectDomain)}</p>
             </div>
+            <div class="success-note">
+                <p>${escapeHtml(noticeTitle)}</p>
+                <p>${escapeHtml(noticeBody)}</p>
+            </div>
+            <p class="footer-text">
+                Need help? Contact
+                <a href="mailto:${escapeHtml(AppConfig.supportContactEmail)}" class="link">${escapeHtml(AppConfig.supportContactEmail)}</a>
+            </p>
         </div>
     </div>
             """.trimIndent()
@@ -137,38 +126,25 @@ $body
 </html>
     """.trimIndent()
 
-    private fun detailRow(label: String, value: String): String = """
-        <div class="detail-row">
-            <span class="detail-label">$label</span>
-            <span class="detail-value">$value</span>
-        </div>
-    """.trimIndent()
-
     private fun gatekeeperStyles(): String = """
         *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
         :root {
-            --background: #ffffff;
-            --foreground: #0a0a0a;
-            --card: #ffffff;
-            --card-foreground: #0a0a0a;
-            --primary: #171717;
-            --primary-foreground: #fafafa;
-            --muted: #f5f5f5;
+            --foreground: #171717;
+            --primary: #6C63FF;
+            --primary-dark: #4F46E5;
             --muted-foreground: #737373;
-            --border: #e5e5e5;
-            --radius: 0.625rem;
-            --radius-xl: 0.75rem;
-            --shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+            --danger: #dc2626;
+            --success: #059669;
+            --radius: 1rem;
         }
 
         body {
             font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            background: color-mix(in oklab, var(--muted) 40%, var(--background));
+            background: linear-gradient(135deg, #f5f5ff 0%, #ffffff 50%, #f5f5ff 100%);
             color: var(--foreground);
-            -webkit-font-smoothing: antialiased;
-            -moz-osx-font-smoothing: grayscale;
             min-height: 100vh;
+            -webkit-font-smoothing: antialiased;
         }
 
         .page {
@@ -176,242 +152,156 @@ $body
             display: flex;
             align-items: center;
             justify-content: center;
-            padding: 1rem;
+            padding: 1.5rem;
         }
 
         .card {
             width: 100%;
-            max-width: 28rem;
-            background: var(--card);
-            color: var(--card-foreground);
-            border: 1px solid var(--border);
-            border-radius: var(--radius-xl);
-            box-shadow: var(--shadow);
+            max-width: 26rem;
+            background: #ffffff;
+            border: 1px solid #ececec;
+            border-radius: var(--radius);
+            overflow: hidden;
+            box-shadow: 0 12px 32px rgb(108 99 255 / 0.12), 0 2px 8px rgb(0 0 0 / 0.04);
         }
 
-        .card-header {
-            display: flex;
-            flex-direction: column;
-            gap: 0.375rem;
-            padding: 1.5rem 1.5rem 0;
-        }
-
-        .card-header-center { text-align: center; align-items: center; }
-
-        .brand-row {
+        .status-strip {
             display: flex;
             align-items: center;
             justify-content: space-between;
-            gap: 0.75rem;
-            margin-bottom: 0.5rem;
-        }
-
-        .brand-row-center { justify-content: center; flex-wrap: wrap; }
-
-        .brand {
-            font-size: 0.875rem;
-            font-weight: 600;
-            letter-spacing: -0.01em;
-            color: var(--foreground);
-        }
-
-        .badge {
-            display: inline-flex;
-            align-items: center;
-            border-radius: calc(var(--radius) - 2px);
-            border: 1px solid transparent;
-            padding: 0.125rem 0.625rem;
+            padding: 0.75rem 1.5rem;
             font-size: 0.75rem;
             font-weight: 600;
-            line-height: 1.25rem;
+            letter-spacing: 0.02em;
+        }
+        .status-strip.blocked { background: #fef2f2; color: var(--danger); }
+        .status-strip.active { background: #ecfdf5; color: var(--success); }
+        .status-strip .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; display: inline-block; margin-right: 6px; }
+        .status-strip .brand { color: #a3a3a3; font-weight: 500; }
+
+        .hero {
+            padding: 2rem 1.75rem 1.5rem;
+            text-align: center;
         }
 
-        .badge-blocked {
-            background: rgb(239 68 68 / 0.15);
-            color: #dc2626;
-            border-color: rgb(239 68 68 / 0.2);
-        }
-
-        .badge-active {
-            background: rgb(16 185 129 / 0.15);
-            color: #059669;
-            border-color: rgb(16 185 129 / 0.2);
-        }
-
-        .icon-wrap {
+        .glyph {
+            width: 3.5rem;
+            height: 3.5rem;
+            border-radius: 50%;
+            margin: 0 auto 1.25rem;
             display: flex;
             align-items: center;
             justify-content: center;
-            width: 2.75rem;
-            height: 2.75rem;
-            border-radius: var(--radius);
-            margin: 0.5rem 0 0.25rem;
+            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+            color: #fff;
         }
+        .glyph-success { background: linear-gradient(135deg, #10b981, #059669); }
+        .glyph svg { width: 1.5rem; height: 1.5rem; }
 
-        .card-header-center .icon-wrap { margin-left: auto; margin-right: auto; }
-
-        .icon-wrap-warning {
-            background: rgb(239 68 68 / 0.1);
-            color: #dc2626;
+        .project-name {
+            font-size: 1.375rem;
+            font-weight: 700;
+            letter-spacing: -0.02em;
         }
-
-        .icon-wrap-success {
-            background: rgb(16 185 129 / 0.1);
-            color: #059669;
-        }
-
-        .icon-wrap svg { width: 1.25rem; height: 1.25rem; }
-
-        .card-title {
-            font-size: 1.25rem;
-            font-weight: 600;
-            line-height: 1;
-            letter-spacing: -0.025em;
-        }
-
-        .card-description {
+        .project-domain {
             font-size: 0.875rem;
-            line-height: 1.5;
             color: var(--muted-foreground);
-            margin-top: 0.375rem;
+            margin-top: 0.125rem;
         }
 
-        .card-description strong { color: var(--foreground); font-weight: 600; }
-
-        .card-content {
-            padding: 1.5rem;
-            display: flex;
-            flex-direction: column;
-            gap: 1rem;
+        .amount-block {
+            margin: 1.75rem 0 0.25rem;
         }
-
-        .details-grid {
-            display: flex;
-            flex-direction: column;
-            gap: 0.875rem;
-            padding: 1rem;
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-            background: color-mix(in oklab, var(--muted) 35%, var(--background));
-        }
-
-        .detail-row { display: flex; flex-direction: column; gap: 0.25rem; }
-
-        .detail-label {
+        .amount-label {
             font-size: 0.75rem;
-            font-weight: 500;
-            letter-spacing: 0.04em;
+            font-weight: 600;
             text-transform: uppercase;
-            color: var(--muted-foreground);
-        }
-
-        .detail-value {
-            font-size: 0.875rem;
-            color: var(--foreground);
-            word-break: break-word;
-        }
-
-        .stat-card {
-            border: 1px solid var(--border);
-            border-radius: var(--radius-xl);
-            padding: 1rem 1.25rem;
-            box-shadow: var(--shadow);
-        }
-
-        .stat-label {
-            font-size: 0.875rem;
-            font-weight: 500;
+            letter-spacing: 0.06em;
             color: var(--muted-foreground);
             margin-bottom: 0.25rem;
         }
+        .amount-value {
+            font-size: 2.75rem;
+            font-weight: 800;
+            letter-spacing: -0.03em;
+            line-height: 1;
+            color: var(--foreground);
+        }
+        .amount-due {
+            font-size: 0.8125rem;
+            color: var(--muted-foreground);
+            margin-top: 0.375rem;
+        }
+        .amount-due strong { color: var(--foreground); font-weight: 600; }
 
-        .stat-value {
-            font-size: 1.875rem;
-            font-weight: 700;
-            letter-spacing: -0.025em;
-            color: #dc2626;
-            line-height: 1.1;
+        .actions {
+            padding: 0 1.75rem 1.75rem;
         }
 
         .btn {
-            display: inline-flex;
+            display: flex;
             align-items: center;
             justify-content: center;
+            gap: 0.5rem;
             width: 100%;
-            height: 2.5rem;
-            padding: 0 1rem;
-            border-radius: calc(var(--radius) - 2px);
-            font-size: 0.875rem;
-            font-weight: 500;
-            line-height: 1;
-            text-decoration: none;
-            transition: background-color 0.15s ease, opacity 0.15s ease;
-            border: none;
-            cursor: pointer;
-        }
-
-        .btn-primary {
-            background: var(--primary);
-            color: var(--primary-foreground);
-        }
-
-        .btn-primary:hover { background: color-mix(in oklab, var(--primary) 90%, transparent); }
-
-        .btn-disabled {
-            opacity: 0.5;
-            pointer-events: none;
-            cursor: not-allowed;
-        }
-
-        .helper-text {
-            font-size: 0.875rem;
-            line-height: 1.5;
-            color: var(--muted-foreground);
-            text-align: center;
-        }
-
-        .helper-text-error { color: #dc2626; }
-
-        .notice-card {
-            border: 1px solid rgb(16 185 129 / 0.25);
-            background: rgb(16 185 129 / 0.08);
-            border-radius: var(--radius);
-            padding: 1rem 1.25rem;
-            text-align: center;
-        }
-
-        .notice-title {
+            height: 3rem;
+            border-radius: 0.75rem;
             font-size: 0.9375rem;
             font-weight: 600;
-            color: var(--foreground);
-            margin-bottom: 0.375rem;
+            text-decoration: none;
+            border: none;
+            cursor: pointer;
+            background: var(--foreground);
+            color: #fff;
+            transition: transform 0.15s ease, background 0.15s ease;
         }
+        .btn:hover { background: #000; transform: translateY(-1px); }
+        .btn-disabled { background: #e5e5e5; color: #a3a3a3; pointer-events: none; }
 
-        .notice-body {
-            font-size: 0.875rem;
-            color: var(--muted-foreground);
-            line-height: 1.5;
-        }
-
-        .footer-text {
+        .helper-text {
             font-size: 0.8125rem;
             color: var(--muted-foreground);
             text-align: center;
+            margin-top: 0.75rem;
             line-height: 1.5;
         }
+        .helper-text-error { color: var(--danger); }
 
-        .link {
-            color: var(--foreground);
-            font-weight: 500;
-            text-decoration: underline;
-            text-underline-offset: 4px;
+        .footer-text {
+            font-size: 0.75rem;
+            color: var(--muted-foreground);
+            text-align: center;
+            line-height: 1.5;
+            padding: 0 1.75rem 1.75rem;
         }
+        .link { color: var(--primary); font-weight: 600; text-decoration: none; }
+        .link:hover { text-decoration: underline; }
 
-        .link:hover { opacity: 0.8; }
+        .success-note {
+            margin: 0 1.75rem 1.75rem;
+            background: #ecfdf5;
+            border-radius: 0.75rem;
+            padding: 1rem 1.25rem;
+            text-align: center;
+        }
+        .success-note p:first-child { font-weight: 600; font-size: 0.9375rem; margin-bottom: 0.25rem; }
+        .success-note p:last-child { font-size: 0.8125rem; color: var(--muted-foreground); }
+
+        @media (max-width: 640px) {
+            .hero { padding: 1.5rem 1.25rem 1rem; }
+            .amount-value { font-size: 2.25rem; }
+        }
     """.trimIndent()
+
+    private fun iconDot(): String =
+        """<span class="dot"></span>"""
 
     private fun iconLock(): String = """
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+    """.trimIndent()
+
+    private fun iconCard(): String = """
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" width="18" height="18"><rect width="20" height="14" x="2" y="5" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/></svg>
     """.trimIndent()
 
     private fun iconCheckCircle(): String = """
