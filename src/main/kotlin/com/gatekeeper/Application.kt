@@ -1,6 +1,7 @@
 package com.gatekeeper
 
 import com.gatekeeper.api.InputValidators
+import com.gatekeeper.admin.configureNginxAdminRoutes
 import com.gatekeeper.admin.configurePaymentAdminRoutes
 import com.gatekeeper.admin.configureProjectAdminRoutes
 import com.gatekeeper.auth.configureAuthRoutes
@@ -50,6 +51,7 @@ fun Application.module() {
     configureAuthRoutes()
     configureProjectAdminRoutes()
     configurePaymentAdminRoutes()
+    configureNginxAdminRoutes()
     configurePaystackWebhookRoutes()
 
     seedInitialAdmin()

@@ -57,6 +57,11 @@ object AppConfig {
     val dockerSocket: String = optionalSetting("DOCKER_SOCKET", "unix:///var/run/docker.sock")
     val internalNetwork: String = optionalSetting("GATEKEEPER_INTERNAL_NETWORK", "gatekeeper-internal")
 
+    // Nginx
+    val nginxSitesAvailablePath: String = optionalSetting("NGINX_SITES_AVAILABLE", "/etc/nginx/sites-available")
+    val nginxSitesEnabledPath: String = optionalSetting("NGINX_SITES_ENABLED", "/etc/nginx/sites-enabled")
+    val nginxSslCertPath: String = optionalSetting("NGINX_SSL_CERT_PATH", "/etc/letsencrypt/live")
+
     // Business Logic
     val defaultGracePeriodDays: Int = optionalSetting("DEFAULT_GRACE_PERIOD_DAYS", "3").toInt()
     val failMode: String = optionalSetting("FAIL_MODE", "open")

@@ -377,6 +377,140 @@ Active projects past their due date, sorted by days overdue descending (JWT requ
 ]
 ```
 
+## Nginx Management Endpoints (JWT Required)
+
+These endpoints manage nginx site configurations for client projects. They require `nginx` CLI and `systemctl` access on the host.
+
+### GET /api/admin/nginx/status/{slug}
+Check if a project has an nginx site configured and enabled, and whether SSL is set up.
+
+**Response:**
+```json
+{
+  "enabled": true,
+  "configPath": "/etc/nginx/sites-available/acw",
+  "enabledPath": "/etc/nginx/sites-enabled/acw",
+  "port": 9921,
+  "sslEnabled": true,
+  "domain": "acw.mikesplore.me"
+}
+```
+
+**Notes:**
+- `enabled` is `true` only if both the sites-available file exists AND the symlink in sites-enabled exists.
+- `sslEnabled` checks whether certificate files exist at the expected Let's Encrypt path.
+- `port` is extracted from the project's `containerName` field (format `name:port`).
+
+### POST /api/admin/nginx/enable/{slug}
+Generate and enable an nginx site config for a project. Validates that the app port is active before creating the config.
+
+**Request:**
+```json
+{
+  "port": 9921,
+  "sslCertificatePath": "/etc/letsencrypt/live/example.com/fullchain.pem",
+  "sslCertificateKeyPath": "/etc/letsencrypt/live/example.com/privkey.pem"
+}
+```
+
+- `port` is optional if `containerName` already contains a port (e.g. `myapp:9921`).
+- `sslCertificatePath` and `sslCertificateKeyPath` are optional. If both are provided, the config listens on 443 with SSL. If omitted, the config listens on port 80.
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Nginx site enabled and reloaded successfully",
+  "config": "server {\n    listen 443 ssl;\n    ...\n}"
+}
+```
+
+**Notes:**
+- Validates that the app port is actually in use before creating the config.
+- Creates a file in `sites-available/{slug}` and a symlink in `sites-enabled/{slug}`.
+- Runs `nginx -t` and `systemctl reload nginx`. If reload fails, the site is disabled and an error is returned.
+- The generated config follows the standard gatekeeperd pattern with `auth_request`, paywall named location, and `/api/gate/` bypass.
+
+### POST /api/admin/nginx/disable/{slug}
+Disable (unlink) an nginx site without removing the config file.
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Nginx site disabled and reloaded successfully"
+}
+```
+
+### POST /api/admin/nginx/remove/{slug}
+Remove an nginx site completely (both sites-available file and sites-enabled symlink).
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Nginx site removed and reloaded successfully"
+}
+```
+
+## SSL Certificate Management Endpoints (JWT Required)
+
+These endpoints manage Let's Encrypt certificates via `certbot`.
+
+### POST /api/admin/nginx/certificate/install
+Install an SSL certificate for a domain using certbot's nginx plugin.
+
+**Request:**
+```json
+{
+  "domain": "example.com",
+  "email": "admin@example.com"
+}
+```
+
+**Response:**
+```json
+{
+  "domain": "example.com",
+  "installed": true,
+  "certificatePath": "/etc/letsencrypt/live/example.com/fullchain.pem",
+  "privateKeyPath": "/etc/letsencrypt/live/example.com/privkey.pem"
+}
+```
+
+**Notes:**
+- Requires `certbot` to be installed on the host.
+- Runs `certbot certonly --nginx --non-interactive --agree-tos -d <domain> -m <email>`.
+- The certificate paths follow the standard Let's Encrypt layout.
+
+### POST /api/admin/nginx/certificate/remove/{domain}
+Remove an SSL certificate for a domain.
+
+**Response:**
+```json
+{
+  "domain": "example.com",
+  "installed": false,
+  "certificatePath": null,
+  "privateKeyPath": null
+}
+```
+
+### GET /api/admin/nginx/certificate/status/{domain}
+Check whether an SSL certificate is installed for a domain.
+
+**Response:**
+```json
+{
+  "domain": "example.com",
+  "installed": true,
+  "certificatePath": "/etc/letsencrypt/live/example.com/fullchain.pem",
+  "privateKeyPath": "/etc/letsencrypt/live/example.com/privkey.pem"
+}
+```
+
+---
+
 ### GET /api/admin/revenue
 Revenue summary from successful payments (JWT required).
 
