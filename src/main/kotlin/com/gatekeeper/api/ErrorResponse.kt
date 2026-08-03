@@ -4,6 +4,7 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.response.respond
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonElement
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 
@@ -12,6 +13,14 @@ data class ErrorResponse(
     val error: String,
     val message: String,
     val timestamp: String
+)
+
+@Serializable
+data class ErrorResponseWithData(
+    val error: String,
+    val message: String,
+    val timestamp: String,
+    val data: JsonElement
 )
 
 @Serializable
@@ -56,4 +65,21 @@ fun paymentRequiredResponse(paywall: com.gatekeeper.gate.PaywallInfo?): PaymentR
 
 suspend fun ApplicationCall.respondError(status: HttpStatusCode, error: String, message: String) {
     respond(status, errorResponse(error, message))
+}
+
+suspend fun ApplicationCall.respondErrorWithData(
+    status: HttpStatusCode,
+    error: String,
+    message: String,
+    data: JsonElement
+) {
+    respond(
+        status,
+        ErrorResponseWithData(
+            error = error,
+            message = message,
+            timestamp = currentErrorTimestamp(),
+            data = data
+        )
+    )
 }

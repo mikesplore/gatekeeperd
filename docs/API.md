@@ -392,13 +392,14 @@ Check if a project has an nginx site configured and enabled, and whether SSL is 
   "enabledPath": "/etc/nginx/sites-enabled/acw",
   "port": 9921,
   "sslEnabled": true,
+  "certificateDomain": "example.com",
   "domain": "acw.mikesplore.me"
 }
 ```
 
 **Notes:**
 - `enabled` is `true` only if both the sites-available file exists AND the symlink in sites-enabled exists.
-- `sslEnabled` checks whether certificate files exist at the expected Let's Encrypt path.
+- `sslEnabled` is `true` if Gatekeeper can find a usable certificate for the project's `domain` (either a direct match, or a parent domain certificate).
 - `port` is extracted from the project's `containerName` field (format `name:port`).
 
 ### POST /api/admin/nginx/enable/{slug}
@@ -409,21 +410,29 @@ Generate and enable an nginx site config for a project. Validates that the proje
 {
   "port": 9921,
   "upstreamScheme": "http",
+  "certificateDomain": "example.com",
   "sslCertificatePath": "/etc/letsencrypt/live/example.com/fullchain.pem",
-  "sslCertificateKeyPath": "/etc/letsencrypt/live/example.com/privkey.pem"
+  "sslCertificateKeyPath": "/etc/letsencrypt/live/example.com/privkey.pem",
+  "requireSsl": false
 }
 ```
 
-- `port` is optional if `containerName` already contains a port (e.g. `myapp:9921`).
+- `port` is optional if `containerName` already contains a port (e.g. `myapp:9921`). If Docker is available and the container publishes exactly one host port, Gatekeeper can also infer the port automatically.
 - `upstreamScheme` is optional. If omitted, Gatekeeper infers `https` for port `443` and `http` for other ports.
-- `sslCertificatePath` and `sslCertificateKeyPath` are optional. If both are provided, the config listens on 443 with SSL. If omitted, the config listens on port 80.
+- `certificateDomain` is optional. If provided, it selects an installed certificate under `/etc/letsencrypt/live/{certificateDomain}/`.
+- `sslCertificatePath` and `sslCertificateKeyPath` are optional. If both are provided, they override all other certificate selection.
+- If no certificate selection is provided, Gatekeeper tries to reuse an installed certificate for the project's `domain` or its parent domains (e.g. reuse `example.com` for `acw.example.com`).
+- `requireSsl` is optional. If `true`, the request fails when no certificate is found. If `false` (default), the site is enabled without SSL (port 80) when no certificate is found.
 
 **Response:**
 ```json
 {
   "success": true,
   "message": "Nginx site enabled and reloaded successfully",
-  "config": "server {\n    listen 443 ssl;\n    ...\n}"
+  "config": "server {\n    listen 443 ssl;\n    ...\n}",
+  "appPort": 9921,
+  "sslEnabled": true,
+  "certificateDomain": "example.com"
 }
 ```
 
@@ -461,6 +470,22 @@ Remove an nginx site completely (both sites-available file and sites-enabled sym
 ## SSL Certificate Management Endpoints (JWT Required)
 
 These endpoints manage Let's Encrypt certificates via `certbot`.
+
+### GET /api/admin/nginx/certificate/list
+List installed certificates found under `/etc/letsencrypt/live`.
+
+**Response:**
+```json
+{
+  "certificates": [
+    {
+      "certificateDomain": "example.com",
+      "certificatePath": "/etc/letsencrypt/live/example.com/fullchain.pem",
+      "privateKeyPath": "/etc/letsencrypt/live/example.com/privkey.pem"
+    }
+  ]
+}
+```
 
 ### POST /api/admin/nginx/certificate/install
 Install an SSL certificate for a domain using certbot's nginx plugin.

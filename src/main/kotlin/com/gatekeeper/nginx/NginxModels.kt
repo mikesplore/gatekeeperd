@@ -6,8 +6,10 @@ import kotlinx.serialization.Serializable
 data class NginxEnableRequest(
     val port: Int? = null,
     val upstreamScheme: String? = null,
+    val certificateDomain: String? = null,
     val sslCertificatePath: String? = null,
-    val sslCertificateKeyPath: String? = null
+    val sslCertificateKeyPath: String? = null,
+    val requireSsl: Boolean? = null
 )
 
 @Serializable
@@ -17,6 +19,7 @@ data class NginxStatusResponse(
     val enabledPath: String? = null,
     val port: Int? = null,
     val sslEnabled: Boolean,
+    val certificateDomain: String? = null,
     val domain: String? = null
 )
 
@@ -32,4 +35,16 @@ data class CertificateResponse(
     val installed: Boolean,
     val certificatePath: String? = null,
     val privateKeyPath: String? = null
+)
+
+@Serializable
+data class InstalledCertificateInfo(
+    val certificateDomain: String,
+    val certificatePath: String,
+    val privateKeyPath: String
+)
+
+@Serializable
+data class CertificateListResponse(
+    val certificates: List<InstalledCertificateInfo>
 )

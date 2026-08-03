@@ -1,10 +1,13 @@
 package com.gatekeeper.admin
 
 import com.gatekeeper.api.respondError
+import com.gatekeeper.api.respondErrorWithData
 import com.gatekeeper.config.AppConfig
 import com.gatekeeper.docker.DockerService
 import com.gatekeeper.nginx.CertificateInstallRequest
+import com.gatekeeper.nginx.CertificateListResponse
 import com.gatekeeper.nginx.CertificateResponse
+import com.gatekeeper.nginx.InstalledCertificateInfo
 import com.gatekeeper.nginx.NginxEnableRequest
 import com.gatekeeper.nginx.NginxStatusResponse
 import com.gatekeeper.nginx.NginxService
@@ -21,6 +24,9 @@ import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.routing
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.putJsonArray
+import kotlinx.serialization.json.JsonPrimitive
 import org.slf4j.LoggerFactory
 
 private val logger = LoggerFactory.getLogger("com.gatekeeper.admin.NginxAdminRoutes")
@@ -29,7 +35,10 @@ private val logger = LoggerFactory.getLogger("com.gatekeeper.admin.NginxAdminRou
 data class NginxEnableResponse(
     val success: Boolean,
     val message: String,
-    val config: String? = null
+    val config: String? = null,
+    val appPort: Int? = null,
+    val sslEnabled: Boolean? = null,
+    val certificateDomain: String? = null
 )
 
 @Serializable
@@ -75,7 +84,7 @@ fun Application.configureNginxAdminRoutes() {
                     available && enabledLink
                 }
 
-                val certInstalled = nginxService.isCertificateInstalled(project.domain)
+                val resolvedCert = nginxService.resolveCertificateForDomain(project.domain)
 
                 call.respond(
                     NginxStatusResponse(
@@ -83,7 +92,8 @@ fun Application.configureNginxAdminRoutes() {
                         configPath = "$sitesAvailablePath/$slug",
                         enabledPath = "$sitesEnabledPath/$slug",
                         port = extractConfiguredPort(project.containerName),
-                        sslEnabled = certInstalled,
+                        sslEnabled = resolvedCert != null,
+                        certificateDomain = resolvedCert?.certificateDomain,
                         domain = project.domain
                     )
                 )
@@ -119,20 +129,10 @@ fun Application.configureNginxAdminRoutes() {
                     return@post
                 }
 
-                val appPort = explicitPort ?: extractConfiguredPort(project.containerName)
-
-                if (appPort == null) {
-                    call.respondError(
-                        HttpStatusCode.BadRequest,
-                        "missing_port",
-                        "Provide a valid port in the request body or encode it in containerName as name:port"
-                    )
-                    return@post
-                }
-
-                // Prefer Docker-based validation: works even when gatekeeperd runs in a container (127.0.0.1 differs).
                 val configuredContainerName = extractConfiguredContainerName(project.containerName)
-                if (dockerService != null && configuredContainerName != null) {
+                val dockerPublishedHostPorts = run {
+                    if (dockerService == null || configuredContainerName == null) return@run null
+
                     val health = dockerService.containerHealth(configuredContainerName)
                     if (health != "running") {
                         call.respondError(
@@ -144,13 +144,52 @@ fun Application.configureNginxAdminRoutes() {
                     }
 
                     val info = dockerService.getContainer(configuredContainerName)
-                    val publishedHostPorts = parsePublishedHostPorts(info?.ports.orEmpty())
+                    parsePublishedHostPorts(info?.ports.orEmpty())
+                }
+
+                val appPort = run {
+                    explicitPort
+                        ?: extractConfiguredPort(project.containerName)
+                        ?: dockerPublishedHostPorts?.singleOrNull()
+                }
+
+                if (appPort == null) {
+                    if (dockerPublishedHostPorts != null) {
+                        call.respondErrorWithData(
+                            HttpStatusCode.BadRequest,
+                            "missing_port",
+                            when {
+                                dockerPublishedHostPorts.isEmpty() ->
+                                    "Could not infer upstream port from Docker. Provide 'port' in the request body or encode containerName as name:port."
+                                else ->
+                                    "Multiple published host ports detected. Provide 'port' in the request body or encode containerName as name:port."
+                            },
+                            buildJsonObject {
+                                put("containerName", JsonPrimitive(configuredContainerName ?: project.containerName))
+                                putJsonArray("publishedHostPorts") {
+                                    dockerPublishedHostPorts.sorted().forEach { add(JsonPrimitive(it)) }
+                                }
+                            }
+                        )
+                        return@post
+                    }
+
+                    call.respondError(
+                        HttpStatusCode.BadRequest,
+                        "missing_port",
+                        "Provide a valid port in the request body, encode containerName as name:port, or ensure Docker is available for port inference."
+                    )
+                    return@post
+                }
+
+                // Prefer Docker-based validation: works even when gatekeeperd runs in a container (127.0.0.1 differs).
+                if (dockerPublishedHostPorts != null) {
                     // If Docker reports published ports, ensure nginx's upstream host port is among them.
-                    if (publishedHostPorts.isNotEmpty() && appPort !in publishedHostPorts) {
+                    if (dockerPublishedHostPorts.isNotEmpty() && appPort !in dockerPublishedHostPorts) {
                         call.respondError(
                             HttpStatusCode.BadRequest,
                             "port_not_active",
-                            "Container '$configuredContainerName' is running but does not publish host port $appPort (published: ${publishedHostPorts.sorted().joinToString(", ")}). Nginx proxies to 127.0.0.1:$appPort."
+                            "Container '$configuredContainerName' is running but does not publish host port $appPort (published: ${dockerPublishedHostPorts.sorted().joinToString(", ")}). Nginx proxies to 127.0.0.1:$appPort."
                         )
                         return@post
                     }
@@ -160,7 +199,7 @@ fun Application.configureNginxAdminRoutes() {
                         call.respondError(
                             HttpStatusCode.BadRequest,
                             "port_not_active",
-                            "Port $appPort is not reachable on 127.0.0.1 for project $slug. Ensure the upstream is listening on the host, or encode containerName as name:port so Docker-based validation can be used."
+                            "Port $appPort is not reachable on 127.0.0.1 for project $slug. Ensure the upstream is listening on the host, or set containerName to a Docker container so Docker-based validation can be used."
                         )
                         return@post
                     }
@@ -181,34 +220,88 @@ fun Application.configureNginxAdminRoutes() {
                     return@post
                 }
 
-                if (body.sslCertificatePath != null && body.sslCertificateKeyPath != null) {
-                    val certFile = java.io.File(body.sslCertificatePath)
-                    val keyFile = java.io.File(body.sslCertificateKeyPath)
-                    if (!certFile.exists() || !keyFile.exists()) {
-                        call.respondError(
-                            HttpStatusCode.BadRequest,
-                            "certificate_not_found",
-                            "SSL certificate files are not accessible at the specified paths. " +
-                                "This usually means either (1) the gatekeeperd process user cannot traverse/read `/etc/letsencrypt` " +
-                                "(common when you verified with `sudo test -f ...`), or (2) gatekeeperd is running in a container/namespace " +
-                                "where those host paths don't exist. " +
-                                "certPath='${certFile.absolutePath}' (exists=${certFile.exists()}, readable=${certFile.canRead()}), " +
-                                "keyPath='${keyFile.absolutePath}' (exists=${keyFile.exists()}, readable=${keyFile.canRead()}). " +
-                                "Try: `test -f ${certFile.absolutePath} && test -f ${keyFile.absolutePath}` (without sudo) as the same user running gatekeeperd."
-                        )
-                        return@post
-                    }
+                val explicitCertPath = body.sslCertificatePath?.trim()?.takeIf { it.isNotBlank() }
+                val explicitKeyPath = body.sslCertificateKeyPath?.trim()?.takeIf { it.isNotBlank() }
+                val requireSsl = body.requireSsl ?: false
+
+                if ((explicitCertPath == null) != (explicitKeyPath == null)) {
+                    call.respondError(
+                        HttpStatusCode.BadRequest,
+                        "invalid_request",
+                        "Provide both sslCertificatePath and sslCertificateKeyPath (or neither)."
+                    )
+                    return@post
                 }
 
-                val sslEnabled = body.sslCertificatePath != null && body.sslCertificateKeyPath != null
+                val resolvedCertificate = when {
+                    explicitCertPath != null && explicitKeyPath != null -> {
+                        val certFile = java.io.File(explicitCertPath)
+                        val keyFile = java.io.File(explicitKeyPath)
+                        if (!certFile.exists() || !keyFile.exists()) {
+                            call.respondError(
+                                HttpStatusCode.BadRequest,
+                                "certificate_not_found",
+                                "SSL certificate files are not accessible at the specified paths. " +
+                                    "This usually means either (1) the gatekeeperd process user cannot traverse/read `/etc/letsencrypt` " +
+                                    "(common when you verified with `sudo test -f ...`), or (2) gatekeeperd is running in a container/namespace " +
+                                    "where those host paths don't exist. " +
+                                    "certPath='${certFile.absolutePath}' (exists=${certFile.exists()}, readable=${certFile.canRead()}), " +
+                                    "keyPath='${keyFile.absolutePath}' (exists=${keyFile.exists()}, readable=${keyFile.canRead()}). " +
+                                    "Try: `test -f ${certFile.absolutePath} && test -f ${keyFile.absolutePath}` (without sudo) as the same user running gatekeeperd."
+                            )
+                            return@post
+                        }
+
+                        com.gatekeeper.nginx.ResolvedCertificate(
+                            certificateDomain = "custom",
+                            certificatePath = certFile.absolutePath,
+                            privateKeyPath = keyFile.absolutePath
+                        )
+                    }
+
+                    else -> nginxService.resolveCertificateForDomain(
+                        domain = domain,
+                        requestedCertificateDomain = body.certificateDomain
+                    )
+                }
+
+                if (body.certificateDomain != null && resolvedCertificate == null) {
+                    val installed = nginxService.listInstalledCertificates().map { it.certificateDomain }
+                    call.respondErrorWithData(
+                        HttpStatusCode.BadRequest,
+                        "certificate_not_found",
+                        "No installed certificate found for '${body.certificateDomain}'.",
+                        buildJsonObject {
+                            put("requestedCertificateDomain", JsonPrimitive(body.certificateDomain))
+                            putJsonArray("installedCertificates") { installed.forEach { add(JsonPrimitive(it)) } }
+                        }
+                    )
+                    return@post
+                }
+
+                if (requireSsl && resolvedCertificate == null) {
+                    val installed = nginxService.listInstalledCertificates().map { it.certificateDomain }
+                    call.respondErrorWithData(
+                        HttpStatusCode.BadRequest,
+                        "certificate_not_found",
+                        "No SSL certificate found for '$domain' (or its parent domains).",
+                        buildJsonObject {
+                            put("domain", JsonPrimitive(domain))
+                            putJsonArray("installedCertificates") { installed.forEach { add(JsonPrimitive(it)) } }
+                        }
+                    )
+                    return@post
+                }
+
+                val sslEnabled = resolvedCertificate != null
                 val config = nginxService.generateNginxConfig(
                     slug = slug,
                     domain = domain,
                     appPort = appPort,
                     upstreamScheme = upstreamScheme,
                     sslEnabled = sslEnabled,
-                    sslCertificatePath = body.sslCertificatePath,
-                    sslCertificateKeyPath = body.sslCertificateKeyPath
+                    sslCertificatePath = resolvedCertificate?.certificatePath,
+                    sslCertificateKeyPath = resolvedCertificate?.privateKeyPath
                 )
 
                 val enabled = nginxService.enableProject(slug, config)
@@ -229,7 +322,10 @@ fun Application.configureNginxAdminRoutes() {
                     NginxEnableResponse(
                         success = true,
                         message = "Nginx site enabled and reloaded successfully",
-                        config = config
+                        config = config,
+                        appPort = appPort,
+                        sslEnabled = sslEnabled,
+                        certificateDomain = resolvedCertificate?.certificateDomain
                     )
                 )
             }
@@ -300,6 +396,18 @@ fun Application.configureNginxAdminRoutes() {
                         message = "Nginx site removed and reloaded successfully"
                     )
                 )
+            }
+
+            get("/api/admin/nginx/certificate/list") {
+                val certificates = nginxService.listInstalledCertificates().map {
+                    InstalledCertificateInfo(
+                        certificateDomain = it.certificateDomain,
+                        certificatePath = it.certificatePath,
+                        privateKeyPath = it.privateKeyPath
+                    )
+                }
+
+                call.respond(CertificateListResponse(certificates = certificates))
             }
 
             post("/api/admin/nginx/certificate/install") {

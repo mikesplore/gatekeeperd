@@ -8,6 +8,12 @@ import java.net.Socket
 
 private val logger = LoggerFactory.getLogger("com.gatekeeper.nginx.NginxService")
 
+data class ResolvedCertificate(
+    val certificateDomain: String,
+    val certificatePath: String,
+    val privateKeyPath: String
+)
+
 class NginxService(
     private val sitesAvailablePath: String = AppConfig.nginxSitesAvailablePath,
     private val sitesEnabledPath: String = AppConfig.nginxSitesEnabledPath,
@@ -304,5 +310,61 @@ class NginxService(
         return certDir.exists() &&
                 File(certDir, "fullchain.pem").exists() &&
                 File(certDir, "privkey.pem").exists()
+    }
+
+    fun resolveCertificateForDomain(domain: String, requestedCertificateDomain: String? = null): ResolvedCertificate? {
+        val requested = requestedCertificateDomain?.trim()?.takeIf { it.isNotBlank() }
+        if (requested != null) {
+            return resolveInstalledCertificateByName(requested)
+        }
+
+        resolveInstalledCertificateByName(domain)?.let { return it }
+
+        val parents = parentDomainCandidates(domain)
+        for (candidate in parents) {
+            resolveInstalledCertificateByName(candidate)?.let { return it }
+        }
+
+        return null
+    }
+
+    fun listInstalledCertificates(): List<ResolvedCertificate> {
+        val liveDir = File(sslCertPath)
+        if (!liveDir.exists() || !liveDir.isDirectory) return emptyList()
+
+        return liveDir.listFiles()
+            .orEmpty()
+            .filter { it.isDirectory }
+            .mapNotNull { dir ->
+                val fullchain = File(dir, "fullchain.pem")
+                val privkey = File(dir, "privkey.pem")
+                if (!fullchain.exists() || !privkey.exists()) return@mapNotNull null
+                ResolvedCertificate(
+                    certificateDomain = dir.name,
+                    certificatePath = fullchain.absolutePath,
+                    privateKeyPath = privkey.absolutePath
+                )
+            }
+            .sortedBy { it.certificateDomain }
+    }
+
+    private fun resolveInstalledCertificateByName(certificateDomain: String): ResolvedCertificate? {
+        if (!isCertificateInstalled(certificateDomain)) return null
+        return ResolvedCertificate(
+            certificateDomain = certificateDomain,
+            certificatePath = "$sslCertPath/$certificateDomain/fullchain.pem",
+            privateKeyPath = "$sslCertPath/$certificateDomain/privkey.pem"
+        )
+    }
+
+    private fun parentDomainCandidates(domain: String): List<String> {
+        val parts = domain.trim().trimEnd('.').split(".").filter { it.isNotBlank() }
+        if (parts.size <= 2) return emptyList()
+
+        val candidates = mutableListOf<String>()
+        for (start in 1..(parts.size - 2)) {
+            candidates.add(parts.subList(start, parts.size).joinToString("."))
+        }
+        return candidates
     }
 }
