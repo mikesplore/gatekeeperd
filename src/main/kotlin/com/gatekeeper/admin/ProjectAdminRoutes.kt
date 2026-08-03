@@ -17,6 +17,10 @@ import com.gatekeeper.docker.CreateContainerResponse
 import com.gatekeeper.docker.DeleteImageRequest
 import com.gatekeeper.docker.DeleteImageResponse
 import com.gatekeeper.docker.DockerService
+import com.gatekeeper.docker.ImageStatusRequest
+import com.gatekeeper.docker.ImageStatusResponse
+import com.gatekeeper.docker.PortsAvailabilityRequest
+import com.gatekeeper.docker.PortsAvailabilityResponse
 import com.gatekeeper.paystack.ProjectPaymentService
 import io.ktor.http.*
 import io.ktor.server.application.*
@@ -29,6 +33,31 @@ import org.slf4j.LoggerFactory
 import java.math.BigDecimal
 
 private val logger = LoggerFactory.getLogger("com.gatekeeper.admin.ProjectAdminRoutes")
+
+private data class ParsedImageRef(
+    val repository: String,
+    val tag: String
+) {
+    val normalized: String get() = "$repository:$tag"
+}
+
+private fun parseImageRef(raw: String): ParsedImageRef? {
+    val trimmed = raw.trim()
+    if (trimmed.isBlank()) return null
+    if (trimmed.contains("@")) return null // digests not supported in admin wizard yet
+
+    val lastSlash = trimmed.lastIndexOf('/')
+    val lastColon = trimmed.lastIndexOf(':')
+    val hasTag = lastColon > lastSlash
+
+    val repository = if (hasTag) trimmed.substring(0, lastColon) else trimmed
+    val tag = if (hasTag) trimmed.substring(lastColon + 1) else "latest"
+
+    if (!InputValidators.isValidImageName(repository)) return null
+    if (tag.isBlank() || !Regex("^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$").matches(tag)) return null
+
+    return ParsedImageRef(repository = repository, tag = tag)
+}
 
 @Serializable
 data class CreateProjectRequest(
@@ -413,46 +442,121 @@ fun Application.configureProjectAdminRoutes() {
                     return@post
                 }
 
-                if (body.name.isBlank() || body.image.isBlank()) {
-                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "name and image are required")
+                if (body.name.isBlank() || !InputValidators.isValidContainerName(body.name)) {
+                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "A valid container name is required")
                     return@post
                 }
 
-                if (body.ports.isEmpty()) {
-                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "At least one port mapping is required")
-                    return@post
-                }
-
-                val dockerService = DockerService(AppConfig.dockerSocket)
-                
-                // Check for port conflicts
-                val existingContainers = dockerService.listContainers(all = true)
-                val portConflicts = mutableListOf<Int>()
-                
-                body.ports.keys.forEach { hostPort ->
-                    existingContainers.forEach { container ->
-                        val containerPorts = container.ports.split(", ")
-                        containerPorts.forEach { portMapping ->
-                            val portPart = portMapping.split("->").getOrNull(0)?.trim()
-                            if (portPart?.toIntOrNull() == hostPort) {
-                                portConflicts.add(hostPort)
-                            }
-                        }
-                    }
-                }
-
-                if (portConflicts.isNotEmpty()) {
-                    dockerService.close()
+                val parsedImage = parseImageRef(body.image)
+                if (parsedImage == null) {
                     call.respondError(
-                        HttpStatusCode.Conflict,
-                        "port_conflict",
-                        "Port(s) already in use: ${portConflicts.joinToString(", ")}"
+                        HttpStatusCode.BadRequest,
+                        "invalid_request",
+                        "A valid image reference is required (e.g. 'nginx:latest' or 'nginx')"
                     )
                     return@post
                 }
 
+                val dockerService = try {
+                    DockerService(AppConfig.dockerSocket)
+                } catch (e: Exception) {
+                    logger.warn("Docker not available for container create (non-fatal): ${e.message}")
+                    call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available")
+                    return@post
+                }
+
                 try {
-                    val container = dockerService.createContainer(body)
+                    // Stage 1: Image availability (optionally pull) before deeper validation.
+                    val imageRef = parsedImage.normalized
+                    if (!dockerService.imageExists(imageRef)) {
+                        if (body.pullImage) {
+                            dockerService.pullImage(parsedImage.repository, parsedImage.tag)
+                        } else {
+                            call.respondError(
+                                HttpStatusCode.NotFound,
+                                "image_not_found",
+                                "Docker image '$imageRef' not found locally. Pull it first or set pullImage=true."
+                            )
+                            return@post
+                        }
+                    }
+
+                    // Stage 2: Validate network selection.
+                    val requestedNetwork = body.network.trim().ifBlank { "bridge" }
+                    if (requestedNetwork == AppConfig.internalNetwork) {
+                        dockerService.createNetworkIfMissing(requestedNetwork)
+                    } else {
+                        val existingNetworks = dockerService.listNetworks().map { it.name }.toSet()
+                        if (requestedNetwork !in existingNetworks) {
+                            call.respondError(
+                                HttpStatusCode.BadRequest,
+                                "network_not_found",
+                                "Docker network '$requestedNetwork' not found. Use GET /api/admin/networks to populate the dropdown."
+                            )
+                            return@post
+                        }
+                    }
+
+                    // Stage 3: Restart policy (optional).
+                    val restartPolicy = body.restartPolicy?.trim()?.takeIf { it.isNotBlank() }
+                    if (restartPolicy != null) {
+                        val ok = restartPolicy in listOf("no", "always", "unless-stopped") ||
+                            restartPolicy == "on-failure" ||
+                            Regex("^on-failure:\\d{1,5}$").matches(restartPolicy)
+                        if (!ok) {
+                            call.respondError(
+                                HttpStatusCode.BadRequest,
+                                "invalid_request",
+                                "restartPolicy must be one of: no, always, unless-stopped, on-failure, on-failure:<max-retries>"
+                            )
+                            return@post
+                        }
+                    }
+
+                    // Stage 3: Ports (optional) and port conflicts.
+                    val hostPorts = body.ports.keys.toSet()
+                    val invalidPorts = hostPorts.filter { it !in 1..65535 } +
+                        body.ports.values.filter { it !in 1..65535 }
+                    if (invalidPorts.isNotEmpty()) {
+                        call.respondError(
+                            HttpStatusCode.BadRequest,
+                            "invalid_request",
+                            "Ports must be between 1 and 65535"
+                        )
+                        return@post
+                    }
+
+                    // Stage 4: Volume mounts (optional).
+                    val invalidVolume = body.volumes.firstOrNull { it.hostPath.isBlank() || it.containerPath.isBlank() }
+                    if (invalidVolume != null) {
+                        call.respondError(
+                            HttpStatusCode.BadRequest,
+                            "invalid_request",
+                            "volumes require both hostPath and containerPath"
+                        )
+                        return@post
+                    }
+
+                    if (hostPorts.isNotEmpty()) {
+                        val inUse = dockerService.hostPortsInUse()
+                        val conflicts = hostPorts.intersect(inUse).sorted()
+                        if (conflicts.isNotEmpty()) {
+                            call.respondError(
+                                HttpStatusCode.Conflict,
+                                "port_conflict",
+                                "Port(s) already in use: ${conflicts.joinToString(", ")}"
+                            )
+                            return@post
+                        }
+                    }
+
+                    val container = dockerService.createContainer(
+                        body.copy(
+                            image = imageRef,
+                            network = requestedNetwork,
+                            restartPolicy = restartPolicy
+                        )
+                    )
                     
                     logger.info("Container created via API: ${body.name}")
                     call.respond(HttpStatusCode.Created, CreateContainerResponse(
@@ -467,6 +571,77 @@ fun Application.configureProjectAdminRoutes() {
                         HttpStatusCode.InternalServerError,
                         "docker_error",
                         e.message ?: "Failed to create container"
+                    )
+                } finally {
+                    dockerService.close()
+                }
+            }
+
+            // Wizard helpers: validate early stages before attempting full container creation.
+            post("/api/admin/images/status") {
+                val body = try {
+                    call.receive<ImageStatusRequest>()
+                } catch (_: Exception) {
+                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid request body")
+                    return@post
+                }
+
+                val parsed = parseImageRef(body.image)
+                if (parsed == null) {
+                    call.respondError(
+                        HttpStatusCode.BadRequest,
+                        "invalid_request",
+                        "A valid image reference is required (e.g. 'nginx:latest' or 'nginx')"
+                    )
+                    return@post
+                }
+
+                val dockerService = try {
+                    DockerService(AppConfig.dockerSocket)
+                } catch (e: Exception) {
+                    logger.warn("Docker not available for image status (non-fatal): ${e.message}")
+                    call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available")
+                    return@post
+                }
+
+                try {
+                    val normalized = parsed.normalized
+                    call.respond(ImageStatusResponse(image = normalized, exists = dockerService.imageExists(normalized)))
+                } finally {
+                    dockerService.close()
+                }
+            }
+
+            post("/api/admin/containers/wizard/ports/check") {
+                val body = try {
+                    call.receive<PortsAvailabilityRequest>()
+                } catch (_: Exception) {
+                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid request body")
+                    return@post
+                }
+
+                val ports = body.hostPorts.mapNotNull { it.takeIf { p -> p in 1..65535 } }.toSet()
+                if (ports.size != body.hostPorts.size) {
+                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "hostPorts must be between 1 and 65535")
+                    return@post
+                }
+
+                val dockerService = try {
+                    DockerService(AppConfig.dockerSocket)
+                } catch (e: Exception) {
+                    logger.warn("Docker not available for ports check (non-fatal): ${e.message}")
+                    call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available")
+                    return@post
+                }
+
+                try {
+                    val inUse = dockerService.hostPortsInUse()
+                    val conflicts = ports.intersect(inUse).sorted()
+                    call.respond(
+                        PortsAvailabilityResponse(
+                            ok = conflicts.isEmpty(),
+                            conflicts = conflicts
+                        )
                     )
                 } finally {
                     dockerService.close()

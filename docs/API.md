@@ -381,6 +381,32 @@ Active projects past their due date, sorted by days overdue descending (JWT requ
 
 These endpoints manage nginx site configurations for client projects. They require `nginx` CLI and `systemctl` access on the host.
 
+### GET /api/admin/nginx/wizard/context/{slug}
+Wizard helper: fetch project + nginx context to drive a step-by-step UI (status, container hints, certificate options).
+
+**Response:**
+```json
+{
+  "slug": "acw",
+  "domain": "acw.example.com",
+  "containerName": "acw-container:9921",
+  "nginxEnabled": false,
+  "configuredContainerName": "acw-container",
+  "configuredPort": 9921,
+  "dockerContainerHealth": "running",
+  "dockerPublishedHostPorts": [9921],
+  "installedCertificates": ["example.com"],
+  "resolvedCertificateDomain": "example.com"
+}
+```
+
+### POST /api/admin/nginx/wizard/validate/{slug}
+Wizard helper: validate nginx enable inputs and return a config preview without applying changes.
+
+**Request:** same as `POST /api/admin/nginx/enable/{slug}`
+
+**Response:** same shape as `POST /api/admin/nginx/enable/{slug}`, but `message` indicates no changes were applied.
+
 ### GET /api/admin/nginx/status/{slug}
 Check if a project has an nginx site configured and enabled, and whether SSL is set up.
 
@@ -567,6 +593,24 @@ Revenue summary from successful payments (JWT required).
 
 These endpoints manage Docker containers, networks, and images on the host. They require Docker socket access and return `503 Service Unavailable` if Docker is not available.
 
+### POST /api/admin/images/status
+Wizard helper: check whether an image is available locally before attempting container creation.
+
+**Request:**
+```json
+{
+  "image": "nginx:latest"
+}
+```
+
+**Response:**
+```json
+{
+  "image": "nginx:latest",
+  "exists": true
+}
+```
+
 ### POST /api/admin/containers/create
 Create and start a new Docker container with custom configuration.
 
@@ -597,8 +641,8 @@ Create and start a new Docker container with custom configuration.
 ```
 
 - `name` (required): Container name
-- `image` (required): Docker image (e.g., `nginx:latest`)
-- `ports` (required): Map of host ports to container ports (e.g., `{"8080": 80}`)
+- `image` (required): Docker image reference (e.g., `nginx:latest` or `nginx`)
+- `ports` (optional): Map of host ports to container ports (e.g., `{"8080": 80}`)
 - `env` (optional): Environment variables as key-value pairs
 - `network` (optional): Docker network to connect to (default: `"bridge"`)
 - `volumes` (optional): List of volume mounts
@@ -616,9 +660,28 @@ Create and start a new Docker container with custom configuration.
 ```
 
 **Notes:**
+- Validates image availability first (pulls if missing when `pullImage=true`)
 - Validates port availability before creating container (returns `409 Conflict` if ports are in use)
 - Container is started immediately after creation
 - Returns full container info including port mappings
+
+### POST /api/admin/containers/wizard/ports/check
+Wizard helper: check whether host ports are already in use on the Docker host.
+
+**Request:**
+```json
+{
+  "hostPorts": [8080, 8081]
+}
+```
+
+**Response:**
+```json
+{
+  "ok": true,
+  "conflicts": []
+}
+```
 
 ### GET /api/admin/containers
 List all Docker containers.
@@ -635,7 +698,7 @@ List all Docker containers.
     "image": "nginx:latest",
     "status": "Up 2 hours",
     "state": "running",
-    "ports": "80->8080/tcp",
+    "ports": "8080->80/tcp",
     "created": 1722163200
   }
 ]

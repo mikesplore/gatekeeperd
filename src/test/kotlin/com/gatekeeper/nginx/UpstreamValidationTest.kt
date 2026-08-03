@@ -25,9 +25,8 @@ class UpstreamValidationTest {
     @Test
     fun `parsePublishedHostPorts extracts host ports from docker ports string`() {
         assertEquals(setOf(9921), parsePublishedHostPorts("9921->9921/tcp"))
-        assertEquals(setOf(80, 443), parsePublishedHostPorts("8080->80/tcp, 8443->443/tcp"))
+        assertEquals(setOf(8080, 8443), parsePublishedHostPorts("8080->80/tcp, 8443->443/tcp"))
         assertEquals(emptySet(), parsePublishedHostPorts(""))
         assertEquals(emptySet(), parsePublishedHostPorts("n/a"))
     }
 }
-

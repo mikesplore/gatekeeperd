@@ -60,3 +60,25 @@ data class DeleteImageResponse(
     val status: String,
     val image: String
 )
+
+@Serializable
+data class ImageStatusRequest(
+    val image: String
+)
+
+@Serializable
+data class ImageStatusResponse(
+    val image: String,
+    val exists: Boolean
+)
+
+@Serializable
+data class PortsAvailabilityRequest(
+    val hostPorts: List<Int>
+)
+
+@Serializable
+data class PortsAvailabilityResponse(
+    val ok: Boolean,
+    val conflicts: List<Int> = emptyList()
+)

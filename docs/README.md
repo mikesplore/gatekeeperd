@@ -120,6 +120,25 @@ Full reference: [API.md](API.md)
 
 ---
 
+## Frontend wizard flows (recommended)
+
+The admin dashboard should use a **wizard-like flow** for Docker container creation and nginx enablement so that later steps are not attempted when earlier prerequisites fail.
+
+### Docker container creation wizard
+
+1. **Network dropdown**: `GET /api/admin/networks`
+2. **Image check**: `POST /api/admin/images/status` (if missing → `POST /api/admin/images/pull`)
+3. **Ports step**: `POST /api/admin/containers/wizard/ports/check`
+4. **Create container**: `POST /api/admin/containers/create` (includes restart policy, env vars, volume mounts)
+
+### Nginx enable wizard
+
+1. **Context + options**: `GET /api/admin/nginx/wizard/context/{slug}` (cert list + inferred port hints)
+2. **Validate + preview**: `POST /api/admin/nginx/wizard/validate/{slug}` (returns config preview; no changes applied)
+3. **Apply**: `POST /api/admin/nginx/enable/{slug}`
+
+---
+
 ## Gate check data flow
 
 ```

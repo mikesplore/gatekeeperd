@@ -11,6 +11,7 @@ import com.gatekeeper.nginx.InstalledCertificateInfo
 import com.gatekeeper.nginx.NginxEnableRequest
 import com.gatekeeper.nginx.NginxStatusResponse
 import com.gatekeeper.nginx.NginxService
+import com.gatekeeper.nginx.ResolvedCertificate
 import com.gatekeeper.nginx.extractConfiguredContainerName
 import com.gatekeeper.nginx.extractConfiguredPort
 import com.gatekeeper.nginx.parsePublishedHostPorts
@@ -25,6 +26,7 @@ import io.ktor.server.routing.post
 import io.ktor.server.routing.routing
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.JsonPrimitive
 import org.slf4j.LoggerFactory
@@ -47,6 +49,203 @@ data class NginxDisableResponse(
     val message: String
 )
 
+@Serializable
+data class NginxWizardContextResponse(
+    val slug: String,
+    val domain: String,
+    val containerName: String,
+    val nginxEnabled: Boolean,
+    val configuredContainerName: String? = null,
+    val configuredPort: Int? = null,
+    val dockerContainerHealth: String? = null,
+    val dockerPublishedHostPorts: List<Int>? = null,
+    val installedCertificates: List<String> = emptyList(),
+    val resolvedCertificateDomain: String? = null
+)
+
+private data class NginxEnablePlan(
+    val slug: String,
+    val domain: String,
+    val appPort: Int,
+    val upstreamScheme: String,
+    val resolvedCertificate: ResolvedCertificate?
+) {
+    val sslEnabled: Boolean get() = resolvedCertificate != null
+}
+
+private sealed interface NginxPlanResult {
+    data class Ok(val plan: NginxEnablePlan) : NginxPlanResult
+    data class Err(
+        val status: HttpStatusCode,
+        val code: String,
+        val message: String,
+        val data: JsonObject? = null
+    ) : NginxPlanResult
+}
+
+private fun computeNginxEnablePlan(
+    slug: String,
+    projectDomain: String,
+    projectContainerName: String,
+    request: NginxEnableRequest,
+    nginxService: NginxService,
+    dockerService: DockerService?
+): NginxPlanResult {
+    val explicitPort = request.port
+    if (explicitPort != null && explicitPort !in 1..65535) {
+        return NginxPlanResult.Err(HttpStatusCode.BadRequest, "invalid_request", "port must be between 1 and 65535")
+    }
+
+    val configuredContainerName = extractConfiguredContainerName(projectContainerName)
+    val dockerPublishedHostPorts = run {
+        if (dockerService == null || configuredContainerName == null) return@run null
+        val health = dockerService.containerHealth(configuredContainerName)
+        if (health != "running") {
+            return NginxPlanResult.Err(
+                HttpStatusCode.BadRequest,
+                "port_not_active",
+                "Container '$configuredContainerName' is not running for project $slug (state: $health). Start it and try again."
+            )
+        }
+        val info = dockerService.getContainer(configuredContainerName)
+        parsePublishedHostPorts(info?.ports.orEmpty())
+    }
+
+    val appPort = explicitPort
+        ?: extractConfiguredPort(projectContainerName)
+        ?: dockerPublishedHostPorts?.singleOrNull()
+
+    if (appPort == null) {
+        if (dockerPublishedHostPorts != null) {
+            return NginxPlanResult.Err(
+                HttpStatusCode.BadRequest,
+                "missing_port",
+                when {
+                    dockerPublishedHostPorts.isEmpty() ->
+                        "Could not infer upstream port from Docker. Provide 'port' in the request body or encode containerName as name:port."
+                    else ->
+                        "Multiple published host ports detected. Provide 'port' in the request body or encode containerName as name:port."
+                },
+                buildJsonObject {
+                    put("containerName", JsonPrimitive(configuredContainerName ?: projectContainerName))
+                    putJsonArray("publishedHostPorts") { dockerPublishedHostPorts.sorted().forEach { add(JsonPrimitive(it)) } }
+                }
+            )
+        }
+
+        return NginxPlanResult.Err(
+            HttpStatusCode.BadRequest,
+            "missing_port",
+            "Provide a valid port in the request body, encode containerName as name:port, or ensure Docker is available for port inference."
+        )
+    }
+
+    // Prefer Docker-based validation: works even when gatekeeperd runs in a container (127.0.0.1 differs).
+    if (dockerPublishedHostPorts != null) {
+        if (dockerPublishedHostPorts.isNotEmpty() && appPort !in dockerPublishedHostPorts) {
+            return NginxPlanResult.Err(
+                HttpStatusCode.BadRequest,
+                "port_not_active",
+                "Container '$configuredContainerName' is running but does not publish host port $appPort (published: ${dockerPublishedHostPorts.sorted().joinToString(", ")}). Nginx proxies to 127.0.0.1:$appPort."
+            )
+        }
+    } else {
+        if (!nginxService.isPortActive(appPort)) {
+            return NginxPlanResult.Err(
+                HttpStatusCode.BadRequest,
+                "port_not_active",
+                "Port $appPort is not reachable on 127.0.0.1 for project $slug. Ensure the upstream is listening on the host, or set containerName to a Docker container so Docker-based validation can be used."
+            )
+        }
+    }
+
+    val upstreamScheme = request.upstreamScheme?.trim()?.lowercase()?.takeIf { it.isNotBlank() }
+        ?: if (appPort == 443) "https" else "http"
+    if (upstreamScheme !in listOf("http", "https")) {
+        return NginxPlanResult.Err(HttpStatusCode.BadRequest, "invalid_request", "upstreamScheme must be 'http' or 'https'")
+    }
+
+    val domain = projectDomain.trim()
+    if (domain.isBlank()) {
+        return NginxPlanResult.Err(HttpStatusCode.BadRequest, "no_domain", "Project has no domain configured")
+    }
+
+    val explicitCertPath = request.sslCertificatePath?.trim()?.takeIf { it.isNotBlank() }
+    val explicitKeyPath = request.sslCertificateKeyPath?.trim()?.takeIf { it.isNotBlank() }
+    val requireSsl = request.requireSsl ?: false
+
+    if ((explicitCertPath == null) != (explicitKeyPath == null)) {
+        return NginxPlanResult.Err(
+            HttpStatusCode.BadRequest,
+            "invalid_request",
+            "Provide both sslCertificatePath and sslCertificateKeyPath (or neither)."
+        )
+    }
+
+    val resolvedCertificate = when {
+        explicitCertPath != null && explicitKeyPath != null -> {
+            val certFile = java.io.File(explicitCertPath)
+            val keyFile = java.io.File(explicitKeyPath)
+            if (!certFile.exists() || !keyFile.exists()) {
+                return NginxPlanResult.Err(
+                    HttpStatusCode.BadRequest,
+                    "certificate_not_found",
+                    "SSL certificate files are not accessible at the specified paths. " +
+                        "certPath='${certFile.absolutePath}' (exists=${certFile.exists()}, readable=${certFile.canRead()}), " +
+                        "keyPath='${keyFile.absolutePath}' (exists=${keyFile.exists()}, readable=${keyFile.canRead()})."
+                )
+            }
+
+            ResolvedCertificate(
+                certificateDomain = "custom",
+                certificatePath = certFile.absolutePath,
+                privateKeyPath = keyFile.absolutePath
+            )
+        }
+
+        else -> nginxService.resolveCertificateForDomain(
+            domain = domain,
+            requestedCertificateDomain = request.certificateDomain
+        )
+    }
+
+    if (request.certificateDomain != null && resolvedCertificate == null) {
+        val installed = nginxService.listInstalledCertificates().map { it.certificateDomain }
+        return NginxPlanResult.Err(
+            HttpStatusCode.BadRequest,
+            "certificate_not_found",
+            "No installed certificate found for '${request.certificateDomain}'.",
+            buildJsonObject {
+                put("requestedCertificateDomain", JsonPrimitive(request.certificateDomain))
+                putJsonArray("installedCertificates") { installed.forEach { add(JsonPrimitive(it)) } }
+            }
+        )
+    }
+
+    if (requireSsl && resolvedCertificate == null) {
+        val installed = nginxService.listInstalledCertificates().map { it.certificateDomain }
+        return NginxPlanResult.Err(
+            HttpStatusCode.BadRequest,
+            "certificate_not_found",
+            "No SSL certificate found for '$domain' (or its parent domains).",
+            buildJsonObject {
+                put("domain", JsonPrimitive(domain))
+                putJsonArray("installedCertificates") { installed.forEach { add(JsonPrimitive(it)) } }
+            }
+        )
+    }
+
+    return NginxPlanResult.Ok(
+        NginxEnablePlan(
+            slug = slug,
+            domain = domain,
+            appPort = appPort,
+            upstreamScheme = upstreamScheme,
+            resolvedCertificate = resolvedCertificate
+        )
+    )
+}
+
 fun Application.configureNginxAdminRoutes() {
     val nginxService = NginxService()
     val dockerService: DockerService? = try {
@@ -62,6 +261,121 @@ fun Application.configureNginxAdminRoutes() {
         })
 
         authenticate("auth-jwt") {
+
+            get("/api/admin/nginx/wizard/context/{slug}") {
+                val slug = call.parameters["slug"]
+                if (slug == null) {
+                    call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing slug path parameter")
+                    return@get
+                }
+
+                val project = ProjectRepository.findBySlug(slug)
+                if (project == null) {
+                    call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
+                    return@get
+                }
+
+                val sitesAvailablePath = AppConfig.nginxSitesAvailablePath
+                val sitesEnabledPath = AppConfig.nginxSitesEnabledPath
+                val nginxEnabled = run {
+                    val available = java.io.File("$sitesAvailablePath/$slug").exists()
+                    val enabledLink = java.io.File("$sitesEnabledPath/$slug").exists()
+                    available && enabledLink
+                }
+
+                val configuredContainerName = extractConfiguredContainerName(project.containerName)
+                val configuredPort = extractConfiguredPort(project.containerName)
+
+                val dockerHealth = runCatching {
+                    if (dockerService == null || configuredContainerName == null) null
+                    else dockerService.containerHealth(configuredContainerName)
+                }.getOrNull()
+
+                val publishedPorts = runCatching {
+                    if (dockerService == null || configuredContainerName == null) null
+                    else parsePublishedHostPorts(dockerService.getContainer(configuredContainerName)?.ports.orEmpty()).sorted()
+                }.getOrNull()
+
+                val installedCerts = nginxService.listInstalledCertificates().map { it.certificateDomain }.sorted()
+                val resolvedCert = nginxService.resolveCertificateForDomain(project.domain)
+
+                call.respond(
+                    NginxWizardContextResponse(
+                        slug = slug,
+                        domain = project.domain,
+                        containerName = project.containerName,
+                        nginxEnabled = nginxEnabled,
+                        configuredContainerName = configuredContainerName,
+                        configuredPort = configuredPort,
+                        dockerContainerHealth = dockerHealth,
+                        dockerPublishedHostPorts = publishedPorts,
+                        installedCertificates = installedCerts,
+                        resolvedCertificateDomain = resolvedCert?.certificateDomain
+                    )
+                )
+            }
+
+            post("/api/admin/nginx/wizard/validate/{slug}") {
+                val slug = call.parameters["slug"]
+                if (slug == null) {
+                    call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing slug path parameter")
+                    return@post
+                }
+
+                val project = ProjectRepository.findBySlug(slug)
+                if (project == null) {
+                    call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
+                    return@post
+                }
+
+                val body = try {
+                    call.receive<NginxEnableRequest>()
+                } catch (_: Exception) {
+                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid request body")
+                    return@post
+                }
+
+                when (val result = computeNginxEnablePlan(
+                    slug = slug,
+                    projectDomain = project.domain,
+                    projectContainerName = project.containerName,
+                    request = body,
+                    nginxService = nginxService,
+                    dockerService = dockerService
+                )) {
+                    is NginxPlanResult.Err -> {
+                        if (result.data != null) {
+                            call.respondErrorWithData(result.status, result.code, result.message, result.data)
+                        } else {
+                            call.respondError(result.status, result.code, result.message)
+                        }
+                        return@post
+                    }
+                    is NginxPlanResult.Ok -> {
+                        val plan = result.plan
+                        val config = nginxService.generateNginxConfig(
+                            slug = slug,
+                            domain = plan.domain,
+                            appPort = plan.appPort,
+                            upstreamScheme = plan.upstreamScheme,
+                            sslEnabled = plan.sslEnabled,
+                            sslCertificatePath = plan.resolvedCertificate?.certificatePath,
+                            sslCertificateKeyPath = plan.resolvedCertificate?.privateKeyPath
+                        )
+
+                        call.respond(
+                            NginxEnableResponse(
+                                success = true,
+                                message = "Validated successfully (no changes applied)",
+                                config = config,
+                                appPort = plan.appPort,
+                                sslEnabled = plan.sslEnabled,
+                                certificateDomain = plan.resolvedCertificate?.certificateDomain
+                            )
+                        )
+                    }
+                }
+            }
 
             get("/api/admin/nginx/status/{slug}") {
                 val slug = call.parameters["slug"]
@@ -119,189 +433,33 @@ fun Application.configureNginxAdminRoutes() {
                     return@post
                 }
 
-                val explicitPort = body.port
-                if (explicitPort != null && explicitPort !in 1..65535) {
-                    call.respondError(
-                        HttpStatusCode.BadRequest,
-                        "invalid_request",
-                        "port must be between 1 and 65535"
-                    )
-                    return@post
-                }
-
-                val configuredContainerName = extractConfiguredContainerName(project.containerName)
-                val dockerPublishedHostPorts = run {
-                    if (dockerService == null || configuredContainerName == null) return@run null
-
-                    val health = dockerService.containerHealth(configuredContainerName)
-                    if (health != "running") {
-                        call.respondError(
-                            HttpStatusCode.BadRequest,
-                            "port_not_active",
-                            "Container '$configuredContainerName' is not running for project $slug (state: $health). Start it and try again."
-                        )
-                        return@post
-                    }
-
-                    val info = dockerService.getContainer(configuredContainerName)
-                    parsePublishedHostPorts(info?.ports.orEmpty())
-                }
-
-                val appPort = run {
-                    explicitPort
-                        ?: extractConfiguredPort(project.containerName)
-                        ?: dockerPublishedHostPorts?.singleOrNull()
-                }
-
-                if (appPort == null) {
-                    if (dockerPublishedHostPorts != null) {
-                        call.respondErrorWithData(
-                            HttpStatusCode.BadRequest,
-                            "missing_port",
-                            when {
-                                dockerPublishedHostPorts.isEmpty() ->
-                                    "Could not infer upstream port from Docker. Provide 'port' in the request body or encode containerName as name:port."
-                                else ->
-                                    "Multiple published host ports detected. Provide 'port' in the request body or encode containerName as name:port."
-                            },
-                            buildJsonObject {
-                                put("containerName", JsonPrimitive(configuredContainerName ?: project.containerName))
-                                putJsonArray("publishedHostPorts") {
-                                    dockerPublishedHostPorts.sorted().forEach { add(JsonPrimitive(it)) }
-                                }
-                            }
-                        )
-                        return@post
-                    }
-
-                    call.respondError(
-                        HttpStatusCode.BadRequest,
-                        "missing_port",
-                        "Provide a valid port in the request body, encode containerName as name:port, or ensure Docker is available for port inference."
-                    )
-                    return@post
-                }
-
-                // Prefer Docker-based validation: works even when gatekeeperd runs in a container (127.0.0.1 differs).
-                if (dockerPublishedHostPorts != null) {
-                    // If Docker reports published ports, ensure nginx's upstream host port is among them.
-                    if (dockerPublishedHostPorts.isNotEmpty() && appPort !in dockerPublishedHostPorts) {
-                        call.respondError(
-                            HttpStatusCode.BadRequest,
-                            "port_not_active",
-                            "Container '$configuredContainerName' is running but does not publish host port $appPort (published: ${dockerPublishedHostPorts.sorted().joinToString(", ")}). Nginx proxies to 127.0.0.1:$appPort."
-                        )
-                        return@post
-                    }
-                } else {
-                    // Fallback for non-Docker / unknown containerName formats.
-                    if (!nginxService.isPortActive(appPort)) {
-                        call.respondError(
-                            HttpStatusCode.BadRequest,
-                            "port_not_active",
-                            "Port $appPort is not reachable on 127.0.0.1 for project $slug. Ensure the upstream is listening on the host, or set containerName to a Docker container so Docker-based validation can be used."
-                        )
-                        return@post
-                    }
-                }
-
-                val upstreamScheme = body.upstreamScheme?.trim()?.lowercase()?.takeIf { it.isNotBlank() } ?: if (appPort == 443) "https" else "http"
-                if (upstreamScheme !in listOf("http", "https")) {
-                    call.respondError(
-                        HttpStatusCode.BadRequest,
-                        "invalid_request",
-                        "upstreamScheme must be 'http' or 'https'"
-                    )
-                    return@post
-                }
-
-                val domain = project.domain.ifBlank {
-                    call.respondError(HttpStatusCode.BadRequest, "no_domain", "Project has no domain configured")
-                    return@post
-                }
-
-                val explicitCertPath = body.sslCertificatePath?.trim()?.takeIf { it.isNotBlank() }
-                val explicitKeyPath = body.sslCertificateKeyPath?.trim()?.takeIf { it.isNotBlank() }
-                val requireSsl = body.requireSsl ?: false
-
-                if ((explicitCertPath == null) != (explicitKeyPath == null)) {
-                    call.respondError(
-                        HttpStatusCode.BadRequest,
-                        "invalid_request",
-                        "Provide both sslCertificatePath and sslCertificateKeyPath (or neither)."
-                    )
-                    return@post
-                }
-
-                val resolvedCertificate = when {
-                    explicitCertPath != null && explicitKeyPath != null -> {
-                        val certFile = java.io.File(explicitCertPath)
-                        val keyFile = java.io.File(explicitKeyPath)
-                        if (!certFile.exists() || !keyFile.exists()) {
-                            call.respondError(
-                                HttpStatusCode.BadRequest,
-                                "certificate_not_found",
-                                "SSL certificate files are not accessible at the specified paths. " +
-                                    "This usually means either (1) the gatekeeperd process user cannot traverse/read `/etc/letsencrypt` " +
-                                    "(common when you verified with `sudo test -f ...`), or (2) gatekeeperd is running in a container/namespace " +
-                                    "where those host paths don't exist. " +
-                                    "certPath='${certFile.absolutePath}' (exists=${certFile.exists()}, readable=${certFile.canRead()}), " +
-                                    "keyPath='${keyFile.absolutePath}' (exists=${keyFile.exists()}, readable=${keyFile.canRead()}). " +
-                                    "Try: `test -f ${certFile.absolutePath} && test -f ${keyFile.absolutePath}` (without sudo) as the same user running gatekeeperd."
-                            )
-                            return@post
+                val plan = when (val result = computeNginxEnablePlan(
+                    slug = slug,
+                    projectDomain = project.domain,
+                    projectContainerName = project.containerName,
+                    request = body,
+                    nginxService = nginxService,
+                    dockerService = dockerService
+                )) {
+                    is NginxPlanResult.Err -> {
+                        if (result.data != null) {
+                            call.respondErrorWithData(result.status, result.code, result.message, result.data)
+                        } else {
+                            call.respondError(result.status, result.code, result.message)
                         }
-
-                        com.gatekeeper.nginx.ResolvedCertificate(
-                            certificateDomain = "custom",
-                            certificatePath = certFile.absolutePath,
-                            privateKeyPath = keyFile.absolutePath
-                        )
+                        return@post
                     }
-
-                    else -> nginxService.resolveCertificateForDomain(
-                        domain = domain,
-                        requestedCertificateDomain = body.certificateDomain
-                    )
+                    is NginxPlanResult.Ok -> result.plan
                 }
 
-                if (body.certificateDomain != null && resolvedCertificate == null) {
-                    val installed = nginxService.listInstalledCertificates().map { it.certificateDomain }
-                    call.respondErrorWithData(
-                        HttpStatusCode.BadRequest,
-                        "certificate_not_found",
-                        "No installed certificate found for '${body.certificateDomain}'.",
-                        buildJsonObject {
-                            put("requestedCertificateDomain", JsonPrimitive(body.certificateDomain))
-                            putJsonArray("installedCertificates") { installed.forEach { add(JsonPrimitive(it)) } }
-                        }
-                    )
-                    return@post
-                }
-
-                if (requireSsl && resolvedCertificate == null) {
-                    val installed = nginxService.listInstalledCertificates().map { it.certificateDomain }
-                    call.respondErrorWithData(
-                        HttpStatusCode.BadRequest,
-                        "certificate_not_found",
-                        "No SSL certificate found for '$domain' (or its parent domains).",
-                        buildJsonObject {
-                            put("domain", JsonPrimitive(domain))
-                            putJsonArray("installedCertificates") { installed.forEach { add(JsonPrimitive(it)) } }
-                        }
-                    )
-                    return@post
-                }
-
-                val sslEnabled = resolvedCertificate != null
                 val config = nginxService.generateNginxConfig(
                     slug = slug,
-                    domain = domain,
-                    appPort = appPort,
-                    upstreamScheme = upstreamScheme,
-                    sslEnabled = sslEnabled,
-                    sslCertificatePath = resolvedCertificate?.certificatePath,
-                    sslCertificateKeyPath = resolvedCertificate?.privateKeyPath
+                    domain = plan.domain,
+                    appPort = plan.appPort,
+                    upstreamScheme = plan.upstreamScheme,
+                    sslEnabled = plan.sslEnabled,
+                    sslCertificatePath = plan.resolvedCertificate?.certificatePath,
+                    sslCertificateKeyPath = plan.resolvedCertificate?.privateKeyPath
                 )
 
                 val enabled = nginxService.enableProject(slug, config)
@@ -323,9 +481,9 @@ fun Application.configureNginxAdminRoutes() {
                         success = true,
                         message = "Nginx site enabled and reloaded successfully",
                         config = config,
-                        appPort = appPort,
-                        sslEnabled = sslEnabled,
-                        certificateDomain = resolvedCertificate?.certificateDomain
+                        appPort = plan.appPort,
+                        sslEnabled = plan.sslEnabled,
+                        certificateDomain = plan.resolvedCertificate?.certificateDomain
                     )
                 )
             }

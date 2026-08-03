@@ -78,6 +78,36 @@ class DockerService(dockerSocketPath: String) {
         logger.info("Image pulled: $fullName")
     }
 
+    fun imageExists(imageRef: String): Boolean {
+        val ref = imageRef.trim()
+        if (ref.isBlank()) return false
+
+        val candidates = buildList {
+            add(ref)
+            if (!ref.contains(":") && !ref.contains("@")) {
+                add("$ref:latest")
+            }
+        }
+
+        return candidates.any { candidate ->
+            try {
+                client.inspectImageCmd(candidate).exec()
+                true
+            } catch (_: Exception) {
+                false
+            }
+        }
+    }
+
+    fun hostPortsInUse(): Set<Int> {
+        return client.listContainersCmd()
+            .withShowAll(true)
+            .exec()
+            .flatMap { c -> c.ports?.toList().orEmpty() }
+            .mapNotNull { p -> p.publicPort }
+            .toSet()
+    }
+
     fun listNetworks(): List<NetworkInfo> {
         return client.listNetworksCmd()
             .exec()
@@ -120,38 +150,46 @@ class DockerService(dockerSocketPath: String) {
     }
 
     fun createContainer(request: CreateContainerRequest): ContainerInfo {
-        val portBindings = Ports()
+        if (request.pullImage && !imageExists(request.image)) {
+            val raw = request.image.trim()
+            val repo = raw.substringBeforeLast(":", raw)
+            val tag = raw.substringAfterLast(":", "latest").takeIf { it != raw } ?: "latest"
+            pullImage(repo, tag)
+        }
+
         val exposedPorts = mutableListOf<ExposedPort>()
-        
+        val portBindings = Ports()
         request.ports.forEach { (hostPort, containerPort) ->
             val exposed = ExposedPort.tcp(containerPort)
             exposedPorts.add(exposed)
             portBindings.bind(exposed, Ports.Binding.bindPort(hostPort))
         }
-        
+
         val envVars = request.env.map { "${it.key}=${it.value}" }
-        
+
         val hostConfig = HostConfig()
-            .withPortBindings(portBindings)
             .withNetworkMode(request.network)
-        
+
+        if (request.ports.isNotEmpty()) {
+            hostConfig.withPortBindings(portBindings)
+        }
+
         if (request.volumes.isNotEmpty()) {
-            val binds = request.volumes.map { 
-                Bind.parse("${it.hostPath}:${it.containerPath}" + 
-                if (it.readOnly) ":ro" else "")
+            val binds = request.volumes.map {
+                Bind.parse("${it.hostPath}:${it.containerPath}" + if (it.readOnly) ":ro" else "")
             }
             hostConfig.withBinds(*binds.toTypedArray())
         }
-        
+
         if (request.restartPolicy != null) {
             hostConfig.withRestartPolicy(RestartPolicy.parse(request.restartPolicy))
         }
-        
+
         val createResponse: CreateContainerResponse = client.createContainerCmd(request.image)
             .withName(request.name)
             .withEnv(envVars)
-            .withExposedPorts(exposedPorts)
             .withHostConfig(hostConfig)
+            .withExposedPorts(exposedPorts)
             .exec()
         
         client.startContainerCmd(createResponse.id).exec()
@@ -188,7 +226,9 @@ class DockerService(dockerSocketPath: String) {
     private fun toContainerInfo(container: Container): ContainerInfo {
         val names = container.names?.map { it.removePrefix("/") } ?: emptyList()
         val ports = container.ports?.joinToString(", ") { port ->
-            "${port.privatePort}->${port.publicPort}/${port.type}"
+            val host = port.publicPort?.toString() ?: "-"
+            val containerPort = port.privatePort?.toString() ?: "-"
+            "$host->$containerPort/${port.type}"
         } ?: ""
 
         return ContainerInfo(

@@ -27,9 +27,9 @@ fun extractConfiguredContainerName(containerName: String): String? {
 
 /**
  * `DockerService` currently exposes ports as a human string like:
- * - "9921->9921/tcp, 8080->8080/tcp"
+ * - "9921->8080/tcp, 443->8443/tcp"
  *
- * We treat the right-hand side of `->` as the *host* port.
+ * We treat the left-hand side of `->` as the *host* port.
  */
 fun parsePublishedHostPorts(portsField: String): Set<Int> {
     if (portsField.isBlank()) return emptySet()
@@ -40,9 +40,8 @@ fun parsePublishedHostPorts(portsField: String): Set<Int> {
         .mapNotNull { mapping ->
             val parts = mapping.split("->", limit = 2)
             if (parts.size != 2) return@mapNotNull null
-            val hostPortPart = parts[1].substringBefore("/").trim()
+            val hostPortPart = parts[0].substringBefore("/").trim()
             hostPortPart.toIntOrNull()
         }
         .toSet()
 }
-
