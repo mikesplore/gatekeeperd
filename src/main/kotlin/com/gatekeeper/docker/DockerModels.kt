@@ -30,7 +30,8 @@ data class VolumeMount(
 
 @Serializable
 data class CreateContainerRequest(
-    val name: String,
+    val name: String = "",
+    val projectSlug: String? = null,
     val image: String,
     val ports: Map<Int, Int> = emptyMap(),
     val env: Map<String, String> = emptyMap(),

@@ -205,7 +205,29 @@ Create a new project registration.
 **Notes:**
 - `slug` must be unique and lowercase; it is used in Traefik labels and gate checks.
 - `type` must be `"frontend"` or `"backend"`.
+- `containerName` must be either `name` or `name:port`. If a port is provided, nginx wizard can use it as the upstream host port.
+- Gatekeeper enforces a **container-first** flow: the referenced Docker container must already exist (otherwise `400 container_not_found`).
 - Creating a project does NOT deploy the container — that is a manual DevOps step. This just registers it in Gatekeeper.
+
+### GET /api/admin/projects/wizard/context
+Wizard helper: list Docker containers (for a dropdown) and currently-used project slugs (to avoid collisions).
+
+**Response:**
+```json
+{
+  "containers": [
+    {
+      "id": "abc123def456",
+      "name": "acw",
+      "image": "mikesplore/acw:latest",
+      "state": "running",
+      "ports": "9921->8080/tcp",
+      "suggestedSlug": "acw"
+    }
+  ],
+  "existingProjectSlugs": ["acw"]
+}
+```
 
 ### PATCH /api/admin/projects/{slug}
 Update project fields.
@@ -222,6 +244,9 @@ Update project fields.
 
 **Response:** Updated project object.
 
+**Notes:**
+- If `containerName` is updated, Gatekeeper validates that the referenced Docker container exists.
+
 ### DELETE /api/admin/projects/{slug}
 Archive a project (soft delete). Sets `deleted_at`, blocks gating, and **preserves** payments, payment events, and audit log for reporting.
 
@@ -229,6 +254,7 @@ Archive a project (soft delete). Sets `deleted_at`, blocks gating, and **preserv
 
 **Notes:**
 - Does not stop or remove the client container — that remains a manual DevOps step.
+- Best-effort nginx cleanup is attempted (`sites-available/sites-enabled` removal + reload) so orphan nginx configs don't continue pointing at archived slugs.
 - Clears the Redis gate cache; the slug behaves as unknown to nginx/Traefik after archive.
 - The slug stays reserved while archived (cannot create a new project with the same slug).
 - Writes an audit log entry with action `project_archived`.
@@ -474,6 +500,9 @@ Generate and enable an nginx site config for a project. Validates that the proje
 ### POST /api/admin/nginx/disable/{slug}
 Disable (unlink) an nginx site without removing the config file.
 
+**Notes:**
+- This endpoint does not require an existing project record; it can be used to clean up orphan nginx configs by slug.
+
 **Response:**
 ```json
 {
@@ -484,6 +513,9 @@ Disable (unlink) an nginx site without removing the config file.
 
 ### POST /api/admin/nginx/remove/{slug}
 Remove an nginx site completely (both sites-available file and sites-enabled symlink).
+
+**Notes:**
+- This endpoint does not require an existing project record; it can be used to clean up orphan nginx configs by slug.
 
 **Response:**
 ```json
@@ -618,6 +650,7 @@ Create and start a new Docker container with custom configuration.
 ```json
 {
   "name": "my-app",
+  "projectSlug": "my-app",
   "image": "nginx:latest",
   "ports": {
     "8080": 80,
@@ -641,7 +674,8 @@ Create and start a new Docker container with custom configuration.
 }
 ```
 
-- `name` (required): Container name
+- `name` (required unless `projectSlug` provided): Container name
+- `projectSlug` (optional): If `name` is omitted/blank, Gatekeeper will auto-name the container using the normalized slug
 - `image` (required): Docker image reference (e.g., `nginx:latest` or `nginx`)
 - `ports` (optional): Map of host ports to container ports (e.g., `{"8080": 80}`)
 - `env` (optional): Environment variables as key-value pairs
@@ -836,7 +870,8 @@ Pull a Docker image from a registry.
 ```json
 {
   "image": "nginx",
-  "tag": "latest"
+  "tag": "latest",
+  "pullViaCli": false
 }
 ```
 
@@ -847,6 +882,9 @@ Pull a Docker image from a registry.
   "image": "nginx:latest"
 }
 ```
+
+**Notes:**
+- For private Docker Hub images, set `pullViaCli=true` (or `DOCKER_PULL_VIA_CLI=true`) so pulls use `docker pull` and can reuse the host's Docker auth.
 
 ### POST /api/admin/images/delete
 Delete a Docker image from the local Docker host.

@@ -134,6 +134,13 @@ The admin dashboard should use a **wizard-like flow** for Docker container creat
 
 For private Docker Hub images, set `pullViaCli=true` (or `DOCKER_PULL_VIA_CLI=true`) so pulls use `docker pull` and can reuse the host's Docker auth.
 
+### Project creation wizard (container-first)
+
+Gatekeeper enforces a container-first flow: you should create/start the Docker container **before** creating the project record.
+
+1. **Container dropdown + slug hints**: `GET /api/admin/projects/wizard/context`
+2. **Create project**: `POST /api/admin/projects` (`containerName` must exist; format `name` or `name:port`)
+
 ### Nginx enable wizard
 
 1. **Context + options**: `GET /api/admin/nginx/wizard/context/{slug}` (cert list + inferred port hints)

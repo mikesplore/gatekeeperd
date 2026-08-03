@@ -16,6 +16,29 @@ object InputValidators {
 
     fun isValidContainerName(name: String): Boolean = CONTAINER_NAME_REGEX.matches(name.trim())
 
+    /**
+     * Accepts:
+     * - `my-container`
+     * - `my-container:9921` (port must be 1..65535)
+     *
+     * Used for the project `containerName` field, which can optionally encode a host port.
+     */
+    fun isValidContainerRef(ref: String): Boolean {
+        val raw = ref.trim()
+        if (raw.isBlank()) return false
+
+        val lastColon = raw.lastIndexOf(':')
+        val hasPort = lastColon > 0 && raw.substring(lastColon + 1).toIntOrNull() != null
+
+        return if (hasPort) {
+            val name = raw.substring(0, lastColon).trim()
+            val port = raw.substring(lastColon + 1).toIntOrNull()
+            isValidContainerName(name) && port != null && port in 1..65535
+        } else {
+            isValidContainerName(raw)
+        }
+    }
+
     fun isValidImageName(name: String): Boolean = IMAGE_NAME_REGEX.matches(name.trim())
 
     fun isValidProjectType(type: String): Boolean =

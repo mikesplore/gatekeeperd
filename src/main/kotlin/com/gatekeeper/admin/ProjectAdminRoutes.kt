@@ -28,6 +28,8 @@ import com.gatekeeper.docker.ImageStatusResponse
 import com.gatekeeper.docker.PortsAvailabilityRequest
 import com.gatekeeper.docker.PortsAvailabilityResponse
 import com.gatekeeper.docker.parseImageRef
+import com.gatekeeper.nginx.NginxService
+import com.gatekeeper.nginx.extractConfiguredContainerName
 import com.gatekeeper.paystack.ProjectPaymentService
 import io.ktor.http.*
 import io.ktor.server.application.*
@@ -85,6 +87,22 @@ data class InitializePaymentResponse(val payment_link: String)
 
 @Serializable
 data class StatusChangeRequest(val reason: String)
+
+@Serializable
+data class ProjectWizardContainerOption(
+    val id: String,
+    val name: String,
+    val image: String,
+    val state: String,
+    val ports: String,
+    val suggestedSlug: String? = null
+)
+
+@Serializable
+data class ProjectCreateWizardContextResponse(
+    val containers: List<ProjectWizardContainerOption>,
+    val existingProjectSlugs: List<String>
+)
 
 fun Application.configureProjectAdminRoutes() {
     routing {
@@ -144,8 +162,8 @@ fun Application.configureProjectAdminRoutes() {
                     return@post
                 }
 
-                if (!InputValidators.isValidContainerName(body.containerName)) {
-                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "containerName contains invalid characters")
+                if (!InputValidators.isValidContainerRef(body.containerName)) {
+                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "containerName must be 'name' or 'name:port'")
                     return@post
                 }
 
@@ -173,11 +191,41 @@ fun Application.configureProjectAdminRoutes() {
 
                 val amountDue = body.amountDue?.let { BigDecimal.valueOf(it) }
 
+                // Enforce container-first flow: the referenced Docker container must exist.
+                val dockerService = try {
+                    DockerService(AppConfig.dockerSocket)
+                } catch (e: Exception) {
+                    logger.warn("Docker not available for project create validation (non-fatal): ${e.message}")
+                    call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available")
+                    return@post
+                }
+
+                val containerRef = body.containerName.trim()
+                val containerName = extractConfiguredContainerName(containerRef)
+                if (containerName == null) {
+                    dockerService.close()
+                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "containerName is invalid")
+                    return@post
+                }
+
+                try {
+                    if (dockerService.getContainer(containerName) == null) {
+                        call.respondError(
+                            HttpStatusCode.BadRequest,
+                            "container_not_found",
+                            "Docker container '$containerName' was not found. Create/start the container first, then create the project."
+                        )
+                        return@post
+                    }
+                } finally {
+                    dockerService.close()
+                }
+
                 val project = ProjectRepository.create(
                     slug = slug,
                     name = body.name.trim(),
                     domain = body.domain.trim(),
-                    containerName = body.containerName.trim(),
+                    containerName = containerRef,
                     type = body.type.lowercase(),
                     clientName = body.clientName?.trim(),
                     clientEmail = body.clientEmail?.trim(),
@@ -211,8 +259,8 @@ fun Application.configureProjectAdminRoutes() {
                     return@patch
                 }
 
-                if (body.containerName != null && !InputValidators.isValidContainerName(body.containerName)) {
-                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "containerName contains invalid characters")
+                if (body.containerName != null && !InputValidators.isValidContainerRef(body.containerName)) {
+                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "containerName must be 'name' or 'name:port'")
                     return@patch
                 }
 
@@ -227,6 +275,38 @@ fun Application.configureProjectAdminRoutes() {
                     return@patch
                 }
                 val amountDue = body.amountDue?.let { BigDecimal.valueOf(it) }
+
+                // If containerName is updated, enforce that the referenced Docker container exists.
+                if (body.containerName != null) {
+                    val dockerService = try {
+                        DockerService(AppConfig.dockerSocket)
+                    } catch (e: Exception) {
+                        logger.warn("Docker not available for project update validation (non-fatal): ${e.message}")
+                        call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available")
+                        return@patch
+                    }
+
+                    val containerRef = body.containerName.trim()
+                    val containerName = extractConfiguredContainerName(containerRef)
+                    if (containerName == null) {
+                        dockerService.close()
+                        call.respondError(HttpStatusCode.BadRequest, "invalid_request", "containerName is invalid")
+                        return@patch
+                    }
+
+                    try {
+                        if (dockerService.getContainer(containerName) == null) {
+                            call.respondError(
+                                HttpStatusCode.BadRequest,
+                                "container_not_found",
+                                "Docker container '$containerName' was not found. Create/start the container first, then update the project."
+                            )
+                            return@patch
+                        }
+                    } finally {
+                        dockerService.close()
+                    }
+                }
 
                 val project = ProjectRepository.update(
                     slug = slug,
@@ -272,8 +352,60 @@ fun Application.configureProjectAdminRoutes() {
                     return@delete
                 }
 
+                runCatching {
+                    val nginx = NginxService()
+                    val removed = nginx.removeProject(slug)
+                    if (!removed) {
+                        logger.warn("Project archived but nginx cleanup failed for slug=$slug (removeProject returned false)")
+                        return@runCatching
+                    }
+                    val reloaded = nginx.reloadNginx()
+                    if (!reloaded) {
+                        logger.warn("Project archived but nginx cleanup reload failed for slug=$slug")
+                    }
+                }.onFailure { e ->
+                    logger.warn("Project archived but nginx cleanup errored for slug=$slug: ${e.message}")
+                }
+
                 logger.info("Project archived: $slug by $actor")
                 call.respond(HttpStatusCode.NoContent)
+            }
+
+            // Wizard helpers: drive a container-first deployment flow (container -> project -> nginx).
+            get("/api/admin/projects/wizard/context") {
+                val dockerService = try {
+                    DockerService(AppConfig.dockerSocket)
+                } catch (e: Exception) {
+                    logger.warn("Docker not available for project wizard context (non-fatal): ${e.message}")
+                    call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available")
+                    return@get
+                }
+
+                try {
+                    val containers = dockerService.listContainers(all = true)
+                        .sortedBy { it.name.lowercase() }
+                        .map { c ->
+                            val suggested = InputValidators.normalizeSlug(
+                                c.name.lowercase()
+                                    .replace(Regex("[^a-z0-9-]"), "-")
+                                    .replace(Regex("-{2,}"), "-")
+                                    .trim('-')
+                            )
+                            ProjectWizardContainerOption(
+                                id = c.id,
+                                name = c.name,
+                                image = c.image,
+                                state = c.state,
+                                ports = c.ports,
+                                suggestedSlug = suggested
+                            )
+                        }
+
+                    val existingSlugs = ProjectRepository.findAll(includeArchived = true).map { it.slug }.sorted()
+                    call.respond(ProjectCreateWizardContextResponse(containers = containers, existingProjectSlugs = existingSlugs))
+                } finally {
+                    dockerService.close()
+                }
             }
 
             post("/api/admin/projects/{slug}/block") {

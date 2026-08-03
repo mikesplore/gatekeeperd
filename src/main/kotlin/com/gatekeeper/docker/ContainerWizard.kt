@@ -87,12 +87,16 @@ internal fun computeContainerCreatePlan(
     internalNetwork: String,
     docker: DockerWizardInspect
 ): ContainerCreatePlanResult {
-    val name = request.name.trim()
+    val name = run {
+        val explicit = request.name.trim()
+        if (explicit.isNotBlank()) explicit
+        else request.projectSlug?.let { InputValidators.normalizeSlug(it) }.orEmpty()
+    }
     if (name.isBlank() || !InputValidators.isValidContainerName(name)) {
         return ContainerCreatePlanResult.Err(
             HttpStatusCode.BadRequest,
             "invalid_request",
-            "A valid container name is required"
+            "A valid container name is required (or provide projectSlug to auto-name the container)."
         )
     }
 

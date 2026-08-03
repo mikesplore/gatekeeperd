@@ -495,12 +495,6 @@ fun Application.configureNginxAdminRoutes() {
                     return@post
                 }
 
-                val project = ProjectRepository.findBySlug(slug)
-                if (project == null) {
-                    call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
-                    return@post
-                }
-
                 val disabled = nginxService.disableProject(slug)
                 if (!disabled) {
                     call.respondError(HttpStatusCode.InternalServerError, "nginx_error", "Failed to disable nginx site")
@@ -526,12 +520,6 @@ fun Application.configureNginxAdminRoutes() {
                 val slug = call.parameters["slug"]
                 if (slug == null) {
                     call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing slug path parameter")
-                    return@post
-                }
-
-                val project = ProjectRepository.findBySlug(slug)
-                if (project == null) {
-                    call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
                     return@post
                 }
 
