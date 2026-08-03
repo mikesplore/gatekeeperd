@@ -1,8 +1,16 @@
 package com.gatekeeper.docker
 
 import com.github.dockerjava.api.DockerClient
+import com.github.dockerjava.api.command.CreateContainerResponse
 import com.github.dockerjava.api.command.InspectContainerResponse
+import com.github.dockerjava.api.command.RemoveContainerCmd
+import com.github.dockerjava.api.command.RemoveImageCmd
+import com.github.dockerjava.api.model.Bind
 import com.github.dockerjava.api.model.Container
+import com.github.dockerjava.api.model.ExposedPort
+import com.github.dockerjava.api.model.HostConfig
+import com.github.dockerjava.api.model.Ports
+import com.github.dockerjava.api.model.RestartPolicy
 import com.github.dockerjava.core.DefaultDockerClientConfig
 import com.github.dockerjava.core.DockerClientBuilder
 import com.github.dockerjava.core.DockerClientConfig
@@ -109,6 +117,63 @@ class DockerService(dockerSocketPath: String) {
             logger.error("Error checking health for container $containerNameOrId", e)
             "unknown"
         }
+    }
+
+    fun createContainer(request: CreateContainerRequest): ContainerInfo {
+        val portBindings = Ports()
+        val exposedPorts = mutableListOf<ExposedPort>()
+        
+        request.ports.forEach { (hostPort, containerPort) ->
+            val exposed = ExposedPort.tcp(containerPort)
+            exposedPorts.add(exposed)
+            portBindings.bind(exposed, Ports.Binding.bindPort(hostPort))
+        }
+        
+        val envVars = request.env.map { "${it.key}=${it.value}" }
+        
+        val hostConfig = HostConfig()
+            .withPortBindings(portBindings)
+            .withNetworkMode(request.network)
+        
+        if (request.volumes.isNotEmpty()) {
+            val binds = request.volumes.map { 
+                Bind.parse("${it.hostPath}:${it.containerPath}" + 
+                if (it.readOnly) ":ro" else "")
+            }
+            hostConfig.withBinds(*binds.toTypedArray())
+        }
+        
+        if (request.restartPolicy != null) {
+            hostConfig.withRestartPolicy(RestartPolicy.parse(request.restartPolicy))
+        }
+        
+        val createResponse: CreateContainerResponse = client.createContainerCmd(request.image)
+            .withName(request.name)
+            .withEnv(envVars)
+            .withExposedPorts(exposedPorts)
+            .withHostConfig(hostConfig)
+            .exec()
+        
+        client.startContainerCmd(createResponse.id).exec()
+        logger.info("Created and started container: ${request.name} (id: ${createResponse.id})")
+        
+        return getContainer(createResponse.id)!!
+    }
+
+    fun deleteImage(image: String, tag: String = "latest", force: Boolean = true) {
+        val fullName = if (tag.isNotEmpty()) "$image:$tag" else image
+        logger.info("Deleting image: $fullName (force=$force)")
+        val removeCmd: RemoveImageCmd = client.removeImageCmd(fullName)
+            .withForce(force)
+        removeCmd.exec()
+        logger.info("Image deleted: $fullName")
+    }
+
+    fun deleteContainer(containerNameOrId: String, force: Boolean = true) {
+        val removeCmd: RemoveContainerCmd = client.removeContainerCmd(containerNameOrId)
+            .withForce(force)
+        removeCmd.exec()
+        logger.info("Deleted container: $containerNameOrId")
     }
 
     fun close() {

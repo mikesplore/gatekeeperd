@@ -402,18 +402,20 @@ Check if a project has an nginx site configured and enabled, and whether SSL is 
 - `port` is extracted from the project's `containerName` field (format `name:port`).
 
 ### POST /api/admin/nginx/enable/{slug}
-Generate and enable an nginx site config for a project. Validates that the app port is active before creating the config.
+Generate and enable an nginx site config for a project. Validates that the project's container is running before creating the config.
 
 **Request:**
 ```json
 {
   "port": 9921,
+  "upstreamScheme": "http",
   "sslCertificatePath": "/etc/letsencrypt/live/example.com/fullchain.pem",
   "sslCertificateKeyPath": "/etc/letsencrypt/live/example.com/privkey.pem"
 }
 ```
 
 - `port` is optional if `containerName` already contains a port (e.g. `myapp:9921`).
+- `upstreamScheme` is optional. If omitted, Gatekeeper infers `https` for port `443` and `http` for other ports.
 - `sslCertificatePath` and `sslCertificateKeyPath` are optional. If both are provided, the config listens on 443 with SSL. If omitted, the config listens on port 80.
 
 **Response:**
@@ -426,10 +428,13 @@ Generate and enable an nginx site config for a project. Validates that the app p
 ```
 
 **Notes:**
-- Validates that the app port is actually in use before creating the config.
+- Validates that the project's Docker container is running before creating the config (works even when gatekeeperd runs in Docker).
+- If Docker reports published ports for the container, Gatekeeper also checks that the expected upstream host port is published.
+- If Docker is unavailable or the project doesn't encode a container name, Gatekeeper falls back to a fast TCP connect probe on `127.0.0.1:{port}`.
 - Creates a file in `sites-available/{slug}` and a symlink in `sites-enabled/{slug}`.
 - Runs `nginx -t` and `systemctl reload nginx`. If reload fails, the site is disabled and an error is returned.
 - The generated config follows the standard gatekeeperd pattern with `auth_request`, paywall named location, and `/api/gate/` bypass.
+- If the upstream app listens on `443`, the generated config uses `proxy_pass https://127.0.0.1:443` unless `upstreamScheme` overrides it.
 
 ### POST /api/admin/nginx/disable/{slug}
 Disable (unlink) an nginx site without removing the config file.
@@ -535,7 +540,60 @@ Revenue summary from successful payments (JWT required).
 
 ## Docker Admin Endpoints (JWT Required)
 
-These endpoints manage Docker containers and networks on the host. They require Docker socket access and return `503 Service Unavailable` if Docker is not available.
+These endpoints manage Docker containers, networks, and images on the host. They require Docker socket access and return `503 Service Unavailable` if Docker is not available.
+
+### POST /api/admin/containers/create
+Create and start a new Docker container with custom configuration.
+
+**Request:**
+```json
+{
+  "name": "my-app",
+  "image": "nginx:latest",
+  "ports": {
+    "8080": 80,
+    "8081": 8080
+  },
+  "env": {
+    "DB_HOST": "postgres",
+    "API_KEY": "secret123"
+  },
+  "network": "gatekeeper-internal",
+  "volumes": [
+    {
+      "hostPath": "/data/app",
+      "containerPath": "/app/data",
+      "readOnly": false
+    }
+  ],
+  "restartPolicy": "unless-stopped",
+  "pullImage": true
+}
+```
+
+- `name` (required): Container name
+- `image` (required): Docker image (e.g., `nginx:latest`)
+- `ports` (required): Map of host ports to container ports (e.g., `{"8080": 80}`)
+- `env` (optional): Environment variables as key-value pairs
+- `network` (optional): Docker network to connect to (default: `"bridge"`)
+- `volumes` (optional): List of volume mounts
+- `restartPolicy` (optional): Docker restart policy (`"no"`, `"always"`, `"unless-stopped"`, `"on-failure"`)
+- `pullImage` (optional): Pull image before creating container (default: `true`)
+
+**Response:** `201 Created`
+```json
+{
+  "id": "abc123def456",
+  "name": "my-app",
+  "status": "Up 2 seconds",
+  "ports": "8080->80/tcp, 8081->8080/tcp"
+}
+```
+
+**Notes:**
+- Validates port availability before creating container (returns `409 Conflict` if ports are in use)
+- Container is started immediately after creation
+- Returns full container info including port mappings
 
 ### GET /api/admin/containers
 List all Docker containers.
@@ -594,6 +652,21 @@ Restart a container.
 }
 ```
 
+### POST /api/admin/containers/{name}/delete
+Delete a container permanently.
+
+**Response:**
+```json
+{
+  "status": "deleted",
+  "container": "acme-container"
+}
+```
+
+**Notes:**
+- Uses `force=true` by default to stop running containers before deletion
+- Container is removed from Docker host
+
 ### GET /api/admin/containers/{name}/health
 Get container health/running state.
 
@@ -640,6 +713,30 @@ Pull a Docker image from a registry.
   "image": "nginx:latest"
 }
 ```
+
+### POST /api/admin/images/delete
+Delete a Docker image from the local Docker host.
+
+**Request:**
+```json
+{
+  "image": "nginx",
+  "tag": "latest",
+  "force": true
+}
+```
+
+**Response:**
+```json
+{
+  "status": "deleted",
+  "image": "nginx:latest"
+}
+```
+
+**Notes:**
+- `force` (optional, default: `true`): Force remove image even if containers are using it
+- Image is removed from Docker host
 
 ---
 

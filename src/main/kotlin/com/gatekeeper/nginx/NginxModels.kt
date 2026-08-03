@@ -4,7 +4,8 @@ import kotlinx.serialization.Serializable
 
 @Serializable
 data class NginxEnableRequest(
-    val port: Int,
+    val port: Int? = null,
+    val upstreamScheme: String? = null,
     val sslCertificatePath: String? = null,
     val sslCertificateKeyPath: String? = null
 )

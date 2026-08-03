@@ -3,25 +3,31 @@ package com.gatekeeper.nginx
 import com.gatekeeper.config.AppConfig
 import org.slf4j.LoggerFactory
 import java.io.File
-import java.net.ServerSocket
+import java.net.InetSocketAddress
+import java.net.Socket
 
 private val logger = LoggerFactory.getLogger("com.gatekeeper.nginx.NginxService")
 
-class NginxService {
-    private val sitesAvailablePath: String = AppConfig.nginxSitesAvailablePath
-    private val sitesEnabledPath: String = AppConfig.nginxSitesEnabledPath
-    private val gatekeeperPort: Int = 8080
+class NginxService(
+    private val sitesAvailablePath: String = AppConfig.nginxSitesAvailablePath,
+    private val sitesEnabledPath: String = AppConfig.nginxSitesEnabledPath,
+    private val gatekeeperPort: Int = 8080,
     private val sslCertPath: String = AppConfig.nginxSslCertPath
+) {
 
     init {
         logger.info("NginxService initialized with sites-available: $sitesAvailablePath, sites-enabled: $sitesEnabledPath")
     }
     fun isPortActive(port: Int): Boolean {
         return try {
-            ServerSocket(port).close()
-            false // Port was available (not in use)
+            listOf("127.0.0.1", "::1").any { host ->
+                Socket().use { socket ->
+                    socket.connect(InetSocketAddress(host, port), 250)
+                    true
+                }
+            }
         } catch (e: Exception) {
-            true // Port is in use
+            false
         }
     }
 
@@ -29,12 +35,14 @@ class NginxService {
         slug: String,
         domain: String,
         appPort: Int,
+        upstreamScheme: String? = null,
         sslEnabled: Boolean,
         sslCertificatePath: String? = null,
         sslCertificateKeyPath: String? = null
     ): String {
         val effectiveSslCert = sslCertificatePath ?: "$sslCertPath/$domain/fullchain.pem"
         val effectiveSslKey = sslCertificateKeyPath ?: "$sslCertPath/$domain/privkey.pem"
+        val effectiveUpstreamScheme = normalizeUpstreamScheme(appPort, upstreamScheme)
 
         return buildString {
             appendLine("server {")
@@ -70,7 +78,7 @@ class NginxService {
             appendLine("        auth_request /gatekeeper-auth-$slug;")
             appendLine("        error_page 403 = @gatekeeper_paywall_$slug;")
             appendLine()
-            appendLine("        proxy_pass http://127.0.0.1:$appPort;")
+            appendLine("        proxy_pass $effectiveUpstreamScheme://127.0.0.1:$appPort;")
             appendLine("        proxy_http_version 1.1;")
             appendLine()
             appendLine("        proxy_set_header Upgrade \$http_upgrade;")
@@ -104,6 +112,18 @@ class NginxService {
             appendLine("    }")
             appendLine("}")
         }
+    }
+
+    private fun normalizeUpstreamScheme(appPort: Int, upstreamScheme: String?): String {
+        val normalized = upstreamScheme?.trim()?.lowercase()?.takeIf { it.isNotBlank() }
+        if (normalized == null) {
+            return if (appPort == 443) "https" else "http"
+        }
+
+        require(normalized == "http" || normalized == "https") {
+            "upstreamScheme must be either http or https"
+        }
+        return normalized
     }
 
     fun enableProject(slug: String, configContent: String): Boolean {

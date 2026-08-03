@@ -1,11 +1,16 @@
 package com.gatekeeper.admin
 
 import com.gatekeeper.api.respondError
+import com.gatekeeper.config.AppConfig
+import com.gatekeeper.docker.DockerService
 import com.gatekeeper.nginx.CertificateInstallRequest
 import com.gatekeeper.nginx.CertificateResponse
 import com.gatekeeper.nginx.NginxEnableRequest
 import com.gatekeeper.nginx.NginxStatusResponse
 import com.gatekeeper.nginx.NginxService
+import com.gatekeeper.nginx.extractConfiguredContainerName
+import com.gatekeeper.nginx.extractConfiguredPort
+import com.gatekeeper.nginx.parsePublishedHostPorts
 import com.gatekeeper.db.repositories.ProjectRepository
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.Application
@@ -35,8 +40,18 @@ data class NginxDisableResponse(
 
 fun Application.configureNginxAdminRoutes() {
     val nginxService = NginxService()
+    val dockerService: DockerService? = try {
+        DockerService(AppConfig.dockerSocket)
+    } catch (e: Exception) {
+        logger.warn("Docker not available for nginx upstream validation (non-fatal): ${e.message}")
+        null
+    }
 
     routing {
+        Runtime.getRuntime().addShutdownHook(Thread {
+            runCatching { dockerService?.close() }
+        })
+
         authenticate("auth-jwt") {
 
             get("/api/admin/nginx/status/{slug}") {
@@ -65,7 +80,7 @@ fun Application.configureNginxAdminRoutes() {
                         enabled = enabled,
                         configPath = "/etc/nginx/sites-available/$slug",
                         enabledPath = "/etc/nginx/sites-enabled/$slug",
-                        port = project.containerName.split(":").getOrNull(1)?.toIntOrNull(),
+                        port = extractConfiguredPort(project.containerName),
                         sslEnabled = certInstalled,
                         domain = project.domain
                     )
@@ -92,14 +107,69 @@ fun Application.configureNginxAdminRoutes() {
                     return@post
                 }
 
-                val appPort = project.containerName.split(":").getOrElse(1) { "80" }.toIntOrNull()
-                    ?: 80
-
-                if (!nginxService.isPortActive(appPort)) {
+                val explicitPort = body.port
+                if (explicitPort != null && explicitPort !in 1..65535) {
                     call.respondError(
                         HttpStatusCode.BadRequest,
-                        "port_not_active",
-                        "Port $appPort is not active for project $slug. Ensure the container is running."
+                        "invalid_request",
+                        "port must be between 1 and 65535"
+                    )
+                    return@post
+                }
+
+                val appPort = explicitPort ?: extractConfiguredPort(project.containerName)
+
+                if (appPort == null) {
+                    call.respondError(
+                        HttpStatusCode.BadRequest,
+                        "missing_port",
+                        "Provide a valid port in the request body or encode it in containerName as name:port"
+                    )
+                    return@post
+                }
+
+                // Prefer Docker-based validation: works even when gatekeeperd runs in a container (127.0.0.1 differs).
+                val configuredContainerName = extractConfiguredContainerName(project.containerName)
+                if (dockerService != null && configuredContainerName != null) {
+                    val health = dockerService.containerHealth(configuredContainerName)
+                    if (health != "running") {
+                        call.respondError(
+                            HttpStatusCode.BadRequest,
+                            "port_not_active",
+                            "Container '$configuredContainerName' is not running for project $slug (state: $health). Start it and try again."
+                        )
+                        return@post
+                    }
+
+                    val info = dockerService.getContainer(configuredContainerName)
+                    val publishedHostPorts = parsePublishedHostPorts(info?.ports.orEmpty())
+                    // If Docker reports published ports, ensure nginx's upstream host port is among them.
+                    if (publishedHostPorts.isNotEmpty() && appPort !in publishedHostPorts) {
+                        call.respondError(
+                            HttpStatusCode.BadRequest,
+                            "port_not_active",
+                            "Container '$configuredContainerName' is running but does not publish host port $appPort (published: ${publishedHostPorts.sorted().joinToString(", ")}). Nginx proxies to 127.0.0.1:$appPort."
+                        )
+                        return@post
+                    }
+                } else {
+                    // Fallback for non-Docker / unknown containerName formats.
+                    if (!nginxService.isPortActive(appPort)) {
+                        call.respondError(
+                            HttpStatusCode.BadRequest,
+                            "port_not_active",
+                            "Port $appPort is not reachable on 127.0.0.1 for project $slug. Ensure the upstream is listening on the host, or encode containerName as name:port so Docker-based validation can be used."
+                        )
+                        return@post
+                    }
+                }
+
+                val upstreamScheme = body.upstreamScheme?.trim()?.lowercase()?.takeIf { it.isNotBlank() } ?: if (appPort == 443) "https" else "http"
+                if (upstreamScheme !in listOf("http", "https")) {
+                    call.respondError(
+                        HttpStatusCode.BadRequest,
+                        "invalid_request",
+                        "upstreamScheme must be 'http' or 'https'"
                     )
                     return@post
                 }
@@ -127,6 +197,7 @@ fun Application.configureNginxAdminRoutes() {
                     slug = slug,
                     domain = domain,
                     appPort = appPort,
+                    upstreamScheme = upstreamScheme,
                     sslEnabled = sslEnabled,
                     sslCertificatePath = body.sslCertificatePath,
                     sslCertificateKeyPath = body.sslCertificateKeyPath

@@ -8,9 +8,15 @@ import com.gatekeeper.api.dto.StatusChangeResponse
 import com.gatekeeper.api.dto.toResponse
 import com.gatekeeper.api.InputValidators
 import com.gatekeeper.api.respondError
+import com.gatekeeper.config.AppConfig
 import com.gatekeeper.db.repositories.AuditRepository
 import com.gatekeeper.db.repositories.PaymentRepository
 import com.gatekeeper.db.repositories.ProjectRepository
+import com.gatekeeper.docker.CreateContainerRequest
+import com.gatekeeper.docker.CreateContainerResponse
+import com.gatekeeper.docker.DeleteImageRequest
+import com.gatekeeper.docker.DeleteImageResponse
+import com.gatekeeper.docker.DockerService
 import com.gatekeeper.paystack.ProjectPaymentService
 import io.ktor.http.*
 import io.ktor.server.application.*
@@ -395,6 +401,136 @@ fun Application.configureProjectAdminRoutes() {
                 }
                 val auditLog = AuditRepository.findByProjectId(project.id).map { it.toResponse() }
                 call.respond(auditLog)
+            }
+
+            // Docker container creation
+            post("/api/admin/containers/create") {
+                val body = try {
+                    call.receive<CreateContainerRequest>()
+                } catch (e: Exception) {
+                    logger.warn("Failed to parse create container request", e)
+                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "The request body could not be parsed")
+                    return@post
+                }
+
+                if (body.name.isBlank() || body.image.isBlank()) {
+                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "name and image are required")
+                    return@post
+                }
+
+                if (body.ports.isEmpty()) {
+                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "At least one port mapping is required")
+                    return@post
+                }
+
+                val dockerService = DockerService(AppConfig.dockerSocket)
+                
+                // Check for port conflicts
+                val existingContainers = dockerService.listContainers(all = true)
+                val portConflicts = mutableListOf<Int>()
+                
+                body.ports.keys.forEach { hostPort ->
+                    existingContainers.forEach { container ->
+                        val containerPorts = container.ports.split(", ")
+                        containerPorts.forEach { portMapping ->
+                            val portPart = portMapping.split("->").getOrNull(0)?.trim()
+                            if (portPart?.toIntOrNull() == hostPort) {
+                                portConflicts.add(hostPort)
+                            }
+                        }
+                    }
+                }
+
+                if (portConflicts.isNotEmpty()) {
+                    dockerService.close()
+                    call.respondError(
+                        HttpStatusCode.Conflict,
+                        "port_conflict",
+                        "Port(s) already in use: ${portConflicts.joinToString(", ")}"
+                    )
+                    return@post
+                }
+
+                try {
+                    val container = dockerService.createContainer(body)
+                    
+                    logger.info("Container created via API: ${body.name}")
+                    call.respond(HttpStatusCode.Created, CreateContainerResponse(
+                        id = container.id,
+                        name = container.name,
+                        status = container.status,
+                        ports = container.ports
+                    ))
+                } catch (e: Exception) {
+                    logger.error("Failed to create container: ${body.name}", e)
+                    call.respondError(
+                        HttpStatusCode.InternalServerError,
+                        "docker_error",
+                        e.message ?: "Failed to create container"
+                    )
+                } finally {
+                    dockerService.close()
+                }
+            }
+
+            // Docker image deletion
+            post("/api/admin/images/delete") {
+                val body = try {
+                    call.receive<DeleteImageRequest>()
+                } catch (e: Exception) {
+                    logger.warn("Failed to parse delete image request", e)
+                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "The request body could not be parsed")
+                    return@post
+                }
+
+                if (body.image.isBlank()) {
+                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "image is required")
+                    return@post
+                }
+
+                try {
+                    val dockerService = DockerService(AppConfig.dockerSocket)
+                    dockerService.deleteImage(body.image, body.tag, body.force)
+                    dockerService.close()
+                    
+                    logger.info("Image deleted via API: ${body.image}:${body.tag}")
+                    call.respond(DeleteImageResponse(
+                        status = "deleted",
+                        image = "${body.image}:${body.tag}"
+                    ))
+                } catch (e: Exception) {
+                    logger.error("Failed to delete image: ${body.image}:${body.tag}", e)
+                    call.respondError(
+                        HttpStatusCode.InternalServerError,
+                        "docker_error",
+                        e.message ?: "Failed to delete image"
+                    )
+                }
+            }
+
+            // Docker container deletion
+            post("/api/admin/containers/{name}/delete") {
+                val name = call.parameters["name"]
+                if (name == null) {
+                    call.respondError(HttpStatusCode.BadRequest, "missing_name", "Missing container name path parameter")
+                    return@post
+                }
+
+                try {
+                    val dockerService = DockerService(AppConfig.dockerSocket)
+                    dockerService.deleteContainer(name)
+                    dockerService.close()
+                    
+                    logger.info("Container deleted via API: $name")
+                    call.respond(mapOf("status" to "deleted", "container" to name))
+                } catch (e: Exception) {
+                    logger.error("Failed to delete container: $name", e)
+                    call.respondError(
+                        HttpStatusCode.InternalServerError,
+                        "docker_error",
+                        e.message ?: "Failed to delete container"
+                    )
+                }
             }
         }
     }

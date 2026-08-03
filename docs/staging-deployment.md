@@ -79,6 +79,36 @@ Use `./deploy.sh --fresh` when DB credentials changed since the first deploy.
 5. Start postgres, verify credentials, then start redis and gatekeeperd
 6. Wait for `/api/health` to respond
 
+## Running gatekeeperd on the host (for nginx management)
+
+The `/api/admin/nginx/*` endpoints need host access to:
+- write `/etc/nginx/sites-available` and `/etc/nginx/sites-enabled`
+- run `nginx -t` and `systemctl reload nginx`
+
+The simplest setup is to run **gatekeeperd on the host (systemd)** and run client apps in Docker.
+
+### Build artifact sources
+
+- GitHub Actions publishes a Docker image to GHCR: `ghcr.io/<owner>/<repo>:<tag>`
+- GitHub Actions also uploads a jar artifact named `gatekeeperd-all-jar`
+
+### Extract jar from GHCR image (no local build on VPS)
+
+On the VPS:
+
+```bash
+# Example (pick a tag from GHCR, e.g. "latest" or the short SHA)
+IMAGE="ghcr.io/<owner>/<repo>:latest"
+
+docker pull "$IMAGE"
+cid="$(docker create "$IMAGE")"
+sudo mkdir -p /opt/gatekeeperd
+sudo docker cp "$cid":/app/gatekeeperd.jar /opt/gatekeeperd/gatekeeperd-all.jar
+docker rm "$cid"
+```
+
+Then run via systemd as described in the main README or your local ops notes.
+
 To stop all services:
 ```bash
 docker stop gatekeeperd redis postgres

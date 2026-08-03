@@ -72,6 +72,8 @@ That is the working split:
 - `location @gatekeeper_paywall_acw` serves the paywall body
 - `location /api/gate/` bypasses the guard so Pay Now, callback, and related gate endpoints stay reachable
 
+If the client app itself terminates TLS on `443`, point `proxy_pass` at `https://127.0.0.1:443` instead of `http://127.0.0.1:9921`, and pass `upstreamScheme: "https"` to the nginx enable API if you are using the admin route.
+
 Apply:
 
 ```bash
