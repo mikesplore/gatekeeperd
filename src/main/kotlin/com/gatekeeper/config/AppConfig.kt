@@ -8,6 +8,7 @@ object AppConfig {
 
     private val dotenv by lazy {
         dotenv {
+            filename = ".env"
             ignoreIfMissing = true
         }
     }

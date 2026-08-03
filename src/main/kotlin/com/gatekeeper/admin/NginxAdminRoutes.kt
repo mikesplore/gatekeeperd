@@ -67,10 +67,12 @@ fun Application.configureNginxAdminRoutes() {
                     return@get
                 }
 
-                val enabled = nginxService.run {
-                    val available = java.io.File("/etc/nginx/sites-available/$slug").exists()
-                    val enabled = java.io.File("/etc/nginx/sites-enabled/$slug").exists()
-                    available && enabled
+                val sitesAvailablePath = AppConfig.nginxSitesAvailablePath
+                val sitesEnabledPath = AppConfig.nginxSitesEnabledPath
+                val enabled = run {
+                    val available = java.io.File("$sitesAvailablePath/$slug").exists()
+                    val enabledLink = java.io.File("$sitesEnabledPath/$slug").exists()
+                    available && enabledLink
                 }
 
                 val certInstalled = nginxService.isCertificateInstalled(project.domain)
@@ -78,8 +80,8 @@ fun Application.configureNginxAdminRoutes() {
                 call.respond(
                     NginxStatusResponse(
                         enabled = enabled,
-                        configPath = "/etc/nginx/sites-available/$slug",
-                        enabledPath = "/etc/nginx/sites-enabled/$slug",
+                        configPath = "$sitesAvailablePath/$slug",
+                        enabledPath = "$sitesEnabledPath/$slug",
                         port = extractConfiguredPort(project.containerName),
                         sslEnabled = certInstalled,
                         domain = project.domain
@@ -186,7 +188,13 @@ fun Application.configureNginxAdminRoutes() {
                         call.respondError(
                             HttpStatusCode.BadRequest,
                             "certificate_not_found",
-                            "SSL certificate files not found at specified paths"
+                            "SSL certificate files are not accessible at the specified paths. " +
+                                "This usually means either (1) the gatekeeperd process user cannot traverse/read `/etc/letsencrypt` " +
+                                "(common when you verified with `sudo test -f ...`), or (2) gatekeeperd is running in a container/namespace " +
+                                "where those host paths don't exist. " +
+                                "certPath='${certFile.absolutePath}' (exists=${certFile.exists()}, readable=${certFile.canRead()}), " +
+                                "keyPath='${keyFile.absolutePath}' (exists=${keyFile.exists()}, readable=${keyFile.canRead()}). " +
+                                "Try: `test -f ${certFile.absolutePath} && test -f ${keyFile.absolutePath}` (without sudo) as the same user running gatekeeperd."
                         )
                         return@post
                     }

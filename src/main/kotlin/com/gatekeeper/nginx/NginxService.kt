@@ -193,19 +193,17 @@ class NginxService(
 
     fun testNginxConfig(): Boolean {
         return try {
-            val process = Runtime.getRuntime().exec(arrayOf("nginx", "-t"))
+            val process = ProcessBuilder("sudo", "/usr/sbin/nginx", "-t").start()
             val exitCode = process.waitFor()
 
             if (exitCode != 0) {
                 val error = process.errorStream.bufferedReader().readText()
-                logger.error("Nginx config test failed: $error")
+                logger.error("Nginx configuration test failed: $error")
                 return false
             }
-
-            logger.info("Nginx configuration test passed")
             true
         } catch (e: Exception) {
-            logger.error("Failed to test nginx configuration", e)
+            logger.error("Failed to test Nginx config", e)
             false
         }
     }
@@ -217,7 +215,8 @@ class NginxService(
                 return false
             }
 
-            val process = Runtime.getRuntime().exec(arrayOf("systemctl", "reload", "nginx"))
+            // Executing with 'sudo' so sudoers NOPASSWD kicks in!
+            val process = ProcessBuilder("sudo", "/bin/systemctl", "reload", "nginx").start()
             val exitCode = process.waitFor()
 
             if (exitCode != 0) {
