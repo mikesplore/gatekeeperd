@@ -255,6 +255,7 @@ Archive a project (soft delete). Sets `deleted_at`, blocks gating, and **preserv
 **Notes:**
 - Does not stop or remove the client container — that remains a manual DevOps step.
 - Best-effort nginx cleanup is attempted (`sites-available/sites-enabled` removal + reload) so orphan nginx configs don't continue pointing at archived slugs.
+- The project is unlinked from its container by replacing `containerName` with an `archived-{slug}` placeholder.
 - Clears the Redis gate cache; the slug behaves as unknown to nginx/Traefik after archive.
 - The slug stays reserved while archived (cannot create a new project with the same slug).
 - Writes an audit log entry with action `project_archived`.

@@ -172,16 +172,18 @@ object ProjectRepository {
                 ?: return@transaction false
 
             val now = LocalDateTime.now()
+            val previousContainerName = project[Projects.containerName]
             Projects.update({ Projects.id eq project[Projects.id] }) {
                 it[Projects.deletedAt] = now
                 it[Projects.status] = ProjectStatus.BLOCKED
+                it[Projects.containerName] = "archived-$slug"
                 it[Projects.updatedAt] = now
             }
             AuditLog.insert {
                 it[AuditLog.projectId] = project[Projects.id]
                 it[AuditLog.action] = "project_archived"
                 it[AuditLog.actor] = actor
-                it[AuditLog.reason] = reason ?: "Project archived (soft delete)"
+                it[AuditLog.reason] = reason ?: "Project archived (soft delete). Unlinked container '$previousContainerName'."
             }
             true
         }.also { archived ->
