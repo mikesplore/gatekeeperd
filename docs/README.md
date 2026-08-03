@@ -126,10 +126,11 @@ The admin dashboard should use a **wizard-like flow** for Docker container creat
 
 ### Docker container creation wizard
 
-1. **Network dropdown**: `GET /api/admin/networks`
+1. **Network dropdown**: `GET /api/admin/containers/wizard/context` (or `GET /api/admin/networks`)
 2. **Image check**: `POST /api/admin/images/status` (if missing → `POST /api/admin/images/pull`)
 3. **Ports step**: `POST /api/admin/containers/wizard/ports/check`
-4. **Create container**: `POST /api/admin/containers/create` (includes restart policy, env vars, volume mounts)
+4. **Validate + normalize**: `POST /api/admin/containers/wizard/validate` (no changes applied)
+5. **Create container**: `POST /api/admin/containers/create` (includes restart policy, env vars, volume mounts)
 
 ### Nginx enable wizard
 

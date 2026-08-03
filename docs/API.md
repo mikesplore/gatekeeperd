@@ -665,6 +665,18 @@ Create and start a new Docker container with custom configuration.
 - Container is started immediately after creation
 - Returns full container info including port mappings
 
+### GET /api/admin/containers/wizard/context
+Wizard helper: fetch Docker container-creation context in one request (networks + internal network info).
+
+**Response:**
+```json
+{
+  "internalNetwork": "gatekeeper-internal",
+  "internalNetworkExists": true,
+  "networks": ["bridge", "gatekeeper-internal"]
+}
+```
+
 ### POST /api/admin/containers/wizard/ports/check
 Wizard helper: check whether host ports are already in use on the Docker host.
 
@@ -680,6 +692,37 @@ Wizard helper: check whether host ports are already in use on the Docker host.
 {
   "ok": true,
   "conflicts": []
+}
+```
+
+### POST /api/admin/containers/wizard/validate
+Wizard helper: validate and normalize a `CreateContainerRequest` without applying changes (no pull, no create).
+
+**Request:** same shape as `POST /api/admin/containers/create`
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Validated successfully (no changes applied)",
+  "normalizedRequest": {
+    "name": "my-app",
+    "image": "nginx:latest",
+    "ports": {
+      "8080": 80
+    },
+    "env": {},
+    "network": "bridge",
+    "volumes": [],
+    "restartPolicy": "unless-stopped",
+    "pullImage": true
+  },
+  "imageExists": true,
+  "willPullImage": false,
+  "networkExists": true,
+  "willCreateInternalNetworkIfMissing": false,
+  "portConflicts": [],
+  "warnings": []
 }
 ```
 
