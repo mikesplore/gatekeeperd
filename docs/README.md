@@ -132,6 +132,8 @@ The admin dashboard should use a **wizard-like flow** for Docker container creat
 4. **Validate + normalize**: `POST /api/admin/containers/wizard/validate` (no changes applied)
 5. **Create container**: `POST /api/admin/containers/create` (includes restart policy, env vars, volume mounts)
 
+For private Docker Hub images, set `pullViaCli=true` (or `DOCKER_PULL_VIA_CLI=true`) so pulls use `docker pull` and can reuse the host's Docker auth.
+
 ### Nginx enable wizard
 
 1. **Context + options**: `GET /api/admin/nginx/wizard/context/{slug}` (cert list + inferred port hints)

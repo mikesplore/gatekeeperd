@@ -57,6 +57,10 @@ object AppConfig {
     // Docker & Infrastructure
     val dockerSocket: String = optionalSetting("DOCKER_SOCKET", "unix:///var/run/docker.sock")
     val internalNetwork: String = optionalSetting("GATEKEEPER_INTERNAL_NETWORK", "gatekeeper-internal")
+    val dockerPullViaCli: Boolean = optionalSetting("DOCKER_PULL_VIA_CLI", "false")
+        .trim()
+        .lowercase()
+        .let { it == "true" || it == "1" || it == "yes" }
 
     // Nginx
     val nginxSitesAvailablePath: String = optionalSetting("NGINX_SITES_AVAILABLE", "/etc/nginx/sites-available")

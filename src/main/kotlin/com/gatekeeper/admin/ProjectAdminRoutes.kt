@@ -459,7 +459,12 @@ fun Application.configureProjectAdminRoutes() {
                             val plan = planResult.plan
 
                             if (plan.willPullImage) {
-                                dockerService.pullImage(plan.parsedImage.repository, plan.parsedImage.tag)
+                                val useCliPull = plan.normalizedRequest.pullViaCli || AppConfig.dockerPullViaCli
+                                if (useCliPull) {
+                                    dockerService.pullImageViaCli(plan.normalizedRequest.image, AppConfig.dockerSocket)
+                                } else {
+                                    dockerService.pullImage(plan.parsedImage.repository, plan.parsedImage.tag)
+                                }
                             }
                             if (plan.willCreateInternalNetworkIfMissing) {
                                 dockerService.createNetworkIfMissing(AppConfig.internalNetwork)

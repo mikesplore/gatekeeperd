@@ -178,7 +178,12 @@ fun Application.configureRouting() {
                 }
                 val tag = body.tag.trim().ifBlank { "latest" }
                 try {
-                    svc.pullImage(image, tag)
+                    val fullRef = "$image:$tag"
+                    if (body.pullViaCli || AppConfig.dockerPullViaCli) {
+                        svc.pullImageViaCli(fullRef, AppConfig.dockerSocket)
+                    } else {
+                        svc.pullImage(image, tag)
+                    }
                     call.respond(mapOf("status" to "pulled", "image" to "$image:$tag"))
                 } catch (e: Exception) {
                     call.respondError(

@@ -5,5 +5,6 @@ import kotlinx.serialization.Serializable
 @Serializable
 data class PullImageRequest(
     val image: String,
-    val tag: String = "latest"
+    val tag: String = "latest",
+    val pullViaCli: Boolean = false
 )

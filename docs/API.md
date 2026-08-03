@@ -636,7 +636,8 @@ Create and start a new Docker container with custom configuration.
     }
   ],
   "restartPolicy": "unless-stopped",
-  "pullImage": true
+  "pullImage": true,
+  "pullViaCli": false
 }
 ```
 
@@ -648,6 +649,7 @@ Create and start a new Docker container with custom configuration.
 - `volumes` (optional): List of volume mounts
 - `restartPolicy` (optional): Docker restart policy (`"no"`, `"always"`, `"unless-stopped"`, `"on-failure"`)
 - `pullImage` (optional): Pull image before creating container (default: `true`)
+- `pullViaCli` (optional): Pull via `docker pull` CLI to reuse host Docker Hub auth (default: `false`)
 
 **Response:** `201 Created`
 ```json
@@ -715,7 +717,8 @@ Wizard helper: validate and normalize a `CreateContainerRequest` without applyin
     "network": "bridge",
     "volumes": [],
     "restartPolicy": "unless-stopped",
-    "pullImage": true
+    "pullImage": true,
+    "pullViaCli": false
   },
   "imageExists": true,
   "willPullImage": false,

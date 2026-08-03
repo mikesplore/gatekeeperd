@@ -37,7 +37,8 @@ data class CreateContainerRequest(
     val network: String = "bridge",
     val volumes: List<VolumeMount> = emptyList(),
     val restartPolicy: String? = null,
-    val pullImage: Boolean = true
+    val pullImage: Boolean = true,
+    val pullViaCli: Boolean = false
 )
 
 @Serializable

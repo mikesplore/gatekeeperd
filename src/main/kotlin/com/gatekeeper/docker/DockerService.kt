@@ -78,6 +78,30 @@ class DockerService(dockerSocketPath: String) {
         logger.info("Image pulled: $fullName")
     }
 
+    fun pullImageViaCli(imageRef: String, dockerHost: String? = null) {
+        val ref = imageRef.trim()
+        require(ref.isNotBlank()) { "imageRef must be non-blank" }
+
+        val cmd = listOf("docker", "pull", ref)
+        logger.info("Pulling image via docker CLI: $ref")
+
+        val process = ProcessBuilder(cmd)
+            .redirectErrorStream(true)
+            .apply {
+                if (!dockerHost.isNullOrBlank()) {
+                    environment()["DOCKER_HOST"] = dockerHost
+                }
+            }
+            .start()
+
+        val output = process.inputStream.bufferedReader().use { it.readText() }
+        val exit = process.waitFor()
+        if (exit != 0) {
+            throw RuntimeException("docker pull failed (exit=$exit): ${output.trim().ifBlank { "no output" }}")
+        }
+        logger.info("Image pulled via docker CLI: $ref")
+    }
+
     fun imageExists(imageRef: String): Boolean {
         val ref = imageRef.trim()
         if (ref.isBlank()) return false
