@@ -89,25 +89,14 @@ The simplest setup is to run **gatekeeperd on the host (systemd)** and run clien
 
 ### Build artifact sources
 
-- GitHub Actions publishes a Docker image to GHCR: `ghcr.io/<owner>/<repo>:<tag>`
-- GitHub Actions also uploads a jar artifact named `gatekeeperd-all-jar`
+- GitHub Actions uploads a jar artifact named `gatekeeperd-all-jar` containing:
+  - `gatekeeperd-all.jar`
+  - `gatekeeperd-all.jar.sha256`
 
-### Extract jar from GHCR image (no local build on VPS)
+### Install jar on VPS
 
-On the VPS:
-
-```bash
-# Example (pick a tag from GHCR, e.g. "latest" or the short SHA)
-IMAGE="ghcr.io/<owner>/<repo>:latest"
-
-docker pull "$IMAGE"
-cid="$(docker create "$IMAGE")"
-sudo mkdir -p /opt/gatekeeperd
-sudo docker cp "$cid":/app/gatekeeperd.jar /opt/gatekeeperd/gatekeeperd-all.jar
-docker rm "$cid"
-```
-
-Then run via systemd as described in the main README or your local ops notes.
+Download the latest workflow artifact from GitHub Actions, place it under a stable path
+(for example `/opt/gatekeeperd/gatekeeperd-all.jar`), then restart the systemd service.
 
 To stop all services:
 ```bash
