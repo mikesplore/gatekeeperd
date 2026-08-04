@@ -22,12 +22,17 @@ Replace `acw` with your project slug and `9921` with your app port.
 server {
     listen 443 ssl;
     listen [::]:443 ssl;
+    http2 on;
+
     server_name acw.mikesplore.me;
 
-    ssl_certificate /etc/letsencrypt/live/vela.mikesplore.tech/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/vela.mikesplore.tech/privkey.pem;
+    ssl_certificate /etc/letsencrypt/live/acw.mikesplore.me/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/acw.mikesplore.me/privkey.pem;
 
-    # Route gatekeeper payment pages through the client domain (same-origin Pay Now button)
+    # -------------------------------------------------------------------------
+    # 1. Gatekeeper Direct Bypass Route
+    # Payment callbacks, webhooks, and paywall APIs bypass auth_request
+    # -------------------------------------------------------------------------
     location /api/gate/ {
         proxy_pass http://127.0.0.1:8080/api/gate/;
         proxy_set_header Host $host;
@@ -36,6 +41,10 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
+    # -------------------------------------------------------------------------
+    # 2. Main Protected Application Route (Aaron's Car Wash Backend)
+    # Evaluates gatekeeper auth_request on every incoming request
+    # -------------------------------------------------------------------------
     location / {
         auth_request /gatekeeper-auth-acw;
         error_page 403 = @gatekeeper_paywall_acw;
@@ -51,17 +60,57 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
+    # -------------------------------------------------------------------------
+    # 3. Isolated Gatekeeper Subrequest (Browser-Header Sanitizer)
+    # Strips all browser headers, CORS metadata, and POST bodies
+    # -------------------------------------------------------------------------
     location = /gatekeeper-auth-acw {
         internal;
         proxy_pass http://127.0.0.1:8080/api/gate/auth?project=acw;
+
+        # Always force subrequest method to GET
+        proxy_method GET;
+
+        # Disable body forwarding
         proxy_pass_request_body off;
+
+        # Strip all body and content headers
         proxy_set_header Content-Length "";
-        proxy_set_header X-Original-URI $request_uri;
+        proxy_set_header Content-Type "";
+        proxy_set_header Transfer-Encoding "";
+
+        # Strip browser CORS and metadata headers that trigger 0ms 403s in Ktor
+        proxy_set_header Authorization "";
+        proxy_set_header Cookie "";
+        proxy_set_header Origin "";
+        proxy_set_header Referer "";
+        proxy_set_header User-Agent "Nginx-Auth-Check";
+        proxy_set_header Accept "";
+        proxy_set_header Accept-Encoding "";
+        proxy_set_header Accept-Language "";
+        proxy_set_header Sec-Fetch-Dest "";
+        proxy_set_header Sec-Fetch-Mode "";
+        proxy_set_header Sec-Fetch-Site "";
+        proxy_set_header Sec-Ch-Ua "";
+
+        # Point Host header strictly to 127.0.0.1
+        proxy_set_header Host 127.0.0.1;
+
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
     }
 
+    # -------------------------------------------------------------------------
+    # 4. Paywall Fallback Location
+    # -------------------------------------------------------------------------
     location @gatekeeper_paywall_acw {
-        proxy_pass http://127.0.0.1:8080/api/gate/paywall?project=acw;
+        rewrite ^ /api/gate/paywall?project=acw break;
+        proxy_pass http://127.0.0.1:8080;
+
         proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
     }
 }
 ```
