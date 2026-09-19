@@ -45,6 +45,14 @@ object AppConfig {
     val paystackSecretKey: String = optionalSetting("PAYSTACK_SECRET_KEY", "")
     val paystackPublicKey: String = optionalSetting("PAYSTACK_PUBLIC_KEY", "")
 
+    // M-Pesa Daraja
+    val mpesaConsumerKey: String = optionalSetting("MPESA_CONSUMER_KEY", "")
+    val mpesaConsumerSecret: String = optionalSetting("MPESA_CONSUMER_SECRET", "")
+    val mpesaShortCode: String = optionalSetting("MPESA_SHORT_CODE", "")
+    val mpesaPasskey: String = optionalSetting("MPESA_PASSKEY", "")
+    val mpesaCallbackUrl: String = optionalSetting("MPESA_CALLBACK_URL", "")
+    val mpesaEnvironment: String = optionalSetting("MPESA_ENVIRONMENT", "sandbox")
+
     /** Public URL of gatekeeperd (e.g. https://gateapi.mikesplore.me) — used for Paystack callbacks */
     val publicBaseUrl: String = optionalSetting("GATEKEEPER_PUBLIC_URL", "")
 

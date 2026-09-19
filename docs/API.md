@@ -952,6 +952,12 @@ Delete a Docker image from the local Docker host.
 
 ## Webhooks (No JWT, Signature Required)
 
+### M-Pesa
+
+`POST /api/mpesa/pay?project={slug}&phone={msisdn}` starts an M-Pesa STK Push and returns `202` with a pending provider reference. `POST /api/mpesa/callback` receives the Daraja callback. M-Pesa payments are stored and reconciled through the same payment application and reconciliation service as Paystack.
+
+Required configuration: `MPESA_CONSUMER_KEY`, `MPESA_CONSUMER_SECRET`, `MPESA_SHORT_CODE`, `MPESA_PASSKEY`, `MPESA_CALLBACK_URL`, and `MPESA_ENVIRONMENT` (`sandbox` or `production`).
+
 ### POST /api/paystack/webhook
 Paystack webhook handler. Verifies HMAC-SHA512 signature via `x-paystack-signature` header.
 

@@ -14,6 +14,8 @@ import com.gatekeeper.paystack.PaystackClient
 import com.gatekeeper.paystack.PaystackProviderClient
 import com.gatekeeper.paystack.configurePaystackWebhookRoutes
 import com.gatekeeper.payments.PaymentReconciliationService
+import com.gatekeeper.mpesa.MpesaClient
+import com.gatekeeper.mpesa.configureMpesaRoutes
 import com.gatekeeper.plugins.configureDatabase
 import com.gatekeeper.plugins.configureMonitoring
 import com.gatekeeper.plugins.configureRedis
@@ -59,7 +61,9 @@ fun Application.module() {
     configurePaymentAdminRoutes()
     configureNginxAdminRoutes()
     configurePaystackWebhookRoutes()
+    configureMpesaRoutes()
     PaymentReconciliationService.register(PaystackProviderClient())
+    PaymentReconciliationService.register(MpesaClient)
 
     seedInitialAdmin()
 
@@ -69,6 +73,7 @@ fun Application.module() {
 
     monitor.subscribe(ApplicationStopping) {
         runCatching { PaystackClient.close() }
+        runCatching { MpesaClient.close() }
     }
 }
 

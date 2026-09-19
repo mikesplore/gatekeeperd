@@ -201,6 +201,12 @@ Copy [.env.example](../.env.example) to `.env`. Required vars have no safe defau
 | `ADMIN_PASSWORD` | First boot | Initial admin password (min 8 chars) |
 | `PAYSTACK_SECRET_KEY` | Payments | Paystack secret key |
 | `PAYSTACK_PUBLIC_KEY` | Payments | Paystack public key |
+| `MPESA_CONSUMER_KEY` | Payments | Daraja consumer key |
+| `MPESA_CONSUMER_SECRET` | Payments | Daraja consumer secret |
+| `MPESA_SHORT_CODE` | Payments | Paybill/till short code |
+| `MPESA_PASSKEY` | Payments | Daraja passkey |
+| `MPESA_ENVIRONMENT` | Payments | `sandbox` or `production` |
+| `MPESA_CALLBACK_URL` | Payments | Public `/api/mpesa/callback` URL |
 | `GATEKEEPER_PUBLIC_URL` | Payments | Public HTTPS base URL, e.g. `https://gateapi.example.com` |
 | `SUPPORT_CONTACT_EMAIL` | No | Shown on paywall pages |
 | `CORS_ALLOWED_ORIGINS` | No | Comma-separated admin dashboard origins |
