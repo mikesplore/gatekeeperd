@@ -118,7 +118,11 @@ object ProjectRepository {
         amountDue: BigDecimal?,
         currency: String?,
         dueDate: LocalDate?,
-        gracePeriodDays: Int?
+        gracePeriodDays: Int?,
+        clearClientName: Boolean = false,
+        clearClientEmail: Boolean = false,
+        clearAmountDue: Boolean = false,
+        clearDueDate: Boolean = false
     ): ProjectRecord? {
         return transaction {
             val existing = Projects.selectAll()
@@ -129,11 +133,11 @@ object ProjectRepository {
                 domain?.let { v -> it[Projects.domain] = v }
                 containerName?.let { v -> it[Projects.containerName] = v }
                 type?.let { v -> it[Projects.type] = ProjectType.valueOf(v.uppercase()) }
-                clientName?.let { v -> it[Projects.clientName] = v }
-                clientEmail?.let { v -> it[Projects.clientEmail] = v }
-                amountDue?.let { v -> it[Projects.amountDue] = v }
+                if (clearClientName) it[Projects.clientName] = null else clientName?.let { v -> it[Projects.clientName] = v }
+                if (clearClientEmail) it[Projects.clientEmail] = null else clientEmail?.let { v -> it[Projects.clientEmail] = v }
+                if (clearAmountDue) it[Projects.amountDue] = null else amountDue?.let { v -> it[Projects.amountDue] = v }
                 currency?.let { v -> it[Projects.currency] = v }
-                dueDate?.let { v -> it[Projects.dueDate] = v }
+                if (clearDueDate) it[Projects.dueDate] = null else dueDate?.let { v -> it[Projects.dueDate] = v }
                 gracePeriodDays?.let { v -> it[Projects.gracePeriodDays] = v }
             }
             AuditLog.insert {

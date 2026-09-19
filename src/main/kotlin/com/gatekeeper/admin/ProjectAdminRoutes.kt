@@ -38,10 +38,14 @@ import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.decodeFromJsonElement
 import org.slf4j.LoggerFactory
 import java.math.BigDecimal
 
 private val logger = LoggerFactory.getLogger("com.gatekeeper.admin.ProjectAdminRoutes")
+private val json = Json { }
 
 private class DockerServiceWizardInspect(private val dockerService: DockerService) : DockerWizardInspect {
     override fun imageExists(imageRef: String): Boolean = dockerService.imageExists(imageRef)
@@ -246,13 +250,16 @@ fun Application.configureProjectAdminRoutes() {
                     return@patch
                 }
 
-                val body = try {
-                    call.receive<UpdateProjectRequest>()
+                val parsed = try {
+                    val payload = call.receive<JsonObject>()
+                    json.decodeFromJsonElement<UpdateProjectRequest>(payload) to payload.keys
                 } catch (e: Exception) {
                     logger.warn("Failed to parse update project request", e)
                     call.respondError(HttpStatusCode.BadRequest, "invalid_request", "The request body could not be parsed")
                     return@patch
                 }
+
+                val (body, presentFields) = parsed
 
                 if (body.type != null && !InputValidators.isValidProjectType(body.type)) {
                     call.respondError(HttpStatusCode.BadRequest, "invalid_request", "type must be 'frontend' or 'backend'")
@@ -319,7 +326,11 @@ fun Application.configureProjectAdminRoutes() {
                     amountDue = amountDue,
                     currency = body.currency,
                     dueDate = dueDate,
-                    gracePeriodDays = body.gracePeriodDays
+                    gracePeriodDays = body.gracePeriodDays,
+                    clearClientName = "clientName" in presentFields && body.clientName == null,
+                    clearClientEmail = "clientEmail" in presentFields && body.clientEmail == null,
+                    clearAmountDue = "amountDue" in presentFields && body.amountDue == null,
+                    clearDueDate = "dueDate" in presentFields && body.dueDate == null
                 )
 
                 if (project == null) {
