@@ -135,6 +135,7 @@ List all projects with their status, client info, and due dates.
     "containerName": "acme-container",
     "type": "backend",
     "status": "active",
+    "blockReason": null,
     "clientName": "John Doe",
     "clientEmail": "john@acme.com",
     "paystackCustomerCode": "CUS_xxx",

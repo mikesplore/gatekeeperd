@@ -447,7 +447,7 @@ fun Application.configureProjectAdminRoutes() {
                 val principal = call.principal<io.ktor.server.auth.jwt.JWTPrincipal>()
                 val actor = principal?.payload?.subject ?: "unknown"
 
-                ProjectRepository.updateStatus(project.id, "manual_block", actor, reason)
+                ProjectRepository.updateStatus(project.id, "manual_block", actor, reason, blockReason = "manual")
                 ProjectRepository.invalidateCache(slug)
 
                 logger.info("Project blocked: $slug by $actor")

@@ -13,6 +13,7 @@ object Projects : Table("projects") {
     val containerName = text("container_name")
     val type = enumerationByName("type", 9, ProjectType::class)
     val status = enumerationByName("status", 12, ProjectStatus::class).default(ProjectStatus.ACTIVE)
+    val blockReason = text("block_reason").nullable()
     val clientName = text("client_name").nullable()
     val clientEmail = text("client_email").nullable()
     val paystackCustomerCode = text("paystack_customer_code").nullable()

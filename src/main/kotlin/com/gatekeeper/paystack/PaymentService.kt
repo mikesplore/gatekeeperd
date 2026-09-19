@@ -148,7 +148,8 @@ object PaymentService {
             ProjectRepository.setStatusAndDueDate(
                 project.id,
                 "blocked",
-                LocalDate.now()
+                LocalDate.now(),
+                blockReason = "payment_reversed"
             )
             AuditRepository.write(
                 projectId = project.id,

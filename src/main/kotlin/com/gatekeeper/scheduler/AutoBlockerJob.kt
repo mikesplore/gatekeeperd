@@ -19,7 +19,7 @@ object AutoBlockerJob {
                 runCatching {
                     val overdue = ProjectRepository.findPastDue(LocalDate.now())
                     overdue.forEach { project ->
-                        ProjectRepository.updateStatus(project.id, "blocked", actor = "system", reason = "auto-block: payment overdue")
+                        ProjectRepository.updateStatus(project.id, "blocked", actor = "system", reason = "auto-block: payment overdue", blockReason = "overdue")
                         logger.warn("Auto-blocked project: ${project.slug} (due: ${project.dueDate}, grace: ${project.gracePeriodDays} days)")
                     }
                 }.onFailure { 
