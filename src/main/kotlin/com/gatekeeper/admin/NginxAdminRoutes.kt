@@ -465,6 +465,21 @@ fun Application.configureNginxAdminRoutes() {
                 if (!result.success) call.respond(HttpStatusCode.UnprocessableEntity, result) else call.respond(result)
             }
 
+            get("/api/admin/nginx/config/{slug}/versions") {
+                val slug = call.parameters["slug"]
+                if (slug.isNullOrBlank()) { call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing slug path parameter"); return@get }
+                val versions = runCatching { nginxService.listBackups(slug) }.getOrElse { call.respondError(HttpStatusCode.BadRequest, "invalid_slug", it.message ?: "Invalid site name"); return@get }
+                call.respond(versions)
+            }
+
+            post("/api/admin/nginx/config/{slug}/rollback/{backup}") {
+                val slug = call.parameters["slug"]
+                val backup = call.parameters["backup"]
+                if (slug.isNullOrBlank() || backup.isNullOrBlank()) { call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Slug and backup name are required"); return@post }
+                val result = runCatching { nginxService.rollback(slug, backup) }.getOrElse { call.respondError(HttpStatusCode.BadRequest, "rollback_failed", it.message ?: "Unable to roll back configuration"); return@post }
+                if (!result.success) call.respond(HttpStatusCode.UnprocessableEntity, result) else call.respond(result)
+            }
+
             post("/api/admin/nginx/enable/{slug}") {
                 val slug = call.parameters["slug"]
                 if (slug == null) {

@@ -459,6 +459,8 @@ Runs `nginx -t` on the host and returns the exit code, timestamp, validity, and 
 
 `POST /api/admin/nginx/config/{slug}/blocks/{index}/apply` replaces only the selected block, runs `nginx -t`, reloads Nginx, and restores the previous file if validation or reload fails.
 
+`GET /api/admin/nginx/config/{slug}/versions` lists available configuration backups. `POST /api/admin/nginx/config/{slug}/rollback/{backup}` restores a selected backup, validates it, reloads Nginx, and restores the current version if anything fails.
+
 These endpoints manage nginx site configurations for client projects. They require `nginx` CLI and `systemctl` access on the host.
 
 ### GET /api/admin/nginx/wizard/context/{slug}

@@ -56,6 +56,8 @@ data class NginxTestResult(
 
 @Serializable data class NginxBlockUpdateRequest(val blockIndex: Int, val content: String)
 @Serializable data class NginxBlockUpdateResponse(val success: Boolean, val message: String, val config: String, val blockIndex: Int, val validation: NginxTestResult, val reloaded: Boolean = false)
+@Serializable data class NginxBackup(val name: String, val createdAt: String, val sizeBytes: Long)
+@Serializable data class NginxRollbackResponse(val success: Boolean, val message: String, val validation: NginxTestResult, val reloaded: Boolean = false)
 
 @Serializable
 data class CertificateInstallRequest(

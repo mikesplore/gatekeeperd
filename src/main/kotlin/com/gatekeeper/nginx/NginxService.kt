@@ -101,6 +101,35 @@ class NginxService(
         return NginxBlockUpdateResponse(true, "Nginx block updated and reloaded successfully", proposed, blockIndex, validation, true)
     }
 
+    fun listBackups(slug: String): List<NginxBackup> {
+        require(slug.matches(Regex("[a-zA-Z0-9][a-zA-Z0-9_-]*"))) { "Invalid nginx site name" }
+        return File(sitesAvailablePath).listFiles { file -> file.name.startsWith("$slug.bak-") }
+            ?.sortedByDescending { it.lastModified() }
+            ?.map { NginxBackup(it.name, Instant.ofEpochMilli(it.lastModified()).toString(), it.length()) }
+            .orEmpty()
+    }
+
+    fun rollback(slug: String, backupName: String): NginxRollbackResponse {
+        require(backupName.matches(Regex("${Regex.escape(slug)}\\.bak-[0-9]+"))) { "Invalid backup name" }
+        val backup = File(sitesAvailablePath, backupName)
+        require(backup.isFile) { "Backup does not exist" }
+        val target = File(sitesAvailablePath, slug)
+        val current = File(sitesAvailablePath, "$slug.bak-${Instant.now().toEpochMilli()}")
+        if (target.isFile) Files.copy(target.toPath(), current.toPath(), StandardCopyOption.REPLACE_EXISTING)
+        Files.copy(backup.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
+        val validation = testNginxConfigDetailed()
+        if (!validation.valid) {
+            if (current.isFile) Files.copy(current.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
+            return NginxRollbackResponse(false, "Rollback validation failed; previous configuration restored", validation)
+        }
+        if (!reloadNginx()) {
+            if (current.isFile) Files.copy(current.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
+            reloadNginx()
+            return NginxRollbackResponse(false, "Rollback reload failed; previous configuration restored", validation)
+        }
+        return NginxRollbackResponse(true, "Configuration rolled back and Nginx reloaded successfully", validation, true)
+    }
+
     fun certificateExpiry(domain: String): Pair<String, Long>? {
         return try {
             val certFile = File("$sslCertPath/$domain/fullchain.pem")
