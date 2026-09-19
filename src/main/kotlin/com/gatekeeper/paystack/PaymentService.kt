@@ -20,6 +20,7 @@ object PaymentService {
         reference: String,
         projectSlug: String,
         amountNaira: BigDecimal,
+        currency: String? = null,
         verifiedVia: String,
         paidAt: LocalDateTime = LocalDateTime.now(),
         rawPayload: String? = null
@@ -35,6 +36,31 @@ object PaymentService {
                 logger.warn("applySuccessfulPayment: project not found slug=$projectSlug ref=$reference")
                 return false
             }
+
+        if (existing != null && existing.projectId != project.id) {
+            logger.error(
+                "Rejecting payment/project mismatch: ref=$reference " +
+                    "paymentProject=${existing.projectId} webhookProject=${project.id}"
+            )
+            return false
+        }
+
+        val expectedAmount = existing?.amount ?: project.amountDue
+        if (expectedAmount == null || amountNaira.compareTo(expectedAmount) != 0) {
+            logger.error(
+                "Rejecting payment amount mismatch: ref=$reference project=${project.slug} " +
+                    "expected=$expectedAmount received=$amountNaira"
+            )
+            return false
+        }
+
+        if (!currency.isNullOrBlank() && !currency.equals(project.currency, ignoreCase = true)) {
+            logger.error(
+                "Rejecting payment currency mismatch: ref=$reference project=${project.slug} " +
+                    "expected=${project.currency} received=$currency"
+            )
+            return false
+        }
 
         if (existing == null) {
             PaymentRepository.create(

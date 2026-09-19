@@ -50,6 +50,7 @@ object ReconciliationJob {
                         reference = payment.paystackReference,
                         projectSlug = project.slug,
                         amountNaira = amountNaira,
+                        currency = verification.currency,
                         verifiedVia = "reconciliation",
                         paidAt = LocalDateTime.now()
                     )

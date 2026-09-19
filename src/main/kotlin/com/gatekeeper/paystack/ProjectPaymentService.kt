@@ -34,6 +34,7 @@ object ProjectPaymentService {
             email = email,
             amountNaira = amount,
             projectSlug = project.slug,
+            currency = project.currency,
             callbackUrl = callbackUrl
         )
     }

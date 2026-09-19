@@ -44,12 +44,14 @@ object PaystackClient {
         email: String,
         amountNaira: BigDecimal,
         projectSlug: String,
+        currency: String? = null,
         callbackUrl: String? = null
     ): Result<String> {
         val amountKobo = (amountNaira * BigDecimal(100)).toLong()
         val request = PaystackInitializeRequest(
             email = email,
             amount = amountKobo,
+            currency = currency,
             metadata = mapOf("project_slug" to projectSlug),
             callbackUrl = callbackUrl
         )
