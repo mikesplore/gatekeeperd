@@ -443,6 +443,16 @@ Active projects past their due date, sorted by days overdue descending (JWT requ
 
 ## Nginx Management Endpoints (JWT Required)
 
+### GET /api/admin/nginx/config/{slug}
+
+Returns the live `sites-available/{slug}` file as text, file metadata, enabled-link state, and parsed `server`/`location` blocks. This is the primary inspection endpoint for diagnosing Nginx without SSH.
+
+### GET /api/admin/nginx/diagnostics
+
+Runs `nginx -t` on the host and returns the exit code, timestamp, validity, and complete command output.
+
+`POST /api/admin/nginx/test` performs the same validation on demand.
+
 These endpoints manage nginx site configurations for client projects. They require `nginx` CLI and `systemctl` access on the host.
 
 ### GET /api/admin/nginx/wizard/context/{slug}

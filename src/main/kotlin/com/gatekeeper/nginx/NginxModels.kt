@@ -26,6 +26,35 @@ data class NginxStatusResponse(
 )
 
 @Serializable
+data class NginxConfigInspection(
+    val slug: String,
+    val configPath: String,
+    val enabledPath: String,
+    val available: Boolean,
+    val enabled: Boolean,
+    val isSymlink: Boolean,
+    val content: String? = null,
+    val blocks: List<NginxConfigBlock> = emptyList(),
+    val modifiedAt: String? = null,
+    val sizeBytes: Long? = null
+)
+
+@Serializable
+data class NginxConfigBlock(
+    val type: String,
+    val header: String,
+    val content: String
+)
+
+@Serializable
+data class NginxTestResult(
+    val valid: Boolean,
+    val exitCode: Int,
+    val output: String,
+    val checkedAt: String
+)
+
+@Serializable
 data class CertificateInstallRequest(
     val domain: String,
     val email: String

@@ -11,6 +11,7 @@ import java.time.Instant
 import java.security.cert.CertificateFactory
 import java.io.ByteArrayInputStream
 import java.time.ZoneOffset
+import java.time.OffsetDateTime
 
 private val logger = LoggerFactory.getLogger("com.gatekeeper.nginx.NginxService")
 
@@ -26,6 +27,50 @@ class NginxService(
     private val gatekeeperPort: Int = 8080,
     private val sslCertPath: String = AppConfig.nginxSslCertPath
 ) {
+    fun inspectSite(slug: String): NginxConfigInspection {
+        require(slug.matches(Regex("[a-zA-Z0-9][a-zA-Z0-9_-]*"))) { "Invalid nginx site name" }
+        val availableFile = File(sitesAvailablePath, slug)
+        val enabledFile = File(sitesEnabledPath, slug)
+        val content = availableFile.takeIf { it.isFile }?.readText()
+        return NginxConfigInspection(
+            slug = slug,
+            configPath = availableFile.absolutePath,
+            enabledPath = enabledFile.absolutePath,
+            available = availableFile.isFile,
+            enabled = enabledFile.exists(),
+            isSymlink = Files.isSymbolicLink(enabledFile.toPath()),
+            content = content,
+            blocks = content?.let(::extractBlocks).orEmpty(),
+            modifiedAt = availableFile.takeIf { it.exists() }?.let { Instant.ofEpochMilli(it.lastModified()).toString() },
+            sizeBytes = availableFile.takeIf { it.exists() }?.length()
+        )
+    }
+
+    private fun extractBlocks(content: String): List<NginxConfigBlock> {
+        val blocks = mutableListOf<NginxConfigBlock>()
+        val pattern = Regex("(?m)^\\s*(server|location(?:\\s*=|\\s+|\\s+@)[^\\{]*)\\s*\\{")
+        pattern.findAll(content).forEach { match ->
+            var depth = 0
+            var end = -1
+            for (index in match.range.last until content.length) {
+                when (content[index]) { '{' -> depth++; '}' -> { depth--; if (depth == 0) { end = index + 1; break } } }
+            }
+            if (end > 0) blocks += NginxConfigBlock(match.groupValues[1].trim().substringBefore('{').trim().split(Regex("\\s+"), 2).first(), match.groupValues[1].trim(), content.substring(match.range.first, end))
+        }
+        return blocks
+    }
+
+    fun testNginxConfigDetailed(): NginxTestResult {
+        return try {
+            val process = ProcessBuilder("sudo", "/usr/sbin/nginx", "-t").redirectErrorStream(true).start()
+            val output = process.inputStream.bufferedReader().readText()
+            val exitCode = process.waitFor()
+            NginxTestResult(exitCode == 0, exitCode, output, OffsetDateTime.now().toString())
+        } catch (e: Exception) {
+            NginxTestResult(false, -1, e.message ?: "Failed to execute nginx -t", OffsetDateTime.now().toString())
+        }
+    }
+
     fun certificateExpiry(domain: String): Pair<String, Long>? {
         return try {
             val certFile = File("$sslCertPath/$domain/fullchain.pem")

@@ -11,6 +11,8 @@ import com.gatekeeper.nginx.InstalledCertificateInfo
 import com.gatekeeper.nginx.NginxEnableRequest
 import com.gatekeeper.nginx.NginxStatusResponse
 import com.gatekeeper.nginx.NginxService
+import com.gatekeeper.nginx.NginxConfigInspection
+import com.gatekeeper.nginx.NginxTestResult
 import com.gatekeeper.nginx.ResolvedCertificate
 import com.gatekeeper.nginx.extractConfiguredContainerName
 import com.gatekeeper.nginx.extractConfiguredPort
@@ -415,6 +417,27 @@ fun Application.configureNginxAdminRoutes() {
                         certificateDaysRemaining = expiry?.second
                     )
                 )
+            }
+
+            get("/api/admin/nginx/config/{slug}") {
+                val slug = call.parameters["slug"]
+                if (slug.isNullOrBlank()) {
+                    call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing slug path parameter")
+                    return@get
+                }
+                val inspection = runCatching { nginxService.inspectSite(slug) }.getOrElse {
+                    call.respondError(HttpStatusCode.BadRequest, "invalid_slug", it.message ?: "Invalid site name")
+                    return@get
+                }
+                call.respond(inspection)
+            }
+
+            get("/api/admin/nginx/diagnostics") {
+                call.respond(nginxService.testNginxConfigDetailed())
+            }
+
+            post("/api/admin/nginx/test") {
+                call.respond(nginxService.testNginxConfigDetailed())
             }
 
             post("/api/admin/nginx/enable/{slug}") {
