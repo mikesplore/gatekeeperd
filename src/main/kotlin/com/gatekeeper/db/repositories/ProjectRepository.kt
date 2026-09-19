@@ -202,6 +202,8 @@ object ProjectRepository {
             Projects.update({ Projects.id eq project[Projects.id] }) {
                 it[Projects.deletedAt] = now
                 it[Projects.status] = ProjectStatus.BLOCKED
+                it[Projects.blockReason] = "archived"
+                it[Projects.lifecycleStatus] = "archived"
                 it[Projects.containerName] = "archived-$slug"
                 it[Projects.updatedAt] = now
             }
@@ -214,6 +216,38 @@ object ProjectRepository {
             true
         }.also { archived ->
             if (archived) invalidateCache(slug)
+        }
+    }
+
+    fun transfer(
+        slug: String,
+        deploymentMode: String,
+        serviceMode: String,
+        actor: String,
+        reason: String?
+    ): ProjectRecord? {
+        return transaction {
+            val project = Projects.selectAll()
+                .where { (Projects.slug eq slug) and Projects.deletedAt.isNull() }
+                .singleOrNull()
+                ?: return@transaction null
+
+            val previous = "deploymentMode=${project[Projects.deploymentMode]}, " +
+                "serviceMode=${project[Projects.serviceMode]}, " +
+                "lifecycleStatus=${project[Projects.lifecycleStatus]}"
+            Projects.update({ Projects.id eq project[Projects.id] }) {
+                it[Projects.deploymentMode] = deploymentMode
+                it[Projects.serviceMode] = serviceMode
+                it[Projects.lifecycleStatus] = "transferred"
+                it[Projects.updatedAt] = LocalDateTime.now()
+            }
+            AuditLog.insert {
+                it[AuditLog.projectId] = project[Projects.id]
+                it[AuditLog.action] = "project_transferred"
+                it[AuditLog.actor] = actor
+                it[AuditLog.reason] = (reason ?: "Project transferred") + "; previous: $previous"
+            }
+            findBySlug(slug)
         }
     }
 

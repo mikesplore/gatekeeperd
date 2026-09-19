@@ -315,6 +315,22 @@ fun Application.configureProjectAdminRoutes() {
                     return@patch
                 }
 
+                if (body.lifecycleStatus != null) {
+                    val current = ProjectRepository.findBySlug(slug)
+                    if (current == null) {
+                        call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
+                        return@patch
+                    }
+                    if (body.lifecycleStatus != current.lifecycleStatus) {
+                        call.respondError(
+                            HttpStatusCode.Conflict,
+                            "invalid_lifecycle_transition",
+                            "Use the dedicated transfer or archive operation for lifecycle changes"
+                        )
+                        return@patch
+                    }
+                }
+
                 // If containerName is updated, enforce that the referenced Docker container exists.
                 if (body.containerName != null) {
                     val dockerService = try {
@@ -399,21 +415,18 @@ fun Application.configureProjectAdminRoutes() {
                     call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
                     return@post
                 }
-                val updated = ProjectRepository.update(
+                if (current.lifecycleStatus !in setOf("active", "transferred")) {
+                    call.respondError(HttpStatusCode.Conflict, "invalid_lifecycle_transition", "Only active or transferred projects can be transferred")
+                    return@post
+                }
+                val principal = call.principal<io.ktor.server.auth.jwt.JWTPrincipal>()
+                val actor = principal?.payload?.subject ?: "unknown"
+                val updated = ProjectRepository.transfer(
                     slug = slug,
-                    name = null,
-                    domain = null,
-                    containerName = null,
-                    type = null,
-                    clientName = null,
-                    clientEmail = null,
-                    amountDue = null,
-                    currency = null,
-                    dueDate = null,
-                    gracePeriodDays = null,
                     deploymentMode = body.deploymentMode,
                     serviceMode = body.serviceMode,
-                    lifecycleStatus = "transferred"
+                    actor = actor,
+                    reason = "Transferred via admin API"
                 ) ?: current
                 call.respond(updated.toResponse())
             }

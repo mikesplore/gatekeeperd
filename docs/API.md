@@ -155,6 +155,8 @@ List all projects with their status, client info, and due dates.
 ### GET /api/admin/projects/{slug}
 Get single project details + payment history + audit log.
 
+Project responses include independent `deploymentMode`, `serviceMode`, `lifecycleStatus`, `status`, and `blockReason` fields. Use the dedicated transfer and archive operations for lifecycle changes.
+
 **Response:**
 ```json
 {
