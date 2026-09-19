@@ -443,6 +443,10 @@ Active projects past their due date, sorted by days overdue descending (JWT requ
 
 ## Nginx Management Endpoints (JWT Required)
 
+### GET /api/admin/dashboard/summary
+
+Returns one authenticated dashboard payload containing project status counts, payment status counts, revenue totals, integration outbox counts, Nginx site counts, and runtime metrics.
+
 ### GET /api/admin/nginx/config/{slug}
 
 Returns the live `sites-available/{slug}` file as text, file metadata, enabled-link state, and parsed `server`/`location` blocks. This is the primary inspection endpoint for diagnosing Nginx without SSH.

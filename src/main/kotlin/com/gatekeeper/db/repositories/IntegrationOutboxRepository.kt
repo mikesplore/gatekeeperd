@@ -8,6 +8,12 @@ import java.util.UUID
 
 object IntegrationOutboxRepository {
     data class Event(val id: UUID, val eventType: String, val idempotencyKey: String, val payload: String, val attempts: Int)
+    data class Summary(val pending: Long, val processing: Long, val deadLetter: Long, val delivered: Long)
+
+    fun summary(): Summary = transaction {
+        val rows = IntegrationOutbox.selectAll().toList()
+        Summary(rows.count { it[IntegrationOutbox.status] == "pending" }.toLong(), rows.count { it[IntegrationOutbox.status] == "processing" }.toLong(), rows.count { it[IntegrationOutbox.status] == "dead_letter" }.toLong(), rows.count { it[IntegrationOutbox.status] == "delivered" }.toLong())
+    }
 
     fun enqueue(eventType: String, idempotencyKey: String, payload: String) {
         transaction {

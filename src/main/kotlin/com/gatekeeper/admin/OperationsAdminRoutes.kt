@@ -17,6 +17,10 @@ import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import kotlinx.serialization.Serializable
+import com.gatekeeper.db.repositories.PaymentRepository
+import com.gatekeeper.db.repositories.IntegrationOutboxRepository
+import com.gatekeeper.plugins.Metrics
+import java.time.OffsetDateTime
 
 @Serializable
 data class ProjectHealthResponse(
@@ -34,9 +38,28 @@ data class BulkProjectRequest(val slugs: List<String>, val reason: String)
 @Serializable
 data class BulkProjectResult(val slug: String, val status: String, val message: String? = null)
 
+@Serializable data class DashboardSummaryResponse(
+    val generatedAt: String,
+    val projects: Map<String, Long>,
+    val payments: Map<String, Long>,
+    val revenue: Map<String, String>,
+    val integrations: Map<String, Long>,
+    val nginx: Map<String, Long>,
+    val metrics: Map<String, Long>
+)
+
 fun Application.configureOperationsAdminRoutes() {
     routing {
         authenticate("auth-jwt") {
+            get("/api/admin/dashboard/summary") {
+                val projects = ProjectRepository.findAll()
+                val payments = PaymentRepository.findAllFiltered(null, null, null, null, 10000, 0).first.map { it.payment }
+                val revenue = PaymentRepository.revenueTotals()
+                val outbox = IntegrationOutboxRepository.summary()
+                val available = java.io.File(AppConfig.nginxSitesAvailablePath).listFiles()?.count { it.isFile && !it.name.startsWith(".") }?.toLong() ?: 0
+                val enabled = java.io.File(AppConfig.nginxSitesEnabledPath).listFiles()?.size?.toLong() ?: 0
+                call.respond(DashboardSummaryResponse(OffsetDateTime.now().toString(), projects.groupingBy { it.status.lowercase() }.eachCount().mapValues { it.value.toLong() }, payments.groupingBy { it.gatewayStatus.lowercase() }.eachCount().mapValues { it.value.toLong() }, mapOf("thisMonth" to revenue.first.toPlainString(), "lastMonth" to revenue.second.toPlainString()), mapOf("outboxPending" to outbox.pending, "outboxProcessing" to outbox.processing, "outboxDeadLetter" to outbox.deadLetter, "outboxDelivered" to outbox.delivered), mapOf("availableSites" to available, "enabledSites" to enabled), Metrics.snapshot()))
+            }
             get("/api/admin/projects/{slug}/health") {
                 val slug = call.parameters["slug"] ?: run {
                     call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing slug path parameter")
