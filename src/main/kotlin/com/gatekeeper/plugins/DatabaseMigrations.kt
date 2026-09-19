@@ -12,6 +12,7 @@ object DatabaseMigrations {
         Migration("1", "phase 2 state fields", "db/migration/V1__phase2_state_fields.sql"),
         Migration("2", "phase 5 customer workflows", "db/migration/V2__phase_5_customer_workflows.sql")
         ,Migration("3", "provider neutral payments", "db/migration/V3__provider_neutral_payments.sql")
+        ,Migration("4", "integration outbox", "db/migration/V4__integration_outbox.sql")
     )
 
     fun apply(dataSource: HikariDataSource) {

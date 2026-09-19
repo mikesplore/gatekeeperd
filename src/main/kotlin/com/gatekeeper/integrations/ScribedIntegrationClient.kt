@@ -8,6 +8,9 @@ import io.ktor.http.*
 import kotlinx.serialization.Serializable
 import org.slf4j.LoggerFactory
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
+import com.gatekeeper.db.repositories.IntegrationOutboxRepository
 
 @Serializable data class ScribedSuspensionPayload(val project_id: String, val project_slug: String, val status: String, val reason: String, val occurred_at: String)
 @Serializable data class ScribedPaymentPayload(val project_id: String, val project_slug: String, val provider: String, val provider_reference: String, val amount: String, val currency: String, val paid_at: String, val status: String = "success")
@@ -15,39 +18,26 @@ import kotlinx.coroutines.runBlocking
 object ScribedIntegrationClient {
     private val logger = LoggerFactory.getLogger("com.gatekeeper.integrations.ScribedIntegrationClient")
     private val http = HttpClient()
+    private val json = Json { encodeDefaults = true }
     fun notifySuspension(project: ProjectRepository.ProjectRecord, reason: String) {
         runBlocking {
         val base = AppConfig.scribedCallbackUrl.trim().trimEnd('/')
         val secret = AppConfig.scribedIntegrationSecret.trim()
         if (base.isBlank() || secret.isBlank()) return@runBlocking
-        repeat(3) { attempt ->
-            val delivered = runCatching {
-                val response = http.post("$base/integrations/gatekeeper/suspensions") {
-                    contentType(ContentType.Application.Json); header("X-Gatekeeper-Secret", secret)
-                    setBody(ScribedSuspensionPayload(project.id.toString(), project.slug, project.status, reason, java.time.OffsetDateTime.now().toString()))
-                }
-                if (!response.status.isSuccess()) logger.warn("Scribed callback failed: status=${response.status} project=${project.slug} attempt=${attempt + 1}")
-                response.status.isSuccess()
-            }.getOrElse {
-                logger.warn("Scribed callback unavailable for project=${project.slug} attempt=${attempt + 1}: ${it.message}")
-                false
-            }
-            if (delivered) return@runBlocking
-            if (attempt < 2) Thread.sleep((attempt + 1) * 500L)
-        }
+        IntegrationOutboxRepository.enqueue("suspension", "suspension:${project.id}:$reason", json.encodeToString(ScribedSuspensionPayload(project.id.toString(), project.slug, project.status, reason, java.time.OffsetDateTime.now().toString())))
         }
     }
 
     fun notifyPayment(project: ProjectRepository.ProjectRecord, provider: String, reference: String, amount: String, currency: String, paidAt: String) {
         val base = AppConfig.scribedCallbackUrl.trim().trimEnd('/'); val secret = AppConfig.scribedIntegrationSecret.trim()
         if (base.isBlank() || secret.isBlank()) return
-        runBlocking {
-            runCatching {
-                http.post("$base/integrations/gatekeeper/payments") {
-                    contentType(ContentType.Application.Json); header("X-Gatekeeper-Secret", secret)
-                    setBody(ScribedPaymentPayload(project.id.toString(), project.slug, provider, reference, amount, currency, paidAt))
-                }
-            }.onFailure { logger.warn("Scribed payment callback unavailable for project=${project.slug}: ${it.message}") }
-        }
+        IntegrationOutboxRepository.enqueue("payment", "payment:${project.id}:$provider:$reference", json.encodeToString(ScribedPaymentPayload(project.id.toString(), project.slug, provider, reference, amount, currency, paidAt)))
+    }
+
+    suspend fun deliver(event: IntegrationOutboxRepository.Event): Boolean {
+        val base = AppConfig.scribedCallbackUrl.trim().trimEnd('/'); val secret = AppConfig.scribedIntegrationSecret.trim()
+        if (base.isBlank() || secret.isBlank()) return false
+        val path = if (event.eventType == "payment") "/integrations/gatekeeper/payments" else "/integrations/gatekeeper/suspensions"
+        return runCatching { http.post("$base$path") { contentType(ContentType.Application.Json); header("X-Gatekeeper-Secret", secret); header("Idempotency-Key", event.idempotencyKey); setBody(event.payload) }.status.isSuccess() }.getOrElse { logger.warn("Scribed outbox delivery failed id=${event.id}: ${it.message}"); false }
     }
 }

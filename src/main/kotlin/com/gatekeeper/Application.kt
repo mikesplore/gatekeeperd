@@ -24,6 +24,7 @@ import com.gatekeeper.plugins.configureSecurity
 import com.gatekeeper.plugins.configureSerialization
 import com.gatekeeper.scheduler.AutoBlockerJob
 import com.gatekeeper.scheduler.ReconciliationJob
+import com.gatekeeper.scheduler.IntegrationOutboxJob
 import io.ktor.server.application.*
 import io.ktor.server.engine.*
 import io.ktor.server.netty.*
@@ -70,6 +71,7 @@ fun Application.module() {
     val appScope = CoroutineScope(SupervisorJob())
     AutoBlockerJob.start(appScope)
     ReconciliationJob.start(appScope)
+    IntegrationOutboxJob.start(appScope)
 
     monitor.subscribe(ApplicationStopping) {
         runCatching { PaystackClient.close() }
