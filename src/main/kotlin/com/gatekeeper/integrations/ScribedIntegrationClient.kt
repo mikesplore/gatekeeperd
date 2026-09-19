@@ -19,13 +19,21 @@ object ScribedIntegrationClient {
         val base = AppConfig.scribedCallbackUrl.trim().trimEnd('/')
         val secret = AppConfig.scribedIntegrationSecret.trim()
         if (base.isBlank() || secret.isBlank()) return@runBlocking
-        runCatching {
-            val response = http.post("$base/integrations/gatekeeper/suspensions") {
-                contentType(ContentType.Application.Json); header("X-Gatekeeper-Secret", secret)
-                setBody(ScribedSuspensionPayload(project.id.toString(), project.slug, project.status, reason, java.time.OffsetDateTime.now().toString()))
+        repeat(3) { attempt ->
+            val delivered = runCatching {
+                val response = http.post("$base/integrations/gatekeeper/suspensions") {
+                    contentType(ContentType.Application.Json); header("X-Gatekeeper-Secret", secret)
+                    setBody(ScribedSuspensionPayload(project.id.toString(), project.slug, project.status, reason, java.time.OffsetDateTime.now().toString()))
+                }
+                if (!response.status.isSuccess()) logger.warn("Scribed callback failed: status=${response.status} project=${project.slug} attempt=${attempt + 1}")
+                response.status.isSuccess()
+            }.getOrElse {
+                logger.warn("Scribed callback unavailable for project=${project.slug} attempt=${attempt + 1}: ${it.message}")
+                false
             }
-            if (!response.status.isSuccess()) logger.warn("Scribed callback failed: status=${response.status} project=${project.slug}")
-        }.onFailure { logger.warn("Scribed callback unavailable for project=${project.slug}: ${it.message}") }
+            if (delivered) return@runBlocking
+            if (attempt < 2) Thread.sleep((attempt + 1) * 500L)
+        }
         }
     }
 }

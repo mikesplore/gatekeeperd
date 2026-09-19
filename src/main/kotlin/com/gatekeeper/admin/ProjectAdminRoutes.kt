@@ -13,6 +13,7 @@ import com.gatekeeper.config.AppConfig
 import com.gatekeeper.db.repositories.AuditRepository
 import com.gatekeeper.db.repositories.PaymentRepository
 import com.gatekeeper.db.repositories.ProjectRepository
+import com.gatekeeper.integrations.ScribedIntegrationClient
 import com.gatekeeper.docker.ContainerCreatePlanResult
 import com.gatekeeper.docker.CreateContainerRequest
 import com.gatekeeper.docker.CreateContainerResponse
@@ -537,6 +538,7 @@ fun Application.configureProjectAdminRoutes() {
 
                 ProjectRepository.updateStatus(project.id, "manual_block", actor, reason, blockReason = "manual")
                 ProjectRepository.invalidateCache(slug)
+                ScribedIntegrationClient.notifySuspension(project.copy(status = "manual_block", blockReason = "manual"), "manual_block: $reason")
 
                 logger.info("Project blocked: $slug by $actor")
                 call.respond(StatusChangeResponse(status = "blocked", slug = slug))
