@@ -237,6 +237,22 @@ class NginxService(
         }
     }
 
+    fun restoreLatestBackup(slug: String): Boolean {
+        return try {
+            val availableFile = File("$sitesAvailablePath/$slug")
+            val backup = availableFile.parentFile?.listFiles { file ->
+                file.name.startsWith("$slug.bak-")
+            }?.maxByOrNull { it.lastModified() }
+                ?: return false
+            Files.copy(backup.toPath(), availableFile.toPath(), StandardCopyOption.REPLACE_EXISTING)
+            logger.info("Restored nginx site $slug from backup ${backup.name}")
+            true
+        } catch (e: Exception) {
+            logger.error("Failed to restore nginx backup for $slug", e)
+            false
+        }
+    }
+
     fun removeProject(slug: String): Boolean {
         return try {
             val availableFile = File("$sitesAvailablePath/$slug")

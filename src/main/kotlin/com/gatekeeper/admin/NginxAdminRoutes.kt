@@ -516,6 +516,24 @@ fun Application.configureNginxAdminRoutes() {
                 )
             }
 
+            post("/api/admin/nginx/rollback/{slug}") {
+                val slug = call.parameters["slug"]
+                if (slug == null) {
+                    call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing slug path parameter")
+                    return@post
+                }
+                val restored = nginxService.restoreLatestBackup(slug)
+                if (!restored) {
+                    call.respondError(HttpStatusCode.NotFound, "nginx_backup_not_found", "No nginx backup was found for this project")
+                    return@post
+                }
+                if (!nginxService.reloadNginx()) {
+                    call.respondError(HttpStatusCode.InternalServerError, "nginx_error", "Rollback restored the file but nginx reload failed")
+                    return@post
+                }
+                call.respond(mapOf("success" to true, "message" to "Nginx configuration rolled back and reloaded"))
+            }
+
             post("/api/admin/nginx/remove/{slug}") {
                 val slug = call.parameters["slug"]
                 if (slug == null) {

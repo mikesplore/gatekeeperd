@@ -83,6 +83,8 @@ Harden administrative and infrastructure operations.
 
 The service can be operated safely through failures, deployments, and infrastructure changes.
 
+Phase 3 implementation status: complete for backend-owned controls. This includes migrations, login rate limiting, JWT revocation/logout, admin-role enforcement, readiness checks, request correlation, Docker allowlists, nginx atomic writes/backups/rollback, and in-process metrics. External alert delivery remains a deployment concern and can consume `/api/admin/metrics` or application logs.
+
 ## Phase 4 — Improve operational workflows
 
 Make the existing system easier to operate without direct database or server-shell access.

@@ -15,6 +15,7 @@ import io.ktor.server.routing.*
 import kotlinx.serialization.Serializable
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
 import org.jetbrains.exposed.sql.selectAll
+import org.jetbrains.exposed.sql.update
 import org.jetbrains.exposed.sql.transactions.transaction
 import org.mindrot.jbcrypt.BCrypt
 import org.slf4j.LoggerFactory
@@ -28,6 +29,9 @@ data class LoginRequest(val email: String, val password: String)
 
 @Serializable
 data class LoginResponse(val token: String)
+
+@Serializable
+data class ChangePasswordRequest(val currentPassword: String, val newPassword: String)
 
 @Serializable
 data class UserProfileResponse(
@@ -99,6 +103,31 @@ fun Application.configureAuthRoutes() {
         }
 
         authenticate("auth-jwt") {
+            post("/api/auth/password") {
+                val principal = call.principal<JWTPrincipal>()
+                val body = try {
+                    call.receive<ChangePasswordRequest>()
+                } catch (e: Exception) {
+                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Current and new passwords are required")
+                    return@post
+                }
+                if (principal == null || body.currentPassword.isBlank() || body.newPassword.length < 8) {
+                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "New password must be at least 8 characters")
+                    return@post
+                }
+                val email = principal.payload.subject.lowercase().trim()
+                val user = transaction { Users.selectAll().where { Users.email eq email }.singleOrNull() }
+                if (user == null || !BCrypt.checkpw(body.currentPassword, user[Users.passwordHash])) {
+                    call.respondError(HttpStatusCode.BadRequest, "invalid_credentials", "Current password is incorrect")
+                    return@post
+                }
+                val hash = BCrypt.hashpw(body.newPassword, BCrypt.gensalt(12))
+                transaction {
+                    Users.update({ Users.email eq email }) { it[Users.passwordHash] = hash }
+                }
+                call.respond(mapOf("status" to "password_changed"))
+            }
+
             post("/api/auth/logout") {
                 val principal = call.principal<JWTPrincipal>()
                 if (principal == null) {
