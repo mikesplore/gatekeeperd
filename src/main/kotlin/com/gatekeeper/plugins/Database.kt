@@ -39,6 +39,8 @@ object DatabaseFactory {
             exec("UPDATE payments SET gateway_status = status WHERE gateway_status != status OR gateway_status IS NULL")
         }
 
+        DatabaseMigrations.apply(dataSource)
+
         logger.info("Database connected: $url")
     }
 
