@@ -99,6 +99,23 @@ fun Application.configureAuthRoutes() {
         }
 
         authenticate("auth-jwt") {
+            post("/api/auth/logout") {
+                val principal = call.principal<JWTPrincipal>()
+                if (principal == null) {
+                    call.respondError(HttpStatusCode.Unauthorized, "unauthorized", "Authentication required")
+                    return@post
+                }
+                val jti = principal.payload.id
+                val expiresAt = principal.payload.expiresAt?.time ?: 0L
+                val ttlSeconds = ((expiresAt - System.currentTimeMillis()) / 1000).coerceAtLeast(1)
+                if (jti.isNullOrBlank()) {
+                    call.respondError(HttpStatusCode.Unauthorized, "invalid_token", "Token cannot be revoked")
+                    return@post
+                }
+                RedisService.set("auth:revoked:$jti", "1", ttlSeconds.toInt())
+                call.respond(mapOf("status" to "logged_out"))
+            }
+
             get("/api/auth/me") {
                 val principal = call.principal<JWTPrincipal>()
                 if (principal == null) {

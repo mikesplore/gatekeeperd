@@ -4,6 +4,7 @@ import com.auth0.jwt.JWT
 import com.auth0.jwt.algorithms.Algorithm
 import com.gatekeeper.api.respondError
 import com.gatekeeper.config.AppConfig
+import org.slf4j.LoggerFactory
 import io.ktor.http.*
 import io.ktor.server.application.*
 import io.ktor.server.auth.*
@@ -13,6 +14,7 @@ import io.ktor.server.plugins.defaultheaders.*
 import java.util.*
 
 object JwtConfig {
+    private val logger = LoggerFactory.getLogger("com.gatekeeper.plugins.JwtConfig")
     val algorithm: Algorithm by lazy { Algorithm.HMAC256(AppConfig.jwtSecret) }
 
     fun createToken(email: String, role: String = "admin"): String {
@@ -21,10 +23,21 @@ object JwtConfig {
             .withSubject(email)
             .withIssuer(AppConfig.jwtIssuer)
             .withAudience(AppConfig.jwtAudience)
+            .withJWTId(UUID.randomUUID().toString())
             .withClaim("role", role)
             .withIssuedAt(now)
             .withExpiresAt(Date(now.time + 24 * 3600 * 1000))
             .sign(algorithm)
+    }
+
+    fun isRevoked(jti: String?): Boolean {
+        if (jti.isNullOrBlank()) return true
+        return try {
+            RedisService.get("auth:revoked:$jti") != null
+        } catch (e: Exception) {
+            logger.warn("Token revocation check unavailable: ${e.message}")
+            false
+        }
     }
 }
 
@@ -62,7 +75,11 @@ fun Application.configureSecurity() {
                     .build()
             )
             validate { credential ->
-                if (credential.payload.audience.contains(AppConfig.jwtAudience)) {
+                val role = credential.payload.getClaim("role").asString()
+                if (credential.payload.audience.contains(AppConfig.jwtAudience) &&
+                    role == "admin" &&
+                    !JwtConfig.isRevoked(credential.payload.id)
+                ) {
                     JWTPrincipal(credential.payload)
                 } else null
             }

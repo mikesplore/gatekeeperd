@@ -1016,3 +1016,5 @@ Common error codes:
 5. **CORS:** Set `CORS_ALLOWED_ORIGINS` in `.env` to a comma-separated list of frontend origins (include the scheme), e.g. `https://gatekeeperd.mikesplore.me`. The API must be rebuilt and redeployed after changing this.
 
 6. **Content types:** Frontend projects receive HTML paywalls. Backend/API projects receive JSON. Use the `type` field from the project to determine which format to expect.
+### POST /api/auth/logout
+Revokes the current JWT until its natural expiry. The endpoint requires the current admin token.

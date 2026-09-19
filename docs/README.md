@@ -16,6 +16,8 @@ Database startup now records numbered migrations in `schema_migrations`. Fresh d
 
 Admin login attempts are rate-limited through Redis by email and client IP: five attempts per 15-minute window. If Redis is unavailable, login remains available and the outage is logged.
 
+Admin JWTs include a unique ID, are restricted to the `admin` role, and can be revoked through `POST /api/auth/logout` until their normal expiry.
+
 ---
 
 ## Architecture
