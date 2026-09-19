@@ -193,6 +193,7 @@ Copy [.env.example](../.env.example) to `.env`. Required vars have no safe defau
 | `GATEKEEPER_INTERNAL_NETWORK` | No | Default `gatekeeper-internal` |
 | `DEFAULT_GRACE_PERIOD_DAYS` | No | Default `3` |
 | `FAIL_MODE` | No | `open` or `closed` |
+| `AUTOBLOCKER_INTERVAL_MINUTES` | No | Auto-block scan interval; default `60` |
 
 **Paystack dashboard (not env vars):**
 - Webhook: `{GATEKEEPER_PUBLIC_URL}/api/paystack/webhook`

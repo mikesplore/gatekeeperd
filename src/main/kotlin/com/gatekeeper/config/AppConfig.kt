@@ -71,6 +71,9 @@ object AppConfig {
     val defaultGracePeriodDays: Int = optionalSetting("DEFAULT_GRACE_PERIOD_DAYS", "3").toInt()
     val failMode: String = optionalSetting("FAIL_MODE", "open")
 
+    val autoBlockerIntervalMinutes: Long =
+        optionalSetting("AUTOBLOCKER_INTERVAL_MINUTES", "60").toLong()
+
     val reconciliationStaleMinutes: Long =
         optionalSetting("RECONCILIATION_STALE_MINUTES", "30").toLong()
     val reconciliationIntervalMinutes: Long =

@@ -147,9 +147,12 @@ object ProjectRepository {
     }
 
     fun updateStatus(id: UUID, newStatus: String, actor: String, reason: String?) {
-        transaction {
+        val slug = transaction {
+            val project = Projects.selectAll().where { Projects.id eq id }.singleOrNull()
+                ?: return@transaction null
             Projects.update({ Projects.id eq id }) {
                 it[Projects.status] = ProjectStatus.valueOf(newStatus.uppercase())
+                it[Projects.updatedAt] = LocalDateTime.now()
             }
             AuditLog.insert {
                 it[AuditLog.projectId] = id
@@ -161,7 +164,9 @@ object ProjectRepository {
                 it[AuditLog.actor] = actor
                 it[AuditLog.reason] = reason
             }
+            project[Projects.slug]
         }
+        slug?.let(::invalidateCache)
     }
 
     fun archive(slug: String, actor: String, reason: String?): Boolean {
@@ -243,31 +248,44 @@ object ProjectRepository {
     }
 
     fun setStatusOnly(id: UUID, newStatus: String) {
-        transaction {
+        val slug = transaction {
+            val project = Projects.selectAll().where { Projects.id eq id }.singleOrNull()
+                ?: return@transaction null
             Projects.update({ Projects.id eq id }) {
                 it[Projects.status] = ProjectStatus.valueOf(newStatus.uppercase())
+                it[Projects.updatedAt] = LocalDateTime.now()
             }
+            project[Projects.slug]
         }
+        slug?.let(::invalidateCache)
     }
 
     fun setStatusAndClearDueDate(id: UUID, newStatus: String) {
-        transaction {
+        val slug = transaction {
+            val project = Projects.selectAll().where { Projects.id eq id }.singleOrNull()
+                ?: return@transaction null
             Projects.update({ Projects.id eq id }) {
                 it[Projects.status] = ProjectStatus.valueOf(newStatus.uppercase())
                 it[Projects.dueDate] = null
                 it[Projects.updatedAt] = LocalDateTime.now()
             }
+            project[Projects.slug]
         }
+        slug?.let(::invalidateCache)
     }
 
     fun setStatusAndDueDate(id: UUID, newStatus: String, dueDate: LocalDate) {
-        transaction {
+        val slug = transaction {
+            val project = Projects.selectAll().where { Projects.id eq id }.singleOrNull()
+                ?: return@transaction null
             Projects.update({ Projects.id eq id }) {
                 it[Projects.status] = ProjectStatus.valueOf(newStatus.uppercase())
                 it[Projects.dueDate] = dueDate
                 it[Projects.updatedAt] = LocalDateTime.now()
             }
+            project[Projects.slug]
         }
+        slug?.let(::invalidateCache)
     }
 
     fun findPastDue(asOf: LocalDate): List<ProjectRecord> {
@@ -281,7 +299,7 @@ object ProjectRepository {
                 .map { it.toProjectRecord() }
                 .filter { record ->
                     record.dueDate != null &&
-                    record.dueDate!!.plusDays(record.gracePeriodDays.toLong()).isBefore(asOf)
+                    record.dueDate.plusDays(record.gracePeriodDays.toLong()).isBefore(asOf)
                 }
         }
     }
