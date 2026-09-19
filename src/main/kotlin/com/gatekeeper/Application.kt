@@ -6,6 +6,7 @@ import com.gatekeeper.admin.configurePaymentAdminRoutes
 import com.gatekeeper.admin.configureProjectAdminRoutes
 import com.gatekeeper.admin.configureOperationsAdminRoutes
 import com.gatekeeper.auth.configureAuthRoutes
+import com.gatekeeper.customer.configureCustomerRoutes
 import com.gatekeeper.config.AppConfig
 import com.gatekeeper.db.tables.Users
 import com.gatekeeper.gate.configureGateRoutes
@@ -49,6 +50,7 @@ fun Application.module() {
     configureSecurity()
     configureRouting()
     configureGateRoutes()
+    configureCustomerRoutes()
     configureAuthRoutes()
     configureProjectAdminRoutes()
     configureOperationsAdminRoutes()

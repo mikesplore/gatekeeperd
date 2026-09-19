@@ -9,7 +9,8 @@ object DatabaseMigrations {
     private data class Migration(val version: String, val description: String, val resource: String)
 
     private val migrations = listOf(
-        Migration("1", "phase 2 state fields", "db/migration/V1__phase2_state_fields.sql")
+        Migration("1", "phase 2 state fields", "db/migration/V1__phase2_state_fields.sql"),
+        Migration("2", "phase 5 customer workflows", "db/migration/V2__phase_5_customer_workflows.sql")
     )
 
     fun apply(dataSource: HikariDataSource) {

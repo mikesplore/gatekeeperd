@@ -121,6 +121,31 @@ Paystack browser return URL after payment. Redirects the browser to the project 
 
 **Note:** when a payment is confirmed, Gatekeeper clears the project's `due_date` and sets the project back to `active`. That stops overdue tracking until an admin assigns a new due date.
 
+### Customer frontend integration
+
+Set `GATEKEEPER_FRONTEND_URL` to the deployed customer frontend origin. The backend does not render customer screens; it supplies the data and redirects the browser to that frontend.
+
+#### GET /api/customer/projects/{slug}/status
+Returns customer-safe access status, amount due, due date, payment history, receipt URLs, payment URL, portal URL, and support URL.
+
+#### GET /api/customer/projects/{slug}/payments/{paymentId}/receipt
+Returns receipt data for a successful payment. The frontend can render or print it.
+
+#### GET /api/customer/projects/{slug}/portal
+Redirects to `${GATEKEEPER_FRONTEND_URL}/portal/{slug}`.
+
+#### GET /api/customer/projects/{slug}/payment-success?reference={ref}
+Redirects to `${GATEKEEPER_FRONTEND_URL}/payment/success` with project and reference query parameters.
+
+#### GET /api/customer/projects/{slug}/reminder
+Returns an email-ready reminder payload containing the recipient, subject, message, and payment URL. Email delivery remains a frontend/notification-provider concern.
+
+#### POST /api/customer/projects/{slug}/support
+Creates a persisted support request. Body:
+```json
+{"name":"Jane Doe","email":"jane@example.com","message":"I need help restoring access."}
+```
+
 ---
 
 ## Admin Endpoints (JWT Required)

@@ -108,6 +108,8 @@ An administrator can diagnose and resolve common operational issues from the das
 
 Once payment and access behavior are trustworthy, improve the client experience.
 
+Phase 5 backend coverage is complete. Customer APIs provide payment status, payment history, receipt data, payment-success and portal redirects to `GATEKEEPER_FRONTEND_URL`, email-reminder payloads, and persisted support requests. The frontend owns the screens and delivery of reminder emails.
+
 - Customer payment status page
 - Payment receipts
 - Email reminders

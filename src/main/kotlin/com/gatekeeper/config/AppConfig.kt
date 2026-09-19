@@ -48,6 +48,9 @@ object AppConfig {
     /** Public URL of gatekeeperd (e.g. https://gateapi.mikesplore.me) — used for Paystack callbacks */
     val publicBaseUrl: String = optionalSetting("GATEKEEPER_PUBLIC_URL", "")
 
+    /** Frontend URL used for customer portal, receipt, payment-success, and support links. */
+    val frontendBaseUrl: String = optionalSetting("GATEKEEPER_FRONTEND_URL", "")
+
     val supportContactEmail: String = optionalSetting("SUPPORT_CONTACT_EMAIL", "support@gatekeeper.local")
 
     /** Used once on first startup when the users table is empty */
