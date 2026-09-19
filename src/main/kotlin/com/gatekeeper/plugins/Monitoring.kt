@@ -9,13 +9,29 @@ import io.ktor.server.request.*
 import io.ktor.server.response.*
 import kotlinx.serialization.SerializationException
 import org.slf4j.LoggerFactory
+import org.slf4j.MDC
 import org.slf4j.event.Level
+import java.util.UUID
 
 private val logger = LoggerFactory.getLogger("com.gatekeeper.plugins.Monitoring")
 
 class NotFoundException(override val message: String) : RuntimeException(message)
 
 fun Application.configureMonitoring() {
+    intercept(ApplicationCallPipeline.Setup) {
+        val requestId = call.request.headers["X-Request-ID"]
+            ?.trim()
+            ?.takeIf { it.length in 1..128 && it.all { character -> character.isLetterOrDigit() || character in "-_." } }
+            ?: UUID.randomUUID().toString()
+        call.response.headers.append("X-Request-ID", requestId)
+        MDC.put("requestId", requestId)
+        try {
+            proceed()
+        } finally {
+            MDC.remove("requestId")
+        }
+    }
+
     install(CallLogging) {
         level = Level.INFO
         filter { call -> call.request.path().startsWith("/api") }
@@ -31,7 +47,7 @@ fun Application.configureMonitoring() {
             )
         }
         exception<NotFoundException> { call, ex ->
-            call.respondError(HttpStatusCode.NotFound, "not_found", ex.message ?: "Resource not found")
+            call.respondError(HttpStatusCode.NotFound, "not_found", ex.message)
         }
         exception<Throwable> { call, ex ->
             logger.error("Unhandled exception", ex)
