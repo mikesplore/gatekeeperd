@@ -11,7 +11,9 @@ import com.gatekeeper.config.AppConfig
 import com.gatekeeper.db.tables.Users
 import com.gatekeeper.gate.configureGateRoutes
 import com.gatekeeper.paystack.PaystackClient
+import com.gatekeeper.paystack.PaystackProviderClient
 import com.gatekeeper.paystack.configurePaystackWebhookRoutes
+import com.gatekeeper.payments.PaymentReconciliationService
 import com.gatekeeper.plugins.configureDatabase
 import com.gatekeeper.plugins.configureMonitoring
 import com.gatekeeper.plugins.configureRedis
@@ -57,6 +59,7 @@ fun Application.module() {
     configurePaymentAdminRoutes()
     configureNginxAdminRoutes()
     configurePaystackWebhookRoutes()
+    PaymentReconciliationService.register(PaystackProviderClient())
 
     seedInitialAdmin()
 

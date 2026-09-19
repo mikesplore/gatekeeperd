@@ -9,12 +9,15 @@ import java.math.BigDecimal
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.util.*
+import com.gatekeeper.payments.PaymentProvider
 
 object PaymentRepository {
 
     data class PaymentRecord(
         val id: UUID,
         val projectId: UUID,
+        val provider: PaymentProvider,
+        val providerReference: String,
         val paystackReference: String,
         val authorizationUrl: String?,
         val amount: BigDecimal,
@@ -45,6 +48,12 @@ object PaymentRepository {
                 ?.toPaymentRecord()
         }
     }
+
+    fun findByProviderReference(provider: PaymentProvider, reference: String): PaymentRecord? = transaction {
+        Payments.selectAll().where {
+            (Payments.provider eq provider.name.lowercase()) and (Payments.providerReference eq reference)
+        }.singleOrNull()?.toPaymentRecord()
+    } ?: findByReference(reference)
 
     fun findById(id: UUID): PaymentRecord? {
         return transaction {
@@ -197,6 +206,52 @@ object PaymentRepository {
         }
     }
 
+    fun create(
+        projectId: UUID,
+        provider: PaymentProvider,
+        providerReference: String,
+        authorizationUrl: String?,
+        amount: BigDecimal,
+        status: String,
+        gatewayStatus: String = status,
+        rawWebhookPayload: String? = null
+    ): PaymentRecord = transaction {
+        val id = UUID.randomUUID()
+        Payments.insert {
+            it[Payments.id] = id
+            it[Payments.projectId] = projectId
+            it[Payments.provider] = provider.name.lowercase()
+            it[Payments.providerReference] = providerReference
+            it[Payments.paystackReference] = providerReference
+            it[Payments.authorizationUrl] = authorizationUrl
+            it[Payments.amount] = amount
+            it[Payments.status] = status
+            it[Payments.gatewayStatus] = gatewayStatus
+            it[Payments.rawWebhookPayload] = rawWebhookPayload
+        }
+        findByReference(providerReference)!!
+    }
+
+    fun markGatewayStatusByProviderReference(
+        provider: PaymentProvider,
+        reference: String,
+        gatewayStatus: String,
+        verifiedVia: String,
+        paidAt: LocalDateTime? = null
+    ) {
+        transaction {
+            Payments.update({
+                (Payments.provider eq provider.name.lowercase()) and (Payments.providerReference eq reference)
+            }) {
+                it[Payments.status] = gatewayStatus
+                it[Payments.gatewayStatus] = gatewayStatus
+                it[Payments.verifiedVia] = verifiedVia
+                it[Payments.verifiedAt] = LocalDateTime.now()
+                if (paidAt != null) it[Payments.paidAt] = paidAt
+            }
+        }
+    }
+
     fun markGatewayStatus(
         reference: String,
         gatewayStatus: String,
@@ -243,6 +298,8 @@ object PaymentRepository {
     private fun ResultRow.toPaymentRecord() = PaymentRecord(
         id = this[Payments.id],
         projectId = this[Payments.projectId],
+        provider = PaymentProvider.valueOf(this[Payments.provider].uppercase()),
+        providerReference = this[Payments.providerReference] ?: this[Payments.paystackReference],
         paystackReference = this[Payments.paystackReference],
         authorizationUrl = this[Payments.authorizationUrl],
         amount = this[Payments.amount],

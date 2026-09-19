@@ -6,6 +6,8 @@ import org.jetbrains.exposed.sql.javatime.datetime
 object Payments : Table("payments") {
     val id = uuid("id").autoGenerate()
     val projectId = uuid("project_id").references(Projects.id)
+    val provider = text("provider").default("paystack")
+    val providerReference = text("provider_reference").nullable()
     val paystackReference = text("paystack_reference").uniqueIndex()
     val authorizationUrl = text("authorization_url").nullable()
     val amount = decimal("amount", 12, 2)
