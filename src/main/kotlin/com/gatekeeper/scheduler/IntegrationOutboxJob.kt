@@ -11,7 +11,7 @@ object IntegrationOutboxJob {
     fun start(scope: CoroutineScope) { scope.launch {
         while (isActive) {
             runCatching {
-                IntegrationOutboxRepository.due().forEach { event ->
+                IntegrationOutboxRepository.claim().forEach { event ->
                     if (ScribedIntegrationClient.deliver(event)) IntegrationOutboxRepository.markDelivered(event.id)
                     else IntegrationOutboxRepository.markFailed(event.id, "Scribed delivery failed", event.attempts)
                 }

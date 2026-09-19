@@ -11,6 +11,8 @@ object IntegrationOutbox : Table("integration_outbox") {
     val idempotencyKey = text("idempotency_key").uniqueIndex()
     val payload = text("payload")
     val attempts = integer("attempts").default(0)
+    val status = text("status").default("pending")
+    val leaseUntil = datetime("lease_until").nullable()
     val nextAttemptAt = datetime("next_attempt_at").defaultExpression(CurrentDateTime)
     val lastError = text("last_error").nullable()
     val deliveredAt = datetime("delivered_at").nullable()

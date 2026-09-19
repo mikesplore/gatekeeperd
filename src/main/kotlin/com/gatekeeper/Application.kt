@@ -5,6 +5,7 @@ import com.gatekeeper.admin.configureNginxAdminRoutes
 import com.gatekeeper.admin.configurePaymentAdminRoutes
 import com.gatekeeper.admin.configureProjectAdminRoutes
 import com.gatekeeper.admin.configureOperationsAdminRoutes
+import com.gatekeeper.admin.configureIntegrationAdminRoutes
 import com.gatekeeper.auth.configureAuthRoutes
 import com.gatekeeper.customer.configureCustomerRoutes
 import com.gatekeeper.config.AppConfig
@@ -59,6 +60,7 @@ fun Application.module() {
     configureAuthRoutes()
     configureProjectAdminRoutes()
     configureOperationsAdminRoutes()
+    configureIntegrationAdminRoutes()
     configurePaymentAdminRoutes()
     configureNginxAdminRoutes()
     configurePaystackWebhookRoutes()
