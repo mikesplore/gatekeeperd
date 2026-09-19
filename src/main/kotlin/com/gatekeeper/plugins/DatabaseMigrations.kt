@@ -15,6 +15,20 @@ object DatabaseMigrations {
     fun apply(dataSource: HikariDataSource) {
         dataSource.connection.use { connection ->
             connection.autoCommit = false
+            val hasProjectsTable = connection.prepareStatement("SELECT to_regclass('public.projects')")
+                .use { statement ->
+                    statement.executeQuery().use { result -> result.next() && result.getString(1) != null }
+                }
+
+            if (!hasProjectsTable) {
+                val baseline = DatabaseMigrations::class.java.classLoader
+                    .getResourceAsStream("db/migration/V0__baseline_schema.sql")
+                    ?.bufferedReader()
+                    ?.use { it.readText() }
+                    ?: error("Missing database baseline migration resource")
+                connection.createStatement().use { statement -> statement.execute(baseline) }
+            }
+
             connection.createStatement().use { statement ->
                 statement.execute(
                     """
@@ -25,6 +39,16 @@ object DatabaseMigrations {
                     )
                     """.trimIndent()
                 )
+            }
+
+            if (!hasProjectsTable) {
+                connection.prepareStatement(
+                    "INSERT INTO schema_migrations(version, description) VALUES (?, ?)"
+                ).use { statement ->
+                    statement.setString(1, "0")
+                    statement.setString(2, "baseline schema")
+                    statement.executeUpdate()
+                }
             }
 
             migrations.forEach { migration ->

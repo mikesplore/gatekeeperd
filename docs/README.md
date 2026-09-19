@@ -12,7 +12,7 @@ Project access status is separate from `blockReason`, which records why access i
 
 PostgreSQL stores projects, payments, audit log, and admin users. Redis caches gate status (60s TTL). Paystack handles checkout and payment confirmation.
 
-Database startup now records numbered migrations in `schema_migrations`. New schema changes should be added as files under `src/main/resources/db/migration/`; do not rely on implicit schema changes for new production behavior.
+Database startup now records numbered migrations in `schema_migrations`. Fresh databases are created from `V0__baseline_schema.sql`, and existing databases receive subsequent numbered migrations. New schema changes should be added as files under `src/main/resources/db/migration/`; do not rely on implicit schema changes for new production behavior.
 
 ---
 
