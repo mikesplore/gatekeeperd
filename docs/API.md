@@ -1096,3 +1096,14 @@ Returns in-process operational counters for authenticated administrators, includ
 - `GET /api/admin/audit/export?action=...&actor=...` — filtered CSV audit export.
 - `POST /api/admin/payment-events/{id}/replay` — replay a stored failed webhook through the idempotent payment handlers.
 - nginx status responses include certificate expiry timestamp and remaining days when the certificate can be parsed.
+### Unmatched routes
+
+Unmatched API routes return JSON instead of a browser-generated error page:
+
+```json
+{
+  "error": "route_not_found",
+  "message": "No route matches GET /api/example",
+  "requestId": "..."
+}
+```

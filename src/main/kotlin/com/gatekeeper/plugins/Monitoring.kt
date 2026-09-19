@@ -38,6 +38,13 @@ fun Application.configureMonitoring() {
     }
 
     install(StatusPages) {
+        status(HttpStatusCode.NotFound) { call, _ ->
+            call.respondError(
+                HttpStatusCode.NotFound,
+                "route_not_found",
+                "No route matches ${call.request.httpMethod.value} ${call.request.path()}"
+            )
+        }
         exception<SerializationException> { call, ex ->
             logger.error("JSON serialization failed for ${call.request.httpMethod.value} ${call.request.path()}", ex)
             call.respondError(
