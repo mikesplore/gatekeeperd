@@ -26,6 +26,9 @@ object ProjectRepository {
         val type: String,
         val status: String,
         val blockReason: String?,
+        val deploymentMode: String,
+        val serviceMode: String,
+        val lifecycleStatus: String,
         val clientName: String?,
         val clientEmail: String?,
         val paystackCustomerCode: String?,
@@ -79,7 +82,10 @@ object ProjectRepository {
         amountDue: BigDecimal?,
         currency: String,
         dueDate: LocalDate?,
-        gracePeriodDays: Int
+        gracePeriodDays: Int,
+        deploymentMode: String = "developer_hosted",
+        serviceMode: String = "development",
+        lifecycleStatus: String = "active"
     ): ProjectRecord {
         return transaction {
             val id = UUID.randomUUID()
@@ -97,6 +103,9 @@ object ProjectRepository {
                 it[Projects.currency] = currency
                 it[Projects.dueDate] = dueDate
                 it[Projects.gracePeriodDays] = gracePeriodDays
+                it[Projects.deploymentMode] = deploymentMode
+                it[Projects.serviceMode] = serviceMode
+                it[Projects.lifecycleStatus] = lifecycleStatus
             }
             AuditLog.insert {
                 it[AuditLog.projectId] = id
@@ -123,7 +132,10 @@ object ProjectRepository {
         clearClientName: Boolean = false,
         clearClientEmail: Boolean = false,
         clearAmountDue: Boolean = false,
-        clearDueDate: Boolean = false
+        clearDueDate: Boolean = false,
+        deploymentMode: String? = null,
+        serviceMode: String? = null,
+        lifecycleStatus: String? = null
     ): ProjectRecord? {
         return transaction {
             val existing = Projects.selectAll()
@@ -140,6 +152,9 @@ object ProjectRepository {
                 currency?.let { v -> it[Projects.currency] = v }
                 if (clearDueDate) it[Projects.dueDate] = null else dueDate?.let { v -> it[Projects.dueDate] = v }
                 gracePeriodDays?.let { v -> it[Projects.gracePeriodDays] = v }
+                deploymentMode?.let { v -> it[Projects.deploymentMode] = v }
+                serviceMode?.let { v -> it[Projects.serviceMode] = v }
+                lifecycleStatus?.let { v -> it[Projects.lifecycleStatus] = v }
             }
             AuditLog.insert {
                 it[AuditLog.projectId] = existing[Projects.id]
@@ -322,6 +337,9 @@ object ProjectRepository {
         type = this[Projects.type].value,
         status = this[Projects.status].value,
         blockReason = this[Projects.blockReason],
+        deploymentMode = this[Projects.deploymentMode],
+        serviceMode = this[Projects.serviceMode],
+        lifecycleStatus = this[Projects.lifecycleStatus],
         clientName = this[Projects.clientName],
         clientEmail = this[Projects.clientEmail],
         paystackCustomerCode = this[Projects.paystackCustomerCode],

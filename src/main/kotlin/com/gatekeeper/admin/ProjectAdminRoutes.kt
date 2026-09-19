@@ -66,7 +66,10 @@ data class CreateProjectRequest(
     val amountDue: Double? = null,
     val currency: String = "KES",
     val dueDate: String? = null,
-    val gracePeriodDays: Int = 3
+    val gracePeriodDays: Int = 3,
+    val deploymentMode: String = "developer_hosted",
+    val serviceMode: String = "development",
+    val lifecycleStatus: String = "active"
 )
 
 @Serializable
@@ -80,7 +83,10 @@ data class UpdateProjectRequest(
     val amountDue: Double? = null,
     val currency: String? = null,
     val dueDate: String? = null,
-    val gracePeriodDays: Int? = null
+    val gracePeriodDays: Int? = null,
+    val deploymentMode: String? = null,
+    val serviceMode: String? = null,
+    val lifecycleStatus: String? = null
 )
 
 @Serializable
@@ -91,6 +97,16 @@ data class InitializePaymentResponse(val payment_link: String)
 
 @Serializable
 data class StatusChangeRequest(val reason: String)
+
+@Serializable
+data class TransferProjectRequest(
+    val deploymentMode: String = "client_hosted",
+    val serviceMode: String = "production"
+)
+
+private val deploymentModes = setOf("developer_hosted", "client_hosted", "external_hosted")
+private val serviceModes = setOf("development", "testing", "production")
+private val lifecycleStatuses = setOf("active", "transferred", "archived", "cancelled")
 
 @Serializable
 data class ProjectWizardContainerOption(
@@ -176,6 +192,11 @@ fun Application.configureProjectAdminRoutes() {
                     return@post
                 }
 
+                if (body.deploymentMode !in deploymentModes || body.serviceMode !in serviceModes || body.lifecycleStatus !in lifecycleStatuses) {
+                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid deployment, service, or lifecycle mode")
+                    return@post
+                }
+
                 val existing = ProjectRepository.findBySlug(slug, includeArchived = true)
                 if (existing != null) {
                     call.respondError(HttpStatusCode.Conflict, "project_exists", "A project with this slug already exists")
@@ -236,7 +257,10 @@ fun Application.configureProjectAdminRoutes() {
                     amountDue = amountDue,
                     currency = body.currency,
                     dueDate = dueDate,
-                    gracePeriodDays = body.gracePeriodDays
+                    gracePeriodDays = body.gracePeriodDays,
+                    deploymentMode = body.deploymentMode,
+                    serviceMode = body.serviceMode,
+                    lifecycleStatus = body.lifecycleStatus
                 )
 
                 logger.info("Project created: $slug")
@@ -282,6 +306,14 @@ fun Application.configureProjectAdminRoutes() {
                     return@patch
                 }
                 val amountDue = body.amountDue?.let { BigDecimal.valueOf(it) }
+
+                if ((body.deploymentMode != null && body.deploymentMode !in deploymentModes) ||
+                    (body.serviceMode != null && body.serviceMode !in serviceModes) ||
+                    (body.lifecycleStatus != null && body.lifecycleStatus !in lifecycleStatuses)
+                ) {
+                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid deployment, service, or lifecycle mode")
+                    return@patch
+                }
 
                 // If containerName is updated, enforce that the referenced Docker container exists.
                 if (body.containerName != null) {
@@ -330,7 +362,10 @@ fun Application.configureProjectAdminRoutes() {
                     clearClientName = "clientName" in presentFields && body.clientName == null,
                     clearClientEmail = "clientEmail" in presentFields && body.clientEmail == null,
                     clearAmountDue = "amountDue" in presentFields && body.amountDue == null,
-                    clearDueDate = "dueDate" in presentFields && body.dueDate == null
+                    clearDueDate = "dueDate" in presentFields && body.dueDate == null,
+                    deploymentMode = body.deploymentMode,
+                    serviceMode = body.serviceMode,
+                    lifecycleStatus = body.lifecycleStatus
                 )
 
                 if (project == null) {
@@ -341,6 +376,46 @@ fun Application.configureProjectAdminRoutes() {
                 ProjectRepository.invalidateCache(slug)
                 logger.info("Project updated: $slug")
                 call.respond(project.toResponse())
+            }
+
+            post("/api/admin/projects/{slug}/transfer") {
+                val slug = call.parameters["slug"]
+                if (slug == null) {
+                    call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing slug path parameter")
+                    return@post
+                }
+                val body = try {
+                    call.receive<TransferProjectRequest>()
+                } catch (e: Exception) {
+                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid transfer request")
+                    return@post
+                }
+                if (body.deploymentMode !in deploymentModes || body.serviceMode !in serviceModes) {
+                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid deployment or service mode")
+                    return@post
+                }
+                val current = ProjectRepository.findBySlug(slug)
+                if (current == null) {
+                    call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
+                    return@post
+                }
+                val updated = ProjectRepository.update(
+                    slug = slug,
+                    name = null,
+                    domain = null,
+                    containerName = null,
+                    type = null,
+                    clientName = null,
+                    clientEmail = null,
+                    amountDue = null,
+                    currency = null,
+                    dueDate = null,
+                    gracePeriodDays = null,
+                    deploymentMode = body.deploymentMode,
+                    serviceMode = body.serviceMode,
+                    lifecycleStatus = "transferred"
+                ) ?: current
+                call.respond(updated.toResponse())
             }
 
             delete("/api/admin/projects/{slug}") {

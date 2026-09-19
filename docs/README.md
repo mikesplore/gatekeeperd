@@ -8,7 +8,7 @@ Gatekeeperd is a **Ktor-based payment gating engine** for client projects on a V
 - **Blocked / overdue** → `402 Payment Required` with HTML paywall (browser) or JSON (API clients)
 - **Payment via Paystack** → webhook activates the project; Redis cache invalidated instantly
 
-Project access status is separate from `blockReason`, which records why access is blocked (for example `manual`, `overdue`, or `payment_reversed`).
+Project access status is separate from `blockReason`, which records why access is blocked (for example `manual`, `overdue`, or `payment_reversed`). Projects also track `deploymentMode`, `serviceMode`, and `lifecycleStatus` independently so a project can move from developer-hosted development to client-hosted production without losing payment or audit history.
 
 PostgreSQL stores projects, payments, audit log, and admin users. Redis caches gate status (60s TTL). Paystack handles checkout and payment confirmation.
 
