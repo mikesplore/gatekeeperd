@@ -18,6 +18,8 @@ Admin login attempts are rate-limited through Redis by email and client IP: five
 
 Admin JWTs include a unique ID, are restricted to the `admin` role, and can be revoked through `POST /api/auth/logout` until their normal expiry.
 
+Health endpoints are separated into liveness (`/api/health/live`) and readiness (`/api/health/ready`). Readiness requires both PostgreSQL and Redis to be reachable.
+
 ---
 
 ## Architecture

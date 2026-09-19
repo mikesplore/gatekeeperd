@@ -29,6 +29,14 @@ object RedisService {
         }
     }
 
+    fun isHealthy(): Boolean {
+        return try {
+            pool?.resource?.use { jedis -> jedis.ping() == "PONG" } ?: false
+        } catch (_: Exception) {
+            false
+        }
+    }
+
     fun set(key: String, value: String, ttlSeconds: Int = 60) {
         pool?.resource?.use { jedis ->
             jedis.setex(key, ttlSeconds.toLong(), value)

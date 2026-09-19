@@ -57,6 +57,12 @@ Health check.
 }
 ```
 
+### GET /api/health/live
+Process liveness check. Returns `200 OK` when the application process is running.
+
+### GET /api/health/ready
+Dependency readiness check. Returns `200 OK` only when PostgreSQL and Redis are reachable; otherwise returns `503 Service Unavailable` with dependency booleans.
+
 ### GET /api/gate/check?project={slug}
 Gate check endpoint called by Traefik ForwardAuth. Never expose this to the public internet directly.
 

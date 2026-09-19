@@ -38,6 +38,16 @@ object DatabaseFactory {
             logger.info("Database connection pool closed")
         }
     }
+
+    fun isHealthy(): Boolean {
+        return try {
+            dataSource.connection.use { connection ->
+                connection.isValid(3)
+            }
+        } catch (_: Exception) {
+            false
+        }
+    }
 }
 
 fun Application.configureDatabase() {
