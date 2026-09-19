@@ -41,6 +41,14 @@ object RedisService {
         }
     }
 
+    fun incrementWithExpiry(key: String, ttlSeconds: Int): Long? {
+        return pool?.resource?.use { jedis ->
+            val count = jedis.incr(key)
+            if (count == 1L) jedis.expire(key, ttlSeconds.toLong())
+            count
+        }
+    }
+
     fun close() {
         pool?.close()
         logger.info("Redis connection pool closed")

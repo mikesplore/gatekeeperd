@@ -14,6 +14,8 @@ PostgreSQL stores projects, payments, audit log, and admin users. Redis caches g
 
 Database startup now records numbered migrations in `schema_migrations`. Fresh databases are created from `V0__baseline_schema.sql`, and existing databases receive subsequent numbered migrations. New schema changes should be added as files under `src/main/resources/db/migration/`; do not rely on implicit schema changes for new production behavior.
 
+Admin login attempts are rate-limited through Redis by email and client IP: five attempts per 15-minute window. If Redis is unavailable, login remains available and the outage is logged.
+
 ---
 
 ## Architecture
