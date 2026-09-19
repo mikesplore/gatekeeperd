@@ -45,7 +45,7 @@ import org.slf4j.LoggerFactory
 import java.math.BigDecimal
 
 private val logger = LoggerFactory.getLogger("com.gatekeeper.admin.ProjectAdminRoutes")
-private val json = Json { }
+private val json = Json.Default
 
 private class DockerServiceWizardInspect(private val dockerService: DockerService) : DockerWizardInspect {
     override fun imageExists(imageRef: String): Boolean = dockerService.imageExists(imageRef)
