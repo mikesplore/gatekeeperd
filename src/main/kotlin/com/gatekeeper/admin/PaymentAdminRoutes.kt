@@ -12,6 +12,7 @@ import io.ktor.server.auth.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import java.time.LocalDate
+import com.gatekeeper.plugins.Metrics
 
 fun Application.configurePaymentAdminRoutes() {
     routing {
@@ -33,6 +34,10 @@ fun Application.configurePaymentAdminRoutes() {
                         offset = offset
                     )
                 )
+            }
+
+            get("/api/admin/metrics") {
+                call.respond(Metrics.snapshot())
             }
 
             get("/api/admin/payment-events") {

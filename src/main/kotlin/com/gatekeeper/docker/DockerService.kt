@@ -15,6 +15,8 @@ import com.github.dockerjava.core.DefaultDockerClientConfig
 import com.github.dockerjava.core.DockerClientBuilder
 import com.github.dockerjava.core.DockerClientConfig
 import org.slf4j.LoggerFactory
+import com.gatekeeper.config.AppConfig
+import java.io.File
 import java.util.stream.Collectors
 
 private val logger = LoggerFactory.getLogger("com.gatekeeper.docker.DockerService")
@@ -174,6 +176,7 @@ class DockerService(dockerSocketPath: String) {
     }
 
     fun createContainer(request: CreateContainerRequest): ContainerInfo {
+        enforceSecurityPolicy(request)
         if (request.pullImage && !imageExists(request.image)) {
             val raw = request.image.trim()
             val repo = raw.substringBeforeLast(":", raw)
@@ -220,6 +223,25 @@ class DockerService(dockerSocketPath: String) {
         logger.info("Created and started container: ${request.name} (id: ${createResponse.id})")
         
         return getContainer(createResponse.id)!!
+    }
+
+    private fun enforceSecurityPolicy(request: CreateContainerRequest) {
+        val registries = AppConfig.dockerAllowedRegistries
+        if (registries.isNotEmpty()) {
+            val repository = request.image.substringBeforeLast(":").substringBefore("@")
+            val firstPart = repository.substringBefore('/')
+            val registry = if (firstPart.contains('.') || firstPart.contains(':') || firstPart == "localhost") firstPart else "docker.io"
+            require(registry.lowercase() in registries) { "Docker registry '$registry' is not allowed" }
+        }
+        val roots = AppConfig.dockerAllowedVolumeRoots.map { File(it).canonicalFile }
+        if (roots.isNotEmpty()) {
+            request.volumes.forEach { mount ->
+                val hostPath = File(mount.hostPath).canonicalFile
+                require(roots.any { hostPath == it || hostPath.toPath().startsWith(it.toPath()) }) {
+                    "Docker volume path '${mount.hostPath}' is outside the allowed volume roots"
+                }
+            }
+        }
     }
 
     fun deleteImage(image: String, tag: String = "latest", force: Boolean = true) {

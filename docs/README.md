@@ -20,6 +20,8 @@ Admin JWTs include a unique ID, are restricted to the `admin` role, and can be r
 
 Health endpoints are separated into liveness (`/api/health/live`) and readiness (`/api/health/ready`). Readiness requires both PostgreSQL and Redis to be reachable.
 
+Docker operations can be restricted with `DOCKER_ALLOWED_REGISTRIES` and `DOCKER_ALLOWED_VOLUME_ROOTS`. When configured, images and host bind mounts outside these allowlists are rejected.
+
 Every request receives an `X-Request-ID` response header. A valid incoming `X-Request-ID` is preserved; otherwise the service generates one. The ID is included in application logs for troubleshooting.
 
 ---

@@ -1024,3 +1024,5 @@ Common error codes:
 6. **Content types:** Frontend projects receive HTML paywalls. Backend/API projects receive JSON. Use the `type` field from the project to determine which format to expect.
 ### POST /api/auth/logout
 Revokes the current JWT until its natural expiry. The endpoint requires the current admin token.
+### GET /api/admin/metrics
+Returns in-process operational counters for authenticated administrators, including gate checks, fail-open/closed events, and webhook processing outcomes. Counters reset when the process restarts.

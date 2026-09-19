@@ -5,6 +5,9 @@ import org.slf4j.LoggerFactory
 import java.io.File
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
+import java.time.Instant
 
 private val logger = LoggerFactory.getLogger("com.gatekeeper.nginx.NginxService")
 
@@ -175,11 +178,29 @@ class NginxService(
         return try {
             val availableFile = File("$sitesAvailablePath/$slug")
             val enabledFile = File("$sitesEnabledPath/$slug")
+            availableFile.parentFile?.mkdirs()
+            enabledFile.parentFile?.mkdirs()
 
-            availableFile.writeText(configContent)
+            if (availableFile.exists()) {
+                val backup = File(availableFile.parent, "$slug.bak-${Instant.now().toEpochMilli()}")
+                Files.copy(availableFile.toPath(), backup.toPath(), StandardCopyOption.COPY_ATTRIBUTES)
+            }
+
+            val temporaryFile = File(availableFile.parent, ".$slug.tmp-${System.nanoTime()}")
+            Files.writeString(temporaryFile.toPath(), configContent)
+            try {
+                Files.move(
+                    temporaryFile.toPath(),
+                    availableFile.toPath(),
+                    StandardCopyOption.ATOMIC_MOVE,
+                    StandardCopyOption.REPLACE_EXISTING
+                )
+            } catch (_: java.nio.file.AtomicMoveNotSupportedException) {
+                Files.move(temporaryFile.toPath(), availableFile.toPath(), StandardCopyOption.REPLACE_EXISTING)
+            }
 
             if (enabledFile.exists()) {
-                enabledFile.delete()
+                Files.delete(enabledFile.toPath())
             }
 
             val result = Runtime.getRuntime().exec(

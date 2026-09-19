@@ -61,6 +61,10 @@ object AppConfig {
         .trim()
         .lowercase()
         .let { it == "true" || it == "1" || it == "yes" }
+    val dockerAllowedRegistries: List<String> = optionalSetting("DOCKER_ALLOWED_REGISTRIES", "")
+        .split(",").map { it.trim().lowercase() }.filter { it.isNotBlank() }
+    val dockerAllowedVolumeRoots: List<String> = optionalSetting("DOCKER_ALLOWED_VOLUME_ROOTS", "")
+        .split(",").map { it.trim() }.filter { it.isNotBlank() }
 
     // Nginx
     val nginxSitesAvailablePath: String = optionalSetting("NGINX_SITES_AVAILABLE", "/etc/nginx/sites-available")

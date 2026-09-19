@@ -12,6 +12,7 @@ import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import kotlinx.serialization.json.Json
 import org.slf4j.LoggerFactory
+import com.gatekeeper.plugins.Metrics
 import java.math.BigDecimal
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
@@ -22,6 +23,7 @@ private val json = Json { ignoreUnknownKeys = true }
 fun Application.configurePaystackWebhookRoutes() {
     routing {
         post("/api/paystack/webhook") {
+            Metrics.increment("webhook.received")
             val rawBody = try {
                 call.receiveText()
             } catch (e: Exception) {
@@ -80,6 +82,7 @@ fun Application.configurePaystackWebhookRoutes() {
                 paystackReference = reference
             )
             if (eventId == null) {
+                Metrics.increment("webhook.duplicate")
                 logger.info("Ignoring duplicate Paystack webhook event=$dedupeKey")
                 call.respond(HttpStatusCode.OK, mapOf("status" to "duplicate"))
                 return@post
@@ -119,7 +122,9 @@ fun Application.configurePaystackWebhookRoutes() {
                     }
                 }
                 PaymentEventRepository.markProcessed(eventId)
+                Metrics.increment("webhook.processed")
             } catch (e: Exception) {
+                Metrics.increment("webhook.failed")
                 logger.error("Error processing webhook ${event.event}, ref=$reference", e)
                 PaymentEventRepository.markFailed(eventId, e.message ?: "Webhook processing failed")
             }

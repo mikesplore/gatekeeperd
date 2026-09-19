@@ -6,6 +6,7 @@ import com.gatekeeper.db.repositories.ProjectRepository
 import com.gatekeeper.gate.PaywallInfo
 import com.gatekeeper.gate.GateResult
 import com.gatekeeper.plugins.RedisService
+import com.gatekeeper.plugins.Metrics
 import org.slf4j.LoggerFactory
 
 private val logger = LoggerFactory.getLogger("com.gatekeeper.gate.GateService")
@@ -24,6 +25,7 @@ object GateService {
         )
 
     fun check(slug: String): GateResult {
+        Metrics.increment("gate.check")
         try {
             val cached = RedisService.get("$REDIS_KEY_PREFIX$slug")
             if (cached != null) {
@@ -74,10 +76,12 @@ object GateService {
         logger.warn("Both Redis and Postgres unreachable for slug=$slug, applying FAIL_MODE=${AppConfig.failMode}")
         return when (AppConfig.failMode.lowercase()) {
             "open" -> {
+                Metrics.increment("gate.fail_open")
                 logger.error("CRITICAL: FAIL_MODE=open — allowing traffic for slug=$slug despite DB outage")
                 GateResult.Active
             }
             "closed" -> {
+                Metrics.increment("gate.fail_closed")
                 logger.error("CRITICAL: FAIL_MODE=closed — blocking traffic for slug=$slug due to DB outage")
                 GateResult.Blocked(type = "backend", paymentLink = null, projectName = slug, paywall = null)
             }
