@@ -4,6 +4,7 @@ import com.gatekeeper.api.InputValidators
 import com.gatekeeper.api.dto.*
 import com.gatekeeper.api.respondError
 import com.gatekeeper.db.repositories.PaymentRepository
+import com.gatekeeper.db.repositories.PaymentEventRepository
 import com.gatekeeper.db.repositories.ProjectRepository
 import io.ktor.http.*
 import io.ktor.server.application.*
@@ -31,6 +32,26 @@ fun Application.configurePaymentAdminRoutes() {
                         limit = limit,
                         offset = offset
                     )
+                )
+            }
+
+            get("/api/admin/payment-events") {
+                val status = call.request.queryParameters["status"]
+                val limit = call.request.queryParameters["limit"]?.toIntOrNull()?.coerceIn(1, 500) ?: 100
+                call.respond(
+                    PaymentEventRepository.findByStatus(status, limit).map { event ->
+                        PaymentEventAdminResponse(
+                            id = event.id.toString(),
+                            dedupeKey = event.dedupeKey,
+                            eventType = event.eventType,
+                            paystackReference = event.reference,
+                            processingStatus = event.processingStatus,
+                            processingAttempts = event.processingAttempts,
+                            processingError = event.processingError,
+                            receivedAt = event.receivedAt.toString(),
+                            processedAt = event.processedAt?.toString()
+                        )
+                    }
                 )
             }
 

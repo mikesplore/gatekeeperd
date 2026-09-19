@@ -12,7 +12,11 @@ object PaymentEvents : Table("payment_events") {
     val eventType = text("event_type")
     val paystackReference = text("paystack_reference").nullable()
     val rawPayload = text("raw_payload")
+    val processingStatus = text("processing_status").default("received")
+    val processingAttempts = integer("processing_attempts").default(0)
+    val processingError = text("processing_error").nullable()
     val receivedAt = datetime("received_at").defaultExpression(CurrentDateTime)
+    val processedAt = datetime("processed_at").nullable()
 
     override val primaryKey = PrimaryKey(id)
 }

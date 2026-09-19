@@ -89,6 +89,19 @@ data class RevenueReportResponse(
 )
 
 @Serializable
+data class PaymentEventAdminResponse(
+    val id: String,
+    val dedupeKey: String? = null,
+    val eventType: String,
+    val paystackReference: String? = null,
+    val processingStatus: String,
+    val processingAttempts: Int,
+    val processingError: String? = null,
+    val receivedAt: String,
+    val processedAt: String? = null
+)
+
+@Serializable
 data class AuditLogResponse(
     val id: String,
     val projectId: String? = null,

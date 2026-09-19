@@ -71,7 +71,7 @@ fun Application.configurePaystackWebhookRoutes() {
             val projectId = resolveProjectId(projectSlug, reference)
             val paymentId = PaymentRepository.findByReference(reference)?.id
 
-            val recorded = PaymentEventRepository.recordIfNew(
+            val eventId = PaymentEventRepository.recordIfNew(
                 dedupeKey = dedupeKey,
                 eventType = event.event,
                 rawPayload = rawBody,
@@ -79,7 +79,7 @@ fun Application.configurePaystackWebhookRoutes() {
                 paymentId = paymentId,
                 paystackReference = reference
             )
-            if (!recorded) {
+            if (eventId == null) {
                 logger.info("Ignoring duplicate Paystack webhook event=$dedupeKey")
                 call.respond(HttpStatusCode.OK, mapOf("status" to "duplicate"))
                 return@post
@@ -93,7 +93,7 @@ fun Application.configurePaystackWebhookRoutes() {
                         } else if (projectSlug.isNullOrBlank()) {
                             logger.warn("charge.success missing project_slug, ref=$reference")
                         } else {
-                            PaymentService.applySuccessfulPayment(
+                            val applied = PaymentService.applySuccessfulPayment(
                                 reference = reference,
                                 projectSlug = projectSlug,
                                 amountNaira = koboToNaira(data.amount),
@@ -101,6 +101,11 @@ fun Application.configurePaystackWebhookRoutes() {
                                 verifiedVia = "webhook",
                                 rawPayload = rawBody
                             )
+                            if (!applied) {
+                                PaymentEventRepository.markFailed(eventId, "Payment integrity checks failed")
+                                call.respond(HttpStatusCode.OK, mapOf("status" to "rejected"))
+                                return@post
+                            }
                         }
                     }
                     "charge.failed" -> {
@@ -113,8 +118,10 @@ fun Application.configurePaystackWebhookRoutes() {
                         logger.info("Webhook event recorded, no handler: ${event.event}, ref=$reference")
                     }
                 }
+                PaymentEventRepository.markProcessed(eventId)
             } catch (e: Exception) {
                 logger.error("Error processing webhook ${event.event}, ref=$reference", e)
+                PaymentEventRepository.markFailed(eventId, e.message ?: "Webhook processing failed")
             }
 
             call.respond(HttpStatusCode.OK, mapOf("status" to "ok"))

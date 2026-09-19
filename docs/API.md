@@ -944,6 +944,8 @@ Paystack webhook handler. Verifies HMAC-SHA512 signature via `x-paystack-signatu
 **Notes:**
 - Handles `charge.success`, `charge.failed`, `charge.reversed`, and `transfer.reversed`.
 - Every webhook is logged to `payment_events` before business logic runs.
+- Webhook events track `received`, `processed`, or `failed` processing status, attempt count, error text, and processing timestamps.
+- Administrators can inspect recent events with `GET /api/admin/payment-events?status=failed`.
 - On `charge.success`: marks payment success, clears the project's `due_date`, activates project, writes audit log, invalidates Redis cache.
 - On `charge.failed`: records failure; does **not** change project status.
 - On reversal: re-blocks the project if the reversed payment had been successful and restores `due_date` to the reversal day.
