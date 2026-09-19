@@ -7,6 +7,7 @@ import org.slf4j.LoggerFactory
 import java.math.BigDecimal
 import java.time.LocalDate
 import java.time.LocalDateTime
+import com.gatekeeper.integrations.ScribedIntegrationClient
 
 object PaymentApplicationService {
     private val logger = LoggerFactory.getLogger("com.gatekeeper.payments.PaymentApplicationService")
@@ -45,6 +46,7 @@ object PaymentApplicationService {
         ProjectRepository.setStatusAndClearDueDate(project.id, "active")
         AuditRepository.write(project.id, "payment_received", "system", "Payment ref=$reference provider=$provider verified via $verifiedVia")
         ProjectRepository.invalidateCache(project.slug)
+        ScribedIntegrationClient.notifyPayment(project, provider.name.lowercase(), reference, amount.toPlainString(), currency ?: project.currency, paidAt.toString())
         logger.info("Payment applied: provider=$provider project=$projectSlug ref=$reference")
         return true
     }
