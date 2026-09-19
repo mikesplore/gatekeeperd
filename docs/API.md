@@ -447,6 +447,8 @@ Active projects past their due date, sorted by days overdue descending (JWT requ
 
 Returns the live `sites-available/{slug}` file as text, file metadata, enabled-link state, and parsed `server`/`location` blocks. This is the primary inspection endpoint for diagnosing Nginx without SSH.
 
+The response also includes SHA-256 fingerprints and `drifted`. Drift is true when the live file differs from the last configuration successfully applied or rolled back through Gatekeeperd.
+
 ### GET /api/admin/nginx/diagnostics
 
 Runs `nginx -t` on the host and returns the exit code, timestamp, validity, and complete command output.
@@ -460,6 +462,8 @@ Runs `nginx -t` on the host and returns the exit code, timestamp, validity, and 
 `POST /api/admin/nginx/config/{slug}/blocks/{index}/apply` replaces only the selected block, runs `nginx -t`, reloads Nginx, and restores the previous file if validation or reload fails.
 
 `GET /api/admin/nginx/config/{slug}/versions` lists available configuration backups. `POST /api/admin/nginx/config/{slug}/rollback/{backup}` restores a selected backup, validates it, reloads Nginx, and restores the current version if anything fails.
+
+Successful block updates and rollbacks are recorded in the project audit log.
 
 These endpoints manage nginx site configurations for client projects. They require `nginx` CLI and `systemctl` access on the host.
 

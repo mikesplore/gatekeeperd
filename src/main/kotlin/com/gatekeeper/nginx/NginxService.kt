@@ -12,6 +12,7 @@ import java.security.cert.CertificateFactory
 import java.io.ByteArrayInputStream
 import java.time.ZoneOffset
 import java.time.OffsetDateTime
+import java.security.MessageDigest
 
 private val logger = LoggerFactory.getLogger("com.gatekeeper.nginx.NginxService")
 
@@ -32,6 +33,9 @@ class NginxService(
         val availableFile = File(sitesAvailablePath, slug)
         val enabledFile = File(sitesEnabledPath, slug)
         val content = availableFile.takeIf { it.isFile }?.readText()
+        val actualHash = content?.let(::sha256)
+        val hashFile = File(sitesAvailablePath, ".$slug.gatekeeperd.sha256")
+        val managedHash = hashFile.takeIf { it.isFile }?.readText()?.trim()
         return NginxConfigInspection(
             slug = slug,
             configPath = availableFile.absolutePath,
@@ -43,7 +47,18 @@ class NginxService(
             blocks = content?.let(::extractBlocks).orEmpty(),
             modifiedAt = availableFile.takeIf { it.exists() }?.let { Instant.ofEpochMilli(it.lastModified()).toString() },
             sizeBytes = availableFile.takeIf { it.exists() }?.length()
+            ,managed = managedHash != null,
+            drifted = managedHash != null && actualHash != managedHash,
+            actualSha256 = actualHash,
+            managedSha256 = managedHash
         )
+    }
+
+    private fun sha256(value: String): String = MessageDigest.getInstance("SHA-256")
+        .digest(value.toByteArray()).joinToString("") { "%02x".format(it) }
+
+    private fun recordManagedVersion(slug: String, content: String) {
+        Files.writeString(File(sitesAvailablePath, ".$slug.gatekeeperd.sha256").toPath(), sha256(content))
     }
 
     private fun extractBlocks(content: String): List<NginxConfigBlock> {
@@ -98,6 +113,7 @@ class NginxService(
             reloadNginx()
             return NginxBlockUpdateResponse(false, "Nginx reload failed; previous configuration restored", current, blockIndex, validation)
         }
+        recordManagedVersion(slug, proposed)
         return NginxBlockUpdateResponse(true, "Nginx block updated and reloaded successfully", proposed, blockIndex, validation, true)
     }
 
@@ -127,6 +143,7 @@ class NginxService(
             reloadNginx()
             return NginxRollbackResponse(false, "Rollback reload failed; previous configuration restored", validation)
         }
+        recordManagedVersion(slug, target.readText())
         return NginxRollbackResponse(true, "Configuration rolled back and Nginx reloaded successfully", validation, true)
     }
 

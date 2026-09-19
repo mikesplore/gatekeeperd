@@ -19,6 +19,7 @@ import com.gatekeeper.nginx.extractConfiguredContainerName
 import com.gatekeeper.nginx.extractConfiguredPort
 import com.gatekeeper.nginx.parsePublishedHostPorts
 import com.gatekeeper.db.repositories.ProjectRepository
+import com.gatekeeper.db.repositories.AuditRepository
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.Application
 import io.ktor.server.auth.authenticate
@@ -463,6 +464,9 @@ fun Application.configureNginxAdminRoutes() {
                 val body = runCatching { call.receive<NginxBlockUpdateRequest>() }.getOrElse { call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid block update body"); return@post }
                 val result = runCatching { nginxService.applyBlockUpdate(slug, index, body.content) }.getOrElse { call.respondError(HttpStatusCode.BadRequest, "invalid_block", it.message ?: "Unable to apply block"); return@post }
                 if (!result.success) call.respond(HttpStatusCode.UnprocessableEntity, result) else call.respond(result)
+                if (result.success) ProjectRepository.findBySlug(slug)?.let { project ->
+                    AuditRepository.write(project.id, "nginx_block_updated", "admin", "Applied Nginx block $index for $slug")
+                }
             }
 
             get("/api/admin/nginx/config/{slug}/versions") {
@@ -478,6 +482,9 @@ fun Application.configureNginxAdminRoutes() {
                 if (slug.isNullOrBlank() || backup.isNullOrBlank()) { call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Slug and backup name are required"); return@post }
                 val result = runCatching { nginxService.rollback(slug, backup) }.getOrElse { call.respondError(HttpStatusCode.BadRequest, "rollback_failed", it.message ?: "Unable to roll back configuration"); return@post }
                 if (!result.success) call.respond(HttpStatusCode.UnprocessableEntity, result) else call.respond(result)
+                if (result.success) ProjectRepository.findBySlug(slug)?.let { project ->
+                    AuditRepository.write(project.id, "nginx_rollback", "admin", "Rolled back Nginx configuration to $backup")
+                }
             }
 
             post("/api/admin/nginx/enable/{slug}") {
