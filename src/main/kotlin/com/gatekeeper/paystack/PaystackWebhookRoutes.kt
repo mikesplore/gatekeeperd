@@ -71,7 +71,7 @@ fun Application.configurePaystackWebhookRoutes() {
             val projectId = resolveProjectId(projectSlug, reference)
             val paymentId = PaymentRepository.findByReference(reference)?.id
 
-            PaymentEventRepository.record(
+            val recorded = PaymentEventRepository.recordIfNew(
                 dedupeKey = dedupeKey,
                 eventType = event.event,
                 rawPayload = rawBody,
@@ -79,6 +79,11 @@ fun Application.configurePaystackWebhookRoutes() {
                 paymentId = paymentId,
                 paystackReference = reference
             )
+            if (!recorded) {
+                logger.info("Ignoring duplicate Paystack webhook event=$dedupeKey")
+                call.respond(HttpStatusCode.OK, mapOf("status" to "duplicate"))
+                return@post
+            }
 
             try {
                 when (event.event) {

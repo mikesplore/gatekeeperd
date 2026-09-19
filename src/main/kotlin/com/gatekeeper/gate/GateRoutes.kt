@@ -4,12 +4,14 @@ import com.gatekeeper.api.InputValidators
 import com.gatekeeper.api.respondError
 import com.gatekeeper.db.repositories.ProjectRepository
 import com.gatekeeper.paystack.PaystackClient
+import com.gatekeeper.paystack.PaymentService
 import com.gatekeeper.paystack.ProjectPaymentService
 import io.ktor.http.*
 import io.ktor.server.application.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import org.slf4j.LoggerFactory
+import java.math.BigDecimal
 
 private val logger = LoggerFactory.getLogger("com.gatekeeper.gate.GateRoutes")
 
@@ -146,12 +148,22 @@ fun Application.configureGateRoutes() {
                 return@get
             }
 
-            val verified = PaystackClient.verifyTransaction(reference)
-                .map { it.status.equals("success", ignoreCase = true) }
-                .getOrDefault(false)
+            val verification = PaystackClient.verifyTransaction(reference).getOrNull()
+            val verified = verification?.status?.equals("success", ignoreCase = true) == true
 
-            if (verified) {
-                logger.info("Payment callback verified for ${project.slug}, ref=$reference")
+            if (verified && verification.reference == reference) {
+                val applied = PaymentService.applySuccessfulPayment(
+                    reference = reference,
+                    projectSlug = project.slug,
+                    amountNaira = BigDecimal.valueOf(verification.amount ?: 0L).movePointLeft(2),
+                    currency = verification.currency,
+                    verifiedVia = "callback"
+                )
+                if (applied) {
+                    logger.info("Payment callback verified and applied for ${project.slug}, ref=$reference")
+                } else {
+                    logger.warn("Payment callback verified but failed integrity checks for ${project.slug}, ref=$reference")
+                }
             } else {
                 logger.warn("Payment callback could not be verified for ${project.slug}, ref=$reference")
             }

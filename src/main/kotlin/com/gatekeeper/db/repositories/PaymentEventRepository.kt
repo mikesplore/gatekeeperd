@@ -18,23 +18,29 @@ object PaymentEventRepository {
         }
     }
 
-    fun record(
+    fun recordIfNew(
         dedupeKey: String,
         eventType: String,
         rawPayload: String,
         projectId: UUID?,
         paymentId: UUID?,
         paystackReference: String?
-    ) {
-        transaction {
-            PaymentEvents.insert {
-                it[PaymentEvents.dedupeKey] = dedupeKey
-                it[PaymentEvents.eventType] = eventType
-                it[PaymentEvents.rawPayload] = rawPayload
-                it[PaymentEvents.projectId] = projectId
-                it[PaymentEvents.paymentId] = paymentId
-                it[PaymentEvents.paystackReference] = paystackReference
+    ): Boolean {
+        return try {
+            transaction {
+                PaymentEvents.insert {
+                    it[PaymentEvents.dedupeKey] = dedupeKey
+                    it[PaymentEvents.eventType] = eventType
+                    it[PaymentEvents.rawPayload] = rawPayload
+                    it[PaymentEvents.projectId] = projectId
+                    it[PaymentEvents.paymentId] = paymentId
+                    it[PaymentEvents.paystackReference] = paystackReference
+                }
             }
+            true
+        } catch (_: Exception) {
+            // A unique-key conflict means another request recorded this event first.
+            false
         }
     }
 }
