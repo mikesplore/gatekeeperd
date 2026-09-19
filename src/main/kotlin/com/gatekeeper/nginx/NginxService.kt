@@ -71,6 +71,36 @@ class NginxService(
         }
     }
 
+    fun previewBlockUpdate(slug: String, blockIndex: Int, replacement: String): String {
+        val current = inspectSite(slug)
+        require(current.available) { "Nginx site '$slug' does not exist" }
+        require(blockIndex in current.blocks.indices) { "Block index $blockIndex is out of range" }
+        val block = current.blocks[blockIndex]
+        val start = current.content!!.indexOf(block.content)
+        require(start >= 0) { "Could not locate selected block in the live configuration" }
+        return current.content.replaceRange(start, start + block.content.length, replacement)
+    }
+
+    fun applyBlockUpdate(slug: String, blockIndex: Int, replacement: String): NginxBlockUpdateResponse {
+        val file = File(sitesAvailablePath, slug)
+        val proposed = previewBlockUpdate(slug, blockIndex, replacement)
+        val current = file.readText()
+        val backup = File(file.parentFile, "$slug.bak-${Instant.now().toEpochMilli()}")
+        Files.copy(file.toPath(), backup.toPath(), StandardCopyOption.REPLACE_EXISTING)
+        Files.writeString(file.toPath(), proposed)
+        val validation = testNginxConfigDetailed()
+        if (!validation.valid) {
+            Files.copy(backup.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING)
+            return NginxBlockUpdateResponse(false, "Nginx validation failed; previous configuration restored", current, blockIndex, validation)
+        }
+        if (!reloadNginx()) {
+            Files.copy(backup.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING)
+            reloadNginx()
+            return NginxBlockUpdateResponse(false, "Nginx reload failed; previous configuration restored", current, blockIndex, validation)
+        }
+        return NginxBlockUpdateResponse(true, "Nginx block updated and reloaded successfully", proposed, blockIndex, validation, true)
+    }
+
     fun certificateExpiry(domain: String): Pair<String, Long>? {
         return try {
             val certFile = File("$sslCertPath/$domain/fullchain.pem")

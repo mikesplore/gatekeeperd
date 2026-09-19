@@ -13,6 +13,7 @@ import com.gatekeeper.nginx.NginxStatusResponse
 import com.gatekeeper.nginx.NginxService
 import com.gatekeeper.nginx.NginxConfigInspection
 import com.gatekeeper.nginx.NginxTestResult
+import com.gatekeeper.nginx.NginxBlockUpdateRequest
 import com.gatekeeper.nginx.ResolvedCertificate
 import com.gatekeeper.nginx.extractConfiguredContainerName
 import com.gatekeeper.nginx.extractConfiguredPort
@@ -438,6 +439,30 @@ fun Application.configureNginxAdminRoutes() {
 
             post("/api/admin/nginx/test") {
                 call.respond(nginxService.testNginxConfigDetailed())
+            }
+
+            post("/api/admin/nginx/config/{slug}/blocks/{index}/preview") {
+                val slug = call.parameters["slug"]
+                val index = call.parameters["index"]?.toIntOrNull()
+                if (slug.isNullOrBlank() || index == null) {
+                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "A valid slug and block index are required")
+                    return@post
+                }
+                val body = runCatching { call.receive<NginxBlockUpdateRequest>() }.getOrElse { call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid block update body"); return@post }
+                val preview = runCatching { nginxService.previewBlockUpdate(slug, index, body.content) }.getOrElse { call.respondError(HttpStatusCode.BadRequest, "invalid_block", it.message ?: "Unable to preview block"); return@post }
+                call.respond(mapOf("slug" to slug, "blockIndex" to index, "config" to preview))
+            }
+
+            post("/api/admin/nginx/config/{slug}/blocks/{index}/apply") {
+                val slug = call.parameters["slug"]
+                val index = call.parameters["index"]?.toIntOrNull()
+                if (slug.isNullOrBlank() || index == null) {
+                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "A valid slug and block index are required")
+                    return@post
+                }
+                val body = runCatching { call.receive<NginxBlockUpdateRequest>() }.getOrElse { call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid block update body"); return@post }
+                val result = runCatching { nginxService.applyBlockUpdate(slug, index, body.content) }.getOrElse { call.respondError(HttpStatusCode.BadRequest, "invalid_block", it.message ?: "Unable to apply block"); return@post }
+                if (!result.success) call.respond(HttpStatusCode.UnprocessableEntity, result) else call.respond(result)
             }
 
             post("/api/admin/nginx/enable/{slug}") {

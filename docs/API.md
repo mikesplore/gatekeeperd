@@ -453,6 +453,12 @@ Runs `nginx -t` on the host and returns the exit code, timestamp, validity, and 
 
 `POST /api/admin/nginx/test` performs the same validation on demand.
 
+### Block preview and apply
+
+`POST /api/admin/nginx/config/{slug}/blocks/{index}/preview` returns the complete proposed file without writing it. The request body is `{ "blockIndex": 0, "content": "..." }`.
+
+`POST /api/admin/nginx/config/{slug}/blocks/{index}/apply` replaces only the selected block, runs `nginx -t`, reloads Nginx, and restores the previous file if validation or reload fails.
+
 These endpoints manage nginx site configurations for client projects. They require `nginx` CLI and `systemctl` access on the host.
 
 ### GET /api/admin/nginx/wizard/context/{slug}
