@@ -20,7 +20,9 @@ data class NginxStatusResponse(
     val port: Int? = null,
     val sslEnabled: Boolean,
     val certificateDomain: String? = null,
-    val domain: String? = null
+    val domain: String? = null,
+    val certificateExpiresAt: String? = null,
+    val certificateDaysRemaining: Long? = null
 )
 
 @Serializable

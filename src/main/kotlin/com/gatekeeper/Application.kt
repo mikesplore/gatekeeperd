@@ -4,6 +4,7 @@ import com.gatekeeper.api.InputValidators
 import com.gatekeeper.admin.configureNginxAdminRoutes
 import com.gatekeeper.admin.configurePaymentAdminRoutes
 import com.gatekeeper.admin.configureProjectAdminRoutes
+import com.gatekeeper.admin.configureOperationsAdminRoutes
 import com.gatekeeper.auth.configureAuthRoutes
 import com.gatekeeper.config.AppConfig
 import com.gatekeeper.db.tables.Users
@@ -50,6 +51,7 @@ fun Application.module() {
     configureGateRoutes()
     configureAuthRoutes()
     configureProjectAdminRoutes()
+    configureOperationsAdminRoutes()
     configurePaymentAdminRoutes()
     configureNginxAdminRoutes()
     configurePaystackWebhookRoutes()

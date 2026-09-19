@@ -89,6 +89,8 @@ Phase 3 implementation status: complete for backend-owned controls. This include
 
 Make the existing system easier to operate without direct database or server-shell access.
 
+Phase 4 backend coverage is complete: project health aggregation, payment/webhook troubleshooting, audit filtering and CSV export, bulk block/unblock, failed-webhook replay, nginx preview/status/rollback, certificate presence and expiry warnings, container health, deployment/lifecycle status, and operational metrics are available through authenticated admin APIs. A dashboard UI can consume these APIs as a separate presentation layer.
+
 - Project health dashboard
 - Payment and webhook troubleshooting
 - Audit filtering and export

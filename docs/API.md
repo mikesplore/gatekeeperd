@@ -1031,3 +1031,11 @@ Changes the authenticated admin password. Requires `currentPassword` and a `newP
 Returns in-process operational counters for authenticated administrators, including gate checks, fail-open/closed events, and webhook processing outcomes. Counters reset when the process restarts.
 
 `POST /api/admin/nginx/rollback/{slug}` restores the most recent backed-up nginx site configuration, validates it, and reloads nginx.
+
+### Phase 4 operator endpoints
+
+- `GET /api/admin/projects/{slug}/health` — aggregated project, container, nginx, certificate, and readiness status.
+- `POST /api/admin/projects/bulk/block` and `/bulk/unblock` — apply access changes to multiple projects.
+- `GET /api/admin/audit/export?action=...&actor=...` — filtered CSV audit export.
+- `POST /api/admin/payment-events/{id}/replay` — replay a stored failed webhook through the idempotent payment handlers.
+- nginx status responses include certificate expiry timestamp and remaining days when the certificate can be parsed.

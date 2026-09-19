@@ -8,6 +8,9 @@ import java.net.Socket
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.time.Instant
+import java.security.cert.CertificateFactory
+import java.io.ByteArrayInputStream
+import java.time.ZoneOffset
 
 private val logger = LoggerFactory.getLogger("com.gatekeeper.nginx.NginxService")
 
@@ -23,6 +26,20 @@ class NginxService(
     private val gatekeeperPort: Int = 8080,
     private val sslCertPath: String = AppConfig.nginxSslCertPath
 ) {
+    fun certificateExpiry(domain: String): Pair<String, Long>? {
+        return try {
+            val certFile = File("$sslCertPath/$domain/fullchain.pem")
+            if (!certFile.exists()) return null
+            val pem = certFile.readBytes()
+            val certificate = CertificateFactory.getInstance("X.509")
+                .generateCertificate(ByteArrayInputStream(pem)) as java.security.cert.X509Certificate
+            val expiry = certificate.notAfter.toInstant().atOffset(ZoneOffset.UTC).toString()
+            val days = java.time.Duration.between(Instant.now(), certificate.notAfter.toInstant()).toDays()
+            expiry to days
+        } catch (_: Exception) {
+            null
+        }
+    }
 
     init {
         logger.info("NginxService initialized with sites-available: $sitesAvailablePath, sites-enabled: $sitesEnabledPath")

@@ -20,6 +20,36 @@ import javax.crypto.spec.SecretKeySpec
 private val logger = LoggerFactory.getLogger("com.gatekeeper.paystack.PaystackWebhookRoutes")
 private val json = Json { ignoreUnknownKeys = true }
 
+suspend fun replayPaystackWebhook(rawBody: String): Boolean {
+    val event = runCatching { json.decodeFromString<PaystackWebhookPayload>(rawBody) }.getOrNull() ?: return false
+    val data = event.data
+    return runCatching {
+        when (event.event) {
+            "charge.success" -> {
+                val slug = data.metadata["project_slug"] ?: return@runCatching false
+                if (!data.status.equals("success", ignoreCase = true)) return@runCatching false
+                PaymentService.applySuccessfulPayment(
+                    reference = data.reference,
+                    projectSlug = slug,
+                    amountNaira = koboToNaira(data.amount),
+                    currency = data.currency,
+                    verifiedVia = "admin_replay",
+                    rawPayload = rawBody
+                )
+            }
+            "charge.failed" -> {
+                PaymentService.handleChargeFailed(data.reference, data.metadata["project_slug"], rawBody)
+                true
+            }
+            "transfer.reversed", "charge.reversed" -> {
+                PaymentService.handleReversal(data.reference)
+                true
+            }
+            else -> false
+        }
+    }.getOrDefault(false)
+}
+
 fun Application.configurePaystackWebhookRoutes() {
     routing {
         post("/api/paystack/webhook") {

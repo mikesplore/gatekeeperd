@@ -45,6 +45,17 @@ object AuditRepository {
         }
     }
 
+    fun findFiltered(action: String?, actor: String?, limit: Int = 1000): List<AuditRecord> {
+        return transaction {
+            val query = AuditLog.selectAll()
+            action?.takeIf { it.isNotBlank() }?.let { value -> query.andWhere { AuditLog.action eq value } }
+            actor?.takeIf { it.isNotBlank() }?.let { value -> query.andWhere { AuditLog.actor eq value } }
+            query.orderBy(AuditLog.createdAt, SortOrder.DESC)
+                .limit(limit.coerceIn(1, 5000))
+                .map { it.toAuditRecord() }
+        }
+    }
+
     private fun org.jetbrains.exposed.sql.ResultRow.toAuditRecord() = AuditRecord(
         id = this[AuditLog.id],
         projectId = this[AuditLog.projectId],

@@ -7,6 +7,13 @@ import java.time.LocalDateTime
 import java.util.*
 
 object PaymentEventRepository {
+    data class ReplayEvent(val id: UUID, val rawPayload: String, val processingStatus: String)
+
+    fun findForReplay(id: UUID): ReplayEvent? = transaction {
+        PaymentEvents.selectAll().where { PaymentEvents.id eq id }.singleOrNull()?.let {
+            ReplayEvent(it[PaymentEvents.id], it[PaymentEvents.rawPayload], it[PaymentEvents.processingStatus])
+        }
+    }
 
     data class PaymentEventRecord(
         val id: UUID,

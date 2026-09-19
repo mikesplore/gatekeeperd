@@ -298,6 +298,7 @@ fun Application.configureNginxAdminRoutes() {
 
                 val installedCerts = nginxService.listInstalledCertificates().map { it.certificateDomain }.sorted()
                 val resolvedCert = nginxService.resolveCertificateForDomain(project.domain)
+                val expiry = nginxService.certificateExpiry(resolvedCert?.certificateDomain ?: project.domain)
 
                 call.respond(
                     NginxWizardContextResponse(
@@ -399,6 +400,7 @@ fun Application.configureNginxAdminRoutes() {
                 }
 
                 val resolvedCert = nginxService.resolveCertificateForDomain(project.domain)
+                val expiry = nginxService.certificateExpiry(resolvedCert?.certificateDomain ?: project.domain)
 
                 call.respond(
                     NginxStatusResponse(
@@ -408,7 +410,9 @@ fun Application.configureNginxAdminRoutes() {
                         port = extractConfiguredPort(project.containerName),
                         sslEnabled = resolvedCert != null,
                         certificateDomain = resolvedCert?.certificateDomain,
-                        domain = project.domain
+                        domain = project.domain,
+                        certificateExpiresAt = expiry?.first,
+                        certificateDaysRemaining = expiry?.second
                     )
                 )
             }
