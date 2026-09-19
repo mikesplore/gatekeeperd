@@ -7,6 +7,7 @@ import org.slf4j.LoggerFactory
 import java.math.BigDecimal
 import java.time.LocalDate
 import java.time.LocalDateTime
+import com.gatekeeper.integrations.ScribedIntegrationClient
 
 object PaymentService {
 
@@ -158,6 +159,7 @@ object PaymentService {
                 reason = "Payment reversed (ref=$reference)"
             )
             ProjectRepository.invalidateCache(project.slug)
+            ScribedIntegrationClient.notifySuspension(project.copy(status = "blocked", blockReason = "payment_reversed"), "payment_reversed")
             logger.warn("Project re-blocked due to payment reversal: ${project.slug}, ref=$reference")
         }
     }

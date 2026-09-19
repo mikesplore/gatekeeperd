@@ -208,6 +208,8 @@ Copy [.env.example](../.env.example) to `.env`. Required vars have no safe defau
 | `MPESA_ENVIRONMENT` | Payments | `sandbox` or `production` |
 | `MPESA_CALLBACK_URL` | Payments | Public `/api/mpesa/callback` URL |
 | `GATEKEEPER_PUBLIC_URL` | Payments | Public HTTPS base URL, e.g. `https://gateapi.example.com` |
+| `SCRIBED_CALLBACK_URL` | Integrations | Scribed base URL for suspension callbacks |
+| `SCRIBED_INTEGRATION_SECRET` | Integrations | Shared `X-Gatekeeper-Secret` value |
 | `SUPPORT_CONTACT_EMAIL` | No | Shown on paywall pages |
 | `CORS_ALLOWED_ORIGINS` | No | Comma-separated admin dashboard origins |
 | `DOCKER_SOCKET` | No | Default `unix:///var/run/docker.sock` |
