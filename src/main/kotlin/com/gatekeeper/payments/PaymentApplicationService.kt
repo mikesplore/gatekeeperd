@@ -26,13 +26,10 @@ object PaymentApplicationService {
         if (existing != null && existing.gatewayStatus == "success") return false
         val project = ProjectRepository.findBySlug(projectSlug) ?: return false
         if (existing != null && existing.projectId != project.id) return false
-        val amountDue = project.amountDue ?: return false
         if (amount <= BigDecimal.ZERO) return false
         if (!currency.isNullOrBlank() && !currency.equals(project.currency, ignoreCase = true)) return false
-        val alreadyPaid = PaymentRepository.successfulAmountForProject(project.id) -
-            if (existing?.gatewayStatus == "success") existing.amount else BigDecimal.ZERO
-        val remaining = amountDue - alreadyPaid
-        if (amount > remaining) return false
+        val remaining = ProjectBalanceService.outstandingBalance(project)
+        if (remaining <= BigDecimal.ZERO || amount > remaining) return false
 
         if (existing == null) {
             PaymentRepository.create(
@@ -49,11 +46,11 @@ object PaymentApplicationService {
             PaymentRepository.updateAmountByProviderReference(provider, reference, amount)
         }
         PaymentRepository.markGatewayStatusByProviderReference(provider, reference, "success", verifiedVia, paidAt)
-        val totalPaid = alreadyPaid + amount
-        if (totalPaid >= amountDue) {
+        val remainingAfterPayment = remaining - amount
+        if (remainingAfterPayment <= BigDecimal.ZERO) {
             ProjectRepository.setStatusAndClearDueDate(project.id, "active")
         }
-        AuditRepository.write(project.id, "payment_received", actor, "Payment ref=$reference provider=$provider amount=$amount totalPaid=$totalPaid/$amountDue verified via $verifiedVia")
+        AuditRepository.write(project.id, "payment_received", actor, "Payment ref=$reference provider=$provider amount=$amount remaining=$remainingAfterPayment verified via $verifiedVia")
         ProjectRepository.invalidateCache(project.slug)
         ScribedIntegrationClient.notifyPayment(project, provider.name.lowercase(), reference, amount.toPlainString(), currency ?: project.currency, paidAt.toString())
         logger.info("Payment applied: provider=$provider project=$projectSlug ref=$reference")

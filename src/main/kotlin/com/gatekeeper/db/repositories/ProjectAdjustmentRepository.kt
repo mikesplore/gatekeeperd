@@ -9,6 +9,7 @@ import org.jetbrains.exposed.sql.insert
 import org.jetbrains.exposed.sql.select
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
 import org.jetbrains.exposed.sql.transactions.transaction
+import org.jetbrains.exposed.sql.and
 
 object ProjectAdjustmentRepository {
     data class AdjustmentRecord(
@@ -37,6 +38,13 @@ object ProjectAdjustmentRepository {
             }
             ProjectAdjustments.select(ProjectAdjustments.columns).where { ProjectAdjustments.id eq id }.single().toRecord()
         }
+    }
+
+    fun totalForProject(projectId: UUID, type: AdjustmentType): BigDecimal = transaction {
+        ProjectAdjustments
+            .select(ProjectAdjustments.amount)
+            .where { (ProjectAdjustments.projectId eq projectId) and (ProjectAdjustments.type eq type) }
+            .fold(BigDecimal.ZERO) { total, row -> total + row[ProjectAdjustments.amount] }
     }
 
     private fun org.jetbrains.exposed.sql.ResultRow.toRecord() = AdjustmentRecord(

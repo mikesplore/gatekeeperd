@@ -2,6 +2,7 @@ package com.gatekeeper.paystack
 
 import com.gatekeeper.config.AppConfig
 import com.gatekeeper.db.repositories.ProjectRepository
+import com.gatekeeper.payments.ProjectBalanceService
 
 object ProjectPaymentService {
 
@@ -20,8 +21,8 @@ object ProjectPaymentService {
             return Result.failure(IllegalStateException("No client email configured for this project"))
         }
 
-        val amount = project.amountDue
-            ?: return Result.failure(IllegalStateException("No amount due configured for this project"))
+        val amount = runCatching { ProjectBalanceService.requireOutstandingBalance(project) }
+            .getOrElse { return Result.failure(it) }
 
         val publicBase = AppConfig.publicBaseUrl.trim().trimEnd('/')
         if (publicBase.isBlank()) {

@@ -8,6 +8,7 @@ import java.math.BigDecimal
 import java.time.LocalDate
 import java.time.LocalDateTime
 import com.gatekeeper.integrations.ScribedIntegrationClient
+import com.gatekeeper.payments.ProjectBalanceService
 
 object PaymentService {
 
@@ -46,7 +47,13 @@ object PaymentService {
             return false
         }
 
-        val expectedAmount = existing?.amount ?: project.amountDue
+        val outstanding = ProjectBalanceService.outstandingBalance(project)
+        if (outstanding <= BigDecimal.ZERO || amountNaira > outstanding) {
+            logger.error("Rejecting payment above outstanding balance: ref=$reference project=${project.slug} outstanding=$outstanding received=$amountNaira")
+            return false
+        }
+
+        val expectedAmount = existing?.amount ?: outstanding
         if (expectedAmount == null || amountNaira.compareTo(expectedAmount) != 0) {
             logger.error(
                 "Rejecting payment amount mismatch: ref=$reference project=${project.slug} " +

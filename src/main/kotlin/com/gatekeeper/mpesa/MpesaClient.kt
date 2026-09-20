@@ -32,7 +32,7 @@ object MpesaClient : PaymentProviderClient {
     suspend fun initiate(project: ProjectRepository.ProjectRecord, phone: String): Result<String> = runCatching {
         require(isConfigured()) { "M-Pesa is not configured" }
         require(AppConfig.mpesaCallbackUrl.isNotBlank()) { "MPESA_CALLBACK_URL is not configured" }
-        val amount = project.amountDue ?: error("No amount due configured for this project")
+        val amount = ProjectBalanceService.requireOutstandingBalance(project)
         val timestamp = LocalDateTime.now(ZoneId.of("Africa/Nairobi")).format(DateTimeFormatter.ofPattern("yyyyMMddHHmmss"))
         val password = Base64.getEncoder().encodeToString("${AppConfig.mpesaShortCode}${AppConfig.mpesaPasskey}$timestamp".toByteArray())
         val response = http.post("$baseUrl/mpesa/stkpush/v1/processrequest") {
