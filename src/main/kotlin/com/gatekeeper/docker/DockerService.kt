@@ -260,6 +260,11 @@ class DockerService(dockerSocketPath: String) {
         logger.info("Deleted container: $containerNameOrId")
     }
 
+    fun renameContainer(containerNameOrId: String, newName: String) {
+        client.renameContainerCmd(containerNameOrId).withName(newName).exec()
+        logger.info("Renamed container $containerNameOrId to $newName")
+    }
+
     fun close() {
         try {
             client.close()

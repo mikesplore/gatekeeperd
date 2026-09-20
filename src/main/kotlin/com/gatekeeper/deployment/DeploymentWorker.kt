@@ -42,17 +42,24 @@ object DeploymentWorker {
             DeploymentJobRepository.update(job.id, "starting_container", "Starting application container")
             val docker = DockerService(AppConfig.dockerSocket)
             try {
+                val targetName = job.containerName ?: "deployment-${job.id.toString().take(8)}"
                 val existing = job.containerName?.let { docker.getContainer(it) }
-                if (existing != null) docker.deleteContainer(existing.name)
+                val candidateName = "${targetName}-${job.id.toString().take(8)}"
                 val ports = if (job.hostPort != null && job.containerPort != null) mapOf(job.hostPort to job.containerPort) else emptyMap()
                 docker.createContainer(CreateContainerRequest(
-                    name = job.containerName ?: "deployment-${job.id.toString().take(8)}",
+                    name = candidateName,
                     image = image,
                     ports = ports,
                     network = job.network,
                     restartPolicy = job.restartPolicy,
                     pullImage = false
                 ))
+                if (docker.containerHealth(candidateName) != "running") {
+                    docker.deleteContainer(candidateName)
+                    error("Replacement container did not reach running state")
+                }
+                existing?.let { docker.deleteContainer(it.name) }
+                docker.renameContainer(candidateName, targetName)
             } finally { docker.close() }
             DeploymentJobRepository.update(job.id, "running_container", "Container started successfully", status = "succeeded")
         } catch (error: Exception) {
