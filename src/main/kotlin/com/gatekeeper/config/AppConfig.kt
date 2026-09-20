@@ -60,6 +60,9 @@ object AppConfig {
     val frontendBaseUrl: String = optionalSetting("GATEKEEPER_FRONTEND_URL", "")
 
     val supportContactEmail: String = optionalSetting("SUPPORT_CONTACT_EMAIL", "support@gatekeeper.local")
+    val resendApiKey: String = optionalSetting("RESEND_API_KEY", "")
+    val resendFromEmail: String = optionalSetting("RESEND_FROM_EMAIL", "")
+    val passwordResetUrl: String = optionalSetting("PASSWORD_RESET_URL", "")
     val scribedCallbackUrl: String = optionalSetting("SCRIBED_CALLBACK_URL", "")
     val scribedIntegrationSecret: String = optionalSetting("SCRIBED_INTEGRATION_SECRET", "")
     val scribedApiToken: String = optionalSetting("SCRIBED_API_TOKEN", "")

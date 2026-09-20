@@ -3,6 +3,9 @@ package com.gatekeeper.auth
 import com.gatekeeper.api.InputValidators
 import com.gatekeeper.api.respondError
 import com.gatekeeper.db.tables.Users
+import com.gatekeeper.db.tables.PasswordResetTokens
+import com.gatekeeper.integrations.ResendClient
+import com.gatekeeper.config.AppConfig
 import com.gatekeeper.plugins.JwtConfig
 import com.gatekeeper.plugins.RedisService
 import io.ktor.http.*
@@ -14,11 +17,18 @@ import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import kotlinx.serialization.Serializable
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
+import org.jetbrains.exposed.sql.and
+import org.jetbrains.exposed.sql.deleteWhere
+import org.jetbrains.exposed.sql.insert
 import org.jetbrains.exposed.sql.selectAll
 import org.jetbrains.exposed.sql.update
 import org.jetbrains.exposed.sql.transactions.transaction
 import org.mindrot.jbcrypt.BCrypt
 import org.slf4j.LoggerFactory
+import java.security.MessageDigest
+import java.security.SecureRandom
+import java.time.LocalDateTime
+import java.util.Base64
 
 private val logger = LoggerFactory.getLogger("com.gatekeeper.auth.AuthRoutes")
 private const val LOGIN_WINDOW_SECONDS = 15 * 60
@@ -32,6 +42,10 @@ data class LoginResponse(val token: String)
 
 @Serializable
 data class ChangePasswordRequest(val currentPassword: String, val newPassword: String)
+@Serializable data class ForgotPasswordRequest(val email: String)
+@Serializable data class ResetPasswordRequest(val token: String, val newPassword: String)
+
+private fun resetTokenHash(token: String): String = MessageDigest.getInstance("SHA-256").digest(token.toByteArray()).joinToString("") { "%02x".format(it) }
 
 @Serializable
 data class UserProfileResponse(
@@ -42,6 +56,54 @@ data class UserProfileResponse(
 
 fun Application.configureAuthRoutes() {
     routing {
+        post("/api/auth/forgot-password") {
+            val body = runCatching { call.receive<ForgotPasswordRequest>() }.getOrNull()
+            if (body == null || !InputValidators.isValidEmail(body.email.trim())) {
+                call.respond(mapOf("status" to "reset_email_queued"))
+                return@post
+            }
+            val email = body.email.lowercase().trim()
+            val user = transaction { Users.selectAll().where { Users.email eq email }.singleOrNull() }
+            if (user != null && AppConfig.passwordResetUrl.isNotBlank()) {
+                val raw = ByteArray(32).also { SecureRandom().nextBytes(it) }
+                val token = Base64.getUrlEncoder().withoutPadding().encodeToString(raw)
+                transaction {
+                    PasswordResetTokens.deleteWhere { PasswordResetTokens.userId eq user[Users.id] }
+                    PasswordResetTokens.insert {
+                        it[userId] = user[Users.id]
+                        it[tokenHash] = resetTokenHash(token)
+                        it[expiresAt] = LocalDateTime.now().plusMinutes(30)
+                    }
+                }
+                ResendClient.sendPasswordReset(email, "${AppConfig.passwordResetUrl.trimEnd('/')}/$token")
+            }
+            call.respond(mapOf("status" to "reset_email_queued"))
+        }
+
+        post("/api/auth/reset-password") {
+            val body = runCatching { call.receive<ResetPasswordRequest>() }.getOrNull()
+            if (body == null || body.token.isBlank() || body.newPassword.length < 8) {
+                call.respondError(HttpStatusCode.BadRequest, "invalid_request", "A valid reset token and password of at least 8 characters are required")
+                return@post
+            }
+            val now = LocalDateTime.now()
+            val tokenRow = transaction {
+                PasswordResetTokens.selectAll().where {
+                    (PasswordResetTokens.tokenHash eq resetTokenHash(body.token)) and PasswordResetTokens.usedAt.isNull()
+                }.singleOrNull()
+            }
+            if (tokenRow == null || tokenRow[PasswordResetTokens.expiresAt].isBefore(now)) {
+                call.respondError(HttpStatusCode.BadRequest, "invalid_reset_token", "This password reset link is invalid or expired")
+                return@post
+            }
+            val hash = BCrypt.hashpw(body.newPassword, BCrypt.gensalt(12))
+            transaction {
+                Users.update({ Users.id eq tokenRow[PasswordResetTokens.userId] }) { it[passwordHash] = hash }
+                PasswordResetTokens.update({ PasswordResetTokens.id eq tokenRow[PasswordResetTokens.id] }) { it[usedAt] = now }
+            }
+            call.respond(mapOf("status" to "password_reset"))
+        }
+
         post("/api/auth/login") {
             val body = try {
                 call.receive<LoginRequest>()
