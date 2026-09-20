@@ -79,7 +79,8 @@ data class CreateNetworkRequest(val name: String, val driver: String = "bridge")
 data class VolumeMount(
     val hostPath: String,
     val containerPath: String,
-    val readOnly: Boolean = false
+    val readOnly: Boolean = false,
+    val volumeName: String? = null
 )
 
 @Serializable
