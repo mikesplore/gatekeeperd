@@ -200,14 +200,24 @@ class DockerService(dockerSocketPath: String) {
         return client.listNetworksCmd()
             .exec()
             .map { net ->
+                val ipam = net.ipam
+                val ipamConfig = ipam?.config?.firstOrNull()
                 NetworkInfo(
                     id = net.id ?: "",
                     name = net.name ?: "",
                     driver = net.driver ?: "",
                     scope = net.scope ?: "",
                     containers = containersByNetwork[net.name].orEmpty().distinct().sorted(),
-                    subnet = net.ipam?.config?.firstOrNull()?.subnet,
-                    gateway = net.ipam?.config?.firstOrNull()?.gateway
+                    subnet = ipamConfig?.subnet,
+                    gateway = ipamConfig?.gateway,
+                    ipRange = ipamConfig?.ipRange,
+                    ipamDriver = ipam?.driver,
+                    internal = net.internal == true,
+                    attachable = net.isAttachable == true,
+                    enableIpv6 = net.enableIPv6 == true,
+                    options = net.options.orEmpty(),
+                    labels = net.labels.orEmpty(),
+                    endpoints = net.containers.orEmpty().map { (id, endpoint) -> NetworkEndpoint(endpoint.name ?: id, id, endpoint.ipv4Address, endpoint.ipv6Address, endpoint.macAddress, endpoint.endpointId) }.sortedBy { it.container }
                 )
             }
     }

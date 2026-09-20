@@ -46,8 +46,19 @@ data class NetworkInfo(
     val scope: String,
     val containers: List<String> = emptyList(),
     val subnet: String? = null,
-    val gateway: String? = null
+    val gateway: String? = null,
+    val ipRange: String? = null,
+    val ipamDriver: String? = null,
+    val internal: Boolean = false,
+    val attachable: Boolean = false,
+    val enableIpv6: Boolean = false,
+    val options: Map<String, String> = emptyMap(),
+    val labels: Map<String, String> = emptyMap(),
+    val endpoints: List<NetworkEndpoint> = emptyList()
 )
+
+@Serializable
+data class NetworkEndpoint(val container: String, val containerId: String, val ipv4: String?, val ipv6: String?, val macAddress: String?, val endpointId: String?)
 
 @Serializable
 data class VolumeInfo(val name: String, val driver: String, val mountpoint: String, val scope: String)
