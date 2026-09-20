@@ -4,6 +4,7 @@ import com.gatekeeper.api.PaymentRequiredResponse
 import com.gatekeeper.api.paymentRequiredResponse
 import com.gatekeeper.config.AppConfig
 import com.gatekeeper.paystack.ProjectPaymentService
+import com.gatekeeper.mpesa.MpesaClient
 import java.math.BigDecimal
 import java.util.Base64
 import java.time.format.DateTimeFormatter
@@ -17,13 +18,14 @@ object PaywallTemplates {
         val amountLabel = formatAmount(info.amountDue, info.currency)
         val dueLabel = info.dueDate?.format(dateFormatter)
         val payUrl = "/api/gate/pay?project=${encode(info.slug)}"
+        val mpesaUrl = "/api/mpesa/pay?project=${encode(info.slug)}"
         val illustrationBlock = if (illustrationDataUri.isNotBlank()) {
             """<img src="$illustrationDataUri" alt="Payment illustration" class="illustration">"""
         } else {
             """<div class="illustration-fallback">Payment</div>"""
         }
         val payDisabledReason = when {
-            !ProjectPaymentService.isPaystackConfigured() ->
+            !ProjectPaymentService.isPaystackConfigured() && !MpesaClient.isConfigured() ->
                 "Online payment is not configured yet. Please contact support."
             info.amountDue == null -> "No payment amount is configured for this project."
             info.clientEmail.isNullOrBlank() -> "No billing email is configured for this project."
@@ -53,8 +55,19 @@ object PaywallTemplates {
                     ${if (dueLabel != null) """<span class="due">Due $dueLabel</span>""" else ""}
                 </div>
                 ${if (showPayButton) """
-                <a href="$payUrl" class="btn">Pay now</a>
-                <p class="helper">You will be redirected to Paystack.</p>
+                <label class="label" for="payment-method">Payment method</label>
+                <select id="payment-method" class="select" onchange="toggleMpesa()">
+                    ${if (ProjectPaymentService.isPaystackConfigured()) "<option value=\"paystack\">Card / bank (Paystack)</option>" else ""}
+                    ${if (MpesaClient.isConfigured()) "<option value=\"mpesa\">M-Pesa</option>" else ""}
+                </select>
+                <a id="paystack-button" href="$payUrl" class="btn">Pay with Paystack</a>
+                <div id="mpesa-form" class="mpesa-form" data-url="$mpesaUrl" hidden>
+                    <label class="label" for="mpesa-phone">M-Pesa phone number</label>
+                    <input id="mpesa-phone" class="input" type="tel" inputmode="tel" placeholder="2547XXXXXXXX">
+                    <button type="button" class="btn" onclick="payWithMpesa()">Pay with M-Pesa</button>
+                    <p id="mpesa-message" class="helper"></p>
+                </div>
+                <p class="helper">Choose a payment method to continue.</p>
                 """ else """
                 <div class="btn btn-disabled">Pay now unavailable</div>
                 <p class="helper helper-error">${escapeHtml(payDisabledReason ?: "Payment is currently unavailable.")}</p>
@@ -83,6 +96,27 @@ object PaywallTemplates {
 </head>
 <body>
 $body
+<script>
+function toggleMpesa() {
+    var mpesa = document.getElementById('mpesa-form');
+    var paystack = document.getElementById('paystack-button');
+    var isMpesa = document.getElementById('payment-method').value === 'mpesa';
+    mpesa.hidden = !isMpesa;
+    paystack.hidden = isMpesa;
+}
+async function payWithMpesa() {
+    var form = document.getElementById('mpesa-form');
+    var phone = document.getElementById('mpesa-phone').value.trim();
+    var message = document.getElementById('mpesa-message');
+    if (!phone) { message.textContent = 'Enter your M-Pesa phone number.'; return; }
+    message.textContent = 'Sending payment prompt…';
+    try {
+        var response = await fetch(form.dataset.url + '&phone=' + encodeURIComponent(phone), { method: 'POST' });
+        if (!response.ok) throw new Error('Unable to initiate payment');
+        message.textContent = 'Check your phone and approve the M-Pesa prompt.';
+    } catch (error) { message.textContent = error.message; }
+}
+</script>
 </body>
 </html>
     """.trimIndent()
