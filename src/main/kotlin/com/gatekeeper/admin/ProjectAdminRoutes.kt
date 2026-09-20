@@ -155,6 +155,21 @@ fun Application.configureProjectAdminRoutes() {
                 )
             }
 
+            get("/api/admin/projects/{slug}/invoice") {
+                val slug = call.parameters["slug"]
+                val project = slug?.let { ProjectRepository.findBySlug(it) }
+                if (project == null) {
+                    call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
+                    return@get
+                }
+                val invoice = ScribedIntegrationClient.invoiceStatus(project.id.toString())
+                if (invoice == null) {
+                    call.respondError(HttpStatusCode.NotFound, "invoice_unavailable", "No Scribed invoice is available for this project")
+                    return@get
+                }
+                call.respond(invoice)
+            }
+
             post("/api/admin/projects") {
                 val body = try {
                     call.receive<CreateProjectRequest>()

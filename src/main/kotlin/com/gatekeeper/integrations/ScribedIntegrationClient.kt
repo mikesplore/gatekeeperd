@@ -10,6 +10,8 @@ import org.slf4j.LoggerFactory
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.decodeFromJsonElement
 import com.gatekeeper.db.repositories.IntegrationOutboxRepository
 
 @Serializable data class ScribedSuspensionPayload(val project_id: String, val project_slug: String, val status: String, val reason: String, val occurred_at: String)
@@ -19,6 +21,17 @@ object ScribedIntegrationClient {
     private val logger = LoggerFactory.getLogger("com.gatekeeper.integrations.ScribedIntegrationClient")
     private val http = HttpClient()
     private val json = Json { encodeDefaults = true }
+
+    suspend fun invoiceStatus(projectId: String): JsonObject? {
+        val base = AppConfig.scribedCallbackUrl.trim().trimEnd('/')
+        val secret = AppConfig.scribedIntegrationSecret.trim()
+        if (base.isBlank() || secret.isBlank()) return null
+        return runCatching {
+            http.get("$base/integrations/gatekeeper/invoices/$projectId") {
+                header("X-Gatekeeper-Secret", secret)
+            }.body<JsonObject>()
+        }.getOrNull()
+    }
     fun notifySuspension(project: ProjectRepository.ProjectRecord, reason: String) {
         runBlocking {
         val base = AppConfig.scribedCallbackUrl.trim().trimEnd('/')

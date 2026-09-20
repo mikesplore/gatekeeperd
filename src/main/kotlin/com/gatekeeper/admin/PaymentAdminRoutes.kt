@@ -13,6 +13,8 @@ import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import java.time.LocalDate
 import com.gatekeeper.plugins.Metrics
+import com.gatekeeper.payments.PaymentReconciliationService
+import java.util.UUID
 
 fun Application.configurePaymentAdminRoutes() {
     routing {
@@ -34,6 +36,15 @@ fun Application.configurePaymentAdminRoutes() {
                         offset = offset
                     )
                 )
+            }
+
+            post("/api/admin/payments/{id}/reconcile") {
+                val id = runCatching { UUID.fromString(call.parameters["id"]) }.getOrNull()
+                    ?: return@post call.respondError(HttpStatusCode.BadRequest, "invalid_payment_id", "Invalid payment ID")
+                val payment = PaymentRepository.findById(id)
+                    ?: return@post call.respondError(HttpStatusCode.NotFound, "payment_not_found", "Payment not found")
+                val reconciled = PaymentReconciliationService.reconcile(payment)
+                call.respond(mapOf("id" to id.toString(), "reconciled" to reconciled, "gatewayStatus" to PaymentRepository.findById(id)?.gatewayStatus))
             }
 
             get("/api/admin/metrics") {
