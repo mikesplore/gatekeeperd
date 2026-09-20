@@ -284,6 +284,20 @@ Update project fields.
 **Notes:**
 - If `containerName` is updated, Gatekeeper validates that the referenced Docker container exists.
 
+### POST /api/admin/projects/{slug}/adjustments
+Append a financial adjustment without overwriting the project’s original charge or payment history.
+
+**Request:**
+```json
+{
+  "type": "ADDITIONAL_CHARGE",
+  "amount": 500.00,
+  "reason": "Added reporting feature"
+}
+```
+
+`type` must be `ADDITIONAL_CHARGE` or `DISCOUNT`; `amount` must be greater than zero. The response includes the actor, adjustment, old balance, and new balance. The operation writes a detailed `project_adjustment` audit entry.
+
 ### DELETE /api/admin/projects/{slug}
 Archive a project (soft delete). Sets `deleted_at`, blocks gating, and **preserves** payments, payment events, and audit log for reporting.
 
