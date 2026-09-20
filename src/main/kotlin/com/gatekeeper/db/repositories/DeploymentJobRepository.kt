@@ -9,10 +9,11 @@ import com.gatekeeper.docker.VolumeMount
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
+import com.gatekeeper.security.SecretValueCipher
 
 data class DeploymentJobRecord(
     val id: UUID, val repository: String, val gitRef: String, val registry: String,
-    val imageName: String, val imageTag: String, val containerName: String?, val hostPort: Int?, val containerPort: Int?, val network: String, val restartPolicy: String, val env: Map<String, String>, val volumes: List<VolumeMount>, val createNetworkIfMissing: Boolean,
+    val imageName: String, val imageTag: String, val containerName: String?, val hostPort: Int?, val containerPort: Int?, val network: String, val restartPolicy: String, val env: Map<String, String>, val secretEnv: Map<String, String>, val volumes: List<VolumeMount>, val createNetworkIfMissing: Boolean,
     val status: String, val currentStep: String,
     val logs: String, val commitSha: String?, val imageDigest: String?, val errorMessage: String?,
     val createdAt: LocalDateTime, val startedAt: LocalDateTime?, val completedAt: LocalDateTime?, val updatedAt: LocalDateTime,
@@ -50,6 +51,10 @@ object DeploymentJobRepository {
             it[network] = request.network
             it[restartPolicy] = request.restartPolicy
             it[envJson] = Json.encodeToString(request.env)
+            it[secretEnvEncrypted] = request.secretEnv.takeIf { values -> values.isNotEmpty() }?.let { values ->
+                check(SecretValueCipher.isConfigured()) { "Deployment secret encryption is not configured" }
+                SecretValueCipher.encrypt(Json.encodeToString(values))
+            }
             it[volumesJson] = Json.encodeToString(request.volumes)
             it[createNetworkIfMissing] = request.createNetworkIfMissing
             it[projectSlug] = request.projectSlug
@@ -88,11 +93,14 @@ object DeploymentJobRepository {
         val existing = DeploymentJobs.selectAll().where { DeploymentJobs.id eq id }.singleOrNull() ?: return@transaction
         DeploymentJobs.update({ DeploymentJobs.id eq id }) {
             step?.let { value -> it[currentStep] = value }
-            log?.let { value -> it[logs] = existing[DeploymentJobs.logs] + value + "\n" }
+            val secrets = existing[DeploymentJobs.secretEnvEncrypted]?.let { encoded ->
+                Json.decodeFromString<Map<String, String>>(SecretValueCipher.decrypt(encoded)).values
+            }.orEmpty()
+            log?.let { value -> it[logs] = existing[DeploymentJobs.logs] + SecretValueCipher.redact(value, secrets) + "\n" }
             commitSha?.let { value -> it[DeploymentJobs.commitSha] = value }
             imageDigest?.let { value -> it[DeploymentJobs.imageDigest] = value }
             status?.let { value -> it[DeploymentJobs.status] = value }
-            error?.let { value -> it[errorMessage] = value }
+            error?.let { value -> it[errorMessage] = SecretValueCipher.redact(value, secrets) }
             if (status == "succeeded" || status == "failed") it[completedAt] = LocalDateTime.now()
             it[updatedAt] = LocalDateTime.now()
         }
@@ -104,7 +112,7 @@ object DeploymentJobRepository {
 
     private fun ResultRow.toRecord() = DeploymentJobRecord(
         this[DeploymentJobs.id], this[DeploymentJobs.repository], this[DeploymentJobs.gitRef], this[DeploymentJobs.registry],
-        this[DeploymentJobs.imageName], this[DeploymentJobs.imageTag], this[DeploymentJobs.containerName], this[DeploymentJobs.hostPort], this[DeploymentJobs.containerPort], this[DeploymentJobs.network], this[DeploymentJobs.restartPolicy], runCatching { Json.decodeFromString<Map<String, String>>(this[DeploymentJobs.envJson]) }.getOrDefault(emptyMap()), runCatching { Json.decodeFromString<List<VolumeMount>>(this[DeploymentJobs.volumesJson]) }.getOrDefault(emptyList()), this[DeploymentJobs.createNetworkIfMissing], this[DeploymentJobs.status], this[DeploymentJobs.currentStep],
+        this[DeploymentJobs.imageName], this[DeploymentJobs.imageTag], this[DeploymentJobs.containerName], this[DeploymentJobs.hostPort], this[DeploymentJobs.containerPort], this[DeploymentJobs.network], this[DeploymentJobs.restartPolicy], runCatching { Json.decodeFromString<Map<String, String>>(this[DeploymentJobs.envJson]) }.getOrDefault(emptyMap()), this[DeploymentJobs.secretEnvEncrypted]?.let { Json.decodeFromString<Map<String, String>>(SecretValueCipher.decrypt(it)) }.orEmpty(), runCatching { Json.decodeFromString<List<VolumeMount>>(this[DeploymentJobs.volumesJson]) }.getOrDefault(emptyList()), this[DeploymentJobs.createNetworkIfMissing], this[DeploymentJobs.status], this[DeploymentJobs.currentStep],
         this[DeploymentJobs.logs], this[DeploymentJobs.commitSha], this[DeploymentJobs.imageDigest], this[DeploymentJobs.errorMessage],
         this[DeploymentJobs.createdAt], this[DeploymentJobs.startedAt], this[DeploymentJobs.completedAt], this[DeploymentJobs.updatedAt], this[DeploymentJobs.previousContainerName], this[DeploymentJobs.previousImage], this[DeploymentJobs.projectSlug]
     )

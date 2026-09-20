@@ -65,7 +65,7 @@ object DeploymentWorker {
                     ports = ports,
                     network = job.network,
                     restartPolicy = job.restartPolicy,
-                    env = job.env,
+                    env = job.env + job.secretEnv,
                     volumes = job.volumes,
                     pullImage = false
                 ))
@@ -99,7 +99,7 @@ object DeploymentWorker {
         return try {
             val candidate = "$target-rollback-${id.toString().take(8)}"
             if (job.network != "bridge" && job.createNetworkIfMissing) docker.createNetworkIfMissing(job.network)
-            docker.createContainer(CreateContainerRequest(name = candidate, image = oldImage, ports = if (job.hostPort != null && job.containerPort != null) mapOf(job.hostPort to job.containerPort) else emptyMap(), network = job.network, restartPolicy = job.restartPolicy, env = job.env, volumes = job.volumes, pullImage = true))
+            docker.createContainer(CreateContainerRequest(name = candidate, image = oldImage, ports = if (job.hostPort != null && job.containerPort != null) mapOf(job.hostPort to job.containerPort) else emptyMap(), network = job.network, restartPolicy = job.restartPolicy, env = job.env + job.secretEnv, volumes = job.volumes, pullImage = true))
             if (!awaitHealthy(docker, candidate, job.hostPort)) { docker.deleteContainer(candidate); return false }
             docker.getContainer(target)?.let { docker.deleteContainer(it.name) }
             docker.renameContainer(candidate, target)

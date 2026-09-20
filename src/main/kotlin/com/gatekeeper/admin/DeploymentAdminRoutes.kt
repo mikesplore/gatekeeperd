@@ -13,6 +13,7 @@ import io.ktor.server.response.respond
 import io.ktor.server.routing.*
 import java.util.UUID
 import com.gatekeeper.db.repositories.AuditRepository
+import com.gatekeeper.security.SecretValueCipher
 
 fun Application.configureDeploymentAdminRoutes() {
     routing {
@@ -31,8 +32,14 @@ fun Application.configureDeploymentAdminRoutes() {
                     !request.gitRef.matches(Regex("^[A-Za-z0-9._/-]+$")) ||
                     !request.imageName.matches(Regex("^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)+$")) ||
                     !request.registry.matches(Regex("^(docker\\.io|[A-Za-z0-9.-]+(:[0-9]{1,5})?)$")) ||
-                    !request.imageTag.matches(Regex("^[A-Za-z0-9_.-]+$")) || request.env.keys.any { it.isBlank() || it.contains('=') || it.contains('\u0000') } || request.volumes.any { it.hostPath.isBlank() || it.containerPath.isBlank() }) {
+                    !request.imageTag.matches(Regex("^[A-Za-z0-9_.-]+$")) ||
+                    (request.env.keys + request.secretEnv.keys).any { !it.matches(Regex("[A-Za-z_][A-Za-z0-9_]*")) } ||
+                    request.volumes.any { it.hostPath.isBlank() || it.containerPath.isBlank() }) {
                     call.respondError(HttpStatusCode.BadRequest, "invalid_deployment_target", "Repository, ref, image name, or tag is invalid")
+                    return@post
+                }
+                if (request.secretEnv.isNotEmpty() && !SecretValueCipher.isConfigured()) {
+                    call.respondError(HttpStatusCode.ServiceUnavailable, "deployment_secrets_unconfigured", "Deployment secret encryption is not configured")
                     return@post
                 }
                 val id = DeploymentJobRepository.create(request)
@@ -76,5 +83,6 @@ private suspend fun changeDeployment(call: ApplicationCall, action: String) {
 
 private fun com.gatekeeper.db.repositories.DeploymentJobRecord.toResponse() = DeploymentJobResponse(
     id.toString(), repository, gitRef, registry, imageName, imageTag, status, currentStep, logs, commitSha, imageDigest,
-    errorMessage, createdAt.toString(), startedAt?.toString(), completedAt?.toString(), updatedAt.toString(), env, volumes
+    errorMessage, createdAt.toString(), startedAt?.toString(), completedAt?.toString(), updatedAt.toString(), env,
+    secretEnv.keys.sorted().associateWith { "••••••••" }, volumes
 )

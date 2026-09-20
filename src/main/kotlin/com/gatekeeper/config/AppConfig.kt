@@ -75,6 +75,7 @@ object AppConfig {
     val githubAppPrivateKeyPath: String = optionalSetting("GITHUB_APP_PRIVATE_KEY_PATH", "")
     val githubWebhookSecret: String = optionalSetting("GITHUB_WEBHOOK_SECRET", "")
     val deploymentStaleMinutes: Long = optionalSetting("DEPLOYMENT_STALE_MINUTES", "30").toLong()
+    val deploymentSecretsKey: String = optionalSetting("DEPLOYMENT_SECRETS_KEY", "")
 
     init {
         logger.info(
@@ -84,6 +85,7 @@ object AppConfig {
             scribedApiToken.isNotBlank(),
             System.getProperty("user.dir")
         )
+        logger.info("Deployment secret encryption key configured: {}", deploymentSecretsKey.isNotBlank())
     }
 
     /** Used once on first startup when the users table is empty */

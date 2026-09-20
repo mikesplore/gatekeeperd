@@ -17,6 +17,7 @@ data class CreateDeploymentRequest(
     val restartPolicy: String = "unless-stopped"
     , val projectSlug: String? = null,
     val env: Map<String, String> = emptyMap(),
+    val secretEnv: Map<String, String> = emptyMap(),
     val volumes: List<VolumeMount> = emptyList(),
     val createNetworkIfMissing: Boolean = false
 )
@@ -40,5 +41,6 @@ data class DeploymentJobResponse(
     val completedAt: String? = null,
     val updatedAt: String,
     val env: Map<String, String> = emptyMap(),
+    val secretEnv: Map<String, String> = emptyMap(),
     val volumes: List<VolumeMount> = emptyList()
 )

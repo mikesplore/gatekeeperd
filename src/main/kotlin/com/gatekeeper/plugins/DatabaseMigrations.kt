@@ -22,6 +22,7 @@ object DatabaseMigrations {
         ,Migration("11", "github app installation", "db/migration/V11__github_app_installation.sql")
         ,Migration("12", "github installation state", "db/migration/V12__github_installation_state.sql")
         ,Migration("13", "deployment runtime spec", "db/migration/V13__deployment_runtime_spec.sql")
+        ,Migration("14", "encrypted deployment secrets", "db/migration/V14__encrypted_deployment_secrets.sql")
     )
 
     fun apply(dataSource: HikariDataSource) {

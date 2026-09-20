@@ -17,6 +17,7 @@ object DeploymentJobs : Table("deployment_jobs") {
     val network = text("network").default("bridge")
     val restartPolicy = text("restart_policy").default("unless-stopped")
     val envJson = text("env_json").default("{}")
+    val secretEnvEncrypted = text("secret_env_encrypted").nullable()
     val volumesJson = text("volumes_json").default("[]")
     val createNetworkIfMissing = bool("create_network_if_missing").default(false)
     val status = text("status")
