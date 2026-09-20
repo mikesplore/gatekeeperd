@@ -90,7 +90,7 @@ fun Application.configurePaymentAdminRoutes() {
                     actor = actor
                 )
                 if (!applied) {
-                    return@post call.respondError(HttpStatusCode.BadRequest, "payment_capture_rejected", "Cash payment does not match the project's outstanding amount or currency")
+                    return@post call.respondError(HttpStatusCode.BadRequest, "payment_capture_rejected", "Cash payment exceeds the project's remaining balance or has an invalid currency")
                 }
                 call.respond(HttpStatusCode.Created, mapOf("provider" to "cash", "reference" to reference, "status" to "success"))
             }

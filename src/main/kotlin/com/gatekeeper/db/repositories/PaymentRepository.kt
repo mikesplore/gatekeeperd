@@ -72,6 +72,12 @@ object PaymentRepository {
         }
     }
 
+    fun successfulAmountForProject(projectId: UUID): BigDecimal = transaction {
+        Payments.select(Payments.amount)
+            .where { (Payments.projectId eq projectId) and (Payments.gatewayStatus eq "success") }
+            .fold(BigDecimal.ZERO) { total, row -> total + row[Payments.amount] }
+    }
+
     fun findLatestPendingAuthorizationUrl(projectId: UUID): String? {
         return transaction {
             Payments.selectAll()
@@ -249,6 +255,14 @@ object PaymentRepository {
                 it[Payments.verifiedAt] = LocalDateTime.now()
                 if (paidAt != null) it[Payments.paidAt] = paidAt
             }
+        }
+    }
+
+    fun updateAmountByProviderReference(provider: PaymentProvider, reference: String, amount: BigDecimal) {
+        transaction {
+            Payments.update({
+                (Payments.provider eq provider.name.lowercase()) and (Payments.providerReference eq reference)
+            }) { it[Payments.amount] = amount }
         }
     }
 

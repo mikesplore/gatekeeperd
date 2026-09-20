@@ -392,7 +392,7 @@ Get the most recent audit log entries across all projects (JWT required).
 List all payments across projects with filters and pagination (JWT required).
 
 ### POST /api/admin/projects/{slug}/payments/cash
-Record a cash payment received by an administrator (JWT required). The amount and currency must match the project's configured amount due and currency. Successful capture activates the project through the same payment application flow as gateway payments and writes an audit entry.
+Record a cash payment received by an administrator (JWT required). Partial payments are accepted, provided they do not exceed the project's remaining balance and use its currency. Successful capture contributes to the project balance; the project activates when the cumulative successful payments reach the configured amount due.
 
 Request body:
 
