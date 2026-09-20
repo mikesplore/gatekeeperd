@@ -11,6 +11,7 @@ import com.github.dockerjava.api.model.ExposedPort
 import com.github.dockerjava.api.model.HostConfig
 import com.github.dockerjava.api.model.Ports
 import com.github.dockerjava.api.model.RestartPolicy
+import com.github.dockerjava.api.model.Image
 import com.github.dockerjava.core.DefaultDockerClientConfig
 import com.github.dockerjava.core.DockerClientBuilder
 import com.github.dockerjava.core.DockerClientConfig
@@ -128,6 +129,14 @@ class DockerService(dockerSocketPath: String) {
     fun imageDigest(imageRef: String): String? = runCatching {
         client.inspectImageCmd(imageRef).exec().repoDigests?.firstOrNull()
     }.getOrNull()
+
+    data class ImageInfo(val id: String, val tags: List<String>, val sizeBytes: Long)
+
+    fun listImages(): List<ImageInfo> = client.listImagesCmd().withShowAll(true).exec().map { image ->
+        ImageInfo(image.id ?: "", image.repoTags?.toList().orEmpty(), image.size ?: 0L)
+    }
+
+    fun referencedImageNames(): Set<String> = listContainers(true).map { it.image }.toSet()
 
     fun hostPortsInUse(): Set<Int> {
         return client.listContainersCmd()
@@ -276,6 +285,10 @@ class DockerService(dockerSocketPath: String) {
             .withForce(force)
         removeCmd.exec()
         logger.info("Image deleted: $fullName")
+    }
+
+    fun deleteImageReference(reference: String) {
+        client.removeImageCmd(reference).withForce(false).exec()
     }
 
     fun deleteContainer(containerNameOrId: String, force: Boolean = true) {

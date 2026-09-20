@@ -477,6 +477,7 @@ Deployment administration is JWT-protected:
 - `GET /api/admin/deployments` and `GET /api/admin/deployments/{id}` expose lifecycle state, logs, commit SHA, image digest, and failure details.
 - `GET /api/admin/deployments/{id}/audit` exposes deployment-worker audit records.
 - `POST /api/admin/deployments/{id}/cancel`, `/retry`, and `/rollback` control the job lifecycle. Rollback uses the persisted previous container image and performs the same health and published-port checks before replacing the active container.
+- `POST /api/admin/system/prune?dryRun=true&imagePrefix=owner/image` performs reference-aware Docker image cleanup. It never runs `docker system prune`; active container images and the current/previous deployment images are preserved. The response reports candidate image sizes and reclaimed bytes, and every cleanup is written to the audit trail. Omit `dryRun` or set it to `false` to remove candidates.
 - `POST /api/integrations/github/webhook` accepts signed GitHub events. `X-GitHub-Delivery` is required and is persisted for idempotency; duplicate deliveries are acknowledged without queueing another deployment.
 
 After a successful deployment, the linked project container name is synchronized. Nginx handoff remains explicit through `POST /api/admin/nginx/enable/{slug}`; it validates the running container and published port before writing and reloading the site configuration.
