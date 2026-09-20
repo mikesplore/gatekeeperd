@@ -11,6 +11,7 @@ import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.*
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerialName
+import kotlinx.serialization.json.Json
 import java.nio.file.Files
 import java.security.KeyFactory
 import java.security.PrivateKey
@@ -24,7 +25,7 @@ import java.util.Base64
 @Serializable data class GitHubRepository(val full_name: String, @SerialName("private") val isPrivate: Boolean)
 
 object GitHubAppClient {
-    private val http = HttpClient { install(ContentNegotiation) { json() } }
+    private val http = HttpClient { install(ContentNegotiation) { json(Json { ignoreUnknownKeys = true }) } }
 
     fun isConfigured(): Boolean = AppConfig.githubAppId != null &&
         (AppConfig.githubAppInstallationId != null || runCatching { GitHubAppInstallationRepository.find() }.getOrNull() != null) &&
