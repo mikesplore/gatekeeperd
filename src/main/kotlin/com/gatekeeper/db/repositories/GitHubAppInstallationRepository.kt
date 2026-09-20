@@ -6,6 +6,7 @@ import org.jetbrains.exposed.sql.insert
 import org.jetbrains.exposed.sql.selectAll
 import org.jetbrains.exposed.sql.transactions.transaction
 import org.jetbrains.exposed.sql.update
+import org.jetbrains.exposed.sql.deleteWhere
 
 data class GitHubInstallationRecord(val installationId: Long, val accountLogin: String?, val accountType: String?)
 
@@ -40,5 +41,9 @@ object GitHubAppInstallationRepository {
         if (row?.get(GitHubAppInstallations.pendingState) != state) return@transaction false
         GitHubAppInstallations.update({ GitHubAppInstallations.id eq 1 }) { it[pendingState] = null }
         true
+    }
+
+    fun clear() = transaction {
+        GitHubAppInstallations.deleteWhere { GitHubAppInstallations.id eq 1 }
     }
 }

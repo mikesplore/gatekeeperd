@@ -57,6 +57,10 @@ fun Application.configureGitHubAdminRoutes() {
                 val separator = if (url.contains("?")) "&" else "?"
                 call.respond(GitHubInstallUrlResponse("$url${separator}state=$state", AppConfig.githubCallbackUrl.takeIf { it.isNotBlank() }))
             }
+            delete("/api/admin/github/installation") {
+                GitHubAppInstallationRepository.clear()
+                call.respond(mapOf("status" to "unlinked"))
+            }
         }
 
         get("/api/integrations/github/callback") {
