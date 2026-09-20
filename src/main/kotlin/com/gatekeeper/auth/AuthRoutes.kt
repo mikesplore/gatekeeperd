@@ -65,6 +65,7 @@ data class UserProfileResponse(
     val role: String,
     val displayName: String? = null,
     val avatarUrl: String? = null,
+    val totpEnabled: Boolean = false,
     val createdAt: String
 )
 
@@ -77,6 +78,9 @@ private const val TOTP_PENDING_TTL_SECONDS = 10 * 60
 private fun pendingTotpKey(userId: UUID) = "auth:2fa:pending:$userId"
 private fun loginChallengeKey(token: String) = "auth:2fa:challenge:${resetTokenHash(token)}"
 private fun recoveryCode(): String = Base64.getUrlEncoder().withoutPadding().encodeToString(ByteArray(9).also { SecureRandom().nextBytes(it) }).take(12).uppercase()
+private fun auditContext(call: ApplicationCall): String = "ip=${call.request.local.remoteHost} requestId=${call.request.headers["X-Request-ID"] ?: "unknown"}"
+private const val TWO_FACTOR_FAILURE_LIMIT = 5
+private const val TWO_FACTOR_LOCK_SECONDS = 15 * 60
 
 fun Application.configureAuthRoutes() {
     routing {
@@ -235,6 +239,7 @@ fun Application.configureAuthRoutes() {
                 val key = loginChallengeKey(body.challengeToken); val value = RedisService.get(key)
                 if (value.isNullOrBlank()) { call.respondError(HttpStatusCode.Unauthorized, "invalid_two_factor_challenge", "The two-factor challenge is invalid or expired"); return@post }
                 val parts = value.split('|', limit = 2); val email = parts[0]; val role = parts.getOrElse(1) { "admin" }
+                if (RedisService.get("auth:2fa:lock:$email") != null) { call.respondError(HttpStatusCode.TooManyRequests, "two_factor_locked", "Too many failed attempts. Try again later."); return@post }
                 val user = transaction { Users.selectAll().where { Users.email eq email }.singleOrNull() }
                 if (user == null) { RedisService.delete(key); call.respondError(HttpStatusCode.Unauthorized, "invalid_two_factor_challenge", "The two-factor challenge is invalid"); return@post }
                 val secret = user[Users.totpSecret]?.let { SecretValueCipher.decrypt(it) }
@@ -243,9 +248,9 @@ fun Application.configureAuthRoutes() {
                     val matched = user[Users.recoveryCodes].indexOfFirst { RecoveryCodeHasher.matches(body.code, it) }
                     if (matched >= 0) { recoveryUsed = true; valid = true; transaction { Users.update({ Users.id eq user[Users.id] }) { it[Users.recoveryCodes] = user[Users.recoveryCodes].filterIndexed { index, _ -> index != matched } } } }
                 }
-                if (!valid) { AuditRepository.write(null, "2FA Verification Failed", email, "Invalid authenticator or recovery code"); call.respondError(HttpStatusCode.Unauthorized, "invalid_two_factor_code", "The verification code is invalid"); return@post }
+                if (!valid) { val attempts = RedisService.incrementWithExpiry("auth:2fa:fail:$email", TWO_FACTOR_LOCK_SECONDS) ?: 0; if (attempts >= TWO_FACTOR_FAILURE_LIMIT) RedisService.set("auth:2fa:lock:$email", "1", TWO_FACTOR_LOCK_SECONDS); AuditRepository.write(null, "2FA Verification Failed", email, "Invalid authenticator or recovery code ${auditContext(call)}"); call.respondError(HttpStatusCode.Unauthorized, "invalid_two_factor_code", "The verification code is invalid"); return@post }
                 RedisService.delete(key)
-                if (recoveryUsed) AuditRepository.write(null, "2FA Recovery Code Used", email, "A recovery code was used")
+                if (recoveryUsed) AuditRepository.write(null, "2FA Recovery Code Used", email, "A recovery code was used ${auditContext(call)}")
                 val token = JwtConfig.createToken(email, role); val refreshToken = newRefreshToken()
                 RedisService.set("auth:refresh:${resetTokenHash(refreshToken)}", "$email|$role", REFRESH_TTL_SECONDS)
                 call.respond(LoginResponse(token, refreshToken))
@@ -264,12 +269,27 @@ fun Application.configureAuthRoutes() {
                 call.respond(mapOf("status" to "two_factor_disabled"))
             }
 
+            post("/api/auth/2fa/recovery-codes/regenerate") {
+                val principal = call.principal<JWTPrincipal>(); val body = runCatching { call.receive<DisableTwoFactorRequest>() }.getOrNull()
+                if (principal == null || body == null) { call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Password and two-factor code are required"); return@post }
+                val email = principal.payload.subject.lowercase().trim(); val user = transaction { Users.selectAll().where { Users.email eq email }.singleOrNull() }
+                if (user == null || !BCrypt.checkpw(body.currentPassword, user[Users.passwordHash])) { call.respondError(HttpStatusCode.BadRequest, "invalid_credentials", "Current password is incorrect"); return@post }
+                val secret = user[Users.totpSecret]?.let { SecretValueCipher.decrypt(it) }; var valid = secret != null && Totp.verify(secret, body.code)
+                if (!valid) valid = user[Users.recoveryCodes].any { RecoveryCodeHasher.matches(body.code, it) }
+                if (!valid) { AuditRepository.write(null, "2FA Recovery Regeneration Failed", email, "Invalid authenticator or recovery code ${auditContext(call)}"); call.respondError(HttpStatusCode.BadRequest, "invalid_two_factor_code", "The verification code is invalid"); return@post }
+                val codes = List(8) { recoveryCode() }; val hashes = codes.map(RecoveryCodeHasher::hash)
+                transaction { Users.update({ Users.id eq user[Users.id] }) { it[Users.recoveryCodes] = hashes } }
+                AuditRepository.write(null, "2FA Recovery Codes Regenerated", email, "Recovery codes replaced ${auditContext(call)}")
+                call.respond(mapOf("recoveryCodes" to codes))
+            }
+
             post("/api/auth/2fa/setup") {
                 val principal = call.principal<JWTPrincipal>()
                 if (principal == null || !SecretValueCipher.isConfigured()) { call.respondError(HttpStatusCode.ServiceUnavailable, "two_factor_unavailable", "Two-factor setup is temporarily unavailable"); return@post }
                 val email = principal.payload.subject.lowercase().trim()
                 val user = transaction { Users.selectAll().where { Users.email eq email }.singleOrNull() }
                 if (user == null) { call.respondError(HttpStatusCode.NotFound, "user_not_found", "User not found"); return@post }
+                if (RedisService.get(pendingTotpKey(user[Users.id])) != null) { call.respondError(HttpStatusCode.Conflict, "two_factor_setup_pending", "A two-factor setup is already pending"); return@post }
                 if (user[Users.totpEnabled]) { call.respondError(HttpStatusCode.Conflict, "two_factor_enabled", "Two-factor authentication is already enabled"); return@post }
                 val secret = Totp.newSecret(); val codes = List(8) { recoveryCode() }
                 val pending = SecretValueCipher.encrypt(secret) + "|" + codes.joinToString(",", transform = RecoveryCodeHasher::hash)
@@ -380,6 +400,7 @@ fun Application.configureAuthRoutes() {
                         role = user[Users.role],
                         displayName = user[Users.displayName],
                         avatarUrl = gravatarUrl(user[Users.email]),
+                        totpEnabled = user[Users.totpEnabled],
                         createdAt = user[Users.createdAt].toString()
                     )
                 )
