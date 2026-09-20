@@ -6,6 +6,8 @@ Gatekeeperd is a Kotlin/Ktor payment-gating backend for client applications host
 
 The backend is paired with a separate `gatekeeperd-frontend` React admin dashboard. This repository contains the API, gating engine, persistence, payment integration, Docker integration, nginx management, and background jobs.
 
+The companion Scribed document and notification service is located at `/home/mike/Development/scribed`. Gatekeeperd integrates with Scribed for invoice lookup, receipt/document handling, payment notifications, and suspension notifications. Scribed runs independently, normally through Uvicorn on port `8001`; Gatekeeperd communicates with it using the configured Scribed URL, API token, and integration secret. Inspect both projects when changing invoice, receipt, payment-notification, or Scribed integration behavior.
+
 ## Repository map
 
 - `src/main/kotlin/com/gatekeeper/Application.kt` — application entry point, plugin wiring, initial admin seeding, and job startup.
@@ -24,6 +26,7 @@ The backend is paired with a separate `gatekeeperd-frontend` React admin dashboa
 - `src/main/resources/application.conf` — Ktor deployment configuration; default port is `8080`.
 - `src/test/kotlin` — Ktor/server, validator, Docker wizard, and nginx service tests.
 - `docs/` — authoritative API, architecture, nginx, deployment, and project-index documentation.
+- `/home/mike/Development/scribed` — companion Scribed service for invoices, receipts, and document/notification workflows; it is outside this repository and must not be committed here.
 
 ## Stack and conventions
 
