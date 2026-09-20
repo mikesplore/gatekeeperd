@@ -24,6 +24,7 @@ object AuditRepository {
                 it[AuditLog.actor] = actor
                 it[AuditLog.reason] = reason
             }
+            NotificationRepository.create(projectId, action, actor, reason)
         }
     }
 

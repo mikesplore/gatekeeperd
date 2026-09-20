@@ -3,6 +3,7 @@ package com.gatekeeper.admin
 import com.gatekeeper.api.respondError
 import com.gatekeeper.api.dto.toResponse
 import com.gatekeeper.db.repositories.AuditRepository
+import com.gatekeeper.db.repositories.NotificationRepository
 import com.gatekeeper.db.repositories.PaymentEventRepository
 import com.gatekeeper.db.repositories.ProjectRepository
 import com.gatekeeper.docker.DockerService
@@ -21,6 +22,8 @@ import com.gatekeeper.db.repositories.PaymentRepository
 import com.gatekeeper.db.repositories.IntegrationOutboxRepository
 import com.gatekeeper.plugins.Metrics
 import java.time.OffsetDateTime
+import java.time.LocalDateTime
+import java.util.UUID
 
 @Serializable
 data class ProjectHealthResponse(
@@ -72,15 +75,38 @@ fun Application.configureOperationsAdminRoutes() {
             }
             get("/api/admin/notifications") {
                 val limit = call.request.queryParameters["limit"]?.toIntOrNull()?.coerceIn(1, 100) ?: 25
-                val notifications = AuditRepository.findAll(limit).map { row ->
-                    val severity = when {
-                        row.action.contains("failed", ignoreCase = true) || row.action.contains("error", ignoreCase = true) -> "error"
-                        row.action.contains("warning", ignoreCase = true) || row.action.contains("blocked", ignoreCase = true) -> "warning"
-                        else -> "info"
-                    }
-                    NotificationResponse(row.id.toString(), row.action.replace('_', ' '), row.reason ?: "System activity recorded", severity, row.action, row.createdAt.toString())
-                }
+                val principal = call.principal<JWTPrincipal>()?.payload?.subject ?: "unknown"
+                val projectId = call.request.queryParameters["projectId"]?.let { runCatching { UUID.fromString(it) }.getOrNull() }
+                val notifications = NotificationRepository.list(principal, call.request.queryParameters["severity"], call.request.queryParameters["type"], projectId, call.request.queryParameters["from"]?.let { runCatching { LocalDateTime.parse(it) }.getOrNull() }, call.request.queryParameters["to"]?.let { runCatching { LocalDateTime.parse(it) }.getOrNull() }, call.request.queryParameters["includeArchived"] == "true", limit).map { row -> NotificationResponse(row.id.toString(), row.title, row.message, row.severity, row.action, row.createdAt.toString(), row.readAt != null) }
                 call.respond(notifications)
+            }
+            post("/api/admin/notifications/{id}/{state}") {
+                val id = call.parameters["id"]?.let { runCatching { UUID.fromString(it) }.getOrNull() } ?: run { call.respondError(HttpStatusCode.BadRequest, "invalid_notification_id", "Invalid notification ID"); return@post }
+                val state = call.parameters["state"] ?: ""
+                if (state !in setOf("read", "dismissed", "archived")) { call.respondError(HttpStatusCode.BadRequest, "invalid_notification_state", "State must be read, dismissed, or archived"); return@post }
+                val recipient = call.principal<JWTPrincipal>()?.payload?.subject ?: "unknown"
+                if (!NotificationRepository.mark(id, recipient, state)) { call.respondError(HttpStatusCode.NotFound, "notification_not_found", "Notification not found"); return@post }
+                call.respond(mapOf("status" to state, "id" to id.toString()))
+            }
+            get("/api/admin/notifications/stream") {
+                val recipient = call.principal<JWTPrincipal>()?.payload?.subject ?: "unknown"
+                call.respondTextWriter(contentType = ContentType.Text.EventStream) {
+                    var lastSeen: String? = null
+                    repeat(20) {
+                        val latest = NotificationRepository.list(recipient, null, null, null, null, null, false, 10)
+                        val fresh = latest.filter { it.id.toString() != lastSeen }
+                        if (fresh.isNotEmpty()) {
+                            lastSeen = fresh.first().id.toString()
+                            val payload = fresh.map { NotificationResponse(it.id.toString(), it.title, it.message, it.severity, it.action, it.createdAt.toString(), it.readAt != null) }
+                            write("data: ${kotlinx.serialization.json.Json.encodeToString(payload)}\n\n")
+                            flush()
+                        } else {
+                            write(": heartbeat\n\n")
+                            flush()
+                        }
+                        kotlinx.coroutines.delay(3000)
+                    }
+                }
             }
             get("/api/admin/projects/{slug}/health") {
                 val slug = call.parameters["slug"] ?: run {
