@@ -9,6 +9,9 @@ import com.gatekeeper.integrations.ResendClient
 import com.gatekeeper.config.AppConfig
 import com.gatekeeper.plugins.JwtConfig
 import com.gatekeeper.plugins.RedisService
+import com.gatekeeper.security.RecoveryCodeHasher
+import com.gatekeeper.security.SecretValueCipher
+import com.gatekeeper.security.Totp
 import io.ktor.http.*
 import io.ktor.server.application.*
 import io.ktor.server.auth.*
@@ -30,6 +33,7 @@ import java.security.MessageDigest
 import java.security.SecureRandom
 import java.time.LocalDateTime
 import java.util.Base64
+import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
@@ -63,6 +67,13 @@ data class UserProfileResponse(
     val avatarUrl: String? = null,
     val createdAt: String
 )
+
+@Serializable data class TotpSetupResponse(val secret: String, val otpauthUri: String, val recoveryCodes: List<String>)
+@Serializable data class TotpCodeRequest(val code: String)
+
+private const val TOTP_PENDING_TTL_SECONDS = 10 * 60
+private fun pendingTotpKey(userId: UUID) = "auth:2fa:pending:$userId"
+private fun recoveryCode(): String = Base64.getUrlEncoder().withoutPadding().encodeToString(ByteArray(9).also { SecureRandom().nextBytes(it) }).take(12).uppercase()
 
 fun Application.configureAuthRoutes() {
     routing {
@@ -208,6 +219,35 @@ fun Application.configureAuthRoutes() {
         }
 
         authenticate("auth-jwt") {
+            post("/api/auth/2fa/setup") {
+                val principal = call.principal<JWTPrincipal>()
+                if (principal == null || !SecretValueCipher.isConfigured()) { call.respondError(HttpStatusCode.ServiceUnavailable, "two_factor_unavailable", "Two-factor setup is temporarily unavailable"); return@post }
+                val email = principal.payload.subject.lowercase().trim()
+                val user = transaction { Users.selectAll().where { Users.email eq email }.singleOrNull() }
+                if (user == null) { call.respondError(HttpStatusCode.NotFound, "user_not_found", "User not found"); return@post }
+                if (user[Users.totpEnabled]) { call.respondError(HttpStatusCode.Conflict, "two_factor_enabled", "Two-factor authentication is already enabled"); return@post }
+                val secret = Totp.newSecret(); val codes = List(8) { recoveryCode() }
+                val pending = SecretValueCipher.encrypt(secret) + "|" + codes.joinToString(",", transform = RecoveryCodeHasher::hash)
+                RedisService.set(pendingTotpKey(user[Users.id]), pending, TOTP_PENDING_TTL_SECONDS)
+                val uri = "otpauth://totp/Gatekeeperd:${java.net.URLEncoder.encode(email, Charsets.UTF_8)}?secret=$secret&issuer=Gatekeeperd&algorithm=SHA1&digits=6&period=30"
+                call.respond(TotpSetupResponse(secret, uri, codes))
+            }
+
+            post("/api/auth/2fa/enable") {
+                val principal = call.principal<JWTPrincipal>(); val body = runCatching { call.receive<TotpCodeRequest>() }.getOrNull()
+                if (principal == null || body == null) { call.respondError(HttpStatusCode.BadRequest, "invalid_request", "A six-digit code is required"); return@post }
+                val email = principal.payload.subject.lowercase().trim(); val user = transaction { Users.selectAll().where { Users.email eq email }.singleOrNull() }
+                if (user == null) { call.respondError(HttpStatusCode.NotFound, "user_not_found", "User not found"); return@post }
+                val pending = RedisService.get(pendingTotpKey(user[Users.id])); val separator = pending?.indexOf('|') ?: -1
+                if (pending.isNullOrBlank() || separator < 1) { call.respondError(HttpStatusCode.BadRequest, "two_factor_setup_expired", "Start two-factor setup again"); return@post }
+                val secret = SecretValueCipher.decrypt(pending.substring(0, separator))
+                if (!Totp.verify(secret, body.code)) { AuditRepository.write(null, "2FA Enable Failed", email, "Invalid verification code"); call.respondError(HttpStatusCode.BadRequest, "invalid_two_factor_code", "The verification code is invalid"); return@post }
+                val hashes = pending.substring(separator + 1).split(',').filter(String::isNotBlank)
+                transaction { Users.update({ Users.id eq user[Users.id] }) { it[Users.totpSecret] = SecretValueCipher.encrypt(secret); it[Users.totpEnabled] = true; it[Users.recoveryCodes] = hashes } }
+                RedisService.delete(pendingTotpKey(user[Users.id])); AuditRepository.write(null, "2FA Enabled", email, "Authenticator-based two-factor authentication enabled")
+                call.respond(mapOf("status" to "two_factor_enabled"))
+            }
+
             post("/api/auth/password") {
                 val principal = call.principal<JWTPrincipal>()
                 val body = try {
