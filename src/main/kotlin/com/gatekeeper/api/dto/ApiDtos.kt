@@ -6,6 +6,13 @@ import com.gatekeeper.db.repositories.ProjectRepository
 import kotlinx.serialization.Serializable
 
 import java.math.BigDecimal
+import java.time.LocalDateTime
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+
+private val NairobiZone: ZoneId = ZoneId.of("Africa/Nairobi")
+private fun LocalDateTime.toNairobiTimestamp(): String =
+    atZone(NairobiZone).format(DateTimeFormatter.ISO_OFFSET_DATE_TIME)
 
 @Serializable
 data class PaginatedResponse<T>(val data: List<T>, val total: Long, val limit: Int, val offset: Int, val hasMore: Boolean)
@@ -169,8 +176,8 @@ fun ProjectRepository.ProjectRecord.toResponse(remainingBalance: BigDecimal? = n
     currency = currency,
     dueDate = dueDate?.toString(),
     gracePeriodDays = gracePeriodDays,
-    createdAt = createdAt.toString(),
-    updatedAt = updatedAt.toString()
+    createdAt = createdAt.toNairobiTimestamp(),
+    updatedAt = updatedAt.toNairobiTimestamp()
 )
 
 fun PaymentRepository.PaymentRecord.toResponse(): PaymentResponse = PaymentResponse(
@@ -183,9 +190,9 @@ fun PaymentRepository.PaymentRecord.toResponse(): PaymentResponse = PaymentRespo
     status = status,
     gatewayStatus = gatewayStatus,
     verifiedVia = verifiedVia,
-    paidAt = paidAt?.toString(),
+    paidAt = paidAt?.toNairobiTimestamp(),
     rawWebhookPayload = rawWebhookPayload,
-    createdAt = createdAt.toString()
+    createdAt = createdAt.toNairobiTimestamp()
 )
 
 fun AuditRepository.AuditRecord.toResponse(): AuditLogResponse = AuditLogResponse(
@@ -194,5 +201,5 @@ fun AuditRepository.AuditRecord.toResponse(): AuditLogResponse = AuditLogRespons
     action = action,
     actor = actor,
     reason = reason,
-    createdAt = createdAt.toString()
+    createdAt = createdAt.toNairobiTimestamp()
 )
