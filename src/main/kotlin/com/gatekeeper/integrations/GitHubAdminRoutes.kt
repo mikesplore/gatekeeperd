@@ -34,7 +34,9 @@ fun Application.configureGitHubAdminRoutes() {
                 call.respond(
                     GitHubStatusResponse(
                         configured = GitHubAppClient.isConfigured(),
-                        connected = installation != null || GitHubAppClient.isConfigured(),
+                        // Environment credentials configure the worker, but do not prove
+                        // that this admin completed the GitHub App installation flow.
+                        connected = installation != null,
                         appId = AppConfig.githubAppId,
                         installationId = installation?.installationId ?: AppConfig.githubAppInstallationId,
                         accountLogin = installation?.accountLogin,
