@@ -168,7 +168,10 @@ class DockerService(dockerSocketPath: String) {
         client.createNetworkCmd().withName(name).withDriver(driver).exec()
     }
 
-    fun deleteNetwork(name: String) { client.removeNetworkCmd(name).exec() }
+    fun deleteNetwork(name: String) {
+        require(name != "bridge" && name != "host" && name != "none") { "Docker built-in networks cannot be deleted" }
+        client.removeNetworkCmd(name).exec()
+    }
 
     fun listVolumes(): List<VolumeInfo> = client.listVolumesCmd().exec().volumes.orEmpty().map {
         VolumeInfo(it.name ?: "", it.driver ?: "", it.mountpoint ?: "", "local")
