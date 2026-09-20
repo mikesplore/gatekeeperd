@@ -471,6 +471,8 @@ Successful block updates and rollbacks are recorded in the project audit log.
 
 ## Deployment operations
 
+Registry credentials are managed through `GET /api/admin/registries`, `PUT /api/admin/registries/{registry}`, and `DELETE /api/admin/registries/{registry}`. Passwords are AES-256-GCM encrypted at rest and never returned. The deployment worker performs registry-scoped `docker login --password-stdin` before push/pull operations.
+
 Deployment administration is JWT-protected:
 
 - `POST /api/admin/deployments` queues a GitHub-to-container deployment. The request accepts `repository`, `gitRef`, `registry` (`docker.io` or a registry host), `imageName`, `imageTag`, optional `containerName`, published `hostPort`/`containerPort`, `network`, `restartPolicy`, and optional `projectSlug`.

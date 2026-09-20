@@ -4,6 +4,7 @@ import com.gatekeeper.api.InputValidators
 import com.gatekeeper.admin.configureNginxAdminRoutes
 import com.gatekeeper.admin.configureDeploymentAdminRoutes
 import com.gatekeeper.admin.configureSystemAdminRoutes
+import com.gatekeeper.admin.configureRegistryAdminRoutes
 import com.gatekeeper.admin.configurePaymentAdminRoutes
 import com.gatekeeper.admin.configureProjectAdminRoutes
 import com.gatekeeper.admin.configureOperationsAdminRoutes
@@ -70,6 +71,7 @@ fun Application.module() {
     configureNginxAdminRoutes()
     configureDeploymentAdminRoutes()
     configureSystemAdminRoutes()
+    configureRegistryAdminRoutes()
     configurePaystackWebhookRoutes()
     configureMpesaRoutes()
     configureGitHubWebhookRoutes()

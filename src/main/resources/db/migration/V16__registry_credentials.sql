@@ -1,0 +1,7 @@
+CREATE TABLE IF NOT EXISTS registry_credentials (
+    registry VARCHAR(255) PRIMARY KEY,
+    username VARCHAR(255) NOT NULL,
+    password_encrypted TEXT NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);

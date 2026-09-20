@@ -3,6 +3,7 @@ package com.gatekeeper.deployment
 import com.gatekeeper.db.repositories.DeploymentJobRepository
 import com.gatekeeper.db.repositories.ProjectRepository
 import com.gatekeeper.db.repositories.AuditRepository
+import com.gatekeeper.db.repositories.RegistryCredentialRepository
 import com.gatekeeper.config.AppConfig
 import com.gatekeeper.docker.CreateContainerRequest
 import com.gatekeeper.docker.DockerService
@@ -15,6 +16,7 @@ import java.nio.file.Path
 import java.util.concurrent.atomic.AtomicBoolean
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.util.UUID
 
 object DeploymentWorker {
     private val logger = LoggerFactory.getLogger("com.gatekeeper.deployment.DeploymentWorker")
@@ -43,6 +45,9 @@ object DeploymentWorker {
             val commit = commandOutput(workspace, listOf("git", "rev-parse", "HEAD")).trim()
             DeploymentJobRepository.update(job.id, "checked_out", "Repository checked out", commitSha = commit)
             val image = registryImage(job.registry, job.imageName, job.imageTag)
+            RegistryCredentialRepository.find(job.registry)?.let { credential ->
+                dockerLogin(job.id, job.registry, credential.username, credential.password)
+            }
             DeploymentJobRepository.update(job.id, "building", "Building $image")
             runCommand(job.id, workspace, listOf("docker", "build", "--tag", image, workspace.toString()))
             DeploymentJobRepository.update(job.id, "pushing", "Pushing $image")
@@ -149,6 +154,16 @@ object DeploymentWorker {
         val process = builder.start()
         process.inputStream.bufferedReader().useLines { lines -> lines.forEach { DeploymentJobRepository.update(id, log = it) } }
         if (process.waitFor() != 0) error("Command failed: ${command.first()}")
+    }
+
+    private fun dockerLogin(id: UUID, registry: String, username: String, password: String) {
+        val host = if (registry == "docker.io") "https://index.docker.io/v1/" else registry
+        val process = ProcessBuilder("docker", "login", host, "--username", username, "--password-stdin")
+            .redirectErrorStream(true).start()
+        process.outputStream.bufferedWriter().use { it.write(password); it.newLine() }
+        val output = process.inputStream.bufferedReader().readText()
+        if (process.waitFor() != 0) error("Docker registry authentication failed for $registry: ${output.trim().take(300)}")
+        DeploymentJobRepository.update(id, "registry_authenticated", "Authenticated to registry $registry")
     }
 
     private fun commandOutput(directory: Path, command: List<String>): String = ProcessBuilder(command).directory(directory.toFile()).start().let { process ->
