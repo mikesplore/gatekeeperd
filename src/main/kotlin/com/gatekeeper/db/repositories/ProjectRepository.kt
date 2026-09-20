@@ -21,6 +21,19 @@ object ProjectRepository {
             .mapNotNull { row -> row[Projects.deployImageName]?.let { AutoDeployTarget(row[Projects.slug], repository, gitRef, it, row[Projects.deployImageTag], row[Projects.containerName]) } }
     }
 
+    fun updateGithubDeployment(slug: String, repository: String?, gitRef: String, imageName: String?, imageTag: String, autoDeploy: Boolean): ProjectRecord? = transaction {
+        val existing = Projects.selectAll().where { (Projects.slug eq slug) and Projects.deletedAt.isNull() }.singleOrNull() ?: return@transaction null
+        Projects.update({ Projects.id eq existing[Projects.id] }) {
+            it[githubRepository] = repository
+            it[Projects.githubRef] = gitRef
+            it[deployImageName] = imageName
+            it[deployImageTag] = imageTag
+            it[Projects.autoDeploy] = autoDeploy
+            it[updatedAt] = LocalDateTime.now()
+        }
+        findBySlug(slug)
+    }
+
     private const val REDIS_KEY_PREFIX = "project:status:"
 
     data class ProjectRecord(
