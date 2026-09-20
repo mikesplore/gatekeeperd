@@ -1,6 +1,7 @@
 package com.gatekeeper.integrations
 
 import com.gatekeeper.config.AppConfig
+import com.gatekeeper.db.repositories.GitHubAppInstallationRepository
 import io.ktor.client.*
 import io.ktor.client.call.*
 import io.ktor.client.request.*
@@ -23,11 +24,14 @@ object GitHubAppClient {
     private val http = HttpClient { install(ContentNegotiation) { json() } }
 
     fun isConfigured(): Boolean = AppConfig.githubAppId != null &&
-        AppConfig.githubAppInstallationId != null && AppConfig.githubAppPrivateKeyPath.isNotBlank()
+        (AppConfig.githubAppInstallationId != null || runCatching { GitHubAppInstallationRepository.find() }.getOrNull() != null) &&
+        AppConfig.githubAppPrivateKeyPath.isNotBlank()
 
     suspend fun installationToken(): String {
         val appId = AppConfig.githubAppId ?: error("GITHUB_APP_ID is not configured")
-        val installationId = AppConfig.githubAppInstallationId ?: error("GITHUB_APP_INSTALLATION_ID is not configured")
+        val installationId = AppConfig.githubAppInstallationId
+            ?: GitHubAppInstallationRepository.find()?.installationId
+            ?: error("No GitHub App installation is configured")
         val key = loadPrivateKey()
         val now = Instant.now().epochSecond
         val header = base64Url("{\"alg\":\"RS256\",\"typ\":\"JWT\"}")
