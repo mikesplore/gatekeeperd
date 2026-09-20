@@ -10,6 +10,21 @@ import io.ktor.server.response.respond
 import io.ktor.server.response.respondRedirect
 import io.ktor.server.routing.*
 import java.util.UUID
+import kotlinx.serialization.Serializable
+
+@Serializable
+private data class GitHubStatusResponse(
+    val configured: Boolean,
+    val connected: Boolean,
+    val appId: Long? = null,
+    val installationId: Long? = null,
+    val accountLogin: String? = null,
+    val accountType: String? = null,
+    val appSlug: String? = null,
+)
+
+@Serializable
+private data class GitHubInstallUrlResponse(val url: String, val callbackUrl: String? = null)
 
 fun Application.configureGitHubAdminRoutes() {
     routing {
@@ -17,14 +32,14 @@ fun Application.configureGitHubAdminRoutes() {
             get("/api/admin/github/status") {
                 val installation = GitHubAppInstallationRepository.find()
                 call.respond(
-                    mapOf(
-                        "configured" to GitHubAppClient.isConfigured(),
-                        "appId" to AppConfig.githubAppId,
-                        "installationId" to (installation?.installationId ?: AppConfig.githubAppInstallationId),
-                        "accountLogin" to installation?.accountLogin,
-                        "accountType" to installation?.accountType,
-                        "appSlug" to AppConfig.githubAppSlug.takeIf { it.isNotBlank() },
-                        "connected" to (installation != null || GitHubAppClient.isConfigured()),
+                    GitHubStatusResponse(
+                        configured = GitHubAppClient.isConfigured(),
+                        connected = installation != null || GitHubAppClient.isConfigured(),
+                        appId = AppConfig.githubAppId,
+                        installationId = installation?.installationId ?: AppConfig.githubAppInstallationId,
+                        accountLogin = installation?.accountLogin,
+                        accountType = installation?.accountType,
+                        appSlug = AppConfig.githubAppSlug.takeIf { it.isNotBlank() },
                     )
                 )
             }
@@ -38,7 +53,7 @@ fun Application.configureGitHubAdminRoutes() {
                 val state = UUID.randomUUID().toString()
                 GitHubAppInstallationRepository.createPendingState(state)
                 val separator = if (url.contains("?")) "&" else "?"
-                call.respond(mapOf("url" to "$url${separator}state=$state", "callbackUrl" to AppConfig.githubCallbackUrl.takeIf { it.isNotBlank() }))
+                call.respond(GitHubInstallUrlResponse("$url${separator}state=$state", AppConfig.githubCallbackUrl.takeIf { it.isNotBlank() }))
             }
         }
 
