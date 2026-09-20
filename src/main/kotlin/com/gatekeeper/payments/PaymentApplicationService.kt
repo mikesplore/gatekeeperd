@@ -53,6 +53,7 @@ object PaymentApplicationService {
         AuditRepository.write(project.id, "payment_received", actor, "Payment ref=$reference provider=$provider amount=$amount remaining=$remainingAfterPayment verified via $verifiedVia")
         ProjectRepository.invalidateCache(project.slug)
         ScribedIntegrationClient.notifyPayment(project, provider.name.lowercase(), reference, amount.toPlainString(), currency ?: project.currency, paidAt.toString())
+        ScribedIntegrationClient.notifyLedger(project, "payment-$provider-$reference")
         logger.info("Payment applied: provider=$provider project=$projectSlug ref=$reference")
         return true
     }

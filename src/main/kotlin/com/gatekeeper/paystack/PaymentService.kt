@@ -93,6 +93,7 @@ object PaymentService {
             reason = "Payment ref=$reference verified via $verifiedVia; due date cleared"
         )
         ProjectRepository.invalidateCache(projectSlug)
+        ScribedIntegrationClient.notifyLedger(project, "payment-paystack-$reference")
 
         logger.info("Payment applied and project activated: $projectSlug, ref=$reference via $verifiedVia")
         return true

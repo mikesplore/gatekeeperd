@@ -537,6 +537,7 @@ fun Application.configureProjectAdminRoutes() {
                     actor,
                     "${type.name} amount=$amount oldBalance=$oldBalance newBalance=$newBalance reason=${body.reason.trim()}"
                 )
+                ScribedIntegrationClient.notifyLedger(project, "adjustment-${adjustment.id}")
                 ProjectRepository.invalidateCache(slug)
                 call.respond(ProjectAdjustmentResponse(adjustment.id.toString(), project.id.toString(), type.name, amount.toDouble(), adjustment.reason, actor, adjustment.createdAt.toString(), oldBalance.toDouble(), newBalance.toDouble()))
             }

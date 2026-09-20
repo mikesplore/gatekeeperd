@@ -14,10 +14,15 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.decodeFromJsonElement
 import com.gatekeeper.db.repositories.IntegrationOutboxRepository
+import com.gatekeeper.db.repositories.ProjectAdjustmentRepository
+import com.gatekeeper.db.tables.AdjustmentType
+import com.gatekeeper.payments.ProjectBalanceService
 import io.ktor.client.statement.bodyAsText
 
 @Serializable data class ScribedSuspensionPayload(val project_id: String, val project_slug: String, val status: String, val reason: String, val occurred_at: String)
 @Serializable data class ScribedPaymentPayload(val project_id: String, val project_slug: String, val provider: String, val provider_reference: String, val amount: String, val currency: String, val paid_at: String, val status: String = "success")
+@Serializable data class ScribedLedgerAdjustment(val id: String, val type: String, val amount: String, val reason: String, val actor: String)
+@Serializable data class ScribedLedgerPayload(val project_id: String, val project_slug: String, val ledger_version: String, val base_amount: String, val additional_charges: String, val discounts: String, val successful_payments: String, val outstanding_balance: String, val currency: String, val adjustments: List<ScribedLedgerAdjustment>)
 
 object ScribedIntegrationClient {
     private val logger = LoggerFactory.getLogger("com.gatekeeper.integrations.ScribedIntegrationClient")
@@ -61,11 +66,24 @@ object ScribedIntegrationClient {
         IntegrationOutboxRepository.enqueue("payment", "payment:${project.id}:$provider:$reference", json.encodeToString(ScribedPaymentPayload(project.id.toString(), project.slug, provider, reference, amount, currency, paidAt)))
     }
 
+    fun notifyLedger(project: ProjectRepository.ProjectRecord, ledgerVersion: String) {
+        val base = AppConfig.scribedCallbackUrl.trim().trimEnd('/')
+        if (base.isBlank() || AppConfig.scribedIntegrationSecret.trim().isBlank()) return
+        val adjustments = ProjectAdjustmentRepository.findByProjectId(project.id).map { ScribedLedgerAdjustment(it.id.toString(), it.type.name, it.amount.toPlainString(), it.reason, it.actor) }
+        val payload = ScribedLedgerPayload(project.id.toString(), project.slug, ledgerVersion,
+            ProjectBalanceService.originalCharge(project).toPlainString(),
+            ProjectBalanceService.additionalCharges(project).toPlainString(),
+            ProjectBalanceService.discounts(project).toPlainString(),
+            ProjectBalanceService.successfulPayments(project).toPlainString(),
+            ProjectBalanceService.outstandingBalance(project).toPlainString(), project.currency, adjustments)
+        IntegrationOutboxRepository.enqueue("ledger", "ledger:${project.id}:$ledgerVersion", json.encodeToString(payload))
+    }
+
     suspend fun deliver(event: IntegrationOutboxRepository.Event): Boolean {
         val base = AppConfig.scribedCallbackUrl.trim().trimEnd('/'); val secret = AppConfig.scribedIntegrationSecret.trim()
         val apiToken = AppConfig.scribedApiToken.trim()
         if (base.isBlank() || secret.isBlank() || apiToken.isBlank()) return false
-        val path = if (event.eventType == "payment") "/integrations/gatekeeper/payments" else "/integrations/gatekeeper/suspensions"
+        val path = when (event.eventType) { "payment" -> "/integrations/gatekeeper/payments"; "ledger" -> "/integrations/gatekeeper/ledger"; else -> "/integrations/gatekeeper/suspensions" }
         return runCatching { http.post("$base$path") { contentType(ContentType.Application.Json); header(HttpHeaders.Authorization, "Bearer $apiToken"); header("X-Gatekeeper-Secret", secret); header("Idempotency-Key", event.idempotencyKey); setBody(event.payload) }.status.isSuccess() }.getOrElse { logger.warn("Scribed outbox delivery failed id=${event.id}: ${it.message}"); false }
     }
 }
