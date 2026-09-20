@@ -34,6 +34,7 @@ import com.gatekeeper.docker.parseImageRef
 import com.gatekeeper.nginx.NginxService
 import com.gatekeeper.nginx.extractConfiguredContainerName
 import com.gatekeeper.paystack.ProjectPaymentService
+import com.gatekeeper.payments.ProjectBalanceService
 import io.ktor.http.*
 import io.ktor.server.application.*
 import io.ktor.server.auth.*
@@ -166,7 +167,7 @@ fun Application.configureProjectAdminRoutes() {
                 call.respond(
                     ProjectsListResponse(
                         projects = filteredProjects.drop(offset).take(limit).map { project ->
-                            val remaining = project.amountDue?.minus(PaymentRepository.successfulAmountForProject(project.id))?.max(java.math.BigDecimal.ZERO)
+                            val remaining = ProjectBalanceService.outstandingBalance(project)
                             project.toResponse(remaining)
                         },
                         total = filteredProjects.size,
@@ -192,7 +193,7 @@ fun Application.configureProjectAdminRoutes() {
                 call.respond(
                     ProjectDetailResponse(
                         project = project.toResponse(
-                            project.amountDue?.minus(PaymentRepository.successfulAmountForProject(project.id))?.max(java.math.BigDecimal.ZERO)
+                            ProjectBalanceService.outstandingBalance(project)
                         ),
                         payments = payments.map { it.toResponse() },
                         audit_log = auditLog.map { it.toResponse() }
