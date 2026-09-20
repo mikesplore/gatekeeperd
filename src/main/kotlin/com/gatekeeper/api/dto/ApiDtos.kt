@@ -4,6 +4,7 @@ import com.gatekeeper.db.repositories.AuditRepository
 import com.gatekeeper.db.repositories.PaymentRepository
 import com.gatekeeper.db.repositories.ProjectRepository
 import kotlinx.serialization.Serializable
+import java.math.BigDecimal
 
 @Serializable
 data class ProjectResponse(
@@ -22,6 +23,7 @@ data class ProjectResponse(
     val clientEmail: String? = null,
     val paystackCustomerCode: String? = null,
     val amountDue: Double? = null,
+    val remainingBalance: Double? = null,
     val currency: String,
     val dueDate: String? = null,
     val gracePeriodDays: Int,
@@ -140,7 +142,7 @@ data class StatusChangeResponse(
     val slug: String
 )
 
-fun ProjectRepository.ProjectRecord.toResponse(): ProjectResponse = ProjectResponse(
+fun ProjectRepository.ProjectRecord.toResponse(remainingBalance: BigDecimal? = null): ProjectResponse = ProjectResponse(
     id = id.toString(),
     slug = slug,
     name = name,
@@ -156,6 +158,7 @@ fun ProjectRepository.ProjectRecord.toResponse(): ProjectResponse = ProjectRespo
     clientEmail = clientEmail,
     paystackCustomerCode = paystackCustomerCode,
     amountDue = amountDue?.toDouble(),
+    remainingBalance = remainingBalance?.toDouble(),
     currency = currency,
     dueDate = dueDate?.toString(),
     gracePeriodDays = gracePeriodDays,

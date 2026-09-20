@@ -160,7 +160,10 @@ fun Application.configureProjectAdminRoutes() {
                     .toList()
                 call.respond(
                     ProjectsListResponse(
-                        projects = filteredProjects.drop(offset).take(limit).map { it.toResponse() },
+                        projects = filteredProjects.drop(offset).take(limit).map { project ->
+                            val remaining = project.amountDue?.minus(PaymentRepository.successfulAmountForProject(project.id))?.max(java.math.BigDecimal.ZERO)
+                            project.toResponse(remaining)
+                        },
                         total = filteredProjects.size,
                         limit = limit,
                         offset = offset
@@ -183,7 +186,9 @@ fun Application.configureProjectAdminRoutes() {
                 val auditLog = AuditRepository.findByProjectId(project.id)
                 call.respond(
                     ProjectDetailResponse(
-                        project = project.toResponse(),
+                        project = project.toResponse(
+                            project.amountDue?.minus(PaymentRepository.successfulAmountForProject(project.id))?.max(java.math.BigDecimal.ZERO)
+                        ),
                         payments = payments.map { it.toResponse() },
                         audit_log = auditLog.map { it.toResponse() }
                     )
