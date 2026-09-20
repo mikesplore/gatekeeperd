@@ -54,7 +54,7 @@ object PaymentService {
         }
 
         val expectedAmount = existing?.amount ?: outstanding
-        if (expectedAmount == null || amountNaira.compareTo(expectedAmount) != 0) {
+        if (amountNaira.compareTo(expectedAmount) != 0) {
             logger.error(
                 "Rejecting payment amount mismatch: ref=$reference project=${project.slug} " +
                     "expected=$expectedAmount received=$amountNaira"
