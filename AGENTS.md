@@ -70,6 +70,15 @@ rtk git status --short
 
 The CI workflow runs `./gradlew --no-daemon test buildFatJar` on Java 21 and publishes `build/libs/gatekeeperd-all.jar` plus its SHA-256 file. Run the relevant tests after Kotlin/API changes, and run the full test/build command before handing off broad changes.
 
+The paired frontend project is located at `/home/mike/Development/gatekeeperd-frontend`. Run its production build from that directory with the NVM-provided Node.js toolchain:
+
+```bash
+cd /home/mike/Development/gatekeeperd-frontend
+rtk env PATH=/home/mike/.nvm/versions/node/v24.20.0/bin:$PATH /home/mike/.nvm/versions/node/v24.20.0/bin/npm run build
+```
+
+The explicit `PATH` is required when Codex runs the command because a non-interactive shell may not load the user's NVM configuration.
+
 ## Commit convention
 
 Commit completed changes as part of the work unless the user explicitly asks not to commit. Before committing:
