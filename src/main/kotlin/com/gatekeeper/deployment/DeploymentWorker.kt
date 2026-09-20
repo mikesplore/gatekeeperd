@@ -29,7 +29,14 @@ object DeploymentWorker {
             runCommand(job.id, workspace, listOf("git", "clone", "--depth", "1", "--branch", job.gitRef, "https://github.com/${job.repository}.git", workspace.toString()))
             val commit = commandOutput(workspace, listOf("git", "rev-parse", "HEAD")).trim()
             DeploymentJobRepository.update(job.id, "checked_out", "Repository checked out", commitSha = commit)
-            DeploymentJobRepository.update(job.id, "awaiting_build", "Checkout complete; build stage is next", status = "awaiting_build")
+            val image = "${job.imageName}:${job.imageTag}"
+            DeploymentJobRepository.update(job.id, "building", "Building $image")
+            runCommand(job.id, workspace, listOf("docker", "build", "--tag", image, workspace.toString()))
+            DeploymentJobRepository.update(job.id, "pushing", "Pushing $image")
+            runCommand(job.id, workspace, listOf("docker", "push", image))
+            DeploymentJobRepository.update(job.id, "pulling", "Pulling $image on the deployment host")
+            runCommand(job.id, workspace, listOf("docker", "pull", image))
+            DeploymentJobRepository.update(job.id, "awaiting_container", "Image is ready; container configuration is next", status = "awaiting_container")
         } catch (error: Exception) {
             DeploymentJobRepository.update(job.id, "failed", error.message ?: "Deployment failed", status = "failed", error = error.message ?: "Deployment failed")
         } finally {
