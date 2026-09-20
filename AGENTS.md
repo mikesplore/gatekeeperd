@@ -86,6 +86,8 @@ The explicit `PATH` is required when Codex runs the command because a non-intera
 
 Commit completed changes as part of the work unless the user explicitly asks not to commit. Before committing:
 
+- commit changes after every fix made
+
 - run the relevant tests
 - run `rtk git diff --check`
 - inspect `rtk git status --short`
