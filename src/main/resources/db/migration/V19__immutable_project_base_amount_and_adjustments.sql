@@ -2,7 +2,7 @@ ALTER TABLE projects ADD COLUMN IF NOT EXISTS base_amount NUMERIC(12, 2);
 
 UPDATE projects
 SET base_amount = amount_due
-WHERE base_amount IS NULL AND amount_due IS NOT NULL;
+WHERE base_amount IS NULL AND amount_due > 0;
 
 ALTER TABLE projects
     ADD CONSTRAINT projects_base_amount_positive
