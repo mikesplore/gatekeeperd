@@ -12,6 +12,8 @@ import kotlinx.serialization.Serializable
 
 @Serializable
 private data class OutboxEventResponse(val id: String, val eventType: String, val idempotencyKey: String, val payload: String, val attempts: Int)
+@Serializable
+private data class OutboxReplayResponse(val replayed: Boolean, val id: String)
 
 fun Application.configureIntegrationAdminRoutes() {
     routing { authenticate("auth-jwt") {
@@ -25,7 +27,7 @@ fun Application.configureIntegrationAdminRoutes() {
             val id = runCatching { UUID.fromString(call.parameters["id"]) }.getOrNull()
             if (id == null) { call.respondError(HttpStatusCode.BadRequest, "invalid_id", "Invalid outbox event id"); return@post }
             IntegrationOutboxRepository.replay(id)
-            call.respond(mapOf("replayed" to true, "id" to id.toString()))
+            call.respond(OutboxReplayResponse(true, id.toString()))
         }
     } }
 }
