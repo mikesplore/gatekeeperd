@@ -58,9 +58,9 @@ class DockerService(dockerSocketPath: String) {
                 base.copy(
                     networks = inspected.networkSettings?.networks?.keys?.sorted().orEmpty(),
                     volumes = inspected.mounts?.mapNotNull { mount ->
-                        val source = mount.source ?: return@mapNotNull null
-                        val destination = mount.destination ?: return@mapNotNull null
-                        VolumeMount(source, destination, mount.mode?.contains("ro") == true)
+                        val source = mount.getSource() ?: return@mapNotNull null
+                        val destination = mount.getDestination() ?: return@mapNotNull null
+                        VolumeMount(source, destination, mount.getMode()?.contains("ro") == true)
                     }.orEmpty()
                 )
             }
