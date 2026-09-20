@@ -14,6 +14,12 @@ import java.time.LocalDateTime
 import java.util.*
 
 object ProjectRepository {
+    data class AutoDeployTarget(val slug: String, val repository: String, val gitRef: String, val imageName: String, val imageTag: String, val containerName: String)
+
+    fun findAutoDeployTargets(repository: String, gitRef: String): List<AutoDeployTarget> = transaction {
+        Projects.selectAll().where { (Projects.githubRepository eq repository) and (Projects.githubRef eq gitRef) and (Projects.autoDeploy eq true) and Projects.deletedAt.isNull() }
+            .mapNotNull { row -> row[Projects.deployImageName]?.let { AutoDeployTarget(row[Projects.slug], repository, gitRef, it, row[Projects.deployImageTag], row[Projects.containerName]) } }
+    }
 
     private const val REDIS_KEY_PREFIX = "project:status:"
 

@@ -17,6 +17,7 @@ object DatabaseMigrations {
         ,Migration("6", "password reset tokens", "db/migration/V6__password_reset_tokens.sql")
         ,Migration("7", "deployment jobs", "db/migration/V7__deployment_jobs.sql")
         ,Migration("8", "deployment container options", "db/migration/V8__deployment_container_options.sql")
+        ,Migration("9", "github deployment mapping", "db/migration/V9__github_deployment_mapping.sql")
     )
 
     fun apply(dataSource: HikariDataSource) {

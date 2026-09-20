@@ -27,6 +27,11 @@ object Projects : Table("projects") {
     val deletedAt = datetime("deleted_at").nullable()
     val createdAt = datetime("created_at").defaultExpression(CurrentDateTime)
     val updatedAt = datetime("updated_at").defaultExpression(CurrentDateTime)
+    val githubRepository = text("github_repository").nullable()
+    val githubRef = text("github_ref").default("main")
+    val deployImageName = text("deploy_image_name").nullable()
+    val deployImageTag = text("deploy_image_tag").default("latest")
+    val autoDeploy = bool("auto_deploy").default(false)
 
     override val primaryKey = PrimaryKey(id)
 }
