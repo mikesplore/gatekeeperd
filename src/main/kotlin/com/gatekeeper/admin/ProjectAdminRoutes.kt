@@ -275,6 +275,27 @@ fun Application.configureProjectAdminRoutes() {
                 call.respondBytes(bytes, ContentType.Application.Pdf)
             }
 
+            get("/api/admin/projects/{slug}/invoice/receipts/{paymentId}") {
+                val slug = call.parameters["slug"]
+                val project = slug?.let { ProjectRepository.findBySlug(it) }
+                if (project == null) {
+                    call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
+                    return@get
+                }
+                val paymentId = call.parameters["paymentId"]?.toLongOrNull()
+                if (paymentId == null) {
+                    call.respondError(HttpStatusCode.BadRequest, "invalid_payment_id", "Invalid receipt payment id")
+                    return@get
+                }
+                val (status, bytes) = ScribedIntegrationClient.receiptPdf(paymentId)
+                if (bytes == null) {
+                    call.respondError(if (status == HttpStatusCode.NotFound) status else HttpStatusCode.BadGateway, "receipt_download_failed", "Unable to download receipt from Scribed")
+                    return@get
+                }
+                call.response.header(HttpHeaders.ContentDisposition, "inline; filename=receipt-${project.slug}-$paymentId.pdf")
+                call.respondBytes(bytes, ContentType.Application.Pdf)
+            }
+
             post("/api/admin/projects/{slug}/invoice/resync") {
                 val slug = call.parameters["slug"]
                 val project = slug?.let { ProjectRepository.findBySlug(it) }

@@ -65,6 +65,20 @@ object ScribedIntegrationClient {
             response.status to response.body<ByteArray>().takeIf { response.status.isSuccess() }
         }.getOrElse { HttpStatusCode.BadGateway to null }
     }
+
+    suspend fun receiptPdf(paymentId: Long): Pair<HttpStatusCode, ByteArray?> {
+        val base = AppConfig.scribedCallbackUrl.trim().trimEnd('/')
+        val secret = AppConfig.scribedIntegrationSecret.trim()
+        val apiToken = AppConfig.scribedApiToken.trim()
+        if (base.isBlank() || secret.isBlank() || apiToken.isBlank()) return HttpStatusCode.ServiceUnavailable to null
+        return runCatching {
+            val response = http.get("$base/payments/$paymentId/receipt") {
+                header(HttpHeaders.Authorization, "Bearer $apiToken")
+                header("X-Gatekeeper-Secret", secret)
+            }
+            response.status to response.body<ByteArray>().takeIf { response.status.isSuccess() }
+        }.getOrElse { HttpStatusCode.BadGateway to null }
+    }
     fun notifySuspension(project: ProjectRepository.ProjectRecord, reason: String) {
         runBlocking {
         val base = AppConfig.scribedCallbackUrl.trim().trimEnd('/')
