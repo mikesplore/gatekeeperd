@@ -52,7 +52,18 @@ class DockerService(dockerSocketPath: String) {
             containers.firstOrNull { container ->
                 container.id.startsWith(containerNameOrId) ||
                         container.names.any { name -> name.removePrefix("/") == containerNameOrId }
-            }?.let { toContainerInfo(it) }
+            }?.let { container ->
+                val base = toContainerInfo(container)
+                val inspected = client.inspectContainerCmd(container.id).exec()
+                base.copy(
+                    networks = inspected.networkSettings?.networks?.keys?.sorted().orEmpty(),
+                    volumes = inspected.mounts?.mapNotNull { mount ->
+                        val source = mount.source ?: return@mapNotNull null
+                        val destination = mount.destination ?: return@mapNotNull null
+                        VolumeMount(source, destination, mount.mode?.contains("ro") == true)
+                    }.orEmpty()
+                )
+            }
         } catch (e: Exception) {
             logger.error("Error getting container $containerNameOrId", e)
             null
@@ -336,7 +347,8 @@ class DockerService(dockerSocketPath: String) {
             status = container.status ?: "unknown",
             state = container.state ?: "unknown",
             ports = ports,
-            created = container.created ?: 0L
+            created = container.created ?: 0L,
+            networks = container.networkSettings?.networks?.keys?.sorted().orEmpty()
         )
     }
 }

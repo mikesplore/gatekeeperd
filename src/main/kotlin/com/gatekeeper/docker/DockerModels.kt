@@ -10,7 +10,9 @@ data class ContainerInfo(
     val status: String,
     val state: String,
     val ports: String,
-    val created: Long
+    val created: Long,
+    val networks: List<String> = emptyList(),
+    val volumes: List<VolumeMount> = emptyList()
 )
 
 @Serializable
