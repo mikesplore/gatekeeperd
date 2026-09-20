@@ -253,6 +253,28 @@ fun Application.configureProjectAdminRoutes() {
                 call.respond(response)
             }
 
+            get("/api/admin/projects/{slug}/invoice/download") {
+                val slug = call.parameters["slug"]
+                val project = slug?.let { ProjectRepository.findBySlug(it) }
+                if (project == null) {
+                    call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
+                    return@get
+                }
+                val lookup = ScribedIntegrationClient.invoiceStatus(project.id.toString())
+                val invoiceId = lookup.body?.get("invoice")?.jsonObject?.get("id")?.jsonPrimitive?.longOrNull
+                if (invoiceId == null) {
+                    call.respondError(HttpStatusCode.NotFound, "invoice_unavailable", "No Scribed invoice is available for this project")
+                    return@get
+                }
+                val (status, bytes) = ScribedIntegrationClient.invoicePdf(invoiceId)
+                if (bytes == null) {
+                    call.respondError(HttpStatusCode.BadGateway, "invoice_download_failed", "Unable to download invoice from Scribed")
+                    return@get
+                }
+                call.response.header(HttpHeaders.ContentDisposition, "attachment; filename=invoice-${project.slug}.pdf")
+                call.respondBytes(bytes, ContentType.Application.Pdf)
+            }
+
             post("/api/admin/projects") {
                 val body = try {
                     call.receive<CreateProjectRequest>()

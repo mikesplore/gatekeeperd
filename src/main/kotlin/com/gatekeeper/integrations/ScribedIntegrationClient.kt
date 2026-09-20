@@ -51,6 +51,20 @@ object ScribedIntegrationClient {
             }
         }.getOrElse { InvoiceLookupResult(null, error = it.message ?: it::class.simpleName) }
     }
+
+    suspend fun invoicePdf(invoiceId: Long): Pair<HttpStatusCode, ByteArray?> {
+        val base = AppConfig.scribedCallbackUrl.trim().trimEnd('/')
+        val secret = AppConfig.scribedIntegrationSecret.trim()
+        val apiToken = AppConfig.scribedApiToken.trim()
+        if (base.isBlank() || secret.isBlank() || apiToken.isBlank()) return HttpStatusCode.ServiceUnavailable to null
+        return runCatching {
+            val response = http.get("$base/invoices/$invoiceId") {
+                header(HttpHeaders.Authorization, "Bearer $apiToken")
+                header("X-Gatekeeper-Secret", secret)
+            }
+            response.status to response.body<ByteArray>().takeIf { response.status.isSuccess() }
+        }.getOrElse { HttpStatusCode.BadGateway to null }
+    }
     fun notifySuspension(project: ProjectRepository.ProjectRecord, reason: String) {
         runBlocking {
         val base = AppConfig.scribedCallbackUrl.trim().trimEnd('/')
