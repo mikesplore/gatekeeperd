@@ -98,6 +98,10 @@ object ScribedIntegrationClient {
         val apiToken = AppConfig.scribedApiToken.trim()
         if (base.isBlank() || secret.isBlank() || apiToken.isBlank()) return false
         val path = when (event.eventType) { "payment" -> "/integrations/gatekeeper/payments"; "ledger" -> "/integrations/gatekeeper/ledger"; else -> "/integrations/gatekeeper/suspensions" }
-        return runCatching { http.post("$base$path") { contentType(ContentType.Application.Json); header(HttpHeaders.Authorization, "Bearer $apiToken"); header("X-Gatekeeper-Secret", secret); header("Idempotency-Key", event.idempotencyKey); setBody(event.payload) }.status.isSuccess() }.getOrElse { logger.warn("Scribed outbox delivery failed id=${event.id}: ${it.message}"); false }
+        return runCatching {
+            val response = http.post("$base$path") { contentType(ContentType.Application.Json); header(HttpHeaders.Authorization, "Bearer $apiToken"); header("X-Gatekeeper-Secret", secret); header("Idempotency-Key", event.idempotencyKey); setBody(event.payload) }
+            if (!response.status.isSuccess()) logger.warn("Scribed outbox delivery rejected id=${event.id} type=${event.eventType} status=${response.status} body=${response.bodyAsText().take(500)}")
+            response.status.isSuccess()
+        }.getOrElse { logger.warn("Scribed outbox delivery failed id=${event.id}: ${it.message}"); false }
     }
 }

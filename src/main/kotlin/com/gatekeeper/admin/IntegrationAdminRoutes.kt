@@ -11,7 +11,7 @@ import java.util.UUID
 import kotlinx.serialization.Serializable
 
 @Serializable
-private data class OutboxEventResponse(val id: String, val eventType: String, val idempotencyKey: String, val payload: String, val attempts: Int)
+private data class OutboxEventResponse(val id: String, val eventType: String, val idempotencyKey: String, val payload: String, val attempts: Int, val status: String, val lastError: String?)
 @Serializable
 private data class OutboxReplayResponse(val replayed: Boolean, val id: String)
 
@@ -19,7 +19,7 @@ fun Application.configureIntegrationAdminRoutes() {
     routing { authenticate("auth-jwt") {
         get("/api/admin/integrations/outbox") {
             val events = IntegrationOutboxRepository.pending().map { event ->
-                OutboxEventResponse(event.id.toString(), event.eventType, event.idempotencyKey, event.payload, event.attempts)
+                OutboxEventResponse(event.id.toString(), event.eventType, event.idempotencyKey, event.payload, event.attempts, event.status, event.lastError)
             }
             call.respond(events)
         }

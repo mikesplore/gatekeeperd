@@ -7,7 +7,7 @@ import java.time.LocalDateTime
 import java.util.UUID
 
 object IntegrationOutboxRepository {
-    data class Event(val id: UUID, val eventType: String, val idempotencyKey: String, val payload: String, val attempts: Int)
+    data class Event(val id: UUID, val eventType: String, val idempotencyKey: String, val payload: String, val attempts: Int, val status: String = "pending", val lastError: String? = null)
     data class Summary(val pending: Long, val processing: Long, val deadLetter: Long, val delivered: Long)
 
     fun summary(): Summary = transaction {
@@ -44,7 +44,7 @@ object IntegrationOutboxRepository {
 
     fun pending(limit: Int = 100): List<Event> = transaction {
         IntegrationOutbox.selectAll().where { IntegrationOutbox.deliveredAt.isNull() }.orderBy(IntegrationOutbox.createdAt).limit(limit).map {
-            Event(it[IntegrationOutbox.id], it[IntegrationOutbox.eventType], it[IntegrationOutbox.idempotencyKey], it[IntegrationOutbox.payload], it[IntegrationOutbox.attempts])
+            Event(it[IntegrationOutbox.id], it[IntegrationOutbox.eventType], it[IntegrationOutbox.idempotencyKey], it[IntegrationOutbox.payload], it[IntegrationOutbox.attempts], it[IntegrationOutbox.status], it[IntegrationOutbox.lastError])
         }
     }
 
