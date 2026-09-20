@@ -28,6 +28,17 @@ data class CustomerPaymentResponse(
 )
 
 @Serializable
+data class CustomerReceiptResponse(
+    val receiptNumber: String,
+    val project: String,
+    val domain: String,
+    val amount: Double,
+    val currency: String,
+    val paidAt: String? = null,
+    val reference: String
+)
+
+@Serializable
 data class CustomerStatusResponse(
     val project: String,
     val name: String,
@@ -98,14 +109,14 @@ fun Application.configureCustomerRoutes() {
             val payment = PaymentRepository.findById(paymentId)?.takeIf { it.projectId == project.id }
                 ?: return@get call.respondError(HttpStatusCode.NotFound, "payment_not_found", "Payment not found")
             if (payment.gatewayStatus != "success") return@get call.respondError(HttpStatusCode.Conflict, "payment_not_complete", "A receipt is available after successful payment")
-            call.respond(mapOf(
-                "receiptNumber" to payment.paystackReference,
-                "project" to project.name,
-                "domain" to project.domain,
-                "amount" to payment.amount.toDouble(),
-                "currency" to project.currency,
-                "paidAt" to payment.paidAt?.toString(),
-                "reference" to payment.paystackReference
+            call.respond(CustomerReceiptResponse(
+                receiptNumber = payment.paystackReference,
+                project = project.name,
+                domain = project.domain,
+                amount = payment.amount.toDouble(),
+                currency = project.currency,
+                paidAt = payment.paidAt?.toString(),
+                reference = payment.paystackReference
             ))
         }
 
