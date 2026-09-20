@@ -184,6 +184,12 @@ fun Application.configureAuthRoutes() {
             call.respond(LoginResponse(JwtConfig.createToken(email, role), nextRefreshToken))
         }
 
+        post("/api/auth/revoke-refresh") {
+            val body = runCatching { call.receive<RefreshRequest>() }.getOrNull()
+            if (body?.refreshToken?.isNotBlank() == true) RedisService.delete("auth:refresh:${resetTokenHash(body.refreshToken)}")
+            call.respond(mapOf("status" to "refresh_revoked"))
+        }
+
         authenticate("auth-jwt") {
             post("/api/auth/password") {
                 val principal = call.principal<JWTPrincipal>()
