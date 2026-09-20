@@ -10,6 +10,7 @@ import io.ktor.client.plugins.contentnegotiation.*
 import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.*
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.SerialName
 import java.nio.file.Files
 import java.security.KeyFactory
 import java.security.PrivateKey
@@ -19,6 +20,8 @@ import java.time.Instant
 import java.util.Base64
 
 @Serializable private data class InstallationTokenResponse(val token: String, val expires_at: String)
+@Serializable private data class InstallationRepositoriesResponse(val repositories: List<GitHubRepository>)
+@Serializable data class GitHubRepository(val full_name: String, @SerialName("private") val isPrivate: Boolean)
 
 object GitHubAppClient {
     private val http = HttpClient { install(ContentNegotiation) { json() } }
@@ -46,6 +49,21 @@ object GitHubAppClient {
         }
         if (!response.status.isSuccess()) error("GitHub installation token request failed: ${response.status}")
         return response.body<InstallationTokenResponse>().token
+    }
+
+    suspend fun repositories(query: String): List<GitHubRepository> {
+        val token = installationToken()
+        val response = http.get("https://api.github.com/installation/repositories") {
+            parameter("per_page", 100)
+            header(HttpHeaders.Authorization, "Bearer $token")
+            header(HttpHeaders.Accept, "application/vnd.github+json")
+            header("X-GitHub-Api-Version", "2022-11-28")
+        }
+        if (!response.status.isSuccess()) error("GitHub repository lookup failed: ${response.status}")
+        val normalized = query.trim().lowercase()
+        return response.body<InstallationRepositoriesResponse>().repositories
+            .filter { normalized.isBlank() || it.full_name.lowercase().contains(normalized) }
+            .take(20)
     }
 
     private fun loadPrivateKey(): PrivateKey {

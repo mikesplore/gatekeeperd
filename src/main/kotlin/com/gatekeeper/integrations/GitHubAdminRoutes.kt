@@ -45,6 +45,14 @@ fun Application.configureGitHubAdminRoutes() {
                     )
                 )
             }
+            get("/api/admin/github/repositories") {
+                val query = call.request.queryParameters["q"].orEmpty()
+                val repositories = runCatching { GitHubAppClient.repositories(query) }.getOrElse {
+                    call.respondError(HttpStatusCode.BadGateway, "github_repository_lookup_failed", "Unable to load GitHub repositories")
+                    return@get
+                }
+                call.respond(repositories)
+            }
             get("/api/admin/github/install-url") {
                 val url = AppConfig.githubAppInstallUrl.takeIf { it.isNotBlank() }
                     ?: AppConfig.githubAppSlug.takeIf { it.isNotBlank() }?.let { "https://github.com/apps/$it/installations/new" }
