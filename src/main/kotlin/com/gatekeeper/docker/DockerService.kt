@@ -125,6 +125,10 @@ class DockerService(dockerSocketPath: String) {
         }
     }
 
+    fun imageDigest(imageRef: String): String? = runCatching {
+        client.inspectImageCmd(imageRef).exec().repoDigests?.firstOrNull()
+    }.getOrNull()
+
     fun hostPortsInUse(): Set<Int> {
         return client.listContainersCmd()
             .withShowAll(true)

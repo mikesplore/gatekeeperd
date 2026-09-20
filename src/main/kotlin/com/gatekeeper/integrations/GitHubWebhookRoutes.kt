@@ -4,6 +4,8 @@ import com.gatekeeper.api.respondError
 import com.gatekeeper.config.AppConfig
 import com.gatekeeper.db.repositories.DeploymentJobRepository
 import com.gatekeeper.db.repositories.ProjectRepository
+import com.gatekeeper.db.repositories.GitHubWebhookRepository
+import com.gatekeeper.db.repositories.AuditRepository
 import com.gatekeeper.deployment.CreateDeploymentRequest
 import io.ktor.http.*
 import io.ktor.server.application.*
@@ -34,7 +36,19 @@ fun Application.configureGitHubWebhookRoutes() {
                 return@post
             }
             val event = call.request.headers["X-GitHub-Event"] ?: "unknown"
+            val delivery = call.request.headers["X-GitHub-Delivery"]
+            if (delivery.isNullOrBlank()) {
+                call.respondError(HttpStatusCode.BadRequest, "missing_github_delivery", "X-GitHub-Delivery is required")
+                return@post
+            }
+            val repository = runCatching { Json.parseToJsonElement(body).jsonObject["repository"]?.jsonObject?.get("full_name")?.jsonPrimitive?.content }.getOrNull()
+            if (!GitHubWebhookRepository.claim(delivery, event, repository)) {
+                call.respond(HttpStatusCode.Accepted, mapOf("status" to "duplicate", "event" to event, "deploymentsQueued" to 0))
+                return@post
+            }
             val queued = if (event == "push") queuePushDeployments(body) else 0
+            GitHubWebhookRepository.setQueuedCount(delivery, queued)
+            AuditRepository.write(null, "github_webhook_received", "github:$delivery", "event=$event repository=${repository ?: "unknown"} queued=$queued")
             call.respond(HttpStatusCode.Accepted, mapOf("status" to "received", "event" to event, "deploymentsQueued" to queued))
         }
     }
@@ -51,6 +65,7 @@ private fun queuePushDeployments(body: String): Int {
             imageName = target.imageName,
             imageTag = target.imageTag,
             containerName = target.containerName
+            , projectSlug = target.slug
         ))
         true
     }

@@ -66,12 +66,12 @@ object AppConfig {
     val scribedCallbackUrl: String = optionalSetting("SCRIBED_CALLBACK_URL", "")
     val scribedIntegrationSecret: String = optionalSetting("SCRIBED_INTEGRATION_SECRET", "")
     val scribedApiToken: String = optionalSetting("SCRIBED_API_TOKEN", "")
-    val githubToken: String = optionalSetting("GITHUB_TOKEN", "")
     val githubAppId: Long? = optionalSetting("GITHUB_APP_ID", "").toLongOrNull()
     val githubAppInstallationId: Long? = optionalSetting("GITHUB_APP_INSTALLATION_ID", "").toLongOrNull()
     val githubClientId: String = optionalSetting("GITHUB_CLIENT_ID", "")
     val githubAppPrivateKeyPath: String = optionalSetting("GITHUB_APP_PRIVATE_KEY_PATH", "")
     val githubWebhookSecret: String = optionalSetting("GITHUB_WEBHOOK_SECRET", "")
+    val deploymentStaleMinutes: Long = optionalSetting("DEPLOYMENT_STALE_MINUTES", "30").toLong()
 
     init {
         logger.info(

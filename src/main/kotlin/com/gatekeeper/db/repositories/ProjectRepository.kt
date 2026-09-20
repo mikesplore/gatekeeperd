@@ -21,6 +21,14 @@ object ProjectRepository {
             .mapNotNull { row -> row[Projects.deployImageName]?.let { AutoDeployTarget(row[Projects.slug], repository, gitRef, it, row[Projects.deployImageTag], row[Projects.containerName]) } }
     }
 
+    fun syncDeployment(slug: String, containerName: String, commit: String?) {
+        transaction {
+            val row = Projects.selectAll().where { (Projects.slug eq slug) and Projects.deletedAt.isNull() }.singleOrNull() ?: return@transaction
+            Projects.update({ Projects.id eq row[Projects.id] }) { it[Projects.containerName] = containerName; it[Projects.updatedAt] = LocalDateTime.now() }
+            AuditLog.insert { it[projectId] = row[Projects.id]; it[action] = "deployment_synchronized"; it[actor] = "deployment-worker"; it[reason] = "container=$containerName commit=${commit ?: "unknown"}" }
+        }
+    }
+
     fun updateGithubDeployment(slug: String, repository: String?, gitRef: String, imageName: String?, imageTag: String, autoDeploy: Boolean): ProjectRecord? = transaction {
         val existing = Projects.selectAll().where { (Projects.slug eq slug) and Projects.deletedAt.isNull() }.singleOrNull() ?: return@transaction null
         Projects.update({ Projects.id eq existing[Projects.id] }) {

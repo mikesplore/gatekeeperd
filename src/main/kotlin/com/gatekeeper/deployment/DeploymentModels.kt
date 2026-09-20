@@ -14,6 +14,7 @@ data class CreateDeploymentRequest(
     val containerPort: Int? = null,
     val network: String = "bridge",
     val restartPolicy: String = "unless-stopped"
+    , val projectSlug: String? = null
 )
 
 @Serializable

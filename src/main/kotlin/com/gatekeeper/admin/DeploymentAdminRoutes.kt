@@ -4,6 +4,7 @@ import com.gatekeeper.api.respondError
 import com.gatekeeper.db.repositories.DeploymentJobRepository
 import com.gatekeeper.deployment.CreateDeploymentRequest
 import com.gatekeeper.deployment.DeploymentJobResponse
+import com.gatekeeper.deployment.DeploymentWorker
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.*
 import io.ktor.server.auth.authenticate
@@ -48,6 +49,12 @@ fun Application.configureDeploymentAdminRoutes() {
             }
             post("/api/admin/deployments/{id}/cancel") { changeDeployment(call, "cancel") }
             post("/api/admin/deployments/{id}/retry") { changeDeployment(call, "retry") }
+            post("/api/admin/deployments/{id}/rollback") {
+                val id = call.parameters["id"]?.let { runCatching { UUID.fromString(it) }.getOrNull() }
+                if (id == null) { call.respondError(HttpStatusCode.BadRequest, "invalid_deployment_id", "Invalid deployment ID"); return@post }
+                if (!DeploymentWorker.rollback(id)) call.respondError(HttpStatusCode.Conflict, "rollback_unavailable", "No healthy previous container is available or rollback failed")
+                else call.respond(mapOf("id" to id.toString(), "status" to "rolled_back"))
+            }
         }
     }
 }

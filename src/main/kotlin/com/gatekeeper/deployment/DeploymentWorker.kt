@@ -1,6 +1,8 @@
 package com.gatekeeper.deployment
 
 import com.gatekeeper.db.repositories.DeploymentJobRepository
+import com.gatekeeper.db.repositories.ProjectRepository
+import com.gatekeeper.db.repositories.AuditRepository
 import com.gatekeeper.config.AppConfig
 import com.gatekeeper.docker.CreateContainerRequest
 import com.gatekeeper.docker.DockerService
@@ -10,6 +12,8 @@ import org.slf4j.LoggerFactory
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.atomic.AtomicBoolean
+import java.net.InetSocketAddress
+import java.net.Socket
 
 object DeploymentWorker {
     private val logger = LoggerFactory.getLogger("com.gatekeeper.deployment.DeploymentWorker")
@@ -18,6 +22,7 @@ object DeploymentWorker {
     fun start(scope: CoroutineScope) {
         if (!started.compareAndSet(false, true)) return
         scope.launch(Dispatchers.IO) {
+            DeploymentJobRepository.recoverStale(AppConfig.deploymentStaleMinutes)
             while (isActive) {
                 runCatching { processNext() }.onFailure { logger.error("Deployment worker cycle failed", it) }
                 delay(1000)
@@ -29,8 +34,9 @@ object DeploymentWorker {
         val job = DeploymentJobRepository.claimNext() ?: return
         val workspace = Files.createTempDirectory("gatekeeper-deployment-${job.id}-")
         try {
+            ensureNotCancelled(job.id)
             DeploymentJobRepository.update(job.id, "cloning", "Cloning ${job.repository}@${job.gitRef}")
-            val githubToken = if (GitHubAppClient.isConfigured()) GitHubAppClient.installationToken() else AppConfig.githubToken
+            val githubToken = GitHubAppClient.installationToken()
             runCommand(job.id, workspace, listOf("git", "clone", "--depth", "1", "--branch", job.gitRef, "https://github.com/${job.repository}.git", workspace.toString()), githubToken)
             val commit = commandOutput(workspace, listOf("git", "rev-parse", "HEAD")).trim()
             DeploymentJobRepository.update(job.id, "checked_out", "Repository checked out", commitSha = commit)
@@ -42,10 +48,14 @@ object DeploymentWorker {
             DeploymentJobRepository.update(job.id, "pulling", "Pulling $image on the deployment host")
             runCommand(job.id, workspace, listOf("docker", "pull", image))
             DeploymentJobRepository.update(job.id, "starting_container", "Starting application container")
+            ensureNotCancelled(job.id)
             val docker = DockerService(AppConfig.dockerSocket)
             try {
+                val digest = docker.imageDigest(image)
+                DeploymentJobRepository.update(job.id, log = "Image digest: ${digest ?: "unavailable"}", imageDigest = digest)
                 val targetName = job.containerName ?: "deployment-${job.id.toString().take(8)}"
                 val existing = job.containerName?.let { docker.getContainer(it) }
+                DeploymentJobRepository.setPreviousContainer(job.id, existing?.name, existing?.image)
                 val candidateName = "${targetName}-${job.id.toString().take(8)}"
                 val ports = if (job.hostPort != null && job.containerPort != null) mapOf(job.hostPort to job.containerPort) else emptyMap()
                 docker.createContainer(CreateContainerRequest(
@@ -56,20 +66,62 @@ object DeploymentWorker {
                     restartPolicy = job.restartPolicy,
                     pullImage = false
                 ))
-                if (docker.containerHealth(candidateName) != "running") {
+                if (!awaitHealthy(docker, candidateName, job.hostPort)) {
                     docker.deleteContainer(candidateName)
-                    error("Replacement container did not reach running state")
+                    error("Replacement container did not become healthy and reachable")
                 }
                 existing?.let { docker.deleteContainer(it.name) }
                 docker.renameContainer(candidateName, targetName)
             } finally { docker.close() }
+            job.projectSlug?.let { ProjectRepository.syncDeployment(it, job.containerName ?: "deployment-${job.id.toString().take(8)}", commit) }
+            AuditRepository.write(null, "deployment_succeeded", "deployment-worker", "job=${job.id} repository=${job.repository} commit=$commit")
             DeploymentJobRepository.update(job.id, "running_container", "Container started successfully", status = "succeeded")
+        } catch (error: CancellationException) {
+            logger.info("Deployment {} cancelled", job.id)
         } catch (error: Exception) {
-            DeploymentJobRepository.update(job.id, "failed", error.message ?: "Deployment failed", status = "failed", error = error.message ?: "Deployment failed")
+            if (!DeploymentJobRepository.isCancelled(job.id)) {
+                AuditRepository.write(null, "deployment_failed", "deployment-worker", "job=${job.id} error=${error.message}")
+                DeploymentJobRepository.update(job.id, "failed", error.message ?: "Deployment failed", status = "failed", error = error.message ?: "Deployment failed")
+            }
         } finally {
             workspace.toFile().deleteRecursively()
         }
     }
+
+    fun rollback(id: java.util.UUID): Boolean {
+        val job = DeploymentJobRepository.find(id) ?: return false
+        val oldImage = job.previousImage ?: return false
+        val target = job.containerName ?: return false
+        val docker = DockerService(AppConfig.dockerSocket)
+        return try {
+            val candidate = "$target-rollback-${id.toString().take(8)}"
+            docker.createContainer(CreateContainerRequest(name = candidate, image = oldImage, ports = if (job.hostPort != null && job.containerPort != null) mapOf(job.hostPort to job.containerPort) else emptyMap(), network = job.network, restartPolicy = job.restartPolicy, pullImage = true))
+            if (!awaitHealthy(docker, candidate, job.hostPort)) { docker.deleteContainer(candidate); return false }
+            docker.getContainer(target)?.let { docker.deleteContainer(it.name) }
+            docker.renameContainer(candidate, target)
+            job.projectSlug?.let { ProjectRepository.syncDeployment(it, target, job.commitSha) }
+            AuditRepository.write(null, "deployment_rolled_back", "deployment-worker", "job=$id image=$oldImage")
+            true
+        } catch (e: Exception) {
+            logger.error("Deployment rollback failed for $id", e); false
+        } finally { docker.close() }
+    }
+
+    private fun ensureNotCancelled(id: java.util.UUID) {
+        if (DeploymentJobRepository.isCancelled(id)) throw CancellationException("Deployment cancelled")
+    }
+
+    private fun awaitHealthy(docker: DockerService, name: String, hostPort: Int?): Boolean {
+        repeat(30) {
+            if (docker.containerHealth(name) == "running" && (hostPort == null || tcpReachable(hostPort))) return true
+            Thread.sleep(1000)
+        }
+        return false
+    }
+
+    private fun tcpReachable(port: Int): Boolean = runCatching {
+        Socket().use { it.connect(InetSocketAddress("127.0.0.1", port), 500); true }
+    }.getOrDefault(false)
 
     private fun runCommand(id: java.util.UUID, directory: Path, command: List<String>, githubToken: String = "") {
         val builder = ProcessBuilder(command).directory(directory.toFile()).redirectErrorStream(true)

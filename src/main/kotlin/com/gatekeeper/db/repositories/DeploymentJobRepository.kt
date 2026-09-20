@@ -11,7 +11,8 @@ data class DeploymentJobRecord(
     val imageName: String, val imageTag: String, val containerName: String?, val hostPort: Int?, val containerPort: Int?, val network: String, val restartPolicy: String,
     val status: String, val currentStep: String,
     val logs: String, val commitSha: String?, val imageDigest: String?, val errorMessage: String?,
-    val createdAt: LocalDateTime, val startedAt: LocalDateTime?, val completedAt: LocalDateTime?, val updatedAt: LocalDateTime
+    val createdAt: LocalDateTime, val startedAt: LocalDateTime?, val completedAt: LocalDateTime?, val updatedAt: LocalDateTime,
+    val previousContainerName: String?, val previousImage: String?, val projectSlug: String?
 )
 
 object DeploymentJobRepository {
@@ -21,7 +22,7 @@ object DeploymentJobRepository {
 
     fun cancel(id: UUID): Boolean = transaction {
         DeploymentJobs.update({ (DeploymentJobs.id eq id) and (DeploymentJobs.status inList listOf("queued", "running", "awaiting_build", "awaiting_container")) }) {
-            it[status] = "cancelled"; it[currentStep] = "cancelled"; it[completedAt] = LocalDateTime.now(); it[updatedAt] = LocalDateTime.now()
+            it[status] = "cancelled"; it[currentStep] = "cancelled"; it[completedAt] = LocalDateTime.now(); it[cancelledAt] = LocalDateTime.now(); it[updatedAt] = LocalDateTime.now()
         } > 0
     }
 
@@ -44,6 +45,7 @@ object DeploymentJobRepository {
             it[containerPort] = request.containerPort
             it[network] = request.network
             it[restartPolicy] = request.restartPolicy
+            it[projectSlug] = request.projectSlug
             it[status] = "queued"
             it[currentStep] = "queued"
         }
@@ -64,12 +66,24 @@ object DeploymentJobRepository {
         find(row[DeploymentJobs.id])
     }
 
-    fun update(id: UUID, step: String? = null, log: String? = null, commitSha: String? = null, status: String? = null, error: String? = null) = transaction {
+    fun recoverStale(maxAgeMinutes: Long): Int = transaction {
+        val cutoff = LocalDateTime.now().minusMinutes(maxAgeMinutes)
+        DeploymentJobs.update({ (DeploymentJobs.status eq "running") and (DeploymentJobs.updatedAt less cutoff) }) {
+            it[status] = "queued"; it[currentStep] = "recovered"; it[errorMessage] = "Recovered after worker restart or timeout"; it[updatedAt] = LocalDateTime.now()
+        }
+    }
+
+    fun isCancelled(id: UUID): Boolean = transaction {
+        DeploymentJobs.selectAll().where { DeploymentJobs.id eq id }.singleOrNull()?.get(DeploymentJobs.status) == "cancelled"
+    }
+
+    fun update(id: UUID, step: String? = null, log: String? = null, commitSha: String? = null, imageDigest: String? = null, status: String? = null, error: String? = null) = transaction {
         val existing = DeploymentJobs.selectAll().where { DeploymentJobs.id eq id }.singleOrNull() ?: return@transaction
         DeploymentJobs.update({ DeploymentJobs.id eq id }) {
             step?.let { value -> it[currentStep] = value }
             log?.let { value -> it[logs] = existing[DeploymentJobs.logs] + value + "\n" }
             commitSha?.let { value -> it[DeploymentJobs.commitSha] = value }
+            imageDigest?.let { value -> it[DeploymentJobs.imageDigest] = value }
             status?.let { value -> it[DeploymentJobs.status] = value }
             error?.let { value -> it[errorMessage] = value }
             if (status == "succeeded" || status == "failed") it[completedAt] = LocalDateTime.now()
@@ -77,10 +91,14 @@ object DeploymentJobRepository {
         }
     }
 
+    fun setPreviousContainer(id: UUID, name: String?, image: String?) = transaction {
+        DeploymentJobs.update({ DeploymentJobs.id eq id }) { it[previousContainerName] = name; it[previousImage] = image; it[updatedAt] = LocalDateTime.now() }
+    }
+
     private fun ResultRow.toRecord() = DeploymentJobRecord(
         this[DeploymentJobs.id], this[DeploymentJobs.repository], this[DeploymentJobs.gitRef], this[DeploymentJobs.registry],
         this[DeploymentJobs.imageName], this[DeploymentJobs.imageTag], this[DeploymentJobs.containerName], this[DeploymentJobs.hostPort], this[DeploymentJobs.containerPort], this[DeploymentJobs.network], this[DeploymentJobs.restartPolicy], this[DeploymentJobs.status], this[DeploymentJobs.currentStep],
         this[DeploymentJobs.logs], this[DeploymentJobs.commitSha], this[DeploymentJobs.imageDigest], this[DeploymentJobs.errorMessage],
-        this[DeploymentJobs.createdAt], this[DeploymentJobs.startedAt], this[DeploymentJobs.completedAt], this[DeploymentJobs.updatedAt]
+        this[DeploymentJobs.createdAt], this[DeploymentJobs.startedAt], this[DeploymentJobs.completedAt], this[DeploymentJobs.updatedAt], this[DeploymentJobs.previousContainerName], this[DeploymentJobs.previousImage], this[DeploymentJobs.projectSlug]
     )
 }

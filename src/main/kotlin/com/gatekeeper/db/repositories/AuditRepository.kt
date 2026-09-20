@@ -16,7 +16,7 @@ object AuditRepository {
         val createdAt: java.time.LocalDateTime
     )
 
-    fun write(projectId: UUID, action: String, actor: String, reason: String?) {
+    fun write(projectId: UUID?, action: String, actor: String, reason: String?) {
         transaction {
             AuditLog.insert {
                 it[AuditLog.projectId] = projectId

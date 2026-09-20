@@ -51,7 +51,24 @@ object GitHubAppClient {
             .replace("-----BEGIN RSA PRIVATE KEY-----", "")
             .replace("-----END RSA PRIVATE KEY-----", "")
             .replace(Regex("\\s"), "")
-        return KeyFactory.getInstance("RSA").generatePrivate(PKCS8EncodedKeySpec(Base64.getDecoder().decode(pem)))
+        val raw = Base64.getDecoder().decode(pem)
+        val pkcs8 = if (Files.readString(java.nio.file.Path.of(AppConfig.githubAppPrivateKeyPath)).contains("BEGIN RSA PRIVATE KEY")) wrapPkcs1(raw) else raw
+        return KeyFactory.getInstance("RSA").generatePrivate(PKCS8EncodedKeySpec(pkcs8))
+    }
+
+    private fun wrapPkcs1(key: ByteArray): ByteArray {
+        val algorithm = byteArrayOf(0x30, 0x0d, 0x06, 0x09, 0x2a, 0x86.toByte(), 0x48, 0x86.toByte(), 0xf7.toByte(), 0x0d, 0x01, 0x01, 0x01, 0x05, 0x00)
+        val body = byteArrayOf(0x02, 0x01, 0x00) + algorithm + der(0x04, key)
+        return der(0x30, body)
+    }
+
+    private fun der(tag: Int, value: ByteArray): ByteArray {
+        val length = when {
+            value.size < 128 -> byteArrayOf(value.size.toByte())
+            value.size < 256 -> byteArrayOf(0x81.toByte(), value.size.toByte())
+            else -> byteArrayOf(0x82.toByte(), (value.size shr 8).toByte(), value.size.toByte())
+        }
+        return byteArrayOf(tag.toByte()) + length + value
     }
 
     private fun base64Url(value: String) = Base64.getUrlEncoder().withoutPadding().encodeToString(value.toByteArray())
