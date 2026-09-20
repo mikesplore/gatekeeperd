@@ -94,20 +94,24 @@ fun Application.configureOperationsAdminRoutes() {
             get("/api/admin/notifications/stream") {
                 val recipient = call.principal<JWTPrincipal>()?.payload?.subject ?: "unknown"
                 call.respondTextWriter(contentType = ContentType.Text.EventStream) {
-                    var lastSeen: String? = null
-                    repeat(20) {
-                        val latest = NotificationRepository.list(recipient, null, null, null, null, null, false, 10)
-                        val fresh = latest.filter { it.id.toString() != lastSeen }
-                        if (fresh.isNotEmpty()) {
-                            lastSeen = fresh.first().id.toString()
-                            val payload = fresh.map { NotificationResponse(it.id.toString(), it.title, it.message, it.severity, it.action, it.createdAt.toString(), it.readAt != null) }
-                            write("data: ${kotlinx.serialization.json.Json.encodeToString(payload)}\n\n")
-                            flush()
-                        } else {
-                            write(": heartbeat\n\n")
-                            flush()
+                    try {
+                        var lastSeen: String? = null
+                        repeat(20) {
+                            val latest = NotificationRepository.list(recipient, null, null, null, null, null, false, 10)
+                            val fresh = latest.filter { it.id.toString() != lastSeen }
+                            if (fresh.isNotEmpty()) {
+                                lastSeen = fresh.first().id.toString()
+                                val payload = fresh.map { NotificationResponse(it.id.toString(), it.title, it.message, it.severity, it.action, it.createdAt.toString(), it.readAt != null) }
+                                write("data: ${kotlinx.serialization.json.Json.encodeToString(payload)}\n\n")
+                                flush()
+                            } else {
+                                write(": heartbeat\n\n")
+                                flush()
+                            }
+                            kotlinx.coroutines.delay(3000)
                         }
-                        kotlinx.coroutines.delay(3000)
+                    } catch (_: Throwable) {
+                        // The browser commonly closes this stream during navigation or reload.
                     }
                 }
             }
