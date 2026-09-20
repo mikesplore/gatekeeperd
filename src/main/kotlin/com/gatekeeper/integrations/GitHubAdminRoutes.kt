@@ -36,7 +36,7 @@ fun Application.configureGitHubAdminRoutes() {
                         configured = GitHubAppClient.isConfigured(),
                         // Environment credentials configure the worker, but do not prove
                         // that this admin completed the GitHub App installation flow.
-                        connected = installation != null,
+                        connected = installation != null && GitHubAppClient.isConfigured(),
                         appId = AppConfig.githubAppId,
                         installationId = installation?.installationId ?: AppConfig.githubAppInstallationId,
                         accountLogin = installation?.accountLogin,
@@ -48,6 +48,7 @@ fun Application.configureGitHubAdminRoutes() {
             get("/api/admin/github/repositories") {
                 val query = call.request.queryParameters["q"].orEmpty()
                 val repositories = runCatching { GitHubAppClient.repositories(query) }.getOrElse {
+                    application.log.warn("GitHub repository lookup failed", it)
                     call.respondError(HttpStatusCode.BadGateway, "github_repository_lookup_failed", "Unable to load GitHub repositories")
                     return@get
                 }

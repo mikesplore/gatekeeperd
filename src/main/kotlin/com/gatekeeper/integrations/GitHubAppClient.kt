@@ -59,7 +59,7 @@ object GitHubAppClient {
             header(HttpHeaders.Accept, "application/vnd.github+json")
             header("X-GitHub-Api-Version", "2022-11-28")
         }
-        if (!response.status.isSuccess()) error("GitHub repository lookup failed: ${response.status}")
+        if (!response.status.isSuccess()) error("GitHub repository lookup failed: ${response.status} ${response.bodyAsText().take(300)}")
         val normalized = query.trim().lowercase()
         return response.body<InstallationRepositoriesResponse>().repositories
             .filter { normalized.isBlank() || it.full_name.lowercase().contains(normalized) }
