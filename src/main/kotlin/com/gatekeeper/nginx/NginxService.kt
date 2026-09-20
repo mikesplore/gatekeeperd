@@ -77,12 +77,12 @@ class NginxService(
 
     fun testNginxConfigDetailed(): NginxTestResult {
         return try {
-            val process = ProcessBuilder("sudo", "/usr/sbin/nginx", "-t").redirectErrorStream(true).start()
+            val process = ProcessBuilder("sudo", "-n", "/usr/sbin/nginx", "-t").redirectErrorStream(true).start()
             val output = process.inputStream.bufferedReader().readText()
             val exitCode = process.waitFor()
             NginxTestResult(exitCode == 0, exitCode, output, OffsetDateTime.now().toString())
         } catch (e: Exception) {
-            NginxTestResult(false, -1, e.message ?: "Failed to execute nginx -t", OffsetDateTime.now().toString())
+            NginxTestResult(false, -1, "Unable to execute nginx -t non-interactively: ${e.message ?: "unknown error"}. Configure sudoers NOPASSWD for the Gatekeeperd service account.", OffsetDateTime.now().toString())
         }
     }
 
@@ -432,11 +432,11 @@ class NginxService(
 
     fun testNginxConfig(): Boolean {
         return try {
-            val process = ProcessBuilder("sudo", "/usr/sbin/nginx", "-t").start()
+            val process = ProcessBuilder("sudo", "-n", "/usr/sbin/nginx", "-t").redirectErrorStream(true).start()
             val exitCode = process.waitFor()
 
             if (exitCode != 0) {
-                val error = process.errorStream.bufferedReader().readText()
+                val error = process.inputStream.bufferedReader().readText()
                 logger.error("Nginx configuration test failed: $error")
                 return false
             }
@@ -455,11 +455,11 @@ class NginxService(
             }
 
             // Executing with 'sudo' so sudoers NOPASSWD kicks in!
-            val process = ProcessBuilder("sudo", "/bin/systemctl", "reload", "nginx").start()
+            val process = ProcessBuilder("sudo", "-n", "/bin/systemctl", "reload", "nginx").redirectErrorStream(true).start()
             val exitCode = process.waitFor()
 
             if (exitCode != 0) {
-                val error = process.errorStream.bufferedReader().readText()
+                val error = process.inputStream.bufferedReader().readText()
                 logger.error("Failed to reload nginx: $error")
                 return false
             }
