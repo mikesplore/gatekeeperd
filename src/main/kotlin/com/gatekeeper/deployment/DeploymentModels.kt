@@ -8,7 +8,12 @@ data class CreateDeploymentRequest(
     val gitRef: String = "main",
     val registry: String = "docker.io",
     val imageName: String,
-    val imageTag: String = "latest"
+    val imageTag: String = "latest",
+    val containerName: String? = null,
+    val hostPort: Int? = null,
+    val containerPort: Int? = null,
+    val network: String = "bridge",
+    val restartPolicy: String = "unless-stopped"
 )
 
 @Serializable

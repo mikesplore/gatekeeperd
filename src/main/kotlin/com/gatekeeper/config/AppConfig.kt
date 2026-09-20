@@ -66,6 +66,7 @@ object AppConfig {
     val scribedCallbackUrl: String = optionalSetting("SCRIBED_CALLBACK_URL", "")
     val scribedIntegrationSecret: String = optionalSetting("SCRIBED_INTEGRATION_SECRET", "")
     val scribedApiToken: String = optionalSetting("SCRIBED_API_TOKEN", "")
+    val githubToken: String = optionalSetting("GITHUB_TOKEN", "")
 
     init {
         logger.info(

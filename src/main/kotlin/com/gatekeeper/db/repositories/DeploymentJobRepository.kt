@@ -8,7 +8,8 @@ import java.util.UUID
 
 data class DeploymentJobRecord(
     val id: UUID, val repository: String, val gitRef: String, val registry: String,
-    val imageName: String, val imageTag: String, val status: String, val currentStep: String,
+    val imageName: String, val imageTag: String, val containerName: String?, val hostPort: Int?, val containerPort: Int?, val network: String, val restartPolicy: String,
+    val status: String, val currentStep: String,
     val logs: String, val commitSha: String?, val imageDigest: String?, val errorMessage: String?,
     val createdAt: LocalDateTime, val startedAt: LocalDateTime?, val completedAt: LocalDateTime?, val updatedAt: LocalDateTime
 )
@@ -23,6 +24,11 @@ object DeploymentJobRepository {
             it[registry] = request.registry
             it[imageName] = request.imageName
             it[imageTag] = request.imageTag
+            it[containerName] = request.containerName
+            it[hostPort] = request.hostPort
+            it[containerPort] = request.containerPort
+            it[network] = request.network
+            it[restartPolicy] = request.restartPolicy
             it[status] = "queued"
             it[currentStep] = "queued"
         }
@@ -58,7 +64,7 @@ object DeploymentJobRepository {
 
     private fun ResultRow.toRecord() = DeploymentJobRecord(
         this[DeploymentJobs.id], this[DeploymentJobs.repository], this[DeploymentJobs.gitRef], this[DeploymentJobs.registry],
-        this[DeploymentJobs.imageName], this[DeploymentJobs.imageTag], this[DeploymentJobs.status], this[DeploymentJobs.currentStep],
+        this[DeploymentJobs.imageName], this[DeploymentJobs.imageTag], this[DeploymentJobs.containerName], this[DeploymentJobs.hostPort], this[DeploymentJobs.containerPort], this[DeploymentJobs.network], this[DeploymentJobs.restartPolicy], this[DeploymentJobs.status], this[DeploymentJobs.currentStep],
         this[DeploymentJobs.logs], this[DeploymentJobs.commitSha], this[DeploymentJobs.imageDigest], this[DeploymentJobs.errorMessage],
         this[DeploymentJobs.createdAt], this[DeploymentJobs.startedAt], this[DeploymentJobs.completedAt], this[DeploymentJobs.updatedAt]
     )
