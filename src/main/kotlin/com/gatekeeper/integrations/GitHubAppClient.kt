@@ -32,8 +32,10 @@ object GitHubAppClient {
 
     suspend fun installationToken(): String {
         val appId = AppConfig.githubAppId ?: error("GITHUB_APP_ID is not configured")
-        val installationId = AppConfig.githubAppInstallationId
-            ?: GitHubAppInstallationRepository.find()?.installationId
+        // Prefer the installation selected through the GitHub connection flow.
+        // The environment value is only a bootstrap fallback and may be stale.
+        val installationId = GitHubAppInstallationRepository.find()?.installationId
+            ?: AppConfig.githubAppInstallationId
             ?: error("No GitHub App installation is configured")
         val key = loadPrivateKey()
         val now = Instant.now().epochSecond
@@ -47,7 +49,7 @@ object GitHubAppClient {
             header(HttpHeaders.Accept, "application/vnd.github+json")
             header("X-GitHub-Api-Version", "2022-11-28")
         }
-        if (!response.status.isSuccess()) error("GitHub installation token request failed: ${response.status}")
+        if (!response.status.isSuccess()) error("GitHub installation token request failed for installation $installationId: ${response.status} ${response.bodyAsText().take(300)}")
         return response.body<InstallationTokenResponse>().token
     }
 
