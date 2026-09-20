@@ -1,0 +1,58 @@
+package com.gatekeeper.integrations
+
+import com.gatekeeper.config.AppConfig
+import io.ktor.client.*
+import io.ktor.client.call.*
+import io.ktor.client.request.*
+import io.ktor.client.statement.*
+import io.ktor.client.plugins.contentnegotiation.*
+import io.ktor.http.*
+import io.ktor.serialization.kotlinx.json.*
+import kotlinx.serialization.Serializable
+import java.nio.file.Files
+import java.security.KeyFactory
+import java.security.PrivateKey
+import java.security.Signature
+import java.security.spec.PKCS8EncodedKeySpec
+import java.time.Instant
+import java.util.Base64
+
+@Serializable private data class InstallationTokenResponse(val token: String, val expires_at: String)
+
+object GitHubAppClient {
+    private val http = HttpClient { install(ContentNegotiation) { json() } }
+
+    fun isConfigured(): Boolean = AppConfig.githubAppId != null &&
+        AppConfig.githubAppInstallationId != null && AppConfig.githubAppPrivateKeyPath.isNotBlank()
+
+    suspend fun installationToken(): String {
+        val appId = AppConfig.githubAppId ?: error("GITHUB_APP_ID is not configured")
+        val installationId = AppConfig.githubAppInstallationId ?: error("GITHUB_APP_INSTALLATION_ID is not configured")
+        val key = loadPrivateKey()
+        val now = Instant.now().epochSecond
+        val header = base64Url("{\"alg\":\"RS256\",\"typ\":\"JWT\"}")
+        val payload = base64Url("{\"iat\":${now - 60},\"exp\":${now + 540},\"iss\":$appId}")
+        val unsigned = "$header.$payload"
+        val signature = Signature.getInstance("SHA256withRSA").apply { initSign(key); update(unsigned.toByteArray()) }.sign()
+        val jwt = "$unsigned.${Base64.getUrlEncoder().withoutPadding().encodeToString(signature)}"
+        val response = http.post("https://api.github.com/app/installations/$installationId/access_tokens") {
+            header(HttpHeaders.Authorization, "Bearer $jwt")
+            header(HttpHeaders.Accept, "application/vnd.github+json")
+            header("X-GitHub-Api-Version", "2022-11-28")
+        }
+        if (!response.status.isSuccess()) error("GitHub installation token request failed: ${response.status}")
+        return response.body<InstallationTokenResponse>().token
+    }
+
+    private fun loadPrivateKey(): PrivateKey {
+        val pem = Files.readString(java.nio.file.Path.of(AppConfig.githubAppPrivateKeyPath))
+            .replace("-----BEGIN PRIVATE KEY-----", "")
+            .replace("-----END PRIVATE KEY-----", "")
+            .replace("-----BEGIN RSA PRIVATE KEY-----", "")
+            .replace("-----END RSA PRIVATE KEY-----", "")
+            .replace(Regex("\\s"), "")
+        return KeyFactory.getInstance("RSA").generatePrivate(PKCS8EncodedKeySpec(Base64.getDecoder().decode(pem)))
+    }
+
+    private fun base64Url(value: String) = Base64.getUrlEncoder().withoutPadding().encodeToString(value.toByteArray())
+}

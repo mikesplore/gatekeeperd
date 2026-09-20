@@ -71,6 +71,7 @@ object AppConfig {
     val githubAppInstallationId: Long? = optionalSetting("GITHUB_APP_INSTALLATION_ID", "").toLongOrNull()
     val githubClientId: String = optionalSetting("GITHUB_CLIENT_ID", "")
     val githubAppPrivateKeyPath: String = optionalSetting("GITHUB_APP_PRIVATE_KEY_PATH", "")
+    val githubWebhookSecret: String = optionalSetting("GITHUB_WEBHOOK_SECRET", "")
 
     init {
         logger.info(

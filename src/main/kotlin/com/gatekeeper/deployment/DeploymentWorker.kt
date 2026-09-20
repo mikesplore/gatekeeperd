@@ -4,6 +4,7 @@ import com.gatekeeper.db.repositories.DeploymentJobRepository
 import com.gatekeeper.config.AppConfig
 import com.gatekeeper.docker.CreateContainerRequest
 import com.gatekeeper.docker.DockerService
+import com.gatekeeper.integrations.GitHubAppClient
 import kotlinx.coroutines.*
 import org.slf4j.LoggerFactory
 import java.nio.file.Files
@@ -24,12 +25,13 @@ object DeploymentWorker {
         }
     }
 
-    private fun processNext() {
+    private suspend fun processNext() {
         val job = DeploymentJobRepository.claimNext() ?: return
         val workspace = Files.createTempDirectory("gatekeeper-deployment-${job.id}-")
         try {
             DeploymentJobRepository.update(job.id, "cloning", "Cloning ${job.repository}@${job.gitRef}")
-            runCommand(job.id, workspace, listOf("git", "clone", "--depth", "1", "--branch", job.gitRef, "https://github.com/${job.repository}.git", workspace.toString()), authenticated = true)
+            val githubToken = if (GitHubAppClient.isConfigured()) GitHubAppClient.installationToken() else AppConfig.githubToken
+            runCommand(job.id, workspace, listOf("git", "clone", "--depth", "1", "--branch", job.gitRef, "https://github.com/${job.repository}.git", workspace.toString()), githubToken)
             val commit = commandOutput(workspace, listOf("git", "rev-parse", "HEAD")).trim()
             DeploymentJobRepository.update(job.id, "checked_out", "Repository checked out", commitSha = commit)
             val image = "${job.imageName}:${job.imageTag}"
@@ -69,12 +71,12 @@ object DeploymentWorker {
         }
     }
 
-    private fun runCommand(id: java.util.UUID, directory: Path, command: List<String>, authenticated: Boolean = false) {
+    private fun runCommand(id: java.util.UUID, directory: Path, command: List<String>, githubToken: String = "") {
         val builder = ProcessBuilder(command).directory(directory.toFile()).redirectErrorStream(true)
-        if (authenticated && AppConfig.githubToken.isNotBlank()) {
+        if (githubToken.isNotBlank()) {
             builder.environment()["GIT_CONFIG_COUNT"] = "1"
             builder.environment()["GIT_CONFIG_KEY_0"] = "http.extraheader"
-            builder.environment()["GIT_CONFIG_VALUE_0"] = "AUTHORIZATION: bearer ${AppConfig.githubToken}"
+            builder.environment()["GIT_CONFIG_VALUE_0"] = "AUTHORIZATION: bearer $githubToken"
         }
         val process = builder.start()
         process.inputStream.bufferedReader().useLines { lines -> lines.forEach { DeploymentJobRepository.update(id, log = it) } }
