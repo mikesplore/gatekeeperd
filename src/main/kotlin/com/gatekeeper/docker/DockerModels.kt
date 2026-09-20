@@ -13,7 +13,18 @@ data class ContainerInfo(
     val created: Long,
     val networks: List<String> = emptyList(),
     val volumes: List<VolumeMount> = emptyList(),
-    val restartPolicy: String = "unknown"
+    val restartPolicy: String = "unknown",
+    val imageId: String? = null,
+    val command: String? = null,
+    val entrypoint: List<String> = emptyList(),
+    val workingDirectory: String? = null,
+    val user: String? = null,
+    val environmentKeys: List<String> = emptyList(),
+    val labels: Map<String, String> = emptyMap(),
+    val restartCount: Int = 0,
+    val oomKilled: Boolean = false,
+    val health: String? = null,
+    val ipAddresses: Map<String, String> = emptyMap()
 )
 
 @Serializable

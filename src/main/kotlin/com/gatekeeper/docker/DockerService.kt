@@ -62,7 +62,20 @@ class DockerService(dockerSocketPath: String) {
                         val destination = mount.getDestination()?.path ?: return@mapNotNull null
                         VolumeMount(source, destination, mount.getMode()?.contains("ro") == true)
                     }.orEmpty(),
-                    restartPolicy = inspected.hostConfig?.restartPolicy?.name ?: "unknown"
+                    restartPolicy = inspected.hostConfig?.restartPolicy?.name ?: "unknown",
+                    imageId = inspected.imageId,
+                    command = inspected.path,
+                    entrypoint = inspected.config?.entrypoint?.toList().orEmpty(),
+                    workingDirectory = inspected.config?.workingDir,
+                    user = inspected.config?.user,
+                    environmentKeys = inspected.config?.env?.mapNotNull { it.substringBefore('=', "").takeIf(String::isNotBlank) }?.sorted().orEmpty(),
+                    labels = inspected.config?.labels.orEmpty(),
+                    restartCount = inspected.restartCount ?: 0,
+                    oomKilled = inspected.state?.oomKilled == true,
+                    health = inspected.state?.health?.status,
+                    ipAddresses = inspected.networkSettings?.networks?.mapNotNull { (network, details) ->
+                        details.ipAddress?.takeIf(String::isNotBlank)?.let { network to it }
+                    }?.toMap().orEmpty()
                 )
             }
         } catch (e: Exception) {
