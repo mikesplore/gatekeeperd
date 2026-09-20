@@ -33,6 +33,8 @@ data class ProjectResponse(
 data class PaymentResponse(
     val id: String,
     val projectId: String,
+    val provider: String,
+    val providerReference: String,
     val paystackReference: String,
     val amount: Double,
     val status: String,
@@ -49,6 +51,8 @@ data class PaymentAdminResponse(
     val projectId: String,
     val projectName: String,
     val projectSlug: String,
+    val provider: String,
+    val providerReference: String,
     val paystackReference: String,
     val amount: Double,
     val gatewayStatus: String,
@@ -154,6 +158,8 @@ fun ProjectRepository.ProjectRecord.toResponse(): ProjectResponse = ProjectRespo
 fun PaymentRepository.PaymentRecord.toResponse(): PaymentResponse = PaymentResponse(
     id = id.toString(),
     projectId = projectId.toString(),
+    provider = provider.name.lowercase(),
+    providerReference = providerReference,
     paystackReference = paystackReference,
     amount = amount.toDouble(),
     status = status,
