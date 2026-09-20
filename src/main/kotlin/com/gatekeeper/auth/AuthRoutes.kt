@@ -4,6 +4,7 @@ import com.gatekeeper.api.InputValidators
 import com.gatekeeper.api.respondError
 import com.gatekeeper.db.tables.Users
 import com.gatekeeper.db.tables.PasswordResetTokens
+import com.gatekeeper.db.repositories.AuditRepository
 import com.gatekeeper.integrations.ResendClient
 import com.gatekeeper.config.AppConfig
 import com.gatekeeper.plugins.JwtConfig
@@ -229,6 +230,7 @@ fun Application.configureAuthRoutes() {
                 transaction {
                     Users.update({ Users.email eq email }) { it[Users.passwordHash] = hash }
                 }
+                AuditRepository.write(null, "Password Changed", email, "Account password changed")
                 call.respond(mapOf("status" to "password_changed"))
             }
 
@@ -266,6 +268,7 @@ fun Application.configureAuthRoutes() {
                         it[Users.displayName] = body.displayName?.trim()?.takeIf(String::isNotBlank)
                     }
                 }
+                AuditRepository.write(null, "Profile Updated", email, "Display name changed")
                 call.respond(mapOf("status" to "profile_updated"))
             }
 
