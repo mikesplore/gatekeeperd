@@ -2,17 +2,19 @@ package com.gatekeeper.integrations
 
 import com.gatekeeper.config.AppConfig
 import io.ktor.client.*
-import io.ktor.client.call.body
+import io.ktor.client.plugins.contentnegotiation.*
 import io.ktor.client.request.*
 import io.ktor.http.*
+import io.ktor.serialization.kotlinx.json.*
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
 import org.slf4j.LoggerFactory
 
 @Serializable private data class ResendEmail(val from: String, val to: List<String>, val subject: String, val html: String)
 
 object ResendClient {
     private val logger = LoggerFactory.getLogger("com.gatekeeper.integrations.ResendClient")
-    private val http = HttpClient()
+    private val http = HttpClient { install(ContentNegotiation) { json(Json) } }
 
     suspend fun sendPasswordReset(email: String, link: String): Boolean {
         val key = AppConfig.resendApiKey.trim()
