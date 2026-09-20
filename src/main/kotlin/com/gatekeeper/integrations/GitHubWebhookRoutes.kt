@@ -19,6 +19,10 @@ import java.util.Base64
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.Serializable
+
+@Serializable
+private data class GitHubWebhookResponse(val status: String, val event: String, val deploymentsQueued: Int)
 
 fun Application.configureGitHubWebhookRoutes() {
     routing {
@@ -43,13 +47,13 @@ fun Application.configureGitHubWebhookRoutes() {
             }
             val repository = runCatching { Json.parseToJsonElement(body).jsonObject["repository"]?.jsonObject?.get("full_name")?.jsonPrimitive?.content }.getOrNull()
             if (!GitHubWebhookRepository.claim(delivery, event, repository)) {
-                call.respond(HttpStatusCode.Accepted, mapOf("status" to "duplicate", "event" to event, "deploymentsQueued" to 0))
+                call.respond(HttpStatusCode.Accepted, GitHubWebhookResponse("duplicate", event, 0))
                 return@post
             }
             val queued = if (event == "push") queuePushDeployments(body) else 0
             GitHubWebhookRepository.setQueuedCount(delivery, queued)
             AuditRepository.write(null, "github_webhook_received", "github:$delivery", "event=$event repository=${repository ?: "unknown"} queued=$queued")
-            call.respond(HttpStatusCode.Accepted, mapOf("status" to "received", "event" to event, "deploymentsQueued" to queued))
+            call.respond(HttpStatusCode.Accepted, GitHubWebhookResponse("received", event, queued))
         }
     }
 }
