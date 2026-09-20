@@ -244,8 +244,28 @@ class DockerService(dockerSocketPath: String) {
         client.removeNetworkCmd(name).exec()
     }
 
-    fun listVolumes(): List<VolumeInfo> = client.listVolumesCmd().exec().volumes.orEmpty().map {
-        VolumeInfo(it.name ?: "", it.driver ?: "", it.mountpoint ?: "", "local")
+    fun listVolumes(): List<VolumeInfo> {
+        val attachedByVolume = client.listContainersCmd().withShowAll(true).exec().flatMap { container ->
+            val name = container.names?.firstOrNull()?.trimStart('/') ?: container.id.orEmpty()
+            runCatching {
+                client.inspectContainerCmd(container.id).exec().mounts.orEmpty()
+                    .filter { !it.name.isNullOrBlank() && it.driver?.equals("local", ignoreCase = true) != false }
+                    .map { it.name!! to name }
+            }.getOrDefault(emptyList())
+        }.groupBy({ it.first }, { it.second }).mapValues { (_, names) -> names.distinct().sorted() }
+
+        return client.listVolumesCmd().exec().volumes.orEmpty().map { volume ->
+            val name = volume.name.orEmpty()
+            VolumeInfo(
+                name = name,
+                driver = volume.driver.orEmpty(),
+                mountpoint = volume.mountpoint.orEmpty(),
+                scope = "local",
+                labels = volume.labels.orEmpty(),
+                options = volume.options.orEmpty(),
+                containers = attachedByVolume[name].orEmpty()
+            )
+        }
     }
 
     fun createVolume(name: String, driver: String = "local") {

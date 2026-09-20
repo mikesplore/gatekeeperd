@@ -61,7 +61,16 @@ data class NetworkInfo(
 data class NetworkEndpoint(val container: String, val containerId: String, val ipv4: String?, val ipv6: String?, val macAddress: String?, val endpointId: String?)
 
 @Serializable
-data class VolumeInfo(val name: String, val driver: String, val mountpoint: String, val scope: String)
+data class VolumeInfo(
+    val name: String,
+    val driver: String,
+    val mountpoint: String,
+    val scope: String,
+    val createdAt: String? = null,
+    val labels: Map<String, String> = emptyMap(),
+    val options: Map<String, String> = emptyMap(),
+    val containers: List<String> = emptyList()
+)
 
 @Serializable
 data class CreateNetworkRequest(val name: String, val driver: String = "bridge")
