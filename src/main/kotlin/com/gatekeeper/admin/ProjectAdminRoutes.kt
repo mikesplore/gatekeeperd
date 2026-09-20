@@ -212,6 +212,7 @@ fun Application.configureProjectAdminRoutes() {
                     return@get
                 }
                 val payments = PaymentRepository.findByProjectId(project.id)
+                val adjustments = ProjectAdjustmentRepository.findByProjectId(project.id)
                 val auditLog = AuditRepository.findByProjectId(project.id)
                 call.respond(
                     ProjectDetailResponse(
@@ -219,7 +220,8 @@ fun Application.configureProjectAdminRoutes() {
                             ProjectBalanceService.outstandingBalance(project)
                         ),
                         payments = payments.map { it.toResponse() },
-                        audit_log = auditLog.map { it.toResponse() }
+                        audit_log = auditLog.map { it.toResponse() },
+                        adjustments = adjustments.map { it.toResponse() }
                     )
                 )
             }

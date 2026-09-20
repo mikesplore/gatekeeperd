@@ -3,6 +3,8 @@ package com.gatekeeper.api.dto
 import com.gatekeeper.db.repositories.AuditRepository
 import com.gatekeeper.db.repositories.PaymentRepository
 import com.gatekeeper.db.repositories.ProjectRepository
+import com.gatekeeper.db.repositories.ProjectAdjustmentRepository
+import com.gatekeeper.payments.ProjectBalanceService
 import kotlinx.serialization.Serializable
 
 import java.math.BigDecimal
@@ -35,6 +37,9 @@ data class ProjectResponse(
     val paystackCustomerCode: String? = null,
     val amountDue: Double? = null,
     val baseAmount: Double? = null,
+    val additionalCharges: Double = 0.0,
+    val discounts: Double = 0.0,
+    val successfulPayments: Double = 0.0,
     val remainingBalance: Double? = null,
     val currency: String,
     val dueDate: String? = null,
@@ -57,6 +62,22 @@ data class PaymentResponse(
     val paidAt: String? = null,
     val rawWebhookPayload: String? = null,
     val createdAt: String
+)
+
+@Serializable
+data class ProjectAdjustmentResponse(
+    val id: String,
+    val projectId: String,
+    val type: String,
+    val amount: Double,
+    val reason: String,
+    val actor: String,
+    val createdAt: String
+)
+
+fun ProjectAdjustmentRepository.AdjustmentRecord.toResponse() = ProjectAdjustmentResponse(
+    id = id.toString(), projectId = projectId.toString(), type = type.name,
+    amount = amount.toDouble(), reason = reason, actor = actor, createdAt = createdAt.toNairobiTimestamp()
 )
 
 @Serializable
@@ -148,7 +169,8 @@ data class AuditLogPageResponse(val entries: List<AuditLogResponse>, val total: 
 data class ProjectDetailResponse(
     val project: ProjectResponse,
     val payments: List<PaymentResponse>,
-    val audit_log: List<AuditLogResponse>
+    val audit_log: List<AuditLogResponse>,
+    val adjustments: List<ProjectAdjustmentResponse> = emptyList()
 )
 
 @Serializable
@@ -174,6 +196,9 @@ fun ProjectRepository.ProjectRecord.toResponse(remainingBalance: BigDecimal? = n
     paystackCustomerCode = paystackCustomerCode,
     amountDue = amountDue?.toDouble(),
     baseAmount = baseAmount?.toDouble(),
+    additionalCharges = ProjectBalanceService.additionalCharges(this).toDouble(),
+    discounts = ProjectBalanceService.discounts(this).toDouble(),
+    successfulPayments = ProjectBalanceService.successfulPayments(this).toDouble(),
     remainingBalance = remainingBalance?.toDouble(),
     currency = currency,
     dueDate = dueDate?.toString(),

@@ -3,6 +3,7 @@ package com.gatekeeper.gate
 import com.gatekeeper.db.repositories.ProjectRepository
 import java.math.BigDecimal
 import java.time.LocalDate
+import com.gatekeeper.payments.ProjectBalanceService
 
 data class PaywallInfo(
     val slug: String,
@@ -18,7 +19,7 @@ data class PaywallInfo(
             slug = project.slug,
             name = project.name,
             domain = project.domain,
-            amountDue = project.amountDue,
+            amountDue = ProjectBalanceService.outstandingBalance(project),
             currency = project.currency,
             dueDate = project.dueDate,
             clientEmail = project.clientEmail

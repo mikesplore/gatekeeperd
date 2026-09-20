@@ -7,6 +7,7 @@ import java.time.LocalDateTime
 import java.util.UUID
 import org.jetbrains.exposed.sql.insert
 import org.jetbrains.exposed.sql.select
+import org.jetbrains.exposed.sql.selectAll
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
 import org.jetbrains.exposed.sql.transactions.transaction
 import org.jetbrains.exposed.sql.and
@@ -45,6 +46,12 @@ object ProjectAdjustmentRepository {
             .select(ProjectAdjustments.amount)
             .where { (ProjectAdjustments.projectId eq projectId) and (ProjectAdjustments.type eq type) }
             .fold(BigDecimal.ZERO) { total, row -> total + row[ProjectAdjustments.amount] }
+    }
+
+    fun findByProjectId(projectId: UUID): List<AdjustmentRecord> = transaction {
+        ProjectAdjustments.selectAll().where { ProjectAdjustments.projectId eq projectId }
+            .orderBy(ProjectAdjustments.createdAt, org.jetbrains.exposed.sql.SortOrder.DESC)
+            .map { it.toRecord() }
     }
 
     private fun org.jetbrains.exposed.sql.ResultRow.toRecord() = AdjustmentRecord(

@@ -7,12 +7,13 @@ import com.gatekeeper.db.tables.AdjustmentType
 import java.math.BigDecimal
 
 object ProjectBalanceService {
+    fun originalCharge(project: ProjectRepository.ProjectRecord): BigDecimal = project.baseAmount ?: project.amountDue ?: BigDecimal.ZERO
+    fun additionalCharges(project: ProjectRepository.ProjectRecord): BigDecimal = ProjectAdjustmentRepository.totalForProject(project.id, AdjustmentType.ADDITIONAL_CHARGE)
+    fun discounts(project: ProjectRepository.ProjectRecord): BigDecimal = ProjectAdjustmentRepository.totalForProject(project.id, AdjustmentType.DISCOUNT)
+    fun successfulPayments(project: ProjectRepository.ProjectRecord): BigDecimal = PaymentRepository.successfulAmountForProject(project.id)
+
     fun outstandingBalance(project: ProjectRepository.ProjectRecord): BigDecimal {
-        val originalCharge = project.baseAmount ?: project.amountDue ?: BigDecimal.ZERO
-        val additionalCharges = ProjectAdjustmentRepository.totalForProject(project.id, AdjustmentType.ADDITIONAL_CHARGE)
-        val discounts = ProjectAdjustmentRepository.totalForProject(project.id, AdjustmentType.DISCOUNT)
-        val successfulPayments = PaymentRepository.successfulAmountForProject(project.id)
-        return (originalCharge + additionalCharges - discounts - successfulPayments).max(BigDecimal.ZERO)
+        return (originalCharge(project) + additionalCharges(project) - discounts(project) - successfulPayments(project)).max(BigDecimal.ZERO)
     }
 
     fun requireOutstandingBalance(project: ProjectRepository.ProjectRecord): BigDecimal =
