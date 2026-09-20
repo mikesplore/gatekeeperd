@@ -8,10 +8,19 @@ import io.ktor.server.auth.authenticate
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import java.util.UUID
+import kotlinx.serialization.Serializable
+
+@Serializable
+private data class OutboxEventResponse(val id: String, val eventType: String, val idempotencyKey: String, val payload: String, val attempts: Int)
 
 fun Application.configureIntegrationAdminRoutes() {
     routing { authenticate("auth-jwt") {
-        get("/api/admin/integrations/outbox") { call.respond(IntegrationOutboxRepository.pending()) }
+        get("/api/admin/integrations/outbox") {
+            val events = IntegrationOutboxRepository.pending().map { event ->
+                OutboxEventResponse(event.id.toString(), event.eventType, event.idempotencyKey, event.payload, event.attempts)
+            }
+            call.respond(events)
+        }
         post("/api/admin/integrations/outbox/{id}/replay") {
             val id = runCatching { UUID.fromString(call.parameters["id"]) }.getOrNull()
             if (id == null) { call.respondError(HttpStatusCode.BadRequest, "invalid_id", "Invalid outbox event id"); return@post }
