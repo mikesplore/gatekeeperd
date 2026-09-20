@@ -2,6 +2,7 @@ package com.gatekeeper
 
 import com.gatekeeper.api.InputValidators
 import com.gatekeeper.admin.configureNginxAdminRoutes
+import com.gatekeeper.admin.configureDeploymentAdminRoutes
 import com.gatekeeper.admin.configurePaymentAdminRoutes
 import com.gatekeeper.admin.configureProjectAdminRoutes
 import com.gatekeeper.admin.configureOperationsAdminRoutes
@@ -26,6 +27,7 @@ import com.gatekeeper.plugins.configureSerialization
 import com.gatekeeper.scheduler.AutoBlockerJob
 import com.gatekeeper.scheduler.ReconciliationJob
 import com.gatekeeper.scheduler.IntegrationOutboxJob
+import com.gatekeeper.deployment.DeploymentWorker
 import io.ktor.server.application.*
 import io.ktor.server.engine.*
 import io.ktor.server.netty.*
@@ -63,6 +65,7 @@ fun Application.module() {
     configureIntegrationAdminRoutes()
     configurePaymentAdminRoutes()
     configureNginxAdminRoutes()
+    configureDeploymentAdminRoutes()
     configurePaystackWebhookRoutes()
     configureMpesaRoutes()
     PaymentReconciliationService.register(PaystackProviderClient())
@@ -74,6 +77,7 @@ fun Application.module() {
     AutoBlockerJob.start(appScope)
     ReconciliationJob.start(appScope)
     IntegrationOutboxJob.start(appScope)
+    DeploymentWorker.start(appScope)
 
     monitor.subscribe(ApplicationStopping) {
         runCatching { PaystackClient.close() }

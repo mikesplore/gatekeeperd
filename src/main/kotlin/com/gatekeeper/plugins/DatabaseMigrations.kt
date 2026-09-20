@@ -15,6 +15,7 @@ object DatabaseMigrations {
         ,Migration("4", "integration outbox", "db/migration/V4__integration_outbox.sql")
         ,Migration("5", "outbox claims and dead letters", "db/migration/V5__outbox_claims_and_dead_letters.sql")
         ,Migration("6", "password reset tokens", "db/migration/V6__password_reset_tokens.sql")
+        ,Migration("7", "deployment jobs", "db/migration/V7__deployment_jobs.sql")
     )
 
     fun apply(dataSource: HikariDataSource) {

@@ -1,0 +1,32 @@
+package com.gatekeeper.deployment
+
+import kotlinx.serialization.Serializable
+
+@Serializable
+data class CreateDeploymentRequest(
+    val repository: String,
+    val gitRef: String = "main",
+    val registry: String = "docker.io",
+    val imageName: String,
+    val imageTag: String = "latest"
+)
+
+@Serializable
+data class DeploymentJobResponse(
+    val id: String,
+    val repository: String,
+    val gitRef: String,
+    val registry: String,
+    val imageName: String,
+    val imageTag: String,
+    val status: String,
+    val currentStep: String,
+    val logs: String,
+    val commitSha: String? = null,
+    val imageDigest: String? = null,
+    val errorMessage: String? = null,
+    val createdAt: String,
+    val startedAt: String? = null,
+    val completedAt: String? = null,
+    val updatedAt: String
+)
