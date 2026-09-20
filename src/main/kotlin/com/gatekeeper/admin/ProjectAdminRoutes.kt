@@ -129,7 +129,14 @@ fun Application.configureProjectAdminRoutes() {
     routing {
         authenticate("auth-jwt") {
             get("/api/admin/projects") {
-                val projects = ProjectRepository.findAll().map { it.toResponse() }
+                val search = call.request.queryParameters["search"]?.trim()?.lowercase()
+                val status = call.request.queryParameters["status"]
+                val offset = call.request.queryParameters["offset"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0
+                val limit = call.request.queryParameters["limit"]?.toIntOrNull()?.coerceIn(1, 500) ?: 500
+                val projects = ProjectRepository.findAll().asSequence()
+                    .filter { search.isNullOrBlank() || listOf(it.name, it.slug, it.domain, it.clientName ?: "").any { value -> value.lowercase().contains(search) } }
+                    .filter { status.isNullOrBlank() || it.status == status }
+                    .drop(offset).take(limit).map { it.toResponse() }.toList()
                 call.respond(projects)
             }
 

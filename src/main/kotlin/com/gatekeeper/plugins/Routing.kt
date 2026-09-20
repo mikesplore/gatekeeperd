@@ -79,7 +79,14 @@ fun Application.configureRouting() {
                     call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available")
                     return@get
                 }
-                val containers = svc.listContainers(all = true)
+                val search = call.request.queryParameters["search"]?.trim()?.lowercase()
+                val state = call.request.queryParameters["state"]
+                val offset = call.request.queryParameters["offset"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0
+                val limit = call.request.queryParameters["limit"]?.toIntOrNull()?.coerceIn(1, 500) ?: 500
+                val containers = svc.listContainers(all = true).asSequence()
+                    .filter { search.isNullOrBlank() || it.name.lowercase().contains(search) || it.image.lowercase().contains(search) }
+                    .filter { state.isNullOrBlank() || it.state.equals(state, ignoreCase = true) }
+                    .drop(offset).take(limit).toList()
                 call.respond(containers)
             }
 
