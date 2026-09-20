@@ -46,11 +46,12 @@ data class LoginResponse(val token: String, val refreshToken: String)
 
 @Serializable
 data class ChangePasswordRequest(val currentPassword: String, val newPassword: String)
-@Serializable data class UpdateProfileRequest(val displayName: String? = null, val avatarUrl: String? = null)
+@Serializable data class UpdateProfileRequest(val displayName: String? = null)
 @Serializable data class ForgotPasswordRequest(val email: String)
 @Serializable data class ResetPasswordRequest(val token: String, val newPassword: String)
 
 private fun resetTokenHash(token: String): String = MessageDigest.getInstance("SHA-256").digest(token.toByteArray()).joinToString("") { "%02x".format(it) }
+private fun gravatarUrl(email: String): String = "https://www.gravatar.com/avatar/${MessageDigest.getInstance("MD5").digest(email.trim().lowercase().toByteArray()).joinToString("") { "%02x".format(it) }}?d=404&s=96"
 private fun newRefreshToken(): String = Base64.getUrlEncoder().withoutPadding().encodeToString(ByteArray(48).also { SecureRandom().nextBytes(it) })
 
 @Serializable
@@ -255,15 +256,14 @@ fun Application.configureAuthRoutes() {
                     call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Profile data is invalid")
                     return@patch
                 }
-                if ((body.displayName?.trim()?.length ?: 0) > 80 || (body.avatarUrl?.trim()?.length ?: 0) > 500) {
-                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Profile fields exceed their maximum length")
+                if ((body.displayName?.trim()?.length ?: 0) > 80) {
+                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Display name exceeds the maximum length")
                     return@patch
                 }
                 val email = principal.payload.subject.lowercase().trim()
                 transaction {
                     Users.update({ Users.email eq email }) {
                         it[Users.displayName] = body.displayName?.trim()?.takeIf(String::isNotBlank)
-                        it[Users.avatarUrl] = body.avatarUrl?.trim()?.takeIf(String::isNotBlank)
                     }
                 }
                 call.respond(mapOf("status" to "profile_updated"))
@@ -291,7 +291,7 @@ fun Application.configureAuthRoutes() {
                         email = user[Users.email],
                         role = user[Users.role],
                         displayName = user[Users.displayName],
-                        avatarUrl = user[Users.avatarUrl],
+                        avatarUrl = gravatarUrl(user[Users.email]),
                         createdAt = user[Users.createdAt].toString()
                     )
                 )
