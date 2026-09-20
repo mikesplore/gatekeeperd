@@ -232,7 +232,7 @@ fun Application.configureAuthRoutes() {
             call.respond(mapOf("status" to "refresh_revoked"))
         }
 
-        authenticate("auth-jwt") {
+        authenticate("auth-jwt", optional = true) {
             post("/api/auth/2fa/verify") {
                 val body = runCatching { call.receive<VerifyTwoFactorRequest>() }.getOrNull()
                 if (body == null || body.challengeToken.isBlank()) { call.respondError(HttpStatusCode.Unauthorized, "invalid_two_factor_challenge", "The two-factor challenge is invalid"); return@post }
