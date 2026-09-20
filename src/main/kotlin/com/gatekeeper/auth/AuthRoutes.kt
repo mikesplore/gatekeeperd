@@ -80,7 +80,7 @@ fun Application.configureAuthRoutes() {
                         it[expiresAt] = LocalDateTime.now().plusMinutes(30)
                     }
                 }
-                val resetLink = "${AppConfig.passwordResetUrl.trimEnd('/')}/$token"
+                val resetLink = "${AppConfig.passwordResetUrl.trimEnd('/')}?token=$token"
                 call.application.launch(Dispatchers.IO) {
                     ResendClient.sendPasswordReset(email, resetLink)
                 }
