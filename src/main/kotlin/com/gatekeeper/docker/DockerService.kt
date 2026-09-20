@@ -200,6 +200,12 @@ class DockerService(dockerSocketPath: String) {
         return client.listNetworksCmd()
             .exec()
             .map { net ->
+                // listNetworks returns summaries; endpoint details are only present
+                // on the network inspection response.
+                val inspected = net.id?.let { id ->
+                    runCatching { client.inspectNetworkCmd().withNetworkId(id).exec() }.getOrNull()
+                }
+                val networkContainers = inspected?.containers ?: net.containers
                 val ipam = net.ipam
                 val ipamConfig = ipam?.config?.firstOrNull()
                 NetworkInfo(
@@ -217,7 +223,7 @@ class DockerService(dockerSocketPath: String) {
                     enableIpv6 = net.enableIPv6 == true,
                     options = net.options.orEmpty(),
                     labels = net.labels.orEmpty(),
-                    endpoints = net.containers.orEmpty().map { (id, endpoint) -> NetworkEndpoint(endpoint.name ?: id, id, endpoint.ipv4Address, endpoint.ipv6Address, endpoint.macAddress, endpoint.endpointId) }.sortedBy { it.container }
+                    endpoints = networkContainers.orEmpty().map { (id, endpoint) -> NetworkEndpoint(endpoint.name ?: id, id, endpoint.ipv4Address, endpoint.ipv6Address, endpoint.macAddress, endpoint.endpointId) }.sortedBy { it.container }
                 )
             }
     }
