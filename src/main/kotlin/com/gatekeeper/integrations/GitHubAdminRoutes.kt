@@ -76,7 +76,11 @@ private suspend fun handleGitHubCallback(call: ApplicationCall) {
             val installationId = call.request.queryParameters["installation_id"]?.toLongOrNull()
             val setupAction = call.request.queryParameters["setup_action"]
             val state = call.request.queryParameters["state"]
-            val redirect = AppConfig.frontendBaseUrl.ifBlank { "/app/settings/profile" }
+            val redirect = AppConfig.frontendBaseUrl
+                .trimEnd('/')
+                .takeIf { it.isNotBlank() }
+                ?.let { "$it/app/settings/profile" }
+                ?: "/app/settings/profile"
             if (installationId == null || setupAction == "cancel" || state == null || !GitHubAppInstallationRepository.consumePendingState(state)) {
                 call.respondRedirect("$redirect?github=cancelled")
                 return
