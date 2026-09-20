@@ -26,7 +26,8 @@ data class NetworkInfo(
     val id: String,
     val name: String,
     val driver: String,
-    val scope: String
+    val scope: String,
+    val containers: List<String> = emptyList()
 )
 
 @Serializable

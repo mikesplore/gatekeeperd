@@ -155,7 +155,8 @@ class DockerService(dockerSocketPath: String) {
                     id = net.id ?: "",
                     name = net.name ?: "",
                     driver = net.driver ?: "",
-                    scope = net.scope ?: ""
+                    scope = net.scope ?: "",
+                    containers = net.containers?.values?.mapNotNull { it.name }?.sorted().orEmpty()
                 )
             }
     }
