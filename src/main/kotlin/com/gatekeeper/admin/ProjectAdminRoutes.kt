@@ -275,6 +275,17 @@ fun Application.configureProjectAdminRoutes() {
                 call.respondBytes(bytes, ContentType.Application.Pdf)
             }
 
+            post("/api/admin/projects/{slug}/invoice/resync") {
+                val slug = call.parameters["slug"]
+                val project = slug?.let { ProjectRepository.findBySlug(it) }
+                if (project == null) {
+                    call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
+                    return@post
+                }
+                ScribedIntegrationClient.notifyLedger(project, "resync-${java.util.UUID.randomUUID()}")
+                call.respond(HttpStatusCode.Accepted, mapOf("status" to "queued", "project" to project.slug))
+            }
+
             post("/api/admin/projects") {
                 val body = try {
                     call.receive<CreateProjectRequest>()
