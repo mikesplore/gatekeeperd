@@ -169,7 +169,14 @@ fun Application.configureAuthRoutes() {
             val role = user[Users.role]
             val token = JwtConfig.createToken(email, role)
             val refreshToken = newRefreshToken()
-            RedisService.set("auth:refresh:${resetTokenHash(refreshToken)}", "$email|$role", REFRESH_TTL_SECONDS)
+            val refreshStored = runCatching {
+                RedisService.set("auth:refresh:${resetTokenHash(refreshToken)}", "$email|$role", REFRESH_TTL_SECONDS)
+            }.isSuccess
+            if (!refreshStored) {
+                logger.error("Login refused because refresh-token storage is unavailable")
+                call.respondError(HttpStatusCode.ServiceUnavailable, "redis_unavailable", "Authentication storage is temporarily unavailable")
+                return@post
+            }
             runCatching { RedisService.delete(emailKey) }
             logger.info("Successful login: $email (account created ${user[Users.createdAt]})")
             call.respond(LoginResponse(token, refreshToken))
