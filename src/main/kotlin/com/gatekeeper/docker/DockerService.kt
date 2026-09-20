@@ -148,6 +148,14 @@ class DockerService(dockerSocketPath: String) {
     }
 
     fun listNetworks(): List<NetworkInfo> {
+        val containersByNetwork = client.listContainersCmd()
+            .withShowAll(true)
+            .exec()
+            .flatMap { container ->
+                val containerName = container.names?.firstOrNull()?.removePrefix("/") ?: container.id
+                container.networkSettings?.networks?.keys.orEmpty().map { networkName -> networkName to containerName }
+            }
+            .groupBy({ it.first }, { it.second })
         return client.listNetworksCmd()
             .exec()
             .map { net ->
@@ -156,7 +164,7 @@ class DockerService(dockerSocketPath: String) {
                     name = net.name ?: "",
                     driver = net.driver ?: "",
                     scope = net.scope ?: "",
-                    containers = net.containers?.values?.mapNotNull { it.name }?.sorted().orEmpty()
+                    containers = containersByNetwork[net.name].orEmpty().distinct().sorted()
                 )
             }
     }
