@@ -5,6 +5,7 @@ import com.gatekeeper.config.AppConfig
 import com.gatekeeper.docker.DockerService
 import com.gatekeeper.docker.PullImageRequest
 import com.gatekeeper.docker.ContainersListResponse
+import com.gatekeeper.docker.CreateNetworkRequest
 import com.gatekeeper.api.dto.*
 import com.gatekeeper.api.InputValidators
 import io.ktor.http.*
@@ -190,6 +191,28 @@ fun Application.configureRouting() {
                 }
                 val networks = svc.listNetworks()
                 call.respond(networks)
+            }
+
+            post("/api/admin/networks") {
+                val svc = dockerService ?: run { call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available"); return@post }
+                val body = runCatching { call.receive<CreateNetworkRequest>() }.getOrElse { call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid network request"); return@post }
+                runCatching { svc.createNetwork(body.name, body.driver); call.respond(HttpStatusCode.Created, mapOf("name" to body.name, "driver" to body.driver)) }.onFailure { call.respondError(HttpStatusCode.Conflict, "network_create_failed", it.message ?: "Unable to create network") }
+            }
+            delete("/api/admin/networks/{name}") {
+                val svc = dockerService ?: run { call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available"); return@delete }
+                val name = call.parameters["name"] ?: run { call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Network name is required"); return@delete }
+                runCatching { svc.deleteNetwork(name); call.respond(mapOf("status" to "deleted", "name" to name)) }.onFailure { call.respondError(HttpStatusCode.Conflict, "network_delete_failed", it.message ?: "Unable to delete network") }
+            }
+            get("/api/admin/volumes") { dockerService?.let { call.respond(it.listVolumes()) } ?: call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available") }
+            post("/api/admin/volumes") {
+                val svc = dockerService ?: run { call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available"); return@post }
+                val body = runCatching { call.receive<CreateNetworkRequest>() }.getOrElse { call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid volume request"); return@post }
+                runCatching { svc.createVolume(body.name, body.driver); call.respond(HttpStatusCode.Created, mapOf("name" to body.name, "driver" to body.driver)) }.onFailure { call.respondError(HttpStatusCode.Conflict, "volume_create_failed", it.message ?: "Unable to create volume") }
+            }
+            delete("/api/admin/volumes/{name}") {
+                val svc = dockerService ?: run { call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available"); return@delete }
+                val name = call.parameters["name"] ?: run { call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Volume name is required"); return@delete }
+                runCatching { svc.deleteVolume(name); call.respond(mapOf("status" to "deleted", "name" to name)) }.onFailure { call.respondError(HttpStatusCode.Conflict, "volume_delete_failed", it.message ?: "Unable to delete volume") }
             }
 
             post("/api/admin/images/pull") {

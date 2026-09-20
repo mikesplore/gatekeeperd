@@ -30,6 +30,12 @@ data class NetworkInfo(
 )
 
 @Serializable
+data class VolumeInfo(val name: String, val driver: String, val mountpoint: String, val scope: String)
+
+@Serializable
+data class CreateNetworkRequest(val name: String, val driver: String = "bridge")
+
+@Serializable
 data class VolumeMount(
     val hostPath: String,
     val containerPath: String,

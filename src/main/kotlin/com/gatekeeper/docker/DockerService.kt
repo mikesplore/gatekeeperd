@@ -163,6 +163,24 @@ class DockerService(dockerSocketPath: String) {
         }
     }
 
+    fun createNetwork(name: String, driver: String = "bridge") {
+        require(name.matches(Regex("^[A-Za-z0-9_.-]{1,63}$"))) { "Invalid network name" }
+        client.createNetworkCmd().withName(name).withDriver(driver).exec()
+    }
+
+    fun deleteNetwork(name: String) { client.removeNetworkCmd(name).exec() }
+
+    fun listVolumes(): List<VolumeInfo> = client.listVolumesCmd().exec().volumes.orEmpty().map {
+        VolumeInfo(it.name ?: "", it.driver ?: "", it.mountpoint ?: "", "local")
+    }
+
+    fun createVolume(name: String, driver: String = "local") {
+        require(name.matches(Regex("^[A-Za-z0-9_.-]{1,255}$"))) { "Invalid volume name" }
+        client.createVolumeCmd().withName(name).withDriver(driver).exec()
+    }
+
+    fun deleteVolume(name: String) { client.removeVolumeCmd(name).exec() }
+
     fun containerHealth(containerNameOrId: String): String {
         return try {
             val inspect: InspectContainerResponse = client.inspectContainerCmd(containerNameOrId).exec()
