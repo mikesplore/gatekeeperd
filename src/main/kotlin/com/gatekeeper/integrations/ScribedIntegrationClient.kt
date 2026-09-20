@@ -14,6 +14,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.decodeFromJsonElement
 import com.gatekeeper.db.repositories.IntegrationOutboxRepository
+import io.ktor.client.statement.bodyAsText
 
 @Serializable data class ScribedSuspensionPayload(val project_id: String, val project_slug: String, val status: String, val reason: String, val occurred_at: String)
 @Serializable data class ScribedPaymentPayload(val project_id: String, val project_slug: String, val provider: String, val provider_reference: String, val amount: String, val currency: String, val paid_at: String, val status: String = "success")
@@ -23,17 +24,27 @@ object ScribedIntegrationClient {
     private val http = HttpClient()
     private val json = Json { encodeDefaults = true }
 
-    suspend fun invoiceStatus(projectId: String): JsonObject? {
+    data class InvoiceLookupResult(val status: HttpStatusCode?, val body: JsonObject? = null, val error: String? = null)
+
+    suspend fun invoiceStatus(projectId: String): InvoiceLookupResult {
         val base = AppConfig.scribedCallbackUrl.trim().trimEnd('/')
         val secret = AppConfig.scribedIntegrationSecret.trim()
         val apiToken = AppConfig.scribedApiToken.trim()
-        if (base.isBlank() || secret.isBlank() || apiToken.isBlank()) return null
+        if (base.isBlank() || secret.isBlank() || apiToken.isBlank()) {
+            return InvoiceLookupResult(null, error = "Scribed integration is not configured")
+        }
         return runCatching {
-            http.get("$base/integrations/gatekeeper/invoices/$projectId") {
+            val response = http.get("$base/integrations/gatekeeper/invoices/$projectId") {
                 header(HttpHeaders.Authorization, "Bearer $apiToken")
                 header("X-Gatekeeper-Secret", secret)
-            }.body<JsonObject>()
-        }.getOrNull()
+            }
+            val responseBody = response.bodyAsText()
+            if (!response.status.isSuccess()) {
+                InvoiceLookupResult(response.status, error = responseBody.take(500))
+            } else {
+                InvoiceLookupResult(response.status, Json.decodeFromString<JsonObject>(responseBody))
+            }
+        }.getOrElse { InvoiceLookupResult(null, error = it.message ?: it::class.simpleName) }
     }
     fun notifySuspension(project: ProjectRepository.ProjectRecord, reason: String) {
         runBlocking {

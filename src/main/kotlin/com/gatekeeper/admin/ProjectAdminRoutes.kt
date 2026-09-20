@@ -179,12 +179,17 @@ fun Application.configureProjectAdminRoutes() {
                     call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
                     return@get
                 }
-                val invoice = ScribedIntegrationClient.invoiceStatus(project.id.toString())
-                if (invoice == null) {
+                val lookup = ScribedIntegrationClient.invoiceStatus(project.id.toString())
+                if (lookup.status == HttpStatusCode.NotFound) {
                     call.respondError(HttpStatusCode.NotFound, "invoice_unavailable", "No Scribed invoice is available for this project")
                     return@get
                 }
-                call.respond(invoice)
+                if (lookup.body == null) {
+                    logger.warn("Scribed invoice lookup failed for project ${project.id}: status=${lookup.status}, error=${lookup.error}")
+                    call.respondError(HttpStatusCode.BadGateway, "invoice_integration_unavailable", "Scribed invoice lookup failed")
+                    return@get
+                }
+                call.respond(lookup.body)
             }
 
             post("/api/admin/projects") {
