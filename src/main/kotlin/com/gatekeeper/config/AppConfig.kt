@@ -62,6 +62,7 @@ object AppConfig {
     val supportContactEmail: String = optionalSetting("SUPPORT_CONTACT_EMAIL", "support@gatekeeper.local")
     val scribedCallbackUrl: String = optionalSetting("SCRIBED_CALLBACK_URL", "")
     val scribedIntegrationSecret: String = optionalSetting("SCRIBED_INTEGRATION_SECRET", "")
+    val scribedApiToken: String = optionalSetting("SCRIBED_API_TOKEN", "")
 
     /** Used once on first startup when the users table is empty */
     val adminEmail: String = optionalSetting("ADMIN_EMAIL", "")

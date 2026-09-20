@@ -26,9 +26,11 @@ object ScribedIntegrationClient {
     suspend fun invoiceStatus(projectId: String): JsonObject? {
         val base = AppConfig.scribedCallbackUrl.trim().trimEnd('/')
         val secret = AppConfig.scribedIntegrationSecret.trim()
-        if (base.isBlank() || secret.isBlank()) return null
+        val apiToken = AppConfig.scribedApiToken.trim()
+        if (base.isBlank() || secret.isBlank() || apiToken.isBlank()) return null
         return runCatching {
             http.get("$base/integrations/gatekeeper/invoices/$projectId") {
+                header(HttpHeaders.Authorization, "Bearer $apiToken")
                 header("X-Gatekeeper-Secret", secret)
             }.body<JsonObject>()
         }.getOrNull()
@@ -50,8 +52,9 @@ object ScribedIntegrationClient {
 
     suspend fun deliver(event: IntegrationOutboxRepository.Event): Boolean {
         val base = AppConfig.scribedCallbackUrl.trim().trimEnd('/'); val secret = AppConfig.scribedIntegrationSecret.trim()
-        if (base.isBlank() || secret.isBlank()) return false
+        val apiToken = AppConfig.scribedApiToken.trim()
+        if (base.isBlank() || secret.isBlank() || apiToken.isBlank()) return false
         val path = if (event.eventType == "payment") "/integrations/gatekeeper/payments" else "/integrations/gatekeeper/suspensions"
-        return runCatching { http.post("$base$path") { contentType(ContentType.Application.Json); header("X-Gatekeeper-Secret", secret); header("Idempotency-Key", event.idempotencyKey); setBody(event.payload) }.status.isSuccess() }.getOrElse { logger.warn("Scribed outbox delivery failed id=${event.id}: ${it.message}"); false }
+        return runCatching { http.post("$base$path") { contentType(ContentType.Application.Json); header(HttpHeaders.Authorization, "Bearer $apiToken"); header("X-Gatekeeper-Secret", secret); header("Idempotency-Key", event.idempotencyKey); setBody(event.payload) }.status.isSuccess() }.getOrElse { logger.warn("Scribed outbox delivery failed id=${event.id}: ${it.message}"); false }
     }
 }
