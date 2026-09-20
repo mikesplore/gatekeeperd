@@ -76,6 +76,8 @@ data class CreateProjectRequest(
 
 @Serializable
 data class UpdateProjectRequest(
+    // Accepted for backwards compatibility with response-shaped edit payloads; the path slug is authoritative.
+    val slug: String? = null,
     val name: String? = null,
     val domain: String? = null,
     val containerName: String? = null,
