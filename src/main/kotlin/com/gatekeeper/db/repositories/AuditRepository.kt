@@ -46,6 +46,14 @@ object AuditRepository {
         }
     }
 
+    fun count(): Long = transaction { AuditLog.selectAll().count() }
+
+    fun findPage(limit: Int, offset: Int): List<AuditRecord> = transaction {
+        AuditLog.selectAll().orderBy(AuditLog.createdAt, SortOrder.DESC)
+            .limit(limit.coerceIn(1, 500), offset.coerceAtLeast(0).toLong())
+            .map { it.toAuditRecord() }
+    }
+
     fun findFiltered(action: String?, actor: String?, limit: Int = 1000): List<AuditRecord> {
         return transaction {
             val query = AuditLog.selectAll()

@@ -1,6 +1,7 @@
 package com.gatekeeper.admin
 
 import com.gatekeeper.api.dto.AuditLogResponse
+import com.gatekeeper.api.dto.AuditLogPageResponse
 import com.gatekeeper.api.dto.PaymentResponse
 import com.gatekeeper.api.dto.ProjectDetailResponse
 import com.gatekeeper.api.dto.ProjectResponse
@@ -705,9 +706,11 @@ fun Application.configureProjectAdminRoutes() {
             }
 
             get("/api/admin/audit") {
-                val limit = call.request.queryParameters["limit"]?.toIntOrNull() ?: 100
-                val auditLog = AuditRepository.findAll(limit.coerceIn(1, 500)).map { it.toResponse() }
-                call.respond(auditLog)
+                val limit = (call.request.queryParameters["limit"]?.toIntOrNull() ?: 50).coerceIn(1, 500)
+                val offset = (call.request.queryParameters["offset"]?.toIntOrNull() ?: 0).coerceAtLeast(0)
+                val total = AuditRepository.count()
+                val entries = AuditRepository.findPage(limit, offset).map { it.toResponse() }
+                call.respond(AuditLogPageResponse(entries, total, limit, offset, offset + entries.size < total))
             }
 
             get("/api/admin/projects/{slug}/audit") {

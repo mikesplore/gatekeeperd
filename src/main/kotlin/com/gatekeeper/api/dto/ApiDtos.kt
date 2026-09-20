@@ -130,6 +130,9 @@ data class AuditLogResponse(
 )
 
 @Serializable
+data class AuditLogPageResponse(val entries: List<AuditLogResponse>, val total: Long, val limit: Int, val offset: Int, val hasMore: Boolean)
+
+@Serializable
 data class ProjectDetailResponse(
     val project: ProjectResponse,
     val payments: List<PaymentResponse>,
