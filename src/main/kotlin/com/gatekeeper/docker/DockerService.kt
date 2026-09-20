@@ -364,11 +364,11 @@ class DockerService(dockerSocketPath: String) {
 
     private fun toContainerInfo(container: Container): ContainerInfo {
         val names = container.names?.map { it.removePrefix("/") } ?: emptyList()
-        val ports = container.ports?.joinToString(", ") { port ->
-            val host = port.publicPort?.toString() ?: "-"
-            val containerPort = port.privatePort?.toString() ?: "-"
-            "$host->$containerPort/${port.type}"
-        } ?: ""
+        val ports = container.ports?.map { port ->
+            val containerPort = port.privatePort?.toString() ?: return@map null
+            val protocol = port.type ?: "tcp"
+            port.publicPort?.let { "$it:$containerPort/$protocol" } ?: "$containerPort/$protocol"
+        }?.filterNotNull()?.distinct()?.joinToString(", ") ?: ""
 
         return ContainerInfo(
             id = container.id.substring(0, 12),
