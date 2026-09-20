@@ -29,6 +29,8 @@ import java.security.MessageDigest
 import java.security.SecureRandom
 import java.time.LocalDateTime
 import java.util.Base64
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 private val logger = LoggerFactory.getLogger("com.gatekeeper.auth.AuthRoutes")
 private const val LOGIN_WINDOW_SECONDS = 15 * 60
@@ -78,7 +80,10 @@ fun Application.configureAuthRoutes() {
                         it[expiresAt] = LocalDateTime.now().plusMinutes(30)
                     }
                 }
-                ResendClient.sendPasswordReset(email, "${AppConfig.passwordResetUrl.trimEnd('/')}/$token")
+                val resetLink = "${AppConfig.passwordResetUrl.trimEnd('/')}/$token"
+                call.application.launch(Dispatchers.IO) {
+                    ResendClient.sendPasswordReset(email, resetLink)
+                }
             }
             call.respond(mapOf("status" to "reset_email_queued"))
         }
