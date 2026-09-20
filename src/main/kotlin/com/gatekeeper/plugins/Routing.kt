@@ -4,6 +4,8 @@ import com.gatekeeper.api.respondError
 import com.gatekeeper.config.AppConfig
 import com.gatekeeper.docker.DockerService
 import com.gatekeeper.docker.PullImageRequest
+import com.gatekeeper.docker.ContainersListResponse
+import com.gatekeeper.api.dto.*
 import com.gatekeeper.api.InputValidators
 import io.ktor.http.*
 import io.ktor.server.application.*
@@ -83,11 +85,18 @@ fun Application.configureRouting() {
                 val state = call.request.queryParameters["state"]
                 val offset = call.request.queryParameters["offset"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0
                 val limit = call.request.queryParameters["limit"]?.toIntOrNull()?.coerceIn(1, 500) ?: 500
-                val containers = svc.listContainers(all = true).asSequence()
+                val filteredContainers = svc.listContainers(all = true).asSequence()
                     .filter { search.isNullOrBlank() || it.name.lowercase().contains(search) || it.image.lowercase().contains(search) }
                     .filter { state.isNullOrBlank() || it.state.equals(state, ignoreCase = true) }
-                    .drop(offset).take(limit).toList()
-                call.respond(containers)
+                    .toList()
+                call.respond(
+                    ContainersListResponse(
+                        containers = filteredContainers.drop(offset).take(limit),
+                        total = filteredContainers.size,
+                        limit = limit,
+                        offset = offset
+                    )
+                )
             }
 
             get("/api/admin/containers/{name}") {

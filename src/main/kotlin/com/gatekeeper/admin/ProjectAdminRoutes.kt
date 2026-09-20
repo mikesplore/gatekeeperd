@@ -4,6 +4,7 @@ import com.gatekeeper.api.dto.AuditLogResponse
 import com.gatekeeper.api.dto.PaymentResponse
 import com.gatekeeper.api.dto.ProjectDetailResponse
 import com.gatekeeper.api.dto.ProjectResponse
+import com.gatekeeper.api.dto.ProjectsListResponse
 import com.gatekeeper.api.dto.StatusChangeResponse
 import com.gatekeeper.api.dto.toResponse
 import com.gatekeeper.api.InputValidators
@@ -133,11 +134,18 @@ fun Application.configureProjectAdminRoutes() {
                 val status = call.request.queryParameters["status"]
                 val offset = call.request.queryParameters["offset"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0
                 val limit = call.request.queryParameters["limit"]?.toIntOrNull()?.coerceIn(1, 500) ?: 500
-                val projects = ProjectRepository.findAll().asSequence()
+                val filteredProjects = ProjectRepository.findAll().asSequence()
                     .filter { search.isNullOrBlank() || listOf(it.name, it.slug, it.domain, it.clientName ?: "").any { value -> value.lowercase().contains(search) } }
                     .filter { status.isNullOrBlank() || it.status == status }
-                    .drop(offset).take(limit).map { it.toResponse() }.toList()
-                call.respond(projects)
+                    .toList()
+                call.respond(
+                    ProjectsListResponse(
+                        projects = filteredProjects.drop(offset).take(limit).map { it.toResponse() },
+                        total = filteredProjects.size,
+                        limit = limit,
+                        offset = offset
+                    )
+                )
             }
 
             get("/api/admin/projects/{slug}") {

@@ -70,6 +70,14 @@ data class PaymentsListResponse(
 )
 
 @Serializable
+data class ProjectsListResponse(
+    val projects: List<ProjectResponse>,
+    val total: Int,
+    val limit: Int,
+    val offset: Int
+)
+
+@Serializable
 data class OverdueProjectResponse(
     val slug: String,
     val name: String,

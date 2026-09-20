@@ -14,6 +14,14 @@ data class ContainerInfo(
 )
 
 @Serializable
+data class ContainersListResponse(
+    val containers: List<ContainerInfo>,
+    val total: Int,
+    val limit: Int,
+    val offset: Int
+)
+
+@Serializable
 data class NetworkInfo(
     val id: String,
     val name: String,
