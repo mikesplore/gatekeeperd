@@ -15,6 +15,11 @@ import java.util.UUID
 fun Application.configureDeploymentAdminRoutes() {
     routing {
         authenticate("auth-jwt") {
+            get("/api/admin/deployments") {
+                val limit = call.request.queryParameters["limit"]?.toIntOrNull()?.coerceIn(1, 100) ?: 25
+                val offset = call.request.queryParameters["offset"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0
+                call.respond(DeploymentJobRepository.list(limit, offset).map { it.toResponse() })
+            }
             post("/api/admin/deployments") {
                 val request = runCatching { call.receive<CreateDeploymentRequest>() }.getOrNull() ?: run {
                     call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid deployment request")
@@ -41,8 +46,17 @@ fun Application.configureDeploymentAdminRoutes() {
                 }
                 call.respond(job.toResponse())
             }
+            post("/api/admin/deployments/{id}/cancel") { changeDeployment(call, "cancel") }
+            post("/api/admin/deployments/{id}/retry") { changeDeployment(call, "retry") }
         }
     }
+}
+
+private suspend fun changeDeployment(call: ApplicationCall, action: String) {
+    val id = call.parameters["id"]?.let { runCatching { UUID.fromString(it) }.getOrNull() } ?: run { call.respondError(HttpStatusCode.BadRequest, "invalid_deployment_id", "Invalid deployment ID"); return }
+    val changed = if (action == "cancel") DeploymentJobRepository.cancel(id) else DeploymentJobRepository.retry(id)
+    if (!changed) call.respondError(HttpStatusCode.Conflict, "deployment_state_conflict", "Deployment cannot be $action in its current state")
+    else call.respond(mapOf("id" to id.toString(), "status" to if (action == "cancel") "cancelled" else "queued"))
 }
 
 private fun com.gatekeeper.db.repositories.DeploymentJobRecord.toResponse() = DeploymentJobResponse(

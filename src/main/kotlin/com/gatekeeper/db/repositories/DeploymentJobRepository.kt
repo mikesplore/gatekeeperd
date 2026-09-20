@@ -15,6 +15,21 @@ data class DeploymentJobRecord(
 )
 
 object DeploymentJobRepository {
+    fun list(limit: Int, offset: Int): List<DeploymentJobRecord> = transaction {
+        DeploymentJobs.selectAll().orderBy(DeploymentJobs.createdAt to SortOrder.DESC).limit(limit, offset.toLong()).map { it.toRecord() }
+    }
+
+    fun cancel(id: UUID): Boolean = transaction {
+        DeploymentJobs.update({ (DeploymentJobs.id eq id) and (DeploymentJobs.status inList listOf("queued", "running", "awaiting_build", "awaiting_container")) }) {
+            it[status] = "cancelled"; it[currentStep] = "cancelled"; it[completedAt] = LocalDateTime.now(); it[updatedAt] = LocalDateTime.now()
+        } > 0
+    }
+
+    fun retry(id: UUID): Boolean = transaction {
+        DeploymentJobs.update({ DeploymentJobs.id eq id and (DeploymentJobs.status inList listOf("failed", "cancelled")) }) {
+            it[status] = "queued"; it[currentStep] = "queued"; it[errorMessage] = null; it[completedAt] = null; it[updatedAt] = LocalDateTime.now()
+        } > 0
+    }
     fun create(request: com.gatekeeper.deployment.CreateDeploymentRequest): UUID = transaction {
         val id = UUID.randomUUID()
         DeploymentJobs.insert {
