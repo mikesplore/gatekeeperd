@@ -48,6 +48,16 @@ data class BulkProjectResult(val slug: String, val status: String, val message: 
     val metrics: Map<String, Long>
 )
 
+@Serializable data class NotificationResponse(
+    val id: String,
+    val title: String,
+    val message: String,
+    val severity: String,
+    val action: String,
+    val createdAt: String,
+    val read: Boolean = false
+)
+
 fun Application.configureOperationsAdminRoutes() {
     routing {
         authenticate("auth-jwt") {
@@ -59,6 +69,18 @@ fun Application.configureOperationsAdminRoutes() {
                 val available = java.io.File(AppConfig.nginxSitesAvailablePath).listFiles()?.count { it.isFile && !it.name.startsWith(".") }?.toLong() ?: 0
                 val enabled = java.io.File(AppConfig.nginxSitesEnabledPath).listFiles()?.size?.toLong() ?: 0
                 call.respond(DashboardSummaryResponse(OffsetDateTime.now().toString(), projects.groupingBy { it.status.lowercase() }.eachCount().mapValues { it.value.toLong() }, payments.groupingBy { it.gatewayStatus.lowercase() }.eachCount().mapValues { it.value.toLong() }, mapOf("thisMonth" to revenue.first.toPlainString(), "lastMonth" to revenue.second.toPlainString()), mapOf("outboxPending" to outbox.pending, "outboxProcessing" to outbox.processing, "outboxDeadLetter" to outbox.deadLetter, "outboxDelivered" to outbox.delivered), mapOf("availableSites" to available, "enabledSites" to enabled), Metrics.snapshot()))
+            }
+            get("/api/admin/notifications") {
+                val limit = call.request.queryParameters["limit"]?.toIntOrNull()?.coerceIn(1, 100) ?: 25
+                val notifications = AuditRepository.findAll(limit).map { row ->
+                    val severity = when {
+                        row.action.contains("failed", ignoreCase = true) || row.action.contains("error", ignoreCase = true) -> "error"
+                        row.action.contains("warning", ignoreCase = true) || row.action.contains("blocked", ignoreCase = true) -> "warning"
+                        else -> "info"
+                    }
+                    NotificationResponse(row.id.toString(), row.action.replace('_', ' '), row.reason ?: "System activity recorded", severity, row.action, row.createdAt.toString())
+                }
+                call.respond(notifications)
             }
             get("/api/admin/projects/{slug}/health") {
                 val slug = call.parameters["slug"] ?: run {
