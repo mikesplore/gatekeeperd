@@ -5,6 +5,7 @@ import com.gatekeeper.config.AppConfig
 import com.gatekeeper.docker.DockerService
 import com.gatekeeper.docker.PullImageRequest
 import com.gatekeeper.docker.ContainersListResponse
+import com.gatekeeper.docker.ContainerLogsResponse
 import com.gatekeeper.docker.CreateNetworkRequest
 import com.gatekeeper.api.dto.*
 import com.gatekeeper.api.InputValidators
@@ -113,6 +114,19 @@ fun Application.configureRouting() {
                 } else {
                     call.respondError(HttpStatusCode.NotFound, "container_not_found", "Container not found")
                 }
+            }
+
+            get("/api/admin/containers/{name}/logs") {
+                val svc = dockerService
+                if (svc == null) {
+                    call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available")
+                    return@get
+                }
+                val name = call.requireContainerName() ?: return@get
+                val tail = call.request.queryParameters["tail"]?.toIntOrNull()?.coerceIn(1, 500) ?: 100
+                runCatching { svc.containerLogs(name, tail) }
+                    .onSuccess { call.respond(ContainerLogsResponse(name, tail, it)) }
+                    .onFailure { call.respondError(HttpStatusCode.Conflict, "container_logs_failed", it.message ?: "Unable to read container logs") }
             }
 
             post("/api/admin/containers/{name}/start") {

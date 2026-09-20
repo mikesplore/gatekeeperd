@@ -7,6 +7,7 @@ import com.github.dockerjava.api.command.RemoveContainerCmd
 import com.github.dockerjava.api.command.RemoveImageCmd
 import com.github.dockerjava.api.model.Bind
 import com.github.dockerjava.api.model.Container
+import com.github.dockerjava.api.model.Frame
 import com.github.dockerjava.api.model.ExposedPort
 import com.github.dockerjava.api.model.HostConfig
 import com.github.dockerjava.api.model.Ports
@@ -19,6 +20,7 @@ import org.slf4j.LoggerFactory
 import com.gatekeeper.config.AppConfig
 import java.io.File
 import java.util.stream.Collectors
+import com.github.dockerjava.api.async.ResultCallback
 
 private val logger = LoggerFactory.getLogger("com.gatekeeper.docker.DockerService")
 
@@ -82,6 +84,20 @@ class DockerService(dockerSocketPath: String) {
             logger.error("Error getting container $containerNameOrId", e)
             null
         }
+    }
+
+    fun containerLogs(containerNameOrId: String, tail: Int = 100): String {
+        val output = StringBuilder()
+        client.logContainerCmd(containerNameOrId)
+            .withStdOut(true)
+            .withStdErr(true)
+            .withTail(tail)
+            .exec(object : ResultCallback.Adapter<Frame>() {
+                override fun onNext(frame: Frame) {
+                    output.append(String(frame.payload ?: ByteArray(0), Charsets.UTF_8))
+                }
+            }).awaitCompletion()
+        return output.toString()
     }
 
     fun startContainer(containerNameOrId: String) {

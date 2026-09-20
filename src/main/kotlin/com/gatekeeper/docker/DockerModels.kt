@@ -28,6 +28,9 @@ data class ContainerInfo(
 )
 
 @Serializable
+data class ContainerLogsResponse(val container: String, val tail: Int, val logs: String)
+
+@Serializable
 data class ContainersListResponse(
     val containers: List<ContainerInfo>,
     val total: Int,
