@@ -46,6 +46,7 @@ data class LoginResponse(val token: String, val refreshToken: String)
 
 @Serializable
 data class ChangePasswordRequest(val currentPassword: String, val newPassword: String)
+@Serializable data class UpdateProfileRequest(val displayName: String? = null, val avatarUrl: String? = null)
 @Serializable data class ForgotPasswordRequest(val email: String)
 @Serializable data class ResetPasswordRequest(val token: String, val newPassword: String)
 
@@ -56,6 +57,8 @@ private fun newRefreshToken(): String = Base64.getUrlEncoder().withoutPadding().
 data class UserProfileResponse(
     val email: String,
     val role: String,
+    val displayName: String? = null,
+    val avatarUrl: String? = null,
     val createdAt: String
 )
 
@@ -245,6 +248,27 @@ fun Application.configureAuthRoutes() {
                 call.respond(mapOf("status" to "logged_out"))
             }
 
+            patch("/api/auth/me") {
+                val principal = call.principal<JWTPrincipal>()
+                val body = runCatching { call.receive<UpdateProfileRequest>() }.getOrNull()
+                if (principal == null || body == null) {
+                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Profile data is invalid")
+                    return@patch
+                }
+                if ((body.displayName?.trim()?.length ?: 0) > 80 || (body.avatarUrl?.trim()?.length ?: 0) > 500) {
+                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Profile fields exceed their maximum length")
+                    return@patch
+                }
+                val email = principal.payload.subject.lowercase().trim()
+                transaction {
+                    Users.update({ Users.email eq email }) {
+                        it[Users.displayName] = body.displayName?.trim()?.takeIf(String::isNotBlank)
+                        it[Users.avatarUrl] = body.avatarUrl?.trim()?.takeIf(String::isNotBlank)
+                    }
+                }
+                call.respond(mapOf("status" to "profile_updated"))
+            }
+
             get("/api/auth/me") {
                 val principal = call.principal<JWTPrincipal>()
                 if (principal == null) {
@@ -266,6 +290,8 @@ fun Application.configureAuthRoutes() {
                     UserProfileResponse(
                         email = user[Users.email],
                         role = user[Users.role],
+                        displayName = user[Users.displayName],
+                        avatarUrl = user[Users.avatarUrl],
                         createdAt = user[Users.createdAt].toString()
                     )
                 )

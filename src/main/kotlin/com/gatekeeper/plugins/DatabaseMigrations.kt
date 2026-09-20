@@ -25,6 +25,7 @@ object DatabaseMigrations {
         ,Migration("14", "encrypted deployment secrets", "db/migration/V14__encrypted_deployment_secrets.sql")
         ,Migration("15", "notifications", "db/migration/V15__notifications.sql")
         ,Migration("16", "registry credentials", "db/migration/V16__registry_credentials.sql")
+        ,Migration("17", "user profile fields", "db/migration/V17__user_profile_fields.sql")
     )
 
     fun apply(dataSource: HikariDataSource) {

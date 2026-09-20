@@ -6,6 +6,8 @@ import org.jetbrains.exposed.sql.javatime.datetime
 object Users : Table("users") {
     val id = uuid("id").autoGenerate()
     val email = text("email").uniqueIndex()
+    val displayName = text("display_name").nullable()
+    val avatarUrl = text("avatar_url").nullable()
     val passwordHash = text("password_hash")
     val role = text("role").default("admin")
     val createdAt = datetime("created_at").defaultExpression(org.jetbrains.exposed.sql.javatime.CurrentDateTime)
