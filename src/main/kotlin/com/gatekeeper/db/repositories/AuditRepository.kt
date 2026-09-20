@@ -46,7 +46,12 @@ object AuditRepository {
         }
     }
 
-    fun count(): Long = transaction { AuditLog.selectAll().count() }
+    fun count(query: String? = null, action: String? = null): Long = transaction {
+        val statement = AuditLog.selectAll()
+        action?.takeIf { it.isNotBlank() }?.let { value -> statement.andWhere { AuditLog.action eq value } }
+        query?.takeIf { it.isNotBlank() }?.let { value -> val pattern = "%${value.trim()}%"; statement.andWhere { (AuditLog.actor like pattern) or (AuditLog.reason like pattern) or (AuditLog.action like pattern) } }
+        statement.count()
+    }
 
     fun findPage(limit: Int, offset: Int, query: String? = null, action: String? = null): List<AuditRecord> = transaction {
         val statement = AuditLog.selectAll()

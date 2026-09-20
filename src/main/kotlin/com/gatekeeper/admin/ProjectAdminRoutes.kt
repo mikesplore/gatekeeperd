@@ -710,7 +710,7 @@ fun Application.configureProjectAdminRoutes() {
                 val offset = (call.request.queryParameters["offset"]?.toIntOrNull() ?: 0).coerceAtLeast(0)
                 val query = call.request.queryParameters["q"]
                 val action = call.request.queryParameters["action"]
-                val total = AuditRepository.count()
+                val total = AuditRepository.count(query, action)
                 val entries = AuditRepository.findPage(limit, offset, query, action).map { it.toResponse() }
                 call.respond(AuditLogPageResponse(entries, total, limit, offset, offset + entries.size < total))
             }
