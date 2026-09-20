@@ -33,12 +33,14 @@ import java.util.Base64
 private val logger = LoggerFactory.getLogger("com.gatekeeper.auth.AuthRoutes")
 private const val LOGIN_WINDOW_SECONDS = 15 * 60
 private const val LOGIN_ATTEMPT_LIMIT = 5
+private const val REFRESH_TTL_SECONDS = 30 * 24 * 60 * 60
 
 @Serializable
 data class LoginRequest(val email: String, val password: String)
 
 @Serializable
-data class LoginResponse(val token: String)
+data class LoginResponse(val token: String, val refreshToken: String)
+@Serializable data class RefreshRequest(val refreshToken: String)
 
 @Serializable
 data class ChangePasswordRequest(val currentPassword: String, val newPassword: String)
@@ -46,6 +48,7 @@ data class ChangePasswordRequest(val currentPassword: String, val newPassword: S
 @Serializable data class ResetPasswordRequest(val token: String, val newPassword: String)
 
 private fun resetTokenHash(token: String): String = MessageDigest.getInstance("SHA-256").digest(token.toByteArray()).joinToString("") { "%02x".format(it) }
+private fun newRefreshToken(): String = Base64.getUrlEncoder().withoutPadding().encodeToString(ByteArray(48).also { SecureRandom().nextBytes(it) })
 
 @Serializable
 data class UserProfileResponse(
@@ -158,10 +161,27 @@ fun Application.configureAuthRoutes() {
                 return@post
             }
 
-            val token = JwtConfig.createToken(email, user[Users.role])
+            val role = user[Users.role]
+            val token = JwtConfig.createToken(email, role)
+            val refreshToken = newRefreshToken()
+            RedisService.set("auth:refresh:${resetTokenHash(refreshToken)}", "$email|$role", REFRESH_TTL_SECONDS)
             runCatching { RedisService.delete(emailKey) }
             logger.info("Successful login: $email (account created ${user[Users.createdAt]})")
-            call.respond(LoginResponse(token))
+            call.respond(LoginResponse(token, refreshToken))
+        }
+
+        post("/api/auth/refresh") {
+            val body = runCatching { call.receive<RefreshRequest>() }.getOrNull()
+            if (body == null || body.refreshToken.isBlank()) { call.respondError(HttpStatusCode.Unauthorized, "invalid_refresh_token", "Refresh token is invalid"); return@post }
+            val key = "auth:refresh:${resetTokenHash(body.refreshToken)}"
+            val value = RedisService.get(key)
+            if (value.isNullOrBlank()) { call.respondError(HttpStatusCode.Unauthorized, "invalid_refresh_token", "Refresh token is invalid or expired"); return@post }
+            val parts = value.split('|', limit = 2)
+            val email = parts[0]; val role = parts.getOrElse(1) { "admin" }
+            val nextRefreshToken = newRefreshToken()
+            RedisService.delete(key)
+            RedisService.set("auth:refresh:${resetTokenHash(nextRefreshToken)}", "$email|$role", REFRESH_TTL_SECONDS)
+            call.respond(LoginResponse(JwtConfig.createToken(email, role), nextRefreshToken))
         }
 
         authenticate("auth-jwt") {
