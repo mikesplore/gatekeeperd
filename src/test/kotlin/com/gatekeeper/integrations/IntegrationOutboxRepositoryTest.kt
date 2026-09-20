@@ -22,8 +22,8 @@ class IntegrationOutboxRepositoryTest {
             assertEquals("{}", first.payload)
             IntegrationOutboxRepository.markFailed(first.id, "test failure", 11)
             assertTrue(IntegrationOutboxRepository.pending(100).any { it.id == first.id })
-            IntegrationOutboxRepository.replay(first.id)
-            assertTrue(IntegrationOutboxRepository.claim(100).any { it.id == first.id })
+            val replayed = IntegrationOutboxRepository.replayAndClaim(first.id)
+            assertTrue(replayed?.id == first.id)
             IntegrationOutboxRepository.markDelivered(first.id)
         } finally {
             DatabaseFactory.close()

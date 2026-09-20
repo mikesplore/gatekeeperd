@@ -63,5 +63,17 @@ object IntegrationOutboxRepository {
         }
     }
 
-    fun replay(id: UUID) = transaction { IntegrationOutbox.update({ IntegrationOutbox.id eq id }) { it[IntegrationOutbox.status] = "pending"; it[IntegrationOutbox.nextAttemptAt] = LocalDateTime.now(); it[IntegrationOutbox.leaseUntil] = null } }
+    fun replayAndClaim(id: UUID): Event? = transaction {
+        val now = LocalDateTime.now()
+        val lease = now.plusMinutes(5)
+        val updated = IntegrationOutbox.update({ (IntegrationOutbox.id eq id) and (IntegrationOutbox.deliveredAt.isNull()) }) {
+            it[IntegrationOutbox.status] = "processing"
+            it[IntegrationOutbox.nextAttemptAt] = now
+            it[IntegrationOutbox.leaseUntil] = lease
+        }
+        if (updated != 1) return@transaction null
+        IntegrationOutbox.selectAll().where { IntegrationOutbox.id eq id }.singleOrNull()?.let { row ->
+            Event(id, row[IntegrationOutbox.eventType], row[IntegrationOutbox.idempotencyKey], row[IntegrationOutbox.payload], row[IntegrationOutbox.attempts])
+        }
+    }
 }
