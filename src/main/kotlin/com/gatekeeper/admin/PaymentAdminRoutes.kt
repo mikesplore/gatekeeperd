@@ -3,6 +3,7 @@ package com.gatekeeper.admin
 import com.gatekeeper.api.InputValidators
 import com.gatekeeper.api.dto.*
 import com.gatekeeper.api.respondError
+import com.gatekeeper.api.dto.PaginatedResponse
 import com.gatekeeper.db.repositories.PaymentRepository
 import com.gatekeeper.db.repositories.PaymentEventRepository
 import com.gatekeeper.db.repositories.ProjectRepository
@@ -102,8 +103,8 @@ fun Application.configurePaymentAdminRoutes() {
             get("/api/admin/payment-events") {
                 val status = call.request.queryParameters["status"]
                 val limit = call.request.queryParameters["limit"]?.toIntOrNull()?.coerceIn(1, 500) ?: 100
-                call.respond(
-                    PaymentEventRepository.findByStatus(status, limit).map { event ->
+                val offset = call.request.queryParameters["offset"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0
+                val events = PaymentEventRepository.findByStatus(status, limit, offset).map { event ->
                         PaymentEventAdminResponse(
                             id = event.id.toString(),
                             dedupeKey = event.dedupeKey,
@@ -116,7 +117,8 @@ fun Application.configurePaymentAdminRoutes() {
                             processedAt = event.processedAt?.toString()
                         )
                     }
-                )
+                val total = PaymentEventRepository.countByStatus(status)
+                call.respond(PaginatedResponse(events, total, limit, offset, offset + events.size < total))
             }
 
             get("/api/admin/projects/overdue") {

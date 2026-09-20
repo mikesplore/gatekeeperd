@@ -4,7 +4,11 @@ import com.gatekeeper.db.repositories.AuditRepository
 import com.gatekeeper.db.repositories.PaymentRepository
 import com.gatekeeper.db.repositories.ProjectRepository
 import kotlinx.serialization.Serializable
+
 import java.math.BigDecimal
+
+@Serializable
+data class PaginatedResponse<T>(val data: List<T>, val total: Long, val limit: Int, val offset: Int, val hasMore: Boolean)
 
 @Serializable
 data class ProjectResponse(

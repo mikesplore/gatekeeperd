@@ -14,7 +14,7 @@ object NotificationRepository {
         Notifications.insert { it[id] = UUID.randomUUID(); it[recipient] = "*"; it[Notifications.projectId] = projectId; it[title] = action.replace('_', ' '); it[Notifications.message] = message ?: "Activity recorded by $actor"; it[Notifications.severity] = severity; it[Notifications.action] = action; it[Notifications.createdAt] = createdAt }
     }
 
-    fun list(recipient: String, severity: String?, action: String?, projectId: UUID?, from: LocalDateTime?, to: LocalDateTime?, includeArchived: Boolean, limit: Int): List<NotificationRecord> = transaction {
+    fun list(recipient: String, severity: String?, action: String?, projectId: UUID?, from: LocalDateTime?, to: LocalDateTime?, includeArchived: Boolean, limit: Int, offset: Int = 0): List<NotificationRecord> = transaction {
         val query = Notifications.selectAll().where { (Notifications.recipient eq "*") or (Notifications.recipient eq recipient) }
         severity?.takeIf { it.isNotBlank() }?.let { query.andWhere { Notifications.severity eq it } }
         action?.takeIf { it.isNotBlank() }?.let { query.andWhere { Notifications.action eq it } }
@@ -22,7 +22,12 @@ object NotificationRepository {
         from?.let { query.andWhere { Notifications.createdAt greaterEq it } }
         to?.let { query.andWhere { Notifications.createdAt lessEq it } }
         if (!includeArchived) query.andWhere { Notifications.archivedAt.isNull() and Notifications.dismissedAt.isNull() }
-        query.orderBy(Notifications.createdAt to SortOrder.DESC).limit(limit.coerceIn(1, 100)).map { it.toRecord() }
+        query.orderBy(Notifications.createdAt to SortOrder.DESC).limit(limit.coerceIn(1, 100), offset.coerceAtLeast(0).toLong()).map { it.toRecord() }
+    }
+
+    fun count(recipient: String, severity: String?, action: String?, projectId: UUID?, from: LocalDateTime?, to: LocalDateTime?, includeArchived: Boolean): Long = transaction {
+        val query = Notifications.selectAll().where { (Notifications.recipient eq "*") or (Notifications.recipient eq recipient) }
+        severity?.takeIf { it.isNotBlank() }?.let { query.andWhere { Notifications.severity eq it } }; action?.takeIf { it.isNotBlank() }?.let { query.andWhere { Notifications.action eq it } }; projectId?.let { query.andWhere { Notifications.projectId eq it } }; from?.let { query.andWhere { Notifications.createdAt greaterEq it } }; to?.let { query.andWhere { Notifications.createdAt lessEq it } }; if (!includeArchived) query.andWhere { Notifications.archivedAt.isNull() and Notifications.dismissedAt.isNull() }; query.count()
     }
 
     fun mark(id: UUID, recipient: String, field: String): Boolean = transaction {

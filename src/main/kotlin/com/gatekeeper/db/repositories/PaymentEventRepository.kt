@@ -27,14 +27,14 @@ object PaymentEventRepository {
         val processedAt: LocalDateTime?
     )
 
-    fun findByStatus(status: String?, limit: Int): List<PaymentEventRecord> {
+    fun findByStatus(status: String?, limit: Int, offset: Int = 0): List<PaymentEventRecord> {
         return transaction {
             val query = PaymentEvents.selectAll()
             status?.takeIf { it.isNotBlank() }?.let { value ->
                 query.andWhere { PaymentEvents.processingStatus eq value }
             }
             query.orderBy(PaymentEvents.receivedAt, SortOrder.DESC)
-                .limit(limit.coerceIn(1, 500))
+                .limit(limit.coerceIn(1, 500), offset.coerceAtLeast(0).toLong())
                 .map { row ->
                     PaymentEventRecord(
                         id = row[PaymentEvents.id],
@@ -50,6 +50,8 @@ object PaymentEventRepository {
                 }
         }
     }
+
+    fun countByStatus(status: String?): Long = transaction { val query = PaymentEvents.selectAll(); status?.takeIf { it.isNotBlank() }?.let { query.andWhere { PaymentEvents.processingStatus eq it } }; query.count() }
 
     fun alreadyRecorded(dedupeKey: String): Boolean {
         return transaction {

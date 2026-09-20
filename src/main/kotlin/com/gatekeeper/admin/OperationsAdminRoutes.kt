@@ -1,6 +1,7 @@
 package com.gatekeeper.admin
 
 import com.gatekeeper.api.respondError
+import com.gatekeeper.api.dto.PaginatedResponse
 import com.gatekeeper.api.dto.toResponse
 import com.gatekeeper.db.repositories.AuditRepository
 import com.gatekeeper.db.repositories.NotificationRepository
@@ -75,10 +76,12 @@ fun Application.configureOperationsAdminRoutes() {
             }
             get("/api/admin/notifications") {
                 val limit = call.request.queryParameters["limit"]?.toIntOrNull()?.coerceIn(1, 100) ?: 25
+                val offset = call.request.queryParameters["offset"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0
                 val principal = call.principal<JWTPrincipal>()?.payload?.subject ?: "unknown"
                 val projectId = call.request.queryParameters["projectId"]?.let { runCatching { UUID.fromString(it) }.getOrNull() }
-                val notifications = NotificationRepository.list(principal, call.request.queryParameters["severity"], call.request.queryParameters["type"], projectId, call.request.queryParameters["from"]?.let { runCatching { LocalDateTime.parse(it) }.getOrNull() }, call.request.queryParameters["to"]?.let { runCatching { LocalDateTime.parse(it) }.getOrNull() }, call.request.queryParameters["includeArchived"] == "true", limit).map { row -> NotificationResponse(row.id.toString(), row.title, row.message, row.severity, row.action, row.createdAt.toString(), row.readAt != null) }
-                call.respond(notifications)
+                val severity = call.request.queryParameters["severity"]; val action = call.request.queryParameters["type"]; val from = call.request.queryParameters["from"]?.let { runCatching { LocalDateTime.parse(it) }.getOrNull() }; val to = call.request.queryParameters["to"]?.let { runCatching { LocalDateTime.parse(it) }.getOrNull() }; val archived = call.request.queryParameters["includeArchived"] == "true"
+                val notifications = NotificationRepository.list(principal, severity, action, projectId, from, to, archived, limit, offset).map { row -> NotificationResponse(row.id.toString(), row.title, row.message, row.severity, row.action, row.createdAt.toString(), row.readAt != null) }; val total = NotificationRepository.count(principal, severity, action, projectId, from, to, archived)
+                call.respond(PaginatedResponse(notifications, total, limit, offset, offset + notifications.size < total))
             }
             post("/api/admin/notifications/{id}/{state}") {
                 val id = call.parameters["id"]?.let { runCatching { UUID.fromString(it) }.getOrNull() } ?: run { call.respondError(HttpStatusCode.BadRequest, "invalid_notification_id", "Invalid notification ID"); return@post }
