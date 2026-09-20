@@ -10,6 +10,6 @@ object GitHubAppInstallations : Table("github_app_installation") {
     val accountLogin = text("account_login").nullable()
     val accountType = text("account_type").nullable()
     val updatedAt = datetime("updated_at").defaultExpression(CurrentDateTime)
+    val pendingState = text("pending_state").nullable()
     override val primaryKey = PrimaryKey(id)
 }
-

@@ -29,5 +29,16 @@ object GitHubAppInstallationRepository {
             it[GitHubAppInstallations.accountType] = accountType
         }
     }
-}
 
+    fun createPendingState(state: String) = transaction {
+        val updated = GitHubAppInstallations.update({ GitHubAppInstallations.id eq 1 }) { it[pendingState] = state }
+        if (updated == 0) GitHubAppInstallations.insert { it[id] = 1; it[installationId] = 0; it[pendingState] = state }
+    }
+
+    fun consumePendingState(state: String): Boolean = transaction {
+        val row = GitHubAppInstallations.selectAll().where { GitHubAppInstallations.id eq 1 }.singleOrNull()
+        if (row?.get(GitHubAppInstallations.pendingState) != state) return@transaction false
+        GitHubAppInstallations.update({ GitHubAppInstallations.id eq 1 }) { it[pendingState] = null }
+        true
+    }
+}

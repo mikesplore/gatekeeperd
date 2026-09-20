@@ -9,6 +9,7 @@ import io.ktor.server.auth.authenticate
 import io.ktor.server.response.respond
 import io.ktor.server.response.respondRedirect
 import io.ktor.server.routing.*
+import java.util.UUID
 
 fun Application.configureGitHubAdminRoutes() {
     routing {
@@ -34,15 +35,19 @@ fun Application.configureGitHubAdminRoutes() {
                     call.respondError(HttpStatusCode.ServiceUnavailable, "github_app_unconfigured", "GitHub App install URL is not configured")
                     return@get
                 }
-                call.respond(mapOf("url" to url, "callbackUrl" to AppConfig.githubCallbackUrl.takeIf { it.isNotBlank() }))
+                val state = UUID.randomUUID().toString()
+                GitHubAppInstallationRepository.createPendingState(state)
+                val separator = if (url.contains("?")) "&" else "?"
+                call.respond(mapOf("url" to "$url${separator}state=$state", "callbackUrl" to AppConfig.githubCallbackUrl.takeIf { it.isNotBlank() }))
             }
         }
 
         get("/api/integrations/github/callback") {
             val installationId = call.request.queryParameters["installation_id"]?.toLongOrNull()
             val setupAction = call.request.queryParameters["setup_action"]
+            val state = call.request.queryParameters["state"]
             val redirect = AppConfig.frontendBaseUrl.ifBlank { "/app/settings/profile" }
-            if (installationId == null || setupAction == "cancel") {
+            if (installationId == null || setupAction == "cancel" || state == null || !GitHubAppInstallationRepository.consumePendingState(state)) {
                 call.respondRedirect("$redirect?github=cancelled")
                 return@get
             }
