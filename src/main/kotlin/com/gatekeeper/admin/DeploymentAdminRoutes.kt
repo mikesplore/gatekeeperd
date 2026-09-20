@@ -12,6 +12,7 @@ import io.ktor.server.request.receive
 import io.ktor.server.response.respond
 import io.ktor.server.routing.*
 import java.util.UUID
+import com.gatekeeper.db.repositories.AuditRepository
 
 fun Application.configureDeploymentAdminRoutes() {
     routing {
@@ -28,7 +29,8 @@ fun Application.configureDeploymentAdminRoutes() {
                 }
                 if (!request.repository.matches(Regex("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")) ||
                     !request.gitRef.matches(Regex("^[A-Za-z0-9._/-]+$")) ||
-                    !request.imageName.matches(Regex("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")) ||
+                    !request.imageName.matches(Regex("^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)+$")) ||
+                    !request.registry.matches(Regex("^(docker\\.io|[A-Za-z0-9.-]+(:[0-9]{1,5})?)$")) ||
                     !request.imageTag.matches(Regex("^[A-Za-z0-9_.-]+$"))) {
                     call.respondError(HttpStatusCode.BadRequest, "invalid_deployment_target", "Repository, ref, image name, or tag is invalid")
                     return@post
@@ -46,6 +48,12 @@ fun Application.configureDeploymentAdminRoutes() {
                     return@get
                 }
                 call.respond(job.toResponse())
+            }
+            get("/api/admin/deployments/{id}/audit") {
+                val id = call.parameters["id"]?.let { runCatching { UUID.fromString(it) }.getOrNull() }
+                if (id == null) { call.respondError(HttpStatusCode.BadRequest, "invalid_deployment_id", "Invalid deployment ID"); return@get }
+                if (DeploymentJobRepository.find(id) == null) { call.respondError(HttpStatusCode.NotFound, "deployment_not_found", "Deployment not found"); return@get }
+                call.respond(AuditRepository.findByJobId(id))
             }
             post("/api/admin/deployments/{id}/cancel") { changeDeployment(call, "cancel") }
             post("/api/admin/deployments/{id}/retry") { changeDeployment(call, "retry") }

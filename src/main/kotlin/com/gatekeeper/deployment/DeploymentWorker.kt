@@ -40,7 +40,7 @@ object DeploymentWorker {
             runCommand(job.id, workspace, listOf("git", "clone", "--depth", "1", "--branch", job.gitRef, "https://github.com/${job.repository}.git", workspace.toString()), githubToken)
             val commit = commandOutput(workspace, listOf("git", "rev-parse", "HEAD")).trim()
             DeploymentJobRepository.update(job.id, "checked_out", "Repository checked out", commitSha = commit)
-            val image = "${job.imageName}:${job.imageTag}"
+            val image = registryImage(job.registry, job.imageName, job.imageTag)
             DeploymentJobRepository.update(job.id, "building", "Building $image")
             runCommand(job.id, workspace, listOf("docker", "build", "--tag", image, workspace.toString()))
             DeploymentJobRepository.update(job.id, "pushing", "Pushing $image")
@@ -122,6 +122,11 @@ object DeploymentWorker {
     private fun tcpReachable(port: Int): Boolean = runCatching {
         Socket().use { it.connect(InetSocketAddress("127.0.0.1", port), 500); true }
     }.getOrDefault(false)
+
+    private fun registryImage(registry: String, name: String, tag: String): String {
+        val host = registry.trim().trimEnd('/')
+        return if (host.isBlank() || host == "docker.io") "$name:$tag" else "$host/$name:$tag"
+    }
 
     private fun runCommand(id: java.util.UUID, directory: Path, command: List<String>, githubToken: String = "") {
         val builder = ProcessBuilder(command).directory(directory.toFile()).redirectErrorStream(true)

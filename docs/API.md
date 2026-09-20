@@ -469,6 +469,18 @@ Runs `nginx -t` on the host and returns the exit code, timestamp, validity, and 
 
 Successful block updates and rollbacks are recorded in the project audit log.
 
+## Deployment operations
+
+Deployment administration is JWT-protected:
+
+- `POST /api/admin/deployments` queues a GitHub-to-container deployment. The request accepts `repository`, `gitRef`, `registry` (`docker.io` or a registry host), `imageName`, `imageTag`, optional `containerName`, published `hostPort`/`containerPort`, `network`, `restartPolicy`, and optional `projectSlug`.
+- `GET /api/admin/deployments` and `GET /api/admin/deployments/{id}` expose lifecycle state, logs, commit SHA, image digest, and failure details.
+- `GET /api/admin/deployments/{id}/audit` exposes deployment-worker audit records.
+- `POST /api/admin/deployments/{id}/cancel`, `/retry`, and `/rollback` control the job lifecycle. Rollback uses the persisted previous container image and performs the same health and published-port checks before replacing the active container.
+- `POST /api/integrations/github/webhook` accepts signed GitHub events. `X-GitHub-Delivery` is required and is persisted for idempotency; duplicate deliveries are acknowledged without queueing another deployment.
+
+After a successful deployment, the linked project container name is synchronized. Nginx handoff remains explicit through `POST /api/admin/nginx/enable/{slug}`; it validates the running container and published port before writing and reloading the site configuration.
+
 These endpoints manage nginx site configurations for client projects. They require `nginx` CLI and `systemctl` access on the host.
 
 ### GET /api/admin/nginx/wizard/context/{slug}
