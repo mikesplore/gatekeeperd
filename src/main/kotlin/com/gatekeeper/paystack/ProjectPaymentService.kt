@@ -21,7 +21,7 @@ object ProjectPaymentService {
             return Result.failure(IllegalStateException("No client email configured for this project"))
         }
 
-        val amount = runCatching { ProjectBalanceService.requireOutstandingBalance(project) }
+        val amount = runCatching { ProjectBalanceService.requireAvailableForNewPayment(project) }
             .getOrElse { return Result.failure(it) }
 
         val publicBase = AppConfig.publicBaseUrl.trim().trimEnd('/')

@@ -78,6 +78,12 @@ object PaymentRepository {
             .fold(BigDecimal.ZERO) { total, row -> total + row[Payments.amount] }
     }
 
+    fun pendingAmountForProject(projectId: UUID): BigDecimal = transaction {
+        Payments.select(Payments.amount)
+            .where { (Payments.projectId eq projectId) and (Payments.gatewayStatus eq "pending") }
+            .fold(BigDecimal.ZERO) { total, row -> total + row[Payments.amount] }
+    }
+
     fun findLatestPendingAuthorizationUrl(projectId: UUID): String? {
         return transaction {
             Payments.selectAll()

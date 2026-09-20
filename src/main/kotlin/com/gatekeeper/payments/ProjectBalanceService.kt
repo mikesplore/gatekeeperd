@@ -18,4 +18,9 @@ object ProjectBalanceService {
     fun requireOutstandingBalance(project: ProjectRepository.ProjectRecord): BigDecimal =
         outstandingBalance(project).takeIf { it > BigDecimal.ZERO }
             ?: error("Project has no outstanding balance")
+
+    fun requireAvailableForNewPayment(project: ProjectRepository.ProjectRecord): BigDecimal {
+        val available = outstandingBalance(project) - PaymentRepository.pendingAmountForProject(project.id)
+        return available.takeIf { it > BigDecimal.ZERO } ?: error("Project has no available outstanding balance")
+    }
 }
