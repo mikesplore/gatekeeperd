@@ -44,7 +44,9 @@ data class NetworkInfo(
     val name: String,
     val driver: String,
     val scope: String,
-    val containers: List<String> = emptyList()
+    val containers: List<String> = emptyList(),
+    val subnet: String? = null,
+    val gateway: String? = null
 )
 
 @Serializable

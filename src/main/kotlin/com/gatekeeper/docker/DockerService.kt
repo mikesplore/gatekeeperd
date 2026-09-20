@@ -205,7 +205,9 @@ class DockerService(dockerSocketPath: String) {
                     name = net.name ?: "",
                     driver = net.driver ?: "",
                     scope = net.scope ?: "",
-                    containers = containersByNetwork[net.name].orEmpty().distinct().sorted()
+                    containers = containersByNetwork[net.name].orEmpty().distinct().sorted(),
+                    subnet = net.ipam?.config?.firstOrNull()?.subnet,
+                    gateway = net.ipam?.config?.firstOrNull()?.gateway
                 )
             }
     }
