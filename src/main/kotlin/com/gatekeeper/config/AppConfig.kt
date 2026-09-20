@@ -64,6 +64,16 @@ object AppConfig {
     val scribedIntegrationSecret: String = optionalSetting("SCRIBED_INTEGRATION_SECRET", "")
     val scribedApiToken: String = optionalSetting("SCRIBED_API_TOKEN", "")
 
+    init {
+        logger.info(
+            "Scribed integration configuration: callbackUrlSet={}, integrationSecretSet={}, apiTokenSet={}, workingDirectory={}",
+            scribedCallbackUrl.isNotBlank(),
+            scribedIntegrationSecret.isNotBlank(),
+            scribedApiToken.isNotBlank(),
+            System.getProperty("user.dir")
+        )
+    }
+
     /** Used once on first startup when the users table is empty */
     val adminEmail: String = optionalSetting("ADMIN_EMAIL", "")
     val adminPassword: String = optionalSetting("ADMIN_PASSWORD", "")
