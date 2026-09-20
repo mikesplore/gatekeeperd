@@ -42,7 +42,11 @@ import io.ktor.server.routing.*
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.decodeFromJsonElement
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.longOrNull
 import org.slf4j.LoggerFactory
 import java.math.BigDecimal
 
@@ -212,7 +216,14 @@ fun Application.configureProjectAdminRoutes() {
                     call.respondError(HttpStatusCode.BadGateway, "invoice_integration_unavailable", "Scribed invoice lookup failed")
                     return@get
                 }
-                call.respond(lookup.body)
+                val scribedBase = AppConfig.scribedCallbackUrl.trim().trimEnd('/')
+                val invoice = lookup.body["invoice"]?.jsonObject
+                val invoiceId = invoice?.get("id")?.jsonPrimitive?.longOrNull
+                val response = if (invoiceId != null && scribedBase.isNotBlank() && invoice != null) {
+                    val invoiceUrl = "$scribedBase/invoices/$invoiceId"
+                    JsonObject(lookup.body + ("invoice" to JsonObject(invoice + ("download_url" to JsonPrimitive(invoiceUrl)))))
+                } else lookup.body
+                call.respond(response)
             }
 
             post("/api/admin/projects") {
