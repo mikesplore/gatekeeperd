@@ -39,11 +39,21 @@ fun Application.configureMonitoring() {
 
     install(StatusPages) {
         status(HttpStatusCode.NotFound) { call, _ ->
-            call.respondError(
-                HttpStatusCode.NotFound,
-                "route_not_found",
-                "No route matches ${call.request.httpMethod.value} ${call.request.path()}"
-            )
+            val path = call.request.path()
+            if (call.request.httpMethod == HttpMethod.Get &&
+                path.matches(Regex("/api/admin/projects/[^/]+/invoice/?"))) {
+                call.respondError(
+                    HttpStatusCode.NotFound,
+                    "invoice_unavailable",
+                    "No Scribed invoice is available for this project"
+                )
+            } else {
+                call.respondError(
+                    HttpStatusCode.NotFound,
+                    "route_not_found",
+                    "No route matches ${call.request.httpMethod.value} $path"
+                )
+            }
         }
         exception<SerializationException> { call, ex ->
             logger.error("JSON serialization failed for ${call.request.httpMethod.value} ${call.request.path()}", ex)
