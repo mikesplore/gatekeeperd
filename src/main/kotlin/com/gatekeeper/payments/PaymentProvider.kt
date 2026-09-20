@@ -5,7 +5,8 @@ import java.time.LocalDateTime
 
 enum class PaymentProvider {
     PAYSTACK,
-    MPESA
+    MPESA,
+    CASH
 }
 
 enum class VerifiedPaymentStatus {

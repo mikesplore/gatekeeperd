@@ -391,6 +391,23 @@ Get the most recent audit log entries across all projects (JWT required).
 ### GET /api/admin/payments
 List all payments across projects with filters and pagination (JWT required).
 
+### POST /api/admin/projects/{slug}/payments/cash
+Record a cash payment received by an administrator (JWT required). The amount and currency must match the project's configured amount due and currency. Successful capture activates the project through the same payment application flow as gateway payments and writes an audit entry.
+
+Request body:
+
+```json
+{
+  "amount": 500,
+  "currency": "KES",
+  "paidAt": "2026-09-20T10:30:00",
+  "receiptNumber": "CASH-1001",
+  "notes": "Received in person"
+}
+```
+
+The response contains the generated cash reference and `status: "success"`. Reusing the same receipt number is rejected rather than creating a duplicate payment.
+
 **Query parameters (all optional):**
 - `status` — filter by `gateway_status` (`pending`, `success`, `failed`, `abandoned`, `reversed`)
 - `project_slug` — filter to one project

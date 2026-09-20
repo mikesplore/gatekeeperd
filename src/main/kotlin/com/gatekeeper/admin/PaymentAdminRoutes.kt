@@ -10,11 +10,26 @@ import io.ktor.http.*
 import io.ktor.server.application.*
 import io.ktor.server.auth.*
 import io.ktor.server.response.*
+import io.ktor.server.request.receive
 import io.ktor.server.routing.*
 import java.time.LocalDate
 import com.gatekeeper.plugins.Metrics
 import com.gatekeeper.payments.PaymentReconciliationService
 import java.util.UUID
+import java.math.BigDecimal
+import java.time.LocalDateTime
+import com.gatekeeper.payments.PaymentApplicationService
+import com.gatekeeper.payments.PaymentProvider
+import kotlinx.serialization.Serializable
+
+@Serializable
+data class CaptureCashPaymentRequest(
+    val amount: Double,
+    val currency: String? = null,
+    val paidAt: String? = null,
+    val receiptNumber: String? = null,
+    val notes: String? = null
+)
 
 fun Application.configurePaymentAdminRoutes() {
     routing {
@@ -45,6 +60,39 @@ fun Application.configurePaymentAdminRoutes() {
                     ?: return@post call.respondError(HttpStatusCode.NotFound, "payment_not_found", "Payment not found")
                 val reconciled = PaymentReconciliationService.reconcile(payment)
                 call.respond(mapOf("id" to id.toString(), "reconciled" to reconciled, "gatewayStatus" to PaymentRepository.findById(id)?.gatewayStatus))
+            }
+
+            post("/api/admin/projects/{slug}/payments/cash") {
+                val slug = call.parameters["slug"]
+                    ?: return@post call.respondError(HttpStatusCode.BadRequest, "invalid_project_slug", "Project slug is required")
+                val project = ProjectRepository.findBySlug(slug)
+                    ?: return@post call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
+                val request = call.receive<CaptureCashPaymentRequest>()
+                if (request.amount <= 0.0 || !request.amount.isFinite()) {
+                    return@post call.respondError(HttpStatusCode.BadRequest, "invalid_payment_amount", "Payment amount must be greater than zero")
+                }
+                val paidAt = request.paidAt?.let { runCatching { LocalDateTime.parse(it) }.getOrNull() }
+                    ?: LocalDateTime.now()
+                val actor = call.principal<io.ktor.server.auth.jwt.JWTPrincipal>()?.payload?.subject ?: "unknown"
+                val reference = request.receiptNumber?.trim()?.takeIf { it.isNotEmpty() }
+                    ?.let { "cash-$it" }
+                    ?: "cash-${UUID.randomUUID()}"
+                val notes = request.notes?.trim()?.takeIf { it.isNotEmpty() }
+                val applied = PaymentApplicationService.applySuccessfulPayment(
+                    provider = PaymentProvider.CASH,
+                    reference = reference,
+                    projectSlug = slug,
+                    amount = BigDecimal.valueOf(request.amount),
+                    currency = request.currency ?: project.currency,
+                    verifiedVia = "manual_cash",
+                    paidAt = paidAt,
+                    rawPayload = notes,
+                    actor = actor
+                )
+                if (!applied) {
+                    return@post call.respondError(HttpStatusCode.BadRequest, "payment_capture_rejected", "Cash payment does not match the project's outstanding amount or currency")
+                }
+                call.respond(HttpStatusCode.Created, mapOf("provider" to "cash", "reference" to reference, "status" to "success"))
             }
 
             get("/api/admin/metrics") {

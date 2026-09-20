@@ -20,7 +20,8 @@ object PaymentApplicationService {
         currency: String? = null,
         verifiedVia: String,
         paidAt: LocalDateTime = LocalDateTime.now(),
-        rawPayload: String? = null
+        rawPayload: String? = null,
+        actor: String = "system"
     ): Boolean {
         val existing = PaymentRepository.findByProviderReference(provider, reference)
         if (existing != null && existing.gatewayStatus == "success") return false
@@ -44,7 +45,7 @@ object PaymentApplicationService {
         }
         PaymentRepository.markGatewayStatusByProviderReference(provider, reference, "success", verifiedVia, paidAt)
         ProjectRepository.setStatusAndClearDueDate(project.id, "active")
-        AuditRepository.write(project.id, "payment_received", "system", "Payment ref=$reference provider=$provider verified via $verifiedVia")
+        AuditRepository.write(project.id, "payment_received", actor, "Payment ref=$reference provider=$provider verified via $verifiedVia")
         ProjectRepository.invalidateCache(project.slug)
         ScribedIntegrationClient.notifyPayment(project, provider.name.lowercase(), reference, amount.toPlainString(), currency ?: project.currency, paidAt.toString())
         logger.info("Payment applied: provider=$provider project=$projectSlug ref=$reference")
