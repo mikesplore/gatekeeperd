@@ -1114,6 +1114,26 @@ Common error codes:
 ### POST /api/auth/logout
 Revokes the current JWT until its natural expiry. The endpoint requires the current admin token.
 
+### POST /api/auth/2fa/setup
+
+Requires an admin JWT. Generates a pending authenticator enrollment and returns the `otpauth://` URI, manual secret, and one-time recovery codes. The enrollment expires after 10 minutes.
+
+### POST /api/auth/2fa/enable
+
+Requires an admin JWT. Body: `{ "code": "123456" }`. Enables 2FA only after validating the pending enrollment code.
+
+### POST /api/auth/2fa/verify
+
+Accepts `{ "challengeToken": "...", "code": "123456" }` after password login when 2FA is enabled. The code may be a TOTP or unused recovery code.
+
+### POST /api/auth/2fa/disable
+
+Requires an admin JWT. Body: `{ "currentPassword": "...", "code": "123456" }`.
+
+### POST /api/auth/2fa/recovery-codes/regenerate
+
+Requires an admin JWT and the current password plus TOTP or recovery code. Returns a new one-time recovery-code batch and invalidates the previous batch.
+
 ### POST /api/auth/password
 Changes the authenticated admin password. Requires `currentPassword` and a `newPassword` of at least 8 characters.
 ### GET /api/admin/metrics
