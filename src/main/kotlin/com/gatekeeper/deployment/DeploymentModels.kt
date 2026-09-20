@@ -1,6 +1,7 @@
 package com.gatekeeper.deployment
 
 import kotlinx.serialization.Serializable
+import com.gatekeeper.docker.VolumeMount
 
 @Serializable
 data class CreateDeploymentRequest(
@@ -14,7 +15,10 @@ data class CreateDeploymentRequest(
     val containerPort: Int? = null,
     val network: String = "bridge",
     val restartPolicy: String = "unless-stopped"
-    , val projectSlug: String? = null
+    , val projectSlug: String? = null,
+    val env: Map<String, String> = emptyMap(),
+    val volumes: List<VolumeMount> = emptyList(),
+    val createNetworkIfMissing: Boolean = false
 )
 
 @Serializable
@@ -34,5 +38,7 @@ data class DeploymentJobResponse(
     val createdAt: String,
     val startedAt: String? = null,
     val completedAt: String? = null,
-    val updatedAt: String
+    val updatedAt: String,
+    val env: Map<String, String> = emptyMap(),
+    val volumes: List<VolumeMount> = emptyList()
 )

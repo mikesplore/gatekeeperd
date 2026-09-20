@@ -1,0 +1,4 @@
+ALTER TABLE deployment_jobs ADD COLUMN IF NOT EXISTS env_json TEXT NOT NULL DEFAULT '{}';
+ALTER TABLE deployment_jobs ADD COLUMN IF NOT EXISTS volumes_json TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE deployment_jobs ADD COLUMN IF NOT EXISTS create_network_if_missing BOOLEAN NOT NULL DEFAULT FALSE;
+

@@ -54,6 +54,7 @@ object DeploymentWorker {
                 val digest = docker.imageDigest(image)
                 DeploymentJobRepository.update(job.id, log = "Image digest: ${digest ?: "unavailable"}", imageDigest = digest)
                 val targetName = job.containerName ?: "deployment-${job.id.toString().take(8)}"
+                if (job.network != "bridge" && job.createNetworkIfMissing) docker.createNetworkIfMissing(job.network)
                 val existing = job.containerName?.let { docker.getContainer(it) }
                 DeploymentJobRepository.setPreviousContainer(job.id, existing?.name, existing?.image)
                 val candidateName = "${targetName}-${job.id.toString().take(8)}"
@@ -64,6 +65,8 @@ object DeploymentWorker {
                     ports = ports,
                     network = job.network,
                     restartPolicy = job.restartPolicy,
+                    env = job.env,
+                    volumes = job.volumes,
                     pullImage = false
                 ))
                 if (!awaitHealthy(docker, candidateName, job.hostPort)) {
@@ -95,7 +98,8 @@ object DeploymentWorker {
         val docker = DockerService(AppConfig.dockerSocket)
         return try {
             val candidate = "$target-rollback-${id.toString().take(8)}"
-            docker.createContainer(CreateContainerRequest(name = candidate, image = oldImage, ports = if (job.hostPort != null && job.containerPort != null) mapOf(job.hostPort to job.containerPort) else emptyMap(), network = job.network, restartPolicy = job.restartPolicy, pullImage = true))
+            if (job.network != "bridge" && job.createNetworkIfMissing) docker.createNetworkIfMissing(job.network)
+            docker.createContainer(CreateContainerRequest(name = candidate, image = oldImage, ports = if (job.hostPort != null && job.containerPort != null) mapOf(job.hostPort to job.containerPort) else emptyMap(), network = job.network, restartPolicy = job.restartPolicy, env = job.env, volumes = job.volumes, pullImage = true))
             if (!awaitHealthy(docker, candidate, job.hostPort)) { docker.deleteContainer(candidate); return false }
             docker.getContainer(target)?.let { docker.deleteContainer(it.name) }
             docker.renameContainer(candidate, target)

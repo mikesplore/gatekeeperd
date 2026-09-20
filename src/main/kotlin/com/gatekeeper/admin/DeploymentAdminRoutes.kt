@@ -31,7 +31,7 @@ fun Application.configureDeploymentAdminRoutes() {
                     !request.gitRef.matches(Regex("^[A-Za-z0-9._/-]+$")) ||
                     !request.imageName.matches(Regex("^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)+$")) ||
                     !request.registry.matches(Regex("^(docker\\.io|[A-Za-z0-9.-]+(:[0-9]{1,5})?)$")) ||
-                    !request.imageTag.matches(Regex("^[A-Za-z0-9_.-]+$"))) {
+                    !request.imageTag.matches(Regex("^[A-Za-z0-9_.-]+$")) || request.env.keys.any { it.isBlank() || it.contains('=') || it.contains('\u0000') } || request.volumes.any { it.hostPath.isBlank() || it.containerPath.isBlank() }) {
                     call.respondError(HttpStatusCode.BadRequest, "invalid_deployment_target", "Repository, ref, image name, or tag is invalid")
                     return@post
                 }
@@ -76,5 +76,5 @@ private suspend fun changeDeployment(call: ApplicationCall, action: String) {
 
 private fun com.gatekeeper.db.repositories.DeploymentJobRecord.toResponse() = DeploymentJobResponse(
     id.toString(), repository, gitRef, registry, imageName, imageTag, status, currentStep, logs, commitSha, imageDigest,
-    errorMessage, createdAt.toString(), startedAt?.toString(), completedAt?.toString(), updatedAt.toString()
+    errorMessage, createdAt.toString(), startedAt?.toString(), completedAt?.toString(), updatedAt.toString(), env, volumes
 )

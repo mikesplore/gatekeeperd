@@ -21,6 +21,7 @@ object DatabaseMigrations {
         ,Migration("10", "deployment reliability", "db/migration/V10__deployment_reliability.sql")
         ,Migration("11", "github app installation", "db/migration/V11__github_app_installation.sql")
         ,Migration("12", "github installation state", "db/migration/V12__github_installation_state.sql")
+        ,Migration("13", "deployment runtime spec", "db/migration/V13__deployment_runtime_spec.sql")
     )
 
     fun apply(dataSource: HikariDataSource) {
