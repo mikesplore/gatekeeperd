@@ -40,7 +40,10 @@ object DeploymentWorker {
         try {
             ensureNotCancelled(job.id)
             DeploymentJobRepository.update(job.id, "cloning", "Cloning ${job.repository}@${job.gitRef}")
-            val githubToken = GitHubAppClient.installationToken()
+            val githubToken = runCatching { GitHubAppClient.installationToken() }.getOrElse {
+                logger.info("GitHub App is not connected; attempting public repository clone for {}", job.repository)
+                ""
+            }
             runCommand(job.id, workspace, listOf("git", "clone", "--depth", "1", "--branch", job.gitRef, "https://github.com/${job.repository}.git", workspace.toString()), githubToken)
             val commit = commandOutput(workspace, listOf("git", "rev-parse", "HEAD")).trim()
             DeploymentJobRepository.update(job.id, "checked_out", "Repository checked out", commitSha = commit)
