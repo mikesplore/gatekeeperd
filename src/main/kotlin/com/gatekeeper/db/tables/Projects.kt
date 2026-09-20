@@ -21,6 +21,7 @@ object Projects : Table("projects") {
     val clientEmail = text("client_email").nullable()
     val paystackCustomerCode = text("paystack_customer_code").nullable()
     val amountDue = decimal("amount_due", 12, 2).nullable()
+    val baseAmount = decimal("base_amount", 12, 2).nullable()
     val currency = text("currency").default("KES")
     val dueDate = date("due_date").nullable()
     val gracePeriodDays = integer("grace_period_days").default(3)

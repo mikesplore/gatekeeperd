@@ -27,6 +27,7 @@ object DatabaseMigrations {
         ,Migration("16", "registry credentials", "db/migration/V16__registry_credentials.sql")
         ,Migration("17", "user profile fields", "db/migration/V17__user_profile_fields.sql")
         ,Migration("18", "user two factor authentication fields", "db/migration/V18__user_2fa_fields.sql")
+        ,Migration("19", "immutable project base amount and adjustments", "db/migration/V19__immutable_project_base_amount_and_adjustments.sql")
     )
 
     fun apply(dataSource: HikariDataSource) {

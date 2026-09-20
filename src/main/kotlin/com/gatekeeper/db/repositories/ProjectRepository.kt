@@ -60,6 +60,7 @@ object ProjectRepository {
         val clientEmail: String?,
         val paystackCustomerCode: String?,
         val amountDue: BigDecimal?,
+        val baseAmount: BigDecimal?,
         val currency: String,
         val dueDate: LocalDate?,
         val gracePeriodDays: Int,
@@ -127,6 +128,7 @@ object ProjectRepository {
                 it[Projects.clientName] = clientName
                 it[Projects.clientEmail] = clientEmail
                 it[Projects.amountDue] = amountDue
+                it[Projects.baseAmount] = amountDue
                 it[Projects.currency] = currency
                 it[Projects.dueDate] = dueDate
                 it[Projects.gracePeriodDays] = gracePeriodDays
@@ -405,6 +407,7 @@ object ProjectRepository {
         clientEmail = this[Projects.clientEmail],
         paystackCustomerCode = this[Projects.paystackCustomerCode],
         amountDue = this[Projects.amountDue],
+        baseAmount = this[Projects.baseAmount],
         currency = this[Projects.currency],
         dueDate = this[Projects.dueDate],
         gracePeriodDays = this[Projects.gracePeriodDays],
