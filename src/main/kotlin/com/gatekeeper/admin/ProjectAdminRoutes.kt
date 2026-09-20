@@ -15,6 +15,8 @@ import com.gatekeeper.config.AppConfig
 import com.gatekeeper.db.repositories.AuditRepository
 import com.gatekeeper.db.repositories.PaymentRepository
 import com.gatekeeper.db.repositories.ProjectRepository
+import com.gatekeeper.db.repositories.ProjectAdjustmentRepository
+import com.gatekeeper.db.tables.AdjustmentType
 import com.gatekeeper.integrations.ScribedIntegrationClient
 import com.gatekeeper.docker.ContainerCreatePlanResult
 import com.gatekeeper.docker.CreateContainerRequest
@@ -38,6 +40,7 @@ import com.gatekeeper.payments.ProjectBalanceService
 import io.ktor.http.*
 import io.ktor.server.application.*
 import io.ktor.server.auth.*
+import io.ktor.server.auth.jwt.JWTPrincipal
 import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
@@ -97,6 +100,26 @@ data class UpdateProjectRequest(
     val deploymentMode: String? = null,
     val serviceMode: String? = null,
     val lifecycleStatus: String? = null
+)
+
+@Serializable
+data class CreateProjectAdjustmentRequest(
+    val type: String,
+    val amount: Double,
+    val reason: String
+)
+
+@Serializable
+data class ProjectAdjustmentResponse(
+    val id: String,
+    val projectId: String,
+    val type: String,
+    val amount: Double,
+    val reason: String,
+    val actor: String,
+    val createdAt: String,
+    val oldBalance: Double,
+    val newBalance: Double
 )
 
 @Serializable
@@ -466,6 +489,54 @@ fun Application.configureProjectAdminRoutes() {
                 ProjectRepository.invalidateCache(slug)
                 logger.info("Project updated: $slug")
                 call.respond(project.toResponse())
+            }
+
+            post("/api/admin/projects/{slug}/adjustments") {
+                val slug = call.parameters["slug"]
+                if (slug == null) {
+                    call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing slug path parameter")
+                    return@post
+                }
+                val body = runCatching { call.receive<CreateProjectAdjustmentRequest>() }.getOrElse {
+                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid adjustment request")
+                    return@post
+                }
+                val type = runCatching { AdjustmentType.valueOf(body.type.trim().uppercase()) }.getOrNull()
+                if (type == null) {
+                    call.respondError(HttpStatusCode.BadRequest, "invalid_adjustment_type", "type must be ADDITIONAL_CHARGE or DISCOUNT")
+                    return@post
+                }
+                val amount = runCatching { BigDecimal.valueOf(body.amount) }.getOrNull()
+                if (amount == null || amount <= BigDecimal.ZERO) {
+                    call.respondError(HttpStatusCode.BadRequest, "invalid_adjustment_amount", "amount must be greater than zero")
+                    return@post
+                }
+                if (body.reason.isBlank()) {
+                    call.respondError(HttpStatusCode.BadRequest, "invalid_adjustment_reason", "reason is required")
+                    return@post
+                }
+                val project = ProjectRepository.findBySlug(slug)
+                if (project == null) {
+                    call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
+                    return@post
+                }
+                val oldBalance = ProjectBalanceService.outstandingBalance(project)
+                val actor = call.principal<JWTPrincipal>()?.payload?.subject ?: "unknown"
+                val adjustment = try {
+                    ProjectAdjustmentRepository.create(project.id, type, amount, body.reason, actor)
+                } catch (e: IllegalArgumentException) {
+                    call.respondError(HttpStatusCode.BadRequest, "invalid_adjustment", e.message ?: "Invalid adjustment")
+                    return@post
+                }
+                val newBalance = ProjectBalanceService.outstandingBalance(project)
+                AuditRepository.write(
+                    project.id,
+                    "project_adjustment",
+                    actor,
+                    "${type.name} amount=$amount oldBalance=$oldBalance newBalance=$newBalance reason=${body.reason.trim()}"
+                )
+                ProjectRepository.invalidateCache(slug)
+                call.respond(ProjectAdjustmentResponse(adjustment.id.toString(), project.id.toString(), type.name, amount.toDouble(), adjustment.reason, actor, adjustment.createdAt.toString(), oldBalance.toDouble(), newBalance.toDouble()))
             }
 
             post("/api/admin/projects/{slug}/transfer") {
