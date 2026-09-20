@@ -61,7 +61,8 @@ class DockerService(dockerSocketPath: String) {
                         val source = mount.getSource() ?: return@mapNotNull null
                         val destination = mount.getDestination()?.path ?: return@mapNotNull null
                         VolumeMount(source, destination, mount.getMode()?.contains("ro") == true)
-                    }.orEmpty()
+                    }.orEmpty(),
+                    restartPolicy = inspected.hostConfig?.restartPolicy?.name ?: "unknown"
                 )
             }
         } catch (e: Exception) {

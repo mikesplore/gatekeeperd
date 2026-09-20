@@ -12,7 +12,8 @@ data class ContainerInfo(
     val ports: String,
     val created: Long,
     val networks: List<String> = emptyList(),
-    val volumes: List<VolumeMount> = emptyList()
+    val volumes: List<VolumeMount> = emptyList(),
+    val restartPolicy: String = "unknown"
 )
 
 @Serializable
