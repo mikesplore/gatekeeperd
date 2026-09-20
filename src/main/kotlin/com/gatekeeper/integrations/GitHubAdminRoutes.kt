@@ -63,21 +63,28 @@ fun Application.configureGitHubAdminRoutes() {
             }
         }
 
+        get("/api/admin/github/callback") {
+            handleGitHubCallback(call)
+        }
         get("/api/integrations/github/callback") {
+            handleGitHubCallback(call)
+        }
+    }
+}
+
+private suspend fun handleGitHubCallback(call: ApplicationCall) {
             val installationId = call.request.queryParameters["installation_id"]?.toLongOrNull()
             val setupAction = call.request.queryParameters["setup_action"]
             val state = call.request.queryParameters["state"]
             val redirect = AppConfig.frontendBaseUrl.ifBlank { "/app/settings/profile" }
             if (installationId == null || setupAction == "cancel" || state == null || !GitHubAppInstallationRepository.consumePendingState(state)) {
                 call.respondRedirect("$redirect?github=cancelled")
-                return@get
+                return
             }
             if (AppConfig.githubAppId == null || AppConfig.githubAppPrivateKeyPath.isBlank()) {
                 call.respondRedirect("$redirect?github=unconfigured")
-                return@get
+                return
             }
             GitHubAppInstallationRepository.save(installationId, call.request.queryParameters["account_login"], call.request.queryParameters["account_type"])
             call.respondRedirect("$redirect?github=authorized&installation_id=$installationId")
-        }
-    }
 }
