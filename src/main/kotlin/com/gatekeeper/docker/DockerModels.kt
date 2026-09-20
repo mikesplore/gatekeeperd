@@ -85,6 +85,7 @@ data class VolumeMount(
 
 @Serializable
 data class CreateContainerRequest(
+    val preset: String? = null,
     val name: String = "",
     val projectSlug: String? = null,
     val image: String,
