@@ -67,6 +67,10 @@ object AppConfig {
     val scribedIntegrationSecret: String = optionalSetting("SCRIBED_INTEGRATION_SECRET", "")
     val scribedApiToken: String = optionalSetting("SCRIBED_API_TOKEN", "")
     val githubToken: String = optionalSetting("GITHUB_TOKEN", "")
+    val githubAppId: Long? = optionalSetting("GITHUB_APP_ID", "").toLongOrNull()
+    val githubAppInstallationId: Long? = optionalSetting("GITHUB_APP_INSTALLATION_ID", "").toLongOrNull()
+    val githubClientId: String = optionalSetting("GITHUB_CLIENT_ID", "")
+    val githubAppPrivateKeyPath: String = optionalSetting("GITHUB_APP_PRIVATE_KEY_PATH", "")
 
     init {
         logger.info(
