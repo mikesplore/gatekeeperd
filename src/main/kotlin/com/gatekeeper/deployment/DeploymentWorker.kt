@@ -81,6 +81,7 @@ object DeploymentWorker {
                 if (job.network != "bridge" && job.createNetworkIfMissing) docker.createNetworkIfMissing(job.network)
                 val existing = job.containerName?.let { docker.getContainer(it) }
                     ?: docker.getContainer(targetName)
+                    ?: docker.findContainerByImage(image)
                 DeploymentJobRepository.setPreviousContainer(job.id, existing?.name, existing?.image)
                 candidateName = "${targetName}-${job.id.toString().take(8)}"
                 val ports = if (job.hostPort != null && job.containerPort != null) mapOf(job.hostPort to job.containerPort) else emptyMap()

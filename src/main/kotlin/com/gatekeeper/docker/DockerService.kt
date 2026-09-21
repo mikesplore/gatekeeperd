@@ -86,6 +86,10 @@ class DockerService(dockerSocketPath: String) {
         }
     }
 
+    /** Finds the running deployment currently serving an image when older records lack a container name. */
+    fun findContainerByImage(image: String): ContainerInfo? =
+        listContainers(all = true).firstOrNull { it.image == image || it.image.substringBefore('@') == image }
+
     fun containerLogs(containerNameOrId: String, tail: Int = 100): String {
         val output = StringBuilder()
         client.logContainerCmd(containerNameOrId)
