@@ -44,6 +44,8 @@ private const val REFRESH_TTL_SECONDS = 30 * 24 * 60 * 60
 
 @Serializable
 data class LoginRequest(val email: String, val password: String)
+@Serializable data class CreateAdminUserRequest(val email: String, val password: String, val role: String = "admin")
+@Serializable data class AdminUserResponse(val id: String, val email: String, val role: String, val twoFactorEnabled: Boolean, val createdAt: String)
 
 @Serializable
 data class LoginResponse(val token: String = "", val refreshToken: String = "", val requiresTwoFactor: Boolean = false, val challengeToken: String? = null)
@@ -404,6 +406,60 @@ fun Application.configureAuthRoutes() {
                         createdAt = user[Users.createdAt].toString()
                     )
                 )
+            }
+
+            get("/api/admin/users") {
+                val principal = call.principal<JWTPrincipal>()
+                if (principal?.payload?.getClaim("role")?.asString() != "admin") {
+                    call.respondError(HttpStatusCode.Forbidden, "forbidden", "Only administrators can manage users")
+                    return@get
+                }
+                val users = transaction { Users.selectAll().orderBy(Users.createdAt).map { user ->
+                    AdminUserResponse(user[Users.id].toString(), user[Users.email], user[Users.role], user[Users.totpEnabled], user[Users.createdAt].toString())
+                } }
+                call.respond(users)
+            }
+
+            post("/api/admin/users") {
+                val principal = call.principal<JWTPrincipal>()
+                if (principal?.payload?.getClaim("role")?.asString() != "admin") {
+                    call.respondError(HttpStatusCode.Forbidden, "forbidden", "Only administrators can manage users")
+                    return@post
+                }
+                val body = runCatching { call.receive<CreateAdminUserRequest>() }.getOrNull()
+                val email = body?.email?.trim()?.lowercase()
+                val role = body?.role?.trim()?.lowercase()
+                if (body == null || email.isNullOrBlank() || !InputValidators.isValidEmail(email) || body.password.length < 8 || role !in setOf("admin", "operator", "viewer")) {
+                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "A valid email, password of at least 8 characters, and role (admin, operator, or viewer) are required")
+                    return@post
+                }
+                val newEmail = requireNotNull(email)
+                val newRole = requireNotNull(role)
+                val created = runCatching {
+                    transaction {
+                        if (Users.selectAll().where { Users.email eq newEmail }.singleOrNull() != null) throw IllegalArgumentException("duplicate")
+                        val id = UUID.randomUUID()
+                        Users.insert {
+                            it[Users.id] = id
+                            it[Users.email] = newEmail
+                            it[Users.passwordHash] = BCrypt.hashpw(body.password, BCrypt.gensalt(12))
+                            it[Users.role] = newRole
+                            it[Users.totpEnabled] = false
+                            it[Users.recoveryCodes] = emptyList()
+                        }
+                        id
+                    }
+                }.getOrElse {
+                    if (it.message == "duplicate") {
+                        call.respondError(HttpStatusCode.Conflict, "user_exists", "A user with that email already exists")
+                    } else {
+                        logger.error("Failed to create admin user", it)
+                        call.respondError(HttpStatusCode.InternalServerError, "user_creation_failed", "Unable to create user")
+                    }
+                    return@post
+                }
+                AuditRepository.write(null, "Admin User Created", principal.payload.subject, "email=$newEmail role=$newRole two_factor_enabled=false")
+                call.respond(HttpStatusCode.Created, AdminUserResponse(created.toString(), newEmail, newRole, false, LocalDateTime.now().toString()))
             }
         }
     }
