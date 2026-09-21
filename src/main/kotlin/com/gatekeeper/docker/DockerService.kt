@@ -13,6 +13,8 @@ import com.github.dockerjava.api.model.HostConfig
 import com.github.dockerjava.api.model.Ports
 import com.github.dockerjava.api.model.RestartPolicy
 import com.github.dockerjava.api.model.Image
+import com.github.dockerjava.api.model.Volume
+import com.github.dockerjava.api.model.AccessMode
 import com.github.dockerjava.core.DefaultDockerClientConfig
 import com.github.dockerjava.core.DockerClientBuilder
 import com.github.dockerjava.core.DockerClientConfig
@@ -334,7 +336,11 @@ class DockerService(dockerSocketPath: String) {
 
         if (request.volumes.isNotEmpty()) {
             val binds = request.volumes.map {
-                Bind.parse("${it.hostPath}:${it.containerPath}" + if (it.readOnly) ":ro" else "")
+                if (it.volumeName != null) {
+                    Bind(it.volumeName, Volume(it.containerPath), if (it.readOnly) AccessMode.ro else AccessMode.rw)
+                } else {
+                    Bind.parse("${it.hostPath}:${it.containerPath}" + if (it.readOnly) ":ro" else "")
+                }
             }
             hostConfig.withBinds(*binds.toTypedArray())
         }
