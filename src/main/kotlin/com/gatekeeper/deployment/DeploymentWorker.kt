@@ -6,6 +6,7 @@ import com.gatekeeper.db.repositories.AuditRepository
 import com.gatekeeper.db.repositories.RegistryCredentialRepository
 import com.gatekeeper.config.AppConfig
 import com.gatekeeper.docker.CreateContainerRequest
+import com.gatekeeper.docker.ContainerInfo
 import com.gatekeeper.docker.DockerService
 import com.gatekeeper.docker.DockerCleanupService
 import com.gatekeeper.integrations.GitHubAppClient
@@ -79,12 +80,22 @@ object DeploymentWorker {
                     ?: job.projectSlug?.let { ProjectRepository.findBySlug(it)?.containerName }
                     ?: "deployment-${job.id.toString().take(8)}"
                 if (job.network != "bridge" && job.createNetworkIfMissing) docker.createNetworkIfMissing(job.network)
-                val existingMatch = sequenceOf(
-                    "configured container name" to job.containerName?.let { docker.getContainer(it) },
-                    "stable target name" to docker.getContainer(targetName),
-                    "image" to docker.findContainerByImage(image),
-                    "published host port ${job.hostPort}" to job.hostPort?.let { docker.findContainerByHostPort(it) }
-                ).firstOrNull { it.second != null }
+                val lookupStrategies = listOf<Pair<String, () -> ContainerInfo?>>(
+                    "configured container name" to { job.containerName?.let { docker.getContainer(it) } },
+                    "stable target name" to { docker.getContainer(targetName) },
+                    "image $image" to { docker.findContainerByImage(image) },
+                    "published host port ${job.hostPort}" to { job.hostPort?.let { docker.findContainerByHostPort(it) } }
+                )
+                var existingMatch: Pair<String, ContainerInfo?>? = null
+                for ((strategy, lookup) in lookupStrategies) {
+                    DeploymentJobRepository.update(job.id, log = "Checking for replacement container by $strategy")
+                    val match = runCatching { lookup() }.getOrNull()
+                    if (match != null) {
+                        existingMatch = strategy to match
+                        break
+                    }
+                    DeploymentJobRepository.update(job.id, log = "No replacement container found by $strategy")
+                }
                 val existing = existingMatch?.second
                 DeploymentJobRepository.update(
                     job.id,
