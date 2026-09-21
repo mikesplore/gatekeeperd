@@ -45,7 +45,12 @@ data class ProjectResponse(
     val dueDate: String? = null,
     val gracePeriodDays: Int,
     val createdAt: String,
-    val updatedAt: String
+    val updatedAt: String,
+    val githubRepository: String? = null,
+    val githubRef: String = "main",
+    val deployImageName: String? = null,
+    val deployImageTag: String = "latest",
+    val autoDeploy: Boolean = false
 )
 
 @Serializable
@@ -204,7 +209,12 @@ fun ProjectRepository.ProjectRecord.toResponse(remainingBalance: BigDecimal? = n
     dueDate = dueDate?.toString(),
     gracePeriodDays = gracePeriodDays,
     createdAt = createdAt.toNairobiTimestamp(),
-    updatedAt = updatedAt.toNairobiTimestamp()
+    updatedAt = updatedAt.toNairobiTimestamp(),
+    githubRepository = githubRepository,
+    githubRef = githubRef,
+    deployImageName = deployImageName,
+    deployImageTag = deployImageTag,
+    autoDeploy = autoDeploy
 )
 
 fun PaymentRepository.PaymentRecord.toResponse(): PaymentResponse = PaymentResponse(

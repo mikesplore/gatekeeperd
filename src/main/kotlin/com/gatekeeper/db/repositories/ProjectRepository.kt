@@ -65,7 +65,8 @@ object ProjectRepository {
         val dueDate: LocalDate?,
         val gracePeriodDays: Int,
         val createdAt: LocalDateTime,
-        val updatedAt: LocalDateTime
+        val updatedAt: LocalDateTime,
+        val githubRepository: String?, val githubRef: String, val deployImageName: String?, val deployImageTag: String, val autoDeploy: Boolean
     )
 
     fun findBySlug(slug: String, includeArchived: Boolean = false): ProjectRecord? {
@@ -412,6 +413,7 @@ object ProjectRepository {
         dueDate = this[Projects.dueDate],
         gracePeriodDays = this[Projects.gracePeriodDays],
         createdAt = this[Projects.createdAt],
-        updatedAt = this[Projects.updatedAt]
+        updatedAt = this[Projects.updatedAt],
+        githubRepository = this[Projects.githubRepository], githubRef = this[Projects.githubRef], deployImageName = this[Projects.deployImageName], deployImageTag = this[Projects.deployImageTag], autoDeploy = this[Projects.autoDeploy]
     )
 }
