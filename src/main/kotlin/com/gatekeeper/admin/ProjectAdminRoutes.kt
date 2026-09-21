@@ -28,6 +28,7 @@ import com.gatekeeper.docker.computeContainerCreatePlan
 import com.gatekeeper.docker.DeleteImageRequest
 import com.gatekeeper.docker.DeleteImageResponse
 import com.gatekeeper.docker.DockerService
+import com.gatekeeper.docker.ContainerCreationTracker
 import com.gatekeeper.docker.ImageStatusRequest
 import com.gatekeeper.docker.ImageStatusResponse
 import com.gatekeeper.docker.PortsAvailabilityRequest
@@ -55,6 +56,7 @@ import kotlinx.serialization.json.longOrNull
 import org.slf4j.LoggerFactory
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import java.util.UUID
 import java.math.BigDecimal
 
 private val logger = LoggerFactory.getLogger("com.gatekeeper.admin.ProjectAdminRoutes")
@@ -898,9 +900,11 @@ fun Application.configureProjectAdminRoutes() {
 
                         is ContainerCreatePlanResult.Ok -> {
                             val plan = planResult.plan
+                            val operation = ContainerCreationTracker.create(plan.normalizedRequest.name)
                             application.launch(Dispatchers.IO) {
                                 try {
                                     if (plan.willPullImage) {
+                                        ContainerCreationTracker.update(operation.id, "pulling")
                                         val useCliPull = plan.normalizedRequest.pullViaCli || AppConfig.dockerPullViaCli
                                         if (useCliPull) {
                                             dockerService.pullImageViaCli(plan.normalizedRequest.image, AppConfig.dockerSocket)
@@ -911,15 +915,18 @@ fun Application.configureProjectAdminRoutes() {
                                     if (plan.willCreateInternalNetworkIfMissing) {
                                         dockerService.createNetworkIfMissing(AppConfig.internalNetwork)
                                     }
+                                    ContainerCreationTracker.update(operation.id, "creating")
                                     val container = dockerService.createContainer(plan.normalizedRequest)
+                                    ContainerCreationTracker.update(operation.id, "succeeded")
                                     logger.info("Container created via API: ${container.name}")
                                 } catch (e: Exception) {
+                                    ContainerCreationTracker.update(operation.id, "failed", e.message ?: "Container creation failed")
                                     logger.error("Failed to create container in background: ${body.name}", e)
                                 } finally {
                                     dockerService.close()
                                 }
                             }
-                            call.respond(HttpStatusCode.Accepted, mapOf("status" to "queued", "name" to plan.normalizedRequest.name))
+                            call.respond(HttpStatusCode.Accepted, mapOf("id" to operation.id.toString(), "status" to "queued", "name" to plan.normalizedRequest.name))
                         }
                     }
                     
@@ -933,6 +940,13 @@ fun Application.configureProjectAdminRoutes() {
                 } finally {
                     dockerService.close()
                 }
+            }
+
+            get("/api/admin/containers/creation/{id}") {
+                val id = call.parameters["id"]?.let { runCatching { UUID.fromString(it) }.getOrNull() }
+                val job = id?.let { ContainerCreationTracker.find(it) }
+                if (job == null) call.respondError(HttpStatusCode.NotFound, "container_creation_not_found", "Container creation operation not found")
+                else call.respond(job)
             }
 
             // Wizard helpers: validate early stages before attempting full container creation.
