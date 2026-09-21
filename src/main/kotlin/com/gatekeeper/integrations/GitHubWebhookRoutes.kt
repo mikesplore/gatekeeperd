@@ -69,7 +69,7 @@ private fun queuePushDeployments(body: String): Int {
             imageName = target.imageName,
             imageTag = target.imageTag,
             containerName = target.containerName
-            , projectSlug = target.slug
+            , projectSlug = target.slug, triggerSource = "github_push"
         ))
         true
     }

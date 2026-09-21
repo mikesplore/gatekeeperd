@@ -29,6 +29,7 @@ object DeploymentJobs : Table("deployment_jobs") {
     val previousImage = text("previous_image").nullable()
     val cancelledAt = datetime("cancelled_at").nullable()
     val projectSlug = text("project_slug").nullable()
+    val triggerSource = text("trigger_source").default("manual")
     val errorMessage = text("error_message").nullable()
     val createdAt = datetime("created_at").defaultExpression(CurrentDateTime)
     val startedAt = datetime("started_at").nullable()
