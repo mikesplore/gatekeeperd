@@ -1,29 +1,31 @@
 package com.gatekeeper.docker
 
+import kotlinx.serialization.Serializable
 import java.time.Instant
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
+@Serializable
 data class ContainerCreationJob(
-    val id: UUID,
+    val id: String,
     val name: String,
     val status: String,
     val error: String? = null,
-    val createdAt: Instant = Instant.now()
+    val createdAt: String = Instant.now().toString()
 )
 
 object ContainerCreationTracker {
-    private val jobs = ConcurrentHashMap<UUID, ContainerCreationJob>()
+    private val jobs = ConcurrentHashMap<String, ContainerCreationJob>()
 
     fun create(name: String): ContainerCreationJob {
-        val job = ContainerCreationJob(UUID.randomUUID(), name, "queued")
+        val job = ContainerCreationJob(UUID.randomUUID().toString(), name, "queued")
         jobs[job.id] = job
         return job
     }
 
-    fun update(id: UUID, status: String, error: String? = null) {
+    fun update(id: String, status: String, error: String? = null) {
         jobs.computeIfPresent(id) { _, job -> job.copy(status = status, error = error) }
     }
 
-    fun find(id: UUID): ContainerCreationJob? = jobs[id]
+    fun find(id: String): ContainerCreationJob? = jobs[id]
 }

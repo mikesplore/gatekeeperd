@@ -942,7 +942,7 @@ fun Application.configureProjectAdminRoutes() {
 
             get("/api/admin/containers/creation/{id}") {
                 val id = call.parameters["id"]?.let { runCatching { UUID.fromString(it) }.getOrNull() }
-                val job = id?.let { ContainerCreationTracker.find(it) }
+                val job = id?.let { ContainerCreationTracker.find(it.toString()) }
                 if (job == null) call.respondError(HttpStatusCode.NotFound, "container_creation_not_found", "Container creation operation not found")
                 else call.respond(job)
             }
