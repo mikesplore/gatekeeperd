@@ -22,7 +22,8 @@ import java.util.Base64
 
 @Serializable private data class InstallationTokenResponse(val token: String, val expires_at: String)
 @Serializable private data class InstallationRepositoriesResponse(val repositories: List<GitHubRepository>)
-@Serializable data class GitHubRepository(val full_name: String, @SerialName("private") val isPrivate: Boolean)
+@Serializable private data class PublicRepositorySearchResponse(val items: List<GitHubRepository>)
+@Serializable data class GitHubRepository(val full_name: String, @SerialName("private") val isPrivate: Boolean, val updated_at: String = "")
 
 object GitHubAppClient {
     private val http = HttpClient { install(ContentNegotiation) { json(Json { ignoreUnknownKeys = true }) } }
@@ -73,8 +74,21 @@ object GitHubAppClient {
             page++
         }
         val normalized = query.trim().lowercase()
+        if (normalized.isNotBlank()) {
+            val publicResponse = http.get("https://api.github.com/search/repositories") {
+                parameter("q", normalized)
+                parameter("per_page", 20)
+                header(HttpHeaders.Accept, "application/vnd.github+json")
+                header("X-GitHub-Api-Version", "2022-11-28")
+            }
+            if (publicResponse.status.isSuccess()) {
+                all += publicResponse.body<PublicRepositorySearchResponse>().items
+            }
+        }
         return all
+            .distinctBy { it.full_name }
             .filter { normalized.isBlank() || it.full_name.lowercase().contains(normalized) }
+            .sortedByDescending { it.updated_at }
             .take(20)
     }
 
