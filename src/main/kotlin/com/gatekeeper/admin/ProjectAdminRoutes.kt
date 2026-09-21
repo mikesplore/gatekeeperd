@@ -172,7 +172,7 @@ fun Application.configureProjectAdminRoutes() {
             patch("/api/admin/projects/{slug}/deployment-source") {
                 val slug = call.parameters["slug"] ?: run { call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing project slug"); return@patch }
                 val body = runCatching { call.receive<GithubDeploymentSourceRequest>() }.getOrNull() ?: run { call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid deployment source"); return@patch }
-                if ((body.repository != null && !body.repository.matches(Regex("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"))) || !body.gitRef.matches(Regex("^[A-Za-z0-9._/-]+$")) || (body.imageName != null && !body.imageName.matches(Regex("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"))) || !body.imageTag.matches(Regex("^[A-Za-z0-9_.-]+$"))) {
+                if ((body.repository != null && !body.repository.matches(Regex("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"))) || !body.gitRef.matches(Regex("^[A-Za-z0-9._/-]+$")) || (body.imageName != null && !body.imageName.matches(Regex("^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*$"))) || !body.imageTag.matches(Regex("^[A-Za-z0-9_.-]+$"))) {
                     call.respondError(HttpStatusCode.BadRequest, "invalid_deployment_source", "Repository, ref, image name, or tag is invalid"); return@patch
                 }
                 val project = ProjectRepository.updateGithubDeployment(slug, body.repository, body.gitRef, body.imageName, body.imageTag, body.autoDeploy) ?: run { call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found"); return@patch }

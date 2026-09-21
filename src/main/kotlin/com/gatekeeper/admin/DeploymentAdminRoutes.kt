@@ -30,7 +30,7 @@ fun Application.configureDeploymentAdminRoutes() {
                 }
                 if (!request.repository.matches(Regex("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")) ||
                     !request.gitRef.matches(Regex("^[A-Za-z0-9._/-]+$")) ||
-                    !request.imageName.matches(Regex("^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)+$")) ||
+                    !request.imageName.matches(Regex("^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*$")) ||
                     !request.registry.matches(Regex("^(docker\\.io|[A-Za-z0-9.-]+(:[0-9]{1,5})?)$")) ||
                     !request.imageTag.matches(Regex("^[A-Za-z0-9_.-]+$")) ||
                     (request.env.keys + request.secretEnv.keys).any { !it.matches(Regex("[A-Za-z_][A-Za-z0-9_]*")) } ||
