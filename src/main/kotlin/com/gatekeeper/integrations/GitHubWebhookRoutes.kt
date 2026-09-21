@@ -65,7 +65,7 @@ private fun queuePushDeployments(body: String): Int {
     return ProjectRepository.findAutoDeployTargets(repository, ref).count { target ->
         val saved = DeploymentJobRepository.latestForProject(target.slug)
         val request = if (saved != null) {
-            CreateDeploymentRequest(saved.repository, ref, saved.registry, saved.imageName, saved.imageTag, saved.containerName,
+            CreateDeploymentRequest(saved.repository, ref, saved.registry, saved.imageName, saved.imageTag, target.containerName,
                 saved.hostPort, saved.containerPort, saved.network, saved.restartPolicy, saved.projectSlug, "github_push",
                 saved.env, saved.secretEnv, saved.volumes, saved.createNetworkIfMissing)
         } else {

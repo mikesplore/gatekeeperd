@@ -72,12 +72,22 @@ object DeploymentWorker {
             try {
                 val digest = docker.imageDigest(image)
                 DeploymentJobRepository.update(job.id, log = "Image digest: ${digest ?: "unavailable"}", imageDigest = digest)
-                val targetName = job.containerName ?: "deployment-${job.id.toString().take(8)}"
+                // Redeployments must reuse the project's stable container name. A new
+                // execution id must not become a new host identity, otherwise the old
+                // container keeps the published port and the replacement cannot start.
+                val targetName = job.containerName
+                    ?: job.projectSlug?.let { ProjectRepository.findBySlug(it)?.containerName }
+                    ?: "deployment-${job.id.toString().take(8)}"
                 if (job.network != "bridge" && job.createNetworkIfMissing) docker.createNetworkIfMissing(job.network)
                 val existing = job.containerName?.let { docker.getContainer(it) }
+                    ?: docker.getContainer(targetName)
                 DeploymentJobRepository.setPreviousContainer(job.id, existing?.name, existing?.image)
                 candidateName = "${targetName}-${job.id.toString().take(8)}"
                 val ports = if (job.hostPort != null && job.containerPort != null) mapOf(job.hostPort to job.containerPort) else emptyMap()
+                // Published host ports cannot be shared. Stop/remove the old instance
+                // immediately before creating its replacement, then restore it through
+                // the normal rollback path if the replacement fails.
+                existing?.let { docker.stopContainer(it.name); docker.deleteContainer(it.name) }
                 docker.createContainer(CreateContainerRequest(
                     name = candidateName,
                     image = image,
@@ -93,7 +103,6 @@ object DeploymentWorker {
                     candidateName = null
                     error("Replacement container did not become healthy and reachable")
                 }
-                existing?.let { docker.deleteContainer(it.name) }
                 docker.renameContainer(candidateName, targetName)
                 candidateName = null
             } finally { docker.close() }
