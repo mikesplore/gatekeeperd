@@ -79,10 +79,21 @@ object DeploymentWorker {
                     ?: job.projectSlug?.let { ProjectRepository.findBySlug(it)?.containerName }
                     ?: "deployment-${job.id.toString().take(8)}"
                 if (job.network != "bridge" && job.createNetworkIfMissing) docker.createNetworkIfMissing(job.network)
-                val existing = job.containerName?.let { docker.getContainer(it) }
-                    ?: docker.getContainer(targetName)
-                    ?: docker.findContainerByImage(image)
-                    ?: job.hostPort?.let { docker.findContainerByHostPort(it) }
+                val existingMatch = sequenceOf(
+                    "configured container name" to job.containerName?.let { docker.getContainer(it) },
+                    "stable target name" to docker.getContainer(targetName),
+                    "image" to docker.findContainerByImage(image),
+                    "published host port ${job.hostPort}" to job.hostPort?.let { docker.findContainerByHostPort(it) }
+                ).firstOrNull { it.second != null }
+                val existing = existingMatch?.second
+                DeploymentJobRepository.update(
+                    job.id,
+                    log = if (existing != null) {
+                        "Replacement container found via ${existingMatch.first}: ${existing.name} (image=${existing.image})"
+                    } else {
+                        "No existing container found to replace; creating a new container"
+                    }
+                )
                 DeploymentJobRepository.setPreviousContainer(job.id, existing?.name, existing?.image)
                 candidateName = "${targetName}-${job.id.toString().take(8)}"
                 val ports = if (job.hostPort != null && job.containerPort != null) mapOf(job.hostPort to job.containerPort) else emptyMap()
