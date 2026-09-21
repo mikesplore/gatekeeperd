@@ -937,8 +937,6 @@ fun Application.configureProjectAdminRoutes() {
                         "docker_error",
                         e.message ?: "Failed to create container"
                     )
-                } finally {
-                    dockerService.close()
                 }
             }
 
