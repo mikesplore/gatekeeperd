@@ -24,6 +24,25 @@ data class CreateDeploymentRequest(
 )
 
 @Serializable
+data class UpdateDeploymentConfigurationRequest(
+    val repository: String? = null,
+    val gitRef: String? = null,
+    val registry: String? = null,
+    val imageName: String? = null,
+    val imageTag: String? = null,
+    val containerName: String? = null,
+    val hostPort: Int? = null,
+    val containerPort: Int? = null,
+    val network: String? = null,
+    val restartPolicy: String? = null,
+    val env: Map<String, String>? = null,
+    /** Null preserves existing secrets; an explicit map replaces them, including an empty map. */
+    val secretEnv: Map<String, String>? = null,
+    val volumes: List<VolumeMount>? = null,
+    val createNetworkIfMissing: Boolean? = null
+)
+
+@Serializable
 data class DeploymentJobResponse(
     val id: String,
     val repository: String,

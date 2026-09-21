@@ -12,6 +12,7 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
 import com.gatekeeper.security.SecretValueCipher
+import com.gatekeeper.deployment.UpdateDeploymentConfigurationRequest
 
 data class DeploymentJobRecord(
     val id: UUID, val repository: String, val gitRef: String, val registry: String,
@@ -23,6 +24,48 @@ data class DeploymentJobRecord(
 )
 
 object DeploymentJobRepository {
+    fun updateConfiguration(id: UUID, request: UpdateDeploymentConfigurationRequest): Boolean = transaction {
+        val row = DeploymentConfigurations.selectAll().where { DeploymentConfigurations.id eq id }.singleOrNull() ?: return@transaction false
+        val newSecrets = request.secretEnv?.let { values ->
+            if (values.isEmpty()) null else {
+                check(SecretValueCipher.isConfigured()) { "Deployment secret encryption is not configured" }
+                SecretValueCipher.encrypt(Json.encodeToString(values))
+            }
+        }
+        val envJson = request.env?.let(Json::encodeToString)
+        val volumesJson = request.volumes?.let(Json::encodeToString)
+        DeploymentConfigurations.update({ DeploymentConfigurations.id eq id }) {
+            request.repository?.let { value -> it[repository] = value }; request.gitRef?.let { value -> it[gitRef] = value }
+            request.registry?.let { value -> it[registry] = value }; request.imageName?.let { value -> it[imageName] = value }
+            request.imageTag?.let { value -> it[imageTag] = value }; request.containerName?.let { value -> it[containerName] = value }
+            request.hostPort?.let { value -> it[hostPort] = value }; request.containerPort?.let { value -> it[containerPort] = value }
+            request.network?.let { value -> it[network] = value }; request.restartPolicy?.let { value -> it[restartPolicy] = value }
+            envJson?.let { value -> it[DeploymentConfigurations.envJson] = value }; volumesJson?.let { value -> it[DeploymentConfigurations.volumesJson] = value }
+            request.createNetworkIfMissing?.let { value -> it[createNetworkIfMissing] = value }
+            if (request.secretEnv != null) it[secretEnvEncrypted] = newSecrets
+            it[updatedAt] = LocalDateTime.now()
+        }
+        // Keep the compatibility row aligned until workers are fully moved to executions.
+        DeploymentJobs.update({ DeploymentJobs.id eq id }) {
+            request.repository?.let { value -> it[repository] = value }; request.gitRef?.let { value -> it[gitRef] = value }
+            request.registry?.let { value -> it[registry] = value }; request.imageName?.let { value -> it[imageName] = value }
+            request.imageTag?.let { value -> it[imageTag] = value }; request.containerName?.let { value -> it[containerName] = value }
+            request.hostPort?.let { value -> it[hostPort] = value }; request.containerPort?.let { value -> it[containerPort] = value }
+            request.network?.let { value -> it[network] = value }; request.restartPolicy?.let { value -> it[restartPolicy] = value }
+            envJson?.let { value -> it[DeploymentJobs.envJson] = value }; volumesJson?.let { value -> it[DeploymentJobs.volumesJson] = value }
+            request.createNetworkIfMissing?.let { value -> it[createNetworkIfMissing] = value }
+            if (request.secretEnv != null) it[DeploymentJobs.secretEnvEncrypted] = newSecrets
+            it[updatedAt] = LocalDateTime.now()
+        }
+        true
+    }
+
+    fun configurationExists(id: UUID): Boolean = transaction { DeploymentConfigurations.selectAll().where { DeploymentConfigurations.id eq id }.count() > 0 }
+
+    fun latestForProject(slug: String): DeploymentJobRecord? = transaction {
+        DeploymentJobs.selectAll().where { DeploymentJobs.projectSlug eq slug }
+            .orderBy(DeploymentJobs.createdAt to SortOrder.DESC).limit(1).singleOrNull()?.toRecord()
+    }
     fun list(limit: Int, offset: Int): List<DeploymentJobRecord> = transaction {
         DeploymentJobs.selectAll().orderBy(DeploymentJobs.createdAt to SortOrder.DESC).limit(limit, offset.toLong()).map { it.toRecord() }
     }

@@ -5,6 +5,7 @@ import com.gatekeeper.db.repositories.DeploymentJobRepository
 import com.gatekeeper.deployment.CreateDeploymentRequest
 import com.gatekeeper.deployment.DeploymentJobResponse
 import com.gatekeeper.deployment.DeploymentWorker
+import com.gatekeeper.deployment.UpdateDeploymentConfigurationRequest
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.*
 import io.ktor.server.auth.authenticate
@@ -45,6 +46,15 @@ fun Application.configureDeploymentAdminRoutes() {
                 val id = DeploymentJobRepository.create(request)
                 call.respond(HttpStatusCode.Accepted, mapOf("id" to id.toString(), "status" to "queued"))
             }
+            patch("/api/admin/deployment-configurations/{id}") { updateConfiguration(call) }
+            put("/api/admin/deployment-configurations/{id}") { updateConfiguration(call) }
+            post("/api/admin/deployment-configurations/{id}/redeploy") {
+                val id = call.parameters["id"]?.let { runCatching { UUID.fromString(it) }.getOrNull() }
+                if (id == null || !DeploymentJobRepository.configurationExists(id)) { call.respondError(HttpStatusCode.NotFound, "deployment_configuration_not_found", "Deployment configuration not found"); return@post }
+                val source = DeploymentJobRepository.find(id) ?: run { call.respondError(HttpStatusCode.NotFound, "deployment_configuration_not_found", "Deployment configuration not found"); return@post }
+                val executionId = DeploymentJobRepository.create(CreateDeploymentRequest(source.repository, source.gitRef, source.registry, source.imageName, source.imageTag, source.containerName, source.hostPort, source.containerPort, source.network, source.restartPolicy, source.projectSlug, "manual_redeploy", source.env, source.secretEnv, source.volumes, source.createNetworkIfMissing))
+                call.respond(HttpStatusCode.Accepted, mapOf("id" to executionId.toString(), "status" to "queued"))
+            }
             get("/api/admin/deployments/{id}") {
                 val id = call.parameters["id"]?.let { runCatching { UUID.fromString(it) }.getOrNull() } ?: run {
                     call.respondError(HttpStatusCode.BadRequest, "invalid_deployment_id", "Invalid deployment ID")
@@ -72,6 +82,16 @@ fun Application.configureDeploymentAdminRoutes() {
             }
         }
     }
+}
+
+private suspend fun updateConfiguration(call: ApplicationCall) {
+    val id = call.parameters["id"]?.let { runCatching { UUID.fromString(it) }.getOrNull() }
+    if (id == null) { call.respondError(HttpStatusCode.BadRequest, "invalid_deployment_configuration_id", "Invalid deployment configuration ID"); return }
+    val request = runCatching { call.receive<UpdateDeploymentConfigurationRequest>() }.getOrNull()
+    if (request == null) { call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid deployment configuration request"); return }
+    if (request.secretEnv?.isNotEmpty() == true && !SecretValueCipher.isConfigured()) { call.respondError(HttpStatusCode.ServiceUnavailable, "deployment_secrets_unconfigured", "Deployment secret encryption is not configured"); return }
+    runCatching { DeploymentJobRepository.updateConfiguration(id, request) }.onFailure { call.respondError(HttpStatusCode.BadRequest, "invalid_deployment_configuration", it.message ?: "Invalid deployment configuration"); return }.getOrThrow()
+    call.respond(mapOf("id" to id.toString(), "status" to "updated", "secretEnv" to "write-only"))
 }
 
 private suspend fun changeDeployment(call: ApplicationCall, action: String) {

@@ -63,14 +63,16 @@ private fun queuePushDeployments(body: String): Int {
     val repository = root["repository"]?.jsonObject?.get("full_name")?.jsonPrimitive?.content ?: return 0
     val ref = root["ref"]?.jsonPrimitive?.content?.removePrefix("refs/heads/") ?: return 0
     return ProjectRepository.findAutoDeployTargets(repository, ref).count { target ->
-        DeploymentJobRepository.create(CreateDeploymentRequest(
-            repository = target.repository,
-            gitRef = target.gitRef,
-            imageName = target.imageName,
-            imageTag = target.imageTag,
-            containerName = target.containerName
-            , projectSlug = target.slug, triggerSource = "github_push"
-        ))
+        val saved = DeploymentJobRepository.latestForProject(target.slug)
+        val request = if (saved != null) {
+            CreateDeploymentRequest(saved.repository, ref, saved.registry, saved.imageName, saved.imageTag, saved.containerName,
+                saved.hostPort, saved.containerPort, saved.network, saved.restartPolicy, saved.projectSlug, "github_push",
+                saved.env, saved.secretEnv, saved.volumes, saved.createNetworkIfMissing)
+        } else {
+            CreateDeploymentRequest(target.repository, target.gitRef, imageName = target.imageName, imageTag = target.imageTag,
+                containerName = target.containerName, projectSlug = target.slug, triggerSource = "github_push")
+        }
+        DeploymentJobRepository.create(request)
         true
     }
 }
