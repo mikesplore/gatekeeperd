@@ -1,6 +1,8 @@
 package com.gatekeeper.db.repositories
 
 import com.gatekeeper.db.tables.DeploymentJobs
+import com.gatekeeper.db.tables.DeploymentConfigurations
+import com.gatekeeper.db.tables.DeploymentExecutions
 import org.jetbrains.exposed.sql.*
 import org.jetbrains.exposed.sql.transactions.transaction
 import java.time.LocalDateTime
@@ -26,18 +28,53 @@ object DeploymentJobRepository {
     }
 
     fun cancel(id: UUID): Boolean = transaction {
-        DeploymentJobs.update({ (DeploymentJobs.id eq id) and (DeploymentJobs.status inList listOf("queued", "running", "awaiting_build", "awaiting_container")) }) {
+        val changed = DeploymentJobs.update({ (DeploymentJobs.id eq id) and (DeploymentJobs.status inList listOf("queued", "running", "awaiting_build", "awaiting_container")) }) {
             it[status] = "cancelled"; it[currentStep] = "cancelled"; it[completedAt] = LocalDateTime.now(); it[cancelledAt] = LocalDateTime.now(); it[updatedAt] = LocalDateTime.now()
         } > 0
+        if (changed) DeploymentExecutions.update({ DeploymentExecutions.id eq id }) {
+            it[status] = "cancelled"; it[currentStep] = "cancelled"; it[completedAt] = LocalDateTime.now(); it[cancelledAt] = LocalDateTime.now(); it[updatedAt] = LocalDateTime.now()
+        }
+        changed
     }
 
     fun retry(id: UUID): Boolean = transaction {
-        DeploymentJobs.update({ DeploymentJobs.id eq id and (DeploymentJobs.status inList listOf("failed", "cancelled")) }) {
+        val changed = DeploymentJobs.update({ DeploymentJobs.id eq id and (DeploymentJobs.status inList listOf("failed", "cancelled")) }) {
             it[status] = "queued"; it[currentStep] = "queued"; it[errorMessage] = null; it[completedAt] = null; it[updatedAt] = LocalDateTime.now()
         } > 0
+        if (changed) DeploymentExecutions.update({ DeploymentExecutions.id eq id }) {
+            it[status] = "queued"; it[currentStep] = "queued"; it[errorMessage] = null; it[completedAt] = null; it[updatedAt] = LocalDateTime.now()
+        }
+        changed
     }
     fun create(request: com.gatekeeper.deployment.CreateDeploymentRequest): UUID = transaction {
         val id = UUID.randomUUID()
+        val envJson = Json.encodeToString(request.env)
+        val secretCiphertext = request.secretEnv.takeIf { it.isNotEmpty() }?.let { values ->
+            check(SecretValueCipher.isConfigured()) { "Deployment secret encryption is not configured" }
+            SecretValueCipher.encrypt(Json.encodeToString(values))
+        }
+        val volumesJson = Json.encodeToString(request.volumes)
+        // Keep the legacy row during rollout for worker compatibility. The new rows are the
+        // durable source of configuration and the immutable execution snapshot.
+        DeploymentConfigurations.insert {
+            it[DeploymentConfigurations.id] = id
+            it[repository] = request.repository; it[gitRef] = request.gitRef; it[registry] = request.registry
+            it[imageName] = request.imageName; it[imageTag] = request.imageTag; it[containerName] = request.containerName
+            it[hostPort] = request.hostPort; it[containerPort] = request.containerPort; it[network] = request.network
+            it[restartPolicy] = request.restartPolicy; it[DeploymentConfigurations.envJson] = envJson
+            it[DeploymentConfigurations.secretEnvEncrypted] = secretCiphertext; it[DeploymentConfigurations.volumesJson] = volumesJson
+            it[createNetworkIfMissing] = request.createNetworkIfMissing; it[projectSlug] = request.projectSlug
+        }
+        DeploymentExecutions.insert {
+            it[DeploymentExecutions.id] = id; it[configurationId] = id
+            it[repository] = request.repository; it[gitRef] = request.gitRef; it[registry] = request.registry
+            it[imageName] = request.imageName; it[imageTag] = request.imageTag; it[containerName] = request.containerName
+            it[hostPort] = request.hostPort; it[containerPort] = request.containerPort; it[network] = request.network
+            it[restartPolicy] = request.restartPolicy; it[DeploymentExecutions.envJson] = envJson
+            it[DeploymentExecutions.secretEnvEncrypted] = secretCiphertext; it[DeploymentExecutions.volumesJson] = volumesJson
+            it[createNetworkIfMissing] = request.createNetworkIfMissing; it[projectSlug] = request.projectSlug
+            it[triggerSource] = request.triggerSource; it[status] = "queued"; it[currentStep] = "queued"
+        }
         DeploymentJobs.insert {
             it[DeploymentJobs.id] = id
             it[repository] = request.repository
@@ -50,17 +87,14 @@ object DeploymentJobRepository {
             it[containerPort] = request.containerPort
             it[network] = request.network
             it[restartPolicy] = request.restartPolicy
-            it[envJson] = Json.encodeToString(request.env)
-            it[secretEnvEncrypted] = request.secretEnv.takeIf { values -> values.isNotEmpty() }?.let { values ->
-                check(SecretValueCipher.isConfigured()) { "Deployment secret encryption is not configured" }
-                SecretValueCipher.encrypt(Json.encodeToString(values))
-            }
-            it[volumesJson] = Json.encodeToString(request.volumes)
-            it[createNetworkIfMissing] = request.createNetworkIfMissing
-            it[projectSlug] = request.projectSlug
-            it[triggerSource] = request.triggerSource
-            it[status] = "queued"
-            it[currentStep] = "queued"
+            it[DeploymentJobs.envJson] = envJson
+            it[DeploymentJobs.secretEnvEncrypted] = secretCiphertext
+            it[DeploymentJobs.volumesJson] = volumesJson
+            it[DeploymentJobs.createNetworkIfMissing] = request.createNetworkIfMissing
+            it[DeploymentJobs.projectSlug] = request.projectSlug
+            it[DeploymentJobs.triggerSource] = request.triggerSource
+            it[DeploymentJobs.status] = "queued"
+            it[DeploymentJobs.currentStep] = "queued"
         }
         id
     }
@@ -76,14 +110,21 @@ object DeploymentJobRepository {
         DeploymentJobs.update({ DeploymentJobs.id eq row[DeploymentJobs.id] }) {
             it[status] = "running"; it[currentStep] = "starting"; it[startedAt] = now; it[updatedAt] = now
         }
+        DeploymentExecutions.update({ DeploymentExecutions.id eq row[DeploymentJobs.id] }) {
+            it[status] = "running"; it[currentStep] = "starting"; it[startedAt] = now; it[updatedAt] = now
+        }
         find(row[DeploymentJobs.id])
     }
 
     fun recoverStale(maxAgeMinutes: Long): Int = transaction {
         val cutoff = LocalDateTime.now().minusMinutes(maxAgeMinutes)
-        DeploymentJobs.update({ (DeploymentJobs.status eq "running") and (DeploymentJobs.updatedAt less cutoff) }) {
+        val changed = DeploymentJobs.update({ (DeploymentJobs.status eq "running") and (DeploymentJobs.updatedAt less cutoff) }) {
             it[status] = "queued"; it[currentStep] = "recovered"; it[errorMessage] = "Recovered after worker restart or timeout"; it[updatedAt] = LocalDateTime.now()
         }
+        DeploymentExecutions.update({ (DeploymentExecutions.status eq "running") and (DeploymentExecutions.updatedAt less cutoff) }) {
+            it[status] = "queued"; it[currentStep] = "recovered"; it[errorMessage] = "Recovered after worker restart or timeout"; it[updatedAt] = LocalDateTime.now()
+        }
+        changed
     }
 
     fun isCancelled(id: UUID): Boolean = transaction {
@@ -105,10 +146,22 @@ object DeploymentJobRepository {
             if (status == "succeeded" || status == "failed") it[completedAt] = LocalDateTime.now()
             it[updatedAt] = LocalDateTime.now()
         }
+        DeploymentExecutions.update({ DeploymentExecutions.id eq id }) {
+            step?.let { value -> it[currentStep] = value }
+            val secrets = existing[DeploymentJobs.secretEnvEncrypted]?.let { encoded -> Json.decodeFromString<Map<String, String>>(SecretValueCipher.decrypt(encoded)).values }.orEmpty()
+            log?.let { value -> it[logs] = (DeploymentExecutions.selectAll().where { DeploymentExecutions.id eq id }.singleOrNull()?.get(DeploymentExecutions.logs).orEmpty()) + SecretValueCipher.redact(value, secrets) + "\n" }
+            commitSha?.let { value -> it[DeploymentExecutions.commitSha] = value }
+            imageDigest?.let { value -> it[DeploymentExecutions.imageDigest] = value }
+            status?.let { value -> it[DeploymentExecutions.status] = value }
+            error?.let { value -> it[DeploymentExecutions.errorMessage] = SecretValueCipher.redact(value, secrets) }
+            if (status == "succeeded" || status == "failed") it[completedAt] = LocalDateTime.now()
+            it[updatedAt] = LocalDateTime.now()
+        }
     }
 
     fun setPreviousContainer(id: UUID, name: String?, image: String?) = transaction {
         DeploymentJobs.update({ DeploymentJobs.id eq id }) { it[previousContainerName] = name; it[previousImage] = image; it[updatedAt] = LocalDateTime.now() }
+        DeploymentExecutions.update({ DeploymentExecutions.id eq id }) { it[previousContainerName] = name; it[previousImage] = image; it[updatedAt] = LocalDateTime.now() }
     }
 
     private fun ResultRow.toRecord() = DeploymentJobRecord(

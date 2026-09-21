@@ -30,6 +30,7 @@ object DatabaseMigrations {
         ,Migration("19", "immutable project base amount and adjustments", "db/migration/V19__immutable_project_base_amount_and_adjustments.sql")
         ,Migration("20", "deployment trigger source", "db/migration/V20__deployment_trigger_source.sql")
         ,Migration("21", "admin user lifecycle", "db/migration/V21__admin_user_lifecycle.sql")
+        ,Migration("22", "deployment configurations and executions", "db/migration/V22__deployment_configurations_and_executions.sql")
     )
 
     fun apply(dataSource: HikariDataSource) {
