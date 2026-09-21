@@ -128,7 +128,7 @@ object ProjectRepository {
                 it[Projects.clientName] = clientName
                 it[Projects.clientEmail] = clientEmail
                 it[Projects.amountDue] = amountDue
-                it[Projects.baseAmount] = amountDue
+                it[Projects.baseAmount] = amountDue?.takeIf { value -> value > BigDecimal.ZERO }
                 it[Projects.currency] = currency
                 it[Projects.dueDate] = dueDate
                 it[Projects.gracePeriodDays] = gracePeriodDays

@@ -83,6 +83,6 @@ private suspend fun changeDeployment(call: ApplicationCall, action: String) {
 
 private fun com.gatekeeper.db.repositories.DeploymentJobRecord.toResponse() = DeploymentJobResponse(
     id.toString(), repository, gitRef, registry, imageName, imageTag, status, currentStep, logs, commitSha, imageDigest,
-    errorMessage, createdAt.toString(), startedAt?.toString(), completedAt?.toString(), updatedAt.toString(), env,
+    errorMessage, createdAt.toString(), startedAt?.toString(), completedAt?.toString(), updatedAt.toString(), previousImage != null, env,
     secretEnv.keys.sorted().associateWith { "••••••••" }, volumes
 )

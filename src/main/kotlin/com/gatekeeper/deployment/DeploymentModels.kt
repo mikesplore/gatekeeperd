@@ -40,6 +40,7 @@ data class DeploymentJobResponse(
     val startedAt: String? = null,
     val completedAt: String? = null,
     val updatedAt: String,
+    val canRollback: Boolean = false,
     val env: Map<String, String> = emptyMap(),
     val secretEnv: Map<String, String> = emptyMap(),
     val volumes: List<VolumeMount> = emptyList()
