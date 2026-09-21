@@ -56,15 +56,24 @@ object GitHubAppClient {
 
     suspend fun repositories(query: String): List<GitHubRepository> {
         val token = installationToken()
-        val response = http.get("https://api.github.com/installation/repositories") {
-            parameter("per_page", 100)
-            header(HttpHeaders.Authorization, "Bearer $token")
-            header(HttpHeaders.Accept, "application/vnd.github+json")
-            header("X-GitHub-Api-Version", "2022-11-28")
+        val all = mutableListOf<GitHubRepository>()
+        var page = 1
+        while (true) {
+            val response = http.get("https://api.github.com/installation/repositories") {
+                parameter("per_page", 100)
+                parameter("page", page)
+                header(HttpHeaders.Authorization, "Bearer $token")
+                header(HttpHeaders.Accept, "application/vnd.github+json")
+                header("X-GitHub-Api-Version", "2022-11-28")
+            }
+            if (!response.status.isSuccess()) error("GitHub repository lookup failed: ${response.status} ${response.bodyAsText().take(300)}")
+            val batch = response.body<InstallationRepositoriesResponse>().repositories
+            all += batch
+            if (batch.size < 100) break
+            page++
         }
-        if (!response.status.isSuccess()) error("GitHub repository lookup failed: ${response.status} ${response.bodyAsText().take(300)}")
         val normalized = query.trim().lowercase()
-        return response.body<InstallationRepositoriesResponse>().repositories
+        return all
             .filter { normalized.isBlank() || it.full_name.lowercase().contains(normalized) }
             .take(20)
     }
