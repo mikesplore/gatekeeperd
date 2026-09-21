@@ -26,8 +26,8 @@ data class DeploymentJobRecord(
 object DeploymentJobRepository {
     fun updateConfiguration(id: UUID, request: UpdateDeploymentConfigurationRequest): Boolean = transaction {
         val row = DeploymentConfigurations.selectAll().where { DeploymentConfigurations.id eq id }.singleOrNull() ?: return@transaction false
-        val newSecrets = request.secretEnv?.let { values ->
-            if (values.isEmpty()) null else {
+        val newSecrets = request.secretEnv?.takeIf { it.isNotEmpty() }?.let { values ->
+            run {
                 check(SecretValueCipher.isConfigured()) { "Deployment secret encryption is not configured" }
                 SecretValueCipher.encrypt(Json.encodeToString(values))
             }
@@ -42,7 +42,7 @@ object DeploymentJobRepository {
             request.network?.let { value -> it[network] = value }; request.restartPolicy?.let { value -> it[restartPolicy] = value }
             envJson?.let { value -> it[DeploymentConfigurations.envJson] = value }; volumesJson?.let { value -> it[DeploymentConfigurations.volumesJson] = value }
             request.createNetworkIfMissing?.let { value -> it[createNetworkIfMissing] = value }
-            if (request.secretEnv != null) it[secretEnvEncrypted] = newSecrets
+            newSecrets?.let { value -> it[secretEnvEncrypted] = value }
             it[updatedAt] = LocalDateTime.now()
         }
         // Keep the compatibility row aligned until workers are fully moved to executions.
@@ -54,7 +54,7 @@ object DeploymentJobRepository {
             request.network?.let { value -> it[network] = value }; request.restartPolicy?.let { value -> it[restartPolicy] = value }
             envJson?.let { value -> it[DeploymentJobs.envJson] = value }; volumesJson?.let { value -> it[DeploymentJobs.volumesJson] = value }
             request.createNetworkIfMissing?.let { value -> it[createNetworkIfMissing] = value }
-            if (request.secretEnv != null) it[DeploymentJobs.secretEnvEncrypted] = newSecrets
+            newSecrets?.let { value -> it[DeploymentJobs.secretEnvEncrypted] = value }
             it[updatedAt] = LocalDateTime.now()
         }
         true
