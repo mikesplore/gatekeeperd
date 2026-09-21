@@ -237,6 +237,7 @@ internal fun computeContainerCreatePlan(
 
     val warnings = buildList {
         request.volumes.forEach { mount ->
+            if (mount.volumeName != null) return@forEach
             val hp = mount.hostPath.trim()
             if (!File(hp).isAbsolute) {
                 add("Volume hostPath '$hp' is not an absolute path; bind mounts typically require absolute paths on Linux hosts.")
