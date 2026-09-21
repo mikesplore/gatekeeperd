@@ -90,6 +90,11 @@ class DockerService(dockerSocketPath: String) {
     fun findContainerByImage(image: String): ContainerInfo? =
         listContainers(all = true).firstOrNull { it.image == image || it.image.substringBefore('@') == image }
 
+    fun findContainerByHostPort(hostPort: Int): ContainerInfo? =
+        client.listContainersCmd().withShowAll(true).exec()
+            .firstOrNull { container -> container.ports.orEmpty().any { it.publicPort == hostPort } }
+            ?.let { getContainer(it.id) }
+
     fun containerLogs(containerNameOrId: String, tail: Int = 100): String {
         val output = StringBuilder()
         client.logContainerCmd(containerNameOrId)
