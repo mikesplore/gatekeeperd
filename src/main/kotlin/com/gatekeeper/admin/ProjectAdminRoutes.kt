@@ -53,6 +53,8 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 import org.slf4j.LoggerFactory
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import java.math.BigDecimal
 
 private val logger = LoggerFactory.getLogger("com.gatekeeper.admin.ProjectAdminRoutes")
@@ -890,35 +892,34 @@ fun Application.configureProjectAdminRoutes() {
                             } else {
                                 call.respondError(planResult.status, planResult.code, planResult.message)
                             }
+                            dockerService.close()
                             return@post
                         }
 
                         is ContainerCreatePlanResult.Ok -> {
                             val plan = planResult.plan
-
-                            if (plan.willPullImage) {
-                                val useCliPull = plan.normalizedRequest.pullViaCli || AppConfig.dockerPullViaCli
-                                if (useCliPull) {
-                                    dockerService.pullImageViaCli(plan.normalizedRequest.image, AppConfig.dockerSocket)
-                                } else {
-                                    dockerService.pullImage(plan.parsedImage.repository, plan.parsedImage.tag)
+                            application.launch(Dispatchers.IO) {
+                                try {
+                                    if (plan.willPullImage) {
+                                        val useCliPull = plan.normalizedRequest.pullViaCli || AppConfig.dockerPullViaCli
+                                        if (useCliPull) {
+                                            dockerService.pullImageViaCli(plan.normalizedRequest.image, AppConfig.dockerSocket)
+                                        } else {
+                                            dockerService.pullImage(plan.parsedImage.repository, plan.parsedImage.tag)
+                                        }
+                                    }
+                                    if (plan.willCreateInternalNetworkIfMissing) {
+                                        dockerService.createNetworkIfMissing(AppConfig.internalNetwork)
+                                    }
+                                    val container = dockerService.createContainer(plan.normalizedRequest)
+                                    logger.info("Container created via API: ${container.name}")
+                                } catch (e: Exception) {
+                                    logger.error("Failed to create container in background: ${body.name}", e)
+                                } finally {
+                                    dockerService.close()
                                 }
                             }
-                            if (plan.willCreateInternalNetworkIfMissing) {
-                                dockerService.createNetworkIfMissing(AppConfig.internalNetwork)
-                            }
-
-                            val container = dockerService.createContainer(plan.normalizedRequest)
-                            logger.info("Container created via API: ${plan.normalizedRequest.name}")
-                            call.respond(
-                                HttpStatusCode.Created,
-                                CreateContainerResponse(
-                                    id = container.id,
-                                    name = container.name,
-                                    status = container.status,
-                                    ports = container.ports
-                                )
-                            )
+                            call.respond(HttpStatusCode.Accepted, mapOf("status" to "queued", "name" to plan.normalizedRequest.name))
                         }
                     }
                     
