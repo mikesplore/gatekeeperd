@@ -221,7 +221,8 @@ fun Application.configureRouting() {
             post("/api/admin/volumes") {
                 val svc = dockerService ?: run { call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available"); return@post }
                 val body = runCatching { call.receive<CreateNetworkRequest>() }.getOrElse { call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid volume request"); return@post }
-                runCatching { svc.createVolume(body.name, body.driver); call.respond(HttpStatusCode.Created, mapOf("name" to body.name, "driver" to body.driver)) }.onFailure { call.respondError(HttpStatusCode.Conflict, "volume_create_failed", it.message ?: "Unable to create volume") }
+                val driver = body.driver.trim().takeIf { it.isNotBlank() && !it.equals("bridge", ignoreCase = true) } ?: "local"
+                runCatching { svc.createVolume(body.name, driver); call.respond(HttpStatusCode.Created, mapOf("name" to body.name, "driver" to driver)) }.onFailure { call.respondError(HttpStatusCode.Conflict, "volume_create_failed", it.message ?: "Unable to create volume") }
             }
             delete("/api/admin/volumes/{name}") {
                 val svc = dockerService ?: run { call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available"); return@delete }
