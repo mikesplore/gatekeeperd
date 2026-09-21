@@ -151,17 +151,33 @@ object DeploymentWorker {
         val oldImage = job.previousImage ?: return false
         val target = job.containerName ?: return false
         val docker = DockerService(AppConfig.dockerSocket)
+        var previousContainerStopped = false
+        var rollbackCandidate: String? = null
         return try {
             val candidate = "$target-rollback-${id.toString().take(8)}"
+            rollbackCandidate = candidate
             if (job.network != "bridge" && job.createNetworkIfMissing) docker.createNetworkIfMissing(job.network)
+            // The rollback candidate uses the same published port as the current
+            // container, so the current instance must be stopped before creation.
+            // Restore it if the rollback candidate cannot become healthy.
+            docker.getContainer(target)?.let {
+                docker.stopContainer(it.name)
+                previousContainerStopped = true
+            }
             docker.createContainer(CreateContainerRequest(name = candidate, image = oldImage, ports = if (job.hostPort != null && job.containerPort != null) mapOf(job.hostPort to job.containerPort) else emptyMap(), network = job.network, restartPolicy = job.restartPolicy, env = job.env + job.secretEnv, volumes = job.volumes, pullImage = true))
-            if (!awaitHealthy(docker, candidate, job.hostPort)) { docker.deleteContainer(candidate); return false }
+            if (!awaitHealthy(docker, candidate, job.hostPort)) {
+                docker.deleteContainer(candidate)
+                if (previousContainerStopped) docker.startContainer(target)
+                return false
+            }
             docker.getContainer(target)?.let { docker.deleteContainer(it.name) }
             docker.renameContainer(candidate, target)
             job.projectSlug?.let { ProjectRepository.syncDeployment(it, target, job.commitSha) }
             AuditRepository.write(null, "deployment_rolled_back", "deployment-worker", "job=$id image=$oldImage")
             true
         } catch (e: Exception) {
+            rollbackCandidate?.let { runCatching { docker.deleteContainer(it) } }
+            if (previousContainerStopped) runCatching { docker.startContainer(target) }
             logger.error("Deployment rollback failed for $id", e); false
         } finally { docker.close() }
     }
