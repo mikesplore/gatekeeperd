@@ -44,7 +44,16 @@ object DeploymentWorker {
                 logger.info("GitHub App is not connected; attempting public repository clone for {}", job.repository)
                 ""
             }
-            runCommand(job.id, workspace, listOf("git", "clone", "--depth", "1", "--branch", job.gitRef, "https://github.com/${job.repository}.git", workspace.toString()), githubToken)
+            val cloneCommand = listOf("git", "clone", "--depth", "1", "--branch", job.gitRef, "https://github.com/${job.repository}.git", workspace.toString())
+            try {
+                runCommand(job.id, workspace, cloneCommand, githubToken)
+            } catch (error: Exception) {
+                if (githubToken.isBlank()) throw error
+                logger.info("Authenticated clone unavailable for {}; retrying as public repository", job.repository)
+                workspace.toFile().deleteRecursively()
+                Files.createDirectories(workspace)
+                runCommand(job.id, workspace, cloneCommand)
+            }
             val commit = commandOutput(workspace, listOf("git", "rev-parse", "HEAD")).trim()
             DeploymentJobRepository.update(job.id, "checked_out", "Repository checked out", commitSha = commit)
             val image = registryImage(job.registry, job.imageName, job.imageTag)
