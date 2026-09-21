@@ -13,6 +13,7 @@ object Users : Table("users") {
     val recoveryCodes = array<String>("recovery_codes")
     val passwordHash = text("password_hash")
     val role = text("role").default("admin")
+    val active = bool("active").default(true)
     val createdAt = datetime("created_at").defaultExpression(org.jetbrains.exposed.sql.javatime.CurrentDateTime)
 
     override val primaryKey = PrimaryKey(id)

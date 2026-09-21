@@ -45,7 +45,8 @@ private const val REFRESH_TTL_SECONDS = 30 * 24 * 60 * 60
 @Serializable
 data class LoginRequest(val email: String, val password: String)
 @Serializable data class CreateAdminUserRequest(val email: String, val password: String, val role: String = "admin")
-@Serializable data class AdminUserResponse(val id: String, val email: String, val role: String, val twoFactorEnabled: Boolean, val createdAt: String)
+@Serializable data class UpdateAdminUserRequest(val email: String? = null, val role: String? = null, val active: Boolean? = null)
+@Serializable data class AdminUserResponse(val id: String, val email: String, val role: String, val twoFactorEnabled: Boolean, val createdAt: String, val active: Boolean = true)
 
 @Serializable
 data class LoginResponse(val token: String = "", val refreshToken: String = "", val requiresTwoFactor: Boolean = false, val challengeToken: String? = null)
@@ -188,6 +189,11 @@ fun Application.configureAuthRoutes() {
             if (!BCrypt.checkpw(body.password, passwordHash)) {
                 logger.warn("Failed login attempt for: $email")
                 call.respondError(HttpStatusCode.BadRequest, "invalid_credentials", "Invalid email or password")
+                return@post
+            }
+
+            if (!user[Users.active]) {
+                call.respondError(HttpStatusCode.Forbidden, "user_suspended", "This account has been suspended")
                 return@post
             }
 
@@ -415,7 +421,7 @@ fun Application.configureAuthRoutes() {
                     return@get
                 }
                 val users = transaction { Users.selectAll().orderBy(Users.createdAt).map { user ->
-                    AdminUserResponse(user[Users.id].toString(), user[Users.email], user[Users.role], user[Users.totpEnabled], user[Users.createdAt].toString())
+                    AdminUserResponse(user[Users.id].toString(), user[Users.email], user[Users.role], user[Users.totpEnabled], user[Users.createdAt].toString(), user[Users.active])
                 } }
                 call.respond(users)
             }
@@ -460,6 +466,37 @@ fun Application.configureAuthRoutes() {
                 }
                 AuditRepository.write(null, "Admin User Created", principal.payload.subject, "email=$newEmail role=$newRole two_factor_enabled=false")
                 call.respond(HttpStatusCode.Created, AdminUserResponse(created.toString(), newEmail, newRole, false, LocalDateTime.now().toString()))
+            }
+
+            patch("/api/admin/users/{id}") {
+                val principal = call.principal<JWTPrincipal>()
+                if (principal?.payload?.getClaim("role")?.asString() != "admin") { call.respondError(HttpStatusCode.Forbidden, "forbidden", "Only administrators can manage users"); return@patch }
+                val id = call.parameters["id"]?.let { runCatching { UUID.fromString(it) }.getOrNull() }
+                val body = runCatching { call.receive<UpdateAdminUserRequest>() }.getOrNull()
+                if (id == null || body == null || (body.email == null && body.role == null && body.active == null)) { call.respondError(HttpStatusCode.BadRequest, "invalid_request", "A valid user update is required"); return@patch }
+                val email = body.email?.trim()?.lowercase()
+                val role = body.role?.trim()?.lowercase()
+                if ((email != null && !InputValidators.isValidEmail(email)) || (role != null && role !in setOf("admin", "operator", "viewer"))) { call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Email or role is invalid"); return@patch }
+                val actor = principal.payload.subject.lowercase().trim()
+                val updated = runCatching { transaction { Users.update({ Users.id eq id }) { statement -> email?.let { statement[Users.email] = it }; role?.let { statement[Users.role] = it }; body.active?.let { statement[Users.active] = it } } } }.getOrDefault(0)
+                if (updated == 0) { call.respondError(HttpStatusCode.NotFound, "user_not_found", "User not found"); return@patch }
+                AuditRepository.write(null, "Admin User Updated", actor, "user_id=$id email=${email ?: "unchanged"} role=${role ?: "unchanged"} active=${body.active ?: "unchanged"}")
+                call.respond(mapOf("status" to "user_updated"))
+            }
+
+            delete("/api/admin/users/{id}") {
+                val principal = call.principal<JWTPrincipal>()
+                if (principal?.payload?.getClaim("role")?.asString() != "admin") { call.respondError(HttpStatusCode.Forbidden, "forbidden", "Only administrators can manage users"); return@delete }
+                val id = call.parameters["id"]?.let { runCatching { UUID.fromString(it) }.getOrNull() }
+                if (id == null) { call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid user ID"); return@delete }
+                val actor = principal.payload.subject.lowercase().trim()
+                val target = transaction { Users.selectAll().where { Users.id eq id }.singleOrNull() }
+                if (target == null) { call.respondError(HttpStatusCode.NotFound, "user_not_found", "User not found"); return@delete }
+                if (target[Users.email] == actor) { call.respondError(HttpStatusCode.Conflict, "cannot_delete_self", "You cannot delete your own account"); return@delete }
+                if (target[Users.role] == "admin" && transaction { Users.selectAll().count { it[Users.role] == "admin" } } <= 1) { call.respondError(HttpStatusCode.Conflict, "last_admin", "The last administrator cannot be deleted"); return@delete }
+                transaction { Users.deleteWhere { Users.id eq id } }
+                AuditRepository.write(null, "Admin User Deleted", actor, "user_id=$id email=${target[Users.email]}")
+                call.respond(mapOf("status" to "user_deleted"))
             }
         }
     }
