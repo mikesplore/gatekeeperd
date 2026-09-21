@@ -88,13 +88,11 @@ object DeploymentWorker {
                 )
                 var existingMatch: Pair<String, ContainerInfo?>? = null
                 for ((strategy, lookup) in lookupStrategies) {
-                    DeploymentJobRepository.update(job.id, log = "Checking for replacement container by $strategy")
                     val match = runCatching { lookup() }.getOrNull()
                     if (match != null) {
                         existingMatch = strategy to match
                         break
                     }
-                    DeploymentJobRepository.update(job.id, log = "No replacement container found by $strategy")
                 }
                 val existing = existingMatch?.second
                 DeploymentJobRepository.update(
