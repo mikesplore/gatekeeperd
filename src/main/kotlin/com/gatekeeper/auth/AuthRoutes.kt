@@ -478,6 +478,7 @@ fun Application.configureAuthRoutes() {
                 val role = body.role?.trim()?.lowercase()
                 if ((email != null && !InputValidators.isValidEmail(email)) || (role != null && role !in setOf("admin", "operator", "viewer"))) { call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Email or role is invalid"); return@patch }
                 val actor = principal.payload.subject.lowercase().trim()
+                if (body.active == false && transaction { Users.selectAll().where { Users.id eq id }.singleOrNull()?.get(Users.email) } == actor) { call.respondError(HttpStatusCode.Conflict, "cannot_suspend_self", "You cannot suspend your own account"); return@patch }
                 val updated = runCatching { transaction { Users.update({ Users.id eq id }) { statement -> email?.let { statement[Users.email] = it }; role?.let { statement[Users.role] = it }; body.active?.let { statement[Users.active] = it } } } }.getOrDefault(0)
                 if (updated == 0) { call.respondError(HttpStatusCode.NotFound, "user_not_found", "User not found"); return@patch }
                 AuditRepository.write(null, "Admin User Updated", actor, "user_id=$id email=${email ?: "unchanged"} role=${role ?: "unchanged"} active=${body.active ?: "unchanged"}")
