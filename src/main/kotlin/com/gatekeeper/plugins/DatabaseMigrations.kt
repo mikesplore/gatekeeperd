@@ -36,6 +36,7 @@ object DatabaseMigrations {
         ,Migration("25", "customers and project ownership", "db/migration/V25__customers_and_project_ownership.sql")
         ,Migration("26", "certificate lifecycle", "db/migration/V26__certificate_lifecycle.sql")
         ,Migration("27", "site bypass paths", "db/migration/V27__site_bypass_paths.sql")
+        ,Migration("28", "project billing information", "db/migration/V28__project_billing_information.sql")
     )
 
     fun apply(dataSource: HikariDataSource) {
