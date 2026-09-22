@@ -16,7 +16,7 @@ object ProjectPaymentService {
             return Result.failure(IllegalStateException("Paystack is not configured on this server"))
         }
 
-        val email = emailOverride?.trim()?.takeIf { it.isNotBlank() } ?: project.clientEmail?.trim()
+        val email = emailOverride?.trim()?.takeIf { it.isNotBlank() } ?: project.customerEmail?.trim()
         if (email.isNullOrBlank()) {
             return Result.failure(IllegalStateException("No client email configured for this project"))
         }

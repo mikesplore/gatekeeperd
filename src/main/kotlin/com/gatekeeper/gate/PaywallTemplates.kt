@@ -29,7 +29,7 @@ object PaywallTemplates {
                 "Online payment is not configured yet. Please contact support."
             info.amountDue == null -> "No payment amount is configured for this project."
             info.amountDue <= BigDecimal.ZERO -> "This project has no outstanding balance."
-            info.clientEmail.isNullOrBlank() -> "No billing email is configured for this project."
+            info.customerEmail.isNullOrBlank() -> "No billing email is configured for this project."
             AppConfig.publicBaseUrl.isBlank() -> "Payment callback URL is not configured on the server."
             else -> null
         }

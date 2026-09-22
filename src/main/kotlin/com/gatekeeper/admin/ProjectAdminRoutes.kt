@@ -77,8 +77,6 @@ data class CreateProjectRequest(
     val domain: String,
     val containerName: String,
     val type: String,
-    val clientName: String? = null,
-    val clientEmail: String? = null,
     val billingName: String? = null,
     val billingEmail: String? = null,
     val billingAddress: String? = null,
@@ -104,8 +102,6 @@ data class UpdateProjectRequest(
     val domain: String? = null,
     val containerName: String? = null,
     val type: String? = null,
-    val clientName: String? = null,
-    val clientEmail: String? = null,
     val billingName: String? = null,
     val billingEmail: String? = null,
     val billingAddress: String? = null,
@@ -200,7 +196,7 @@ fun Application.configureProjectAdminRoutes() {
                 val offset = call.request.queryParameters["offset"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0
                 val limit = call.request.queryParameters["limit"]?.toIntOrNull()?.coerceIn(1, 500) ?: 500
                 val filteredProjects = ProjectRepository.findAll().asSequence()
-                    .filter { search.isNullOrBlank() || listOf(it.name, it.slug, it.domain, it.clientName ?: "").any { value -> value.lowercase().contains(search) } }
+                    .filter { search.isNullOrBlank() || listOf(it.name, it.slug, it.domain, it.customerName ?: "").any { value -> value.lowercase().contains(search) } }
                     .filter { status.isNullOrBlank() || it.status == status }
                     .toList()
                 call.respond(
@@ -378,11 +374,6 @@ fun Application.configureProjectAdminRoutes() {
                     return@post
                 }
 
-                if (body.clientEmail?.isNotBlank() == true && !InputValidators.isValidEmail(body.clientEmail)) {
-                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "clientEmail is not a valid email address")
-                    return@post
-                }
-
                 val amountDue = body.amountDue?.let { BigDecimal.valueOf(it) }
 
                 val customerId = body.customerId?.let {
@@ -445,8 +436,6 @@ fun Application.configureProjectAdminRoutes() {
                     domain = body.domain.trim(),
                     containerName = containerRef,
                     type = body.type.lowercase(),
-                    clientName = body.clientName?.trim(),
-                    clientEmail = body.clientEmail?.trim(),
                     billingName = body.billingName?.trim(), billingEmail = body.billingEmail?.trim(), billingAddress = body.billingAddress?.trim(),
                     amountDue = amountDue,
                     currency = body.currency,
@@ -487,11 +476,6 @@ fun Application.configureProjectAdminRoutes() {
 
                 if (body.containerName != null && !InputValidators.isValidContainerRef(body.containerName)) {
                     call.respondError(HttpStatusCode.BadRequest, "invalid_request", "containerName must be 'name' or 'name:port'")
-                    return@patch
-                }
-
-                if (body.clientEmail?.isNotBlank() == true && !InputValidators.isValidEmail(body.clientEmail)) {
-                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "clientEmail is not a valid email address")
                     return@patch
                 }
 
@@ -564,8 +548,6 @@ fun Application.configureProjectAdminRoutes() {
                     domain = body.domain?.trim(),
                     containerName = body.containerName?.trim(),
                     type = body.type?.lowercase(),
-                    clientName = body.clientName?.trim(),
-                    clientEmail = body.clientEmail?.trim(),
                     billingName = body.billingName?.trim(),
                     billingEmail = body.billingEmail?.trim(),
                     billingAddress = body.billingAddress?.trim(),
@@ -573,8 +555,6 @@ fun Application.configureProjectAdminRoutes() {
                     currency = body.currency,
                     dueDate = dueDate,
                     gracePeriodDays = body.gracePeriodDays,
-                    clearClientName = "clientName" in presentFields && body.clientName == null,
-                    clearClientEmail = "clientEmail" in presentFields && body.clientEmail == null,
                     clearAmountDue = "amountDue" in presentFields && body.amountDue == null,
                     clearDueDate = "dueDate" in presentFields && body.dueDate == null,
                     deploymentMode = body.deploymentMode,
@@ -844,11 +824,11 @@ fun Application.configureProjectAdminRoutes() {
                     return@post
                 }
 
-                if (project.amountDue == null || project.clientEmail == null) {
+                if (project.amountDue == null || project.customerEmail == null) {
                     call.respondError(
                         HttpStatusCode.BadRequest,
                         "invalid_request",
-                        "Project has no amount_due or client_email configured"
+                        "Project has no amount_due or customer email configured"
                     )
                     return@post
                 }

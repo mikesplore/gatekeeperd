@@ -12,7 +12,7 @@ data class PaywallInfo(
     val amountDue: BigDecimal?,
     val currency: String,
     val dueDate: LocalDate?,
-    val clientEmail: String?
+    val customerEmail: String?
 ) {
     companion object {
         fun from(project: ProjectRepository.ProjectRecord) = PaywallInfo(
@@ -22,7 +22,7 @@ data class PaywallInfo(
             amountDue = ProjectBalanceService.outstandingBalance(project),
             currency = project.currency,
             dueDate = project.dueDate,
-            clientEmail = project.clientEmail
+            customerEmail = project.customerEmail
         )
     }
 }

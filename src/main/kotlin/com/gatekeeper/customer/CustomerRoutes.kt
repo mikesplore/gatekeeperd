@@ -138,8 +138,8 @@ fun Application.configureCustomerRoutes() {
         get("/api/customer/projects/{slug}/reminder") {
             val slug = call.parameters["slug"] ?: return@get call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing project slug")
             val project = ProjectRepository.findBySlug(slug) ?: return@get call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
-            val recipient = project.clientEmail?.takeIf { it.isNotBlank() }
-                ?: return@get call.respondError(HttpStatusCode.Conflict, "missing_client_email", "This project has no client email configured")
+            val recipient = project.customerEmail?.takeIf { it.isNotBlank() }
+                ?: return@get call.respondError(HttpStatusCode.Conflict, "missing_customer_email", "This project has no customer email configured")
             call.respond(CustomerReminderResponse(
                 recipient = recipient,
                 subject = "Payment required for ${project.name}",

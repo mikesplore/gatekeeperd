@@ -18,8 +18,6 @@ object Projects : Table("projects") {
     val deploymentMode = text("deployment_mode").default("developer_hosted")
     val serviceMode = text("service_mode").default("development")
     val lifecycleStatus = text("lifecycle_status").default("active")
-    val clientName = text("client_name").nullable()
-    val clientEmail = text("client_email").nullable()
     val billingName = text("billing_name").nullable()
     val billingEmail = text("billing_email").nullable()
     val billingAddress = text("billing_address").nullable()

@@ -4,6 +4,7 @@ import com.gatekeeper.db.tables.AuditLog
 import com.gatekeeper.db.tables.ProjectStatus
 import com.gatekeeper.db.tables.ProjectType
 import com.gatekeeper.db.tables.Projects
+import com.gatekeeper.db.tables.Customers
 import com.gatekeeper.plugins.RedisService
 import org.jetbrains.exposed.sql.*
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
@@ -56,8 +57,8 @@ object ProjectRepository {
         val deploymentMode: String,
         val serviceMode: String,
         val lifecycleStatus: String,
-        val clientName: String?,
-        val clientEmail: String?,
+        val customerName: String?,
+        val customerEmail: String?,
         val billingName: String?, val billingEmail: String?, val billingAddress: String?,
         val paystackCustomerCode: String?,
         val amountDue: BigDecimal?,
@@ -116,8 +117,6 @@ object ProjectRepository {
         domain: String,
         containerName: String,
         type: String,
-        clientName: String?,
-        clientEmail: String?,
         billingName: String?, billingEmail: String?, billingAddress: String?,
         amountDue: BigDecimal?,
         currency: String,
@@ -138,8 +137,6 @@ object ProjectRepository {
                 it[Projects.containerName] = containerName
                 it[Projects.type] = ProjectType.valueOf(type.uppercase())
                 it[Projects.status] = ProjectStatus.ACTIVE
-                it[Projects.clientName] = clientName
-                it[Projects.clientEmail] = clientEmail
                 it[Projects.billingName] = billingName
                 it[Projects.billingEmail] = billingEmail
                 it[Projects.billingAddress] = billingAddress
@@ -169,15 +166,11 @@ object ProjectRepository {
         domain: String?,
         containerName: String?,
         type: String?,
-        clientName: String?,
-        clientEmail: String?,
         billingName: String? = null, billingEmail: String? = null, billingAddress: String? = null,
         amountDue: BigDecimal?,
         currency: String?,
         dueDate: LocalDate?,
         gracePeriodDays: Int?,
-        clearClientName: Boolean = false,
-        clearClientEmail: Boolean = false,
         clearAmountDue: Boolean = false,
         clearDueDate: Boolean = false,
         deploymentMode: String? = null,
@@ -193,8 +186,6 @@ object ProjectRepository {
                 domain?.let { v -> it[Projects.domain] = v }
                 containerName?.let { v -> it[Projects.containerName] = v }
                 type?.let { v -> it[Projects.type] = ProjectType.valueOf(v.uppercase()) }
-                if (clearClientName) it[Projects.clientName] = null else clientName?.let { v -> it[Projects.clientName] = v }
-                if (clearClientEmail) it[Projects.clientEmail] = null else clientEmail?.let { v -> it[Projects.clientEmail] = v }
                 billingName?.let { v -> it[Projects.billingName] = v }
                 billingEmail?.let { v -> it[Projects.billingEmail] = v }
                 billingAddress?.let { v -> it[Projects.billingAddress] = v }
@@ -315,8 +306,8 @@ object ProjectRepository {
     data class OverdueProject(
         val slug: String,
         val name: String,
-        val clientName: String?,
-        val clientEmail: String?,
+        val customerName: String?,
+        val customerEmail: String?,
         val billingName: String?, val billingEmail: String?, val billingAddress: String?,
         val dueDate: LocalDate,
         val daysOverdue: Long,
@@ -340,8 +331,8 @@ object ProjectRepository {
                     OverdueProject(
                         slug = row[Projects.slug],
                         name = row[Projects.name],
-                        clientName = row[Projects.clientName],
-                        clientEmail = row[Projects.clientEmail],
+                        customerName = row[Projects.customerId]?.let { id -> Customers.selectAll().where { Customers.id eq id }.singleOrNull()?.get(Customers.name) },
+                        customerEmail = row[Projects.customerId]?.let { id -> Customers.selectAll().where { Customers.id eq id }.singleOrNull()?.get(Customers.contactEmail) },
                         billingName = row[Projects.billingName], billingEmail = row[Projects.billingEmail], billingAddress = row[Projects.billingAddress],
                         dueDate = dueDate,
                         daysOverdue = java.time.temporal.ChronoUnit.DAYS.between(dueDate, asOf),
@@ -426,8 +417,8 @@ object ProjectRepository {
         deploymentMode = this[Projects.deploymentMode],
         serviceMode = this[Projects.serviceMode],
         lifecycleStatus = this[Projects.lifecycleStatus],
-        clientName = this[Projects.clientName],
-        clientEmail = this[Projects.clientEmail],
+        customerName = this[Projects.customerId]?.let { id -> Customers.selectAll().where { Customers.id eq id }.singleOrNull()?.get(Customers.name) },
+        customerEmail = this[Projects.customerId]?.let { id -> Customers.selectAll().where { Customers.id eq id }.singleOrNull()?.get(Customers.contactEmail) },
         billingName = this[Projects.billingName], billingEmail = this[Projects.billingEmail], billingAddress = this[Projects.billingAddress],
         paystackCustomerCode = this[Projects.paystackCustomerCode],
         amountDue = this[Projects.amountDue],
