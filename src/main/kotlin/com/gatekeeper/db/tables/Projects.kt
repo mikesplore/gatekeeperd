@@ -7,6 +7,7 @@ import org.jetbrains.exposed.sql.javatime.date
 
 object Projects : Table("projects") {
     val id = uuid("id").autoGenerate()
+    val customerId = reference("customer_id", Customers.id).nullable().index()
     val slug = text("slug").uniqueIndex()
     val name = text("name")
     val domain = text("domain")

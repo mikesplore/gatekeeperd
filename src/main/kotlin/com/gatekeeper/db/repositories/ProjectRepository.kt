@@ -66,7 +66,8 @@ object ProjectRepository {
         val gracePeriodDays: Int,
         val createdAt: LocalDateTime,
         val updatedAt: LocalDateTime,
-        val githubRepository: String?, val githubRef: String, val deployImageName: String?, val deployImageTag: String, val autoDeploy: Boolean
+        val githubRepository: String?, val githubRef: String, val deployImageName: String?, val deployImageTag: String, val autoDeploy: Boolean,
+        val customerId: UUID? = null
     )
 
     fun findBySlug(slug: String, includeArchived: Boolean = false): ProjectRecord? {
@@ -414,6 +415,6 @@ object ProjectRepository {
         gracePeriodDays = this[Projects.gracePeriodDays],
         createdAt = this[Projects.createdAt],
         updatedAt = this[Projects.updatedAt],
-        githubRepository = this[Projects.githubRepository], githubRef = this[Projects.githubRef], deployImageName = this[Projects.deployImageName], deployImageTag = this[Projects.deployImageTag], autoDeploy = this[Projects.autoDeploy]
+        githubRepository = this[Projects.githubRepository], githubRef = this[Projects.githubRef], deployImageName = this[Projects.deployImageName], deployImageTag = this[Projects.deployImageTag], autoDeploy = this[Projects.autoDeploy], customerId = this[Projects.customerId]
     )
 }

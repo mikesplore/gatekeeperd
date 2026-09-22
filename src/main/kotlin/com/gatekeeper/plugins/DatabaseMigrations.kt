@@ -33,6 +33,7 @@ object DatabaseMigrations {
         ,Migration("22", "deployment configurations and executions", "db/migration/V22__deployment_configurations_and_executions.sql")
         ,Migration("23", "nginx sites", "db/migration/V23__nginx_sites.sql")
         ,Migration("24", "nginx site reconciliation status", "db/migration/V24__nginx_site_reconciliation_status.sql")
+        ,Migration("25", "customers and project ownership", "db/migration/V25__customers_and_project_ownership.sql")
     )
 
     fun apply(dataSource: HikariDataSource) {
