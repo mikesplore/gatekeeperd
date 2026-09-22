@@ -248,7 +248,9 @@ fun Application.configureOperationsAdminRoutes() {
             get("/api/admin/dashboard/customers") {
                 val offset = call.request.queryParameters["offset"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0
                 val limit = call.request.queryParameters["limit"]?.toIntOrNull()?.coerceIn(1, 500) ?: 100
-                call.respond(CustomerRepository.findAll().drop(offset).take(limit).map { customer ->
+                val query = call.request.queryParameters["q"]
+                val (customers, total) = CustomerRepository.findPage(query, limit, offset)
+                call.respond(mapOf("customers" to customers.map { customer ->
                     val owned = CustomerRepository.findSites(customer.id)
                     val sites = owned.mapNotNull { it.site }
                     val financials = owned.map { dashboardProjectFinancials(it.project) }
@@ -256,7 +258,7 @@ fun Application.configureOperationsAdminRoutes() {
                     val paid = financials.sumOf { it.paid }
                     val balance = financials.sumOf { it.balance }
                     DashboardCustomerResponse(customer.id.toString(), customer.name, customer.contactEmail, customer.contactPhone, derivedBillingStatus(financials), owned.size, sites.groupingBy { it.reconciliationStatus.value }.eachCount(), billed.toDouble(), paid.toDouble(), balance.toDouble())
-                })
+                }, "total" to total, "limit" to limit, "offset" to offset, "hasMore" to (offset + customers.size < total)))
             }
             get("/api/admin/dashboard/customers/{id}") {
                 val id = runCatching { UUID.fromString(call.parameters["id"]) }.getOrNull() ?: run { call.respondError(HttpStatusCode.BadRequest, "invalid_customer_id", "Invalid customer ID"); return@get }

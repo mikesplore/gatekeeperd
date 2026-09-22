@@ -239,9 +239,11 @@ fun Application.configureRouting() {
                 val search = call.request.queryParameters["q"]?.trim()?.lowercase()
                 val offset = call.request.queryParameters["offset"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0
                 val limit = call.request.queryParameters["limit"]?.toIntOrNull()?.coerceIn(1, 500) ?: 100
-                val all = svc.listVolumes().filter { search.isNullOrBlank() || it.name.lowercase().contains(search) }
-                val rows = all.drop(offset).take(limit)
-                call.respond(mapOf("items" to rows, "total" to all.size, "limit" to limit, "offset" to offset, "hasMore" to (offset + rows.size < all.size)))
+                runCatching {
+                    val all = svc.listVolumes().filter { search.isNullOrBlank() || it.name.lowercase().contains(search) }
+                    val rows = all.drop(offset).take(limit)
+                    call.respond(mapOf("items" to rows, "total" to all.size, "limit" to limit, "offset" to offset, "hasMore" to (offset + rows.size < all.size)))
+                }.onFailure { call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", it.message ?: "Unable to list Docker volumes") }
             } ?: call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available") }
             post("/api/admin/volumes") {
                 val svc = dockerService ?: run { call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available"); return@post }

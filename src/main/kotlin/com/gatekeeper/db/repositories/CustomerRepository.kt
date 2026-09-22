@@ -11,6 +11,8 @@ import org.jetbrains.exposed.sql.transactions.transaction
 import java.time.LocalDateTime
 import java.util.UUID
 import org.jetbrains.exposed.sql.insert
+import org.jetbrains.exposed.sql.lowerCase
+import org.jetbrains.exposed.sql.or
 
 object CustomerRepository {
     data class CustomerRecord(val id: UUID, val name: String, val contactEmail: String?, val contactPhone: String?, val billingStatus: String, val createdAt: LocalDateTime, val updatedAt: LocalDateTime)
@@ -19,6 +21,17 @@ object CustomerRepository {
 
     fun findAll(): List<CustomerRecord> = transaction {
         Customers.selectAll().orderBy(Customers.createdAt, SortOrder.ASC).map { it.toRecord() }
+    }
+
+    fun findPage(query: String?, limit: Int, offset: Int): Pair<List<CustomerRecord>, Int> = transaction {
+        val normalized = query?.trim()?.lowercase()?.takeIf { it.isNotBlank() }
+        val rows = if (normalized == null) Customers.selectAll() else Customers.selectAll().where {
+            (Customers.name.lowerCase() like "%$normalized%") or
+                (Customers.contactEmail.lowerCase() like "%$normalized%") or
+                (Customers.contactPhone.lowerCase() like "%$normalized%")
+        }
+        val all = rows.orderBy(Customers.createdAt, SortOrder.ASC).map { it.toRecord() }
+        all.drop(offset).take(limit) to all.size
     }
 
     fun findById(id: UUID): CustomerRecord? = transaction {
