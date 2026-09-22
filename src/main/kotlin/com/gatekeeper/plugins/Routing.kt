@@ -62,17 +62,31 @@ fun Application.configureRouting() {
             call.respond(mapOf("status" to "ok"))
         }
 
+        get("/health/live") {
+            call.respond(mapOf("status" to "ok"))
+        }
+
         get("/api/health/ready") {
             val database = DatabaseFactory.isHealthy()
             val redis = RedisService.isHealthy()
-            val ready = database && redis
+            val migrations = DatabaseFactory.migrationsHealthy()
+            val ready = database && redis && migrations
             call.respond(
                 if (ready) HttpStatusCode.OK else HttpStatusCode.ServiceUnavailable,
                 mapOf(
                     "status" to if (ready) "ready" else "not_ready",
-                    "dependencies" to mapOf("database" to database, "redis" to redis)
+                    "dependencies" to mapOf("database" to database, "redis" to redis, "migrations" to migrations)
                 )
             )
+        }
+
+        get("/health/ready") {
+            val database = DatabaseFactory.isHealthy()
+            val redis = RedisService.isHealthy()
+            val migrations = DatabaseFactory.migrationsHealthy()
+            val ready = database && redis && migrations
+            call.respond(if (ready) HttpStatusCode.OK else HttpStatusCode.ServiceUnavailable,
+                mapOf("status" to if (ready) "ready" else "not_ready", "dependencies" to mapOf("database" to database, "redis" to redis, "migrations" to migrations)))
         }
 
         // Admin routes (JWT-protected)

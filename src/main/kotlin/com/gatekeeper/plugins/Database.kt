@@ -6,6 +6,7 @@ import com.zaxxer.hikari.HikariDataSource
 import io.ktor.server.application.*
 import org.jetbrains.exposed.sql.Database
 import org.slf4j.LoggerFactory
+import java.sql.Connection
 
 private val logger = LoggerFactory.getLogger("com.gatekeeper.plugins.Database")
 
@@ -38,6 +39,34 @@ object DatabaseFactory {
             logger.info("Database connection pool closed")
         }
     }
+
+    fun isInitialized() = ::dataSource.isInitialized
+
+    fun <T> withAdvisoryLock(key: String, block: () -> T): T {
+        return dataSource.connection.use { connection ->
+            connection.autoCommit = false
+            val lockId = DistributedLock.lockId(key)
+            connection.prepareStatement("SELECT pg_advisory_lock(?)").use { statement ->
+                statement.setLong(1, lockId)
+                statement.execute()
+            }
+            try {
+                block()
+            } finally {
+                connection.prepareStatement("SELECT pg_advisory_unlock(?)").use { statement ->
+                    statement.setLong(1, lockId)
+                    statement.execute()
+                }
+                connection.commit()
+            }
+        }
+    }
+
+    fun migrationsHealthy(): Boolean = runCatching {
+        dataSource.connection.use { connection ->
+            connection.prepareStatement("SELECT 1 FROM flyway_schema_history LIMIT 1").use { it.executeQuery().next() }
+        }
+    }.getOrDefault(false)
 
     fun isHealthy(): Boolean {
         return try {

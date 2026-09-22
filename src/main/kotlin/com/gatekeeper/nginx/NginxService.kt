@@ -13,6 +13,7 @@ import java.io.ByteArrayInputStream
 import java.time.ZoneOffset
 import java.time.OffsetDateTime
 import java.security.MessageDigest
+import com.gatekeeper.plugins.DistributedLock
 
 private val logger = LoggerFactory.getLogger("com.gatekeeper.nginx.NginxService")
 
@@ -391,7 +392,8 @@ class NginxService(
     }
 
     fun enableProject(slug: String, configContent: String): Boolean {
-        return try {
+        return DistributedLock.withLock("nginx-site:$slug") {
+          try {
             val availableFile = File("$sitesAvailablePath/$slug")
             val enabledFile = File("$sitesEnabledPath/$slug")
             availableFile.parentFile?.mkdirs()
@@ -406,7 +408,7 @@ class NginxService(
             if (!testNginxConfigWithStagedSite(slug, stagedFile).valid) {
                 Files.deleteIfExists(stagedFile.toPath())
                 logger.error("Nginx validation failed for staged site $slug; live configuration was not changed")
-                return false
+                return@withLock false
             }
 
             val backup = if (availableFile.isFile) {
@@ -427,13 +429,13 @@ class NginxService(
                     restoreActivatedSite(availableFile, enabledFile, backup)
                     reloadNginx()
                     logger.error("Nginx reload failed for $slug; previous configuration was restored")
-                    return false
+                    return@withLock false
                 }
             } catch (e: Exception) {
                 restoreActivatedSite(availableFile, enabledFile, backup)
                 runCatching { reloadNginx() }
                 logger.error("Failed to activate nginx site $slug; previous configuration was restored", e)
-                return false
+                return@withLock false
             } finally {
                 Files.deleteIfExists(stagedFile.toPath())
             }
@@ -443,9 +445,10 @@ class NginxService(
             recordManagedVersion(slug, availableFile.readText())
             logger.info("Enabled nginx site: $slug")
             true
-        } catch (e: Exception) {
+          } catch (e: Exception) {
             logger.error("Failed to enable nginx site: $slug", e)
             false
+          }
         }
     }
 
@@ -476,7 +479,7 @@ class NginxService(
     }
 
     fun disableProject(slug: String): Boolean {
-        return try {
+        return DistributedLock.withLock("nginx-site:$slug") { try {
             val enabledFile = File("$sitesEnabledPath/$slug")
             if (enabledFile.exists()) {
                 enabledFile.delete()
@@ -486,11 +489,11 @@ class NginxService(
         } catch (e: Exception) {
             logger.error("Failed to disable nginx site: $slug", e)
             false
-        }
+        } }
     }
 
     fun removeProject(slug: String): Boolean {
-        return try {
+        return DistributedLock.withLock("nginx-site:$slug") { try {
             val availableFile = File("$sitesAvailablePath/$slug")
             val enabledFile = File("$sitesEnabledPath/$slug")
 
@@ -506,7 +509,7 @@ class NginxService(
         } catch (e: Exception) {
             logger.error("Failed to remove nginx site: $slug", e)
             false
-        }
+        } }
     }
 
     fun testNginxConfig(): Boolean {
