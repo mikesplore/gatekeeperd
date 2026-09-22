@@ -165,7 +165,7 @@ fun Application.configureOperationsAdminRoutes() {
                     gateEnabled = updated.gateEnabled, bypassPaths = updated.bypassPaths
                 ))
                 if (!nginx.enableProject(slug, config)) { call.respondError(HttpStatusCode.UnprocessableEntity, "nginx_error", "Validation or activation failed; previous configuration was preserved"); return@patch }
-                call.respond(dashboardSite(updated))
+                call.respond(dashboardSite(SiteRepository.findByProjectSlug(slug) ?: updated))
             }
             delete("/api/admin/dashboard/sites/{slug}") {
                 val slug = call.parameters["slug"] ?: run { call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing slug"); return@delete }

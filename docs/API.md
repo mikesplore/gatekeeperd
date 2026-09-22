@@ -1175,3 +1175,11 @@ Unmatched API routes return JSON instead of a browser-generated error page:
   "requestId": "..."
 }
 ```
+
+Dashboard write operations are also available to authenticated administrators:
+
+- `PATCH /api/admin/dashboard/sites/{slug}` updates desired Site render fields and activates the generated configuration through nginx validation and reload.
+- `DELETE /api/admin/dashboard/sites/{slug}` removes the Site record and its deployed nginx artifacts.
+- `DELETE /api/admin/dashboard/dead-configs/{filename}` requires `{"confirm":true}` and moves the orphaned file to a timestamped backup.
+- `POST /api/admin/dashboard/customers` creates a customer.
+- `PATCH /api/admin/dashboard/projects/{id}` assigns or clears `customerId`.
