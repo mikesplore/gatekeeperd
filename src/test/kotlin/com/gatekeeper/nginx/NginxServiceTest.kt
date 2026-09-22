@@ -253,6 +253,7 @@ class NginxServiceTest {
         val service = NginxService(
             sitesAvailablePath = available.absolutePath,
             sitesEnabledPath = enabled.absolutePath,
+            sslCertPath = root.resolve("certificates").absolutePath,
             nginxTestRunner = { NginxTestResult(true, 0, "stub", "now") },
             nginxReloadRunner = { false }
         )
