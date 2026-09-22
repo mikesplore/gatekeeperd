@@ -18,6 +18,10 @@ object Sites : Table("sites") {
     val certExplicitPath = text("cert_explicit_path").nullable()
     val gateEnabled = bool("gate_enabled").default(true)
     val configVersion = integer("config_version").default(1)
+    val reconciliationStatus = enumerationByName("reconciliation_status", 12, ReconciliationStatus::class).default(ReconciliationStatus.HEALTHY)
+    val lastNginxError = text("last_nginx_error").nullable()
+    val lastDockerError = text("last_docker_error").nullable()
+    val lastReconciledAt = datetime("last_reconciled_at").nullable()
     val createdAt = datetime("created_at").defaultExpression(CurrentDateTime)
     val updatedAt = datetime("updated_at").defaultExpression(CurrentDateTime)
 
@@ -38,4 +42,13 @@ enum class TlsMode(val value: String) {
 enum class CertMode(val value: String) {
     AUTO_RESOLVE("auto_resolve"),
     EXPLICIT_PATH("explicit_path")
+}
+
+enum class ReconciliationStatus(val value: String) {
+    HEALTHY("healthy"),
+    DRIFTED("drifted"),
+    DOCKER_DOWN("docker_down"),
+    DEAD_CONFIG("dead_config"),
+    DISABLED("disabled"),
+    ERROR("error")
 }

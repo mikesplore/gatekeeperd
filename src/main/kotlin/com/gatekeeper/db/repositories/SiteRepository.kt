@@ -5,6 +5,7 @@ import com.gatekeeper.db.tables.Projects
 import com.gatekeeper.db.tables.Sites
 import com.gatekeeper.db.tables.TlsMode
 import com.gatekeeper.db.tables.UpstreamMode
+import com.gatekeeper.db.tables.ReconciliationStatus
 import org.jetbrains.exposed.sql.ResultRow
 import org.jetbrains.exposed.sql.and
 import org.jetbrains.exposed.sql.deleteWhere
@@ -22,6 +23,7 @@ object SiteRepository {
         val upstreamMode: UpstreamMode, val upstreamContainerName: String?, val upstreamExplicitPort: Int?,
         val tlsMode: TlsMode, val certMode: CertMode, val certExplicitPath: String?, val gateEnabled: Boolean,
         val configVersion: Int, val createdAt: LocalDateTime, val updatedAt: LocalDateTime
+        , val reconciliationStatus: ReconciliationStatus, val lastNginxError: String?, val lastDockerError: String?, val lastReconciledAt: LocalDateTime?
     )
 
     fun findByProjectId(projectId: UUID): SiteRecord? = transaction {
@@ -63,6 +65,7 @@ object SiteRepository {
         this[Sites.id], this[Sites.projectId], this[Sites.domain], this[Sites.upstreamHost],
         this[Sites.upstreamMode], this[Sites.upstreamContainerName], this[Sites.upstreamExplicitPort],
         this[Sites.tlsMode], this[Sites.certMode], this[Sites.certExplicitPath], this[Sites.gateEnabled],
-        this[Sites.configVersion], this[Sites.createdAt], this[Sites.updatedAt]
+        this[Sites.configVersion], this[Sites.createdAt], this[Sites.updatedAt], this[Sites.reconciliationStatus],
+        this[Sites.lastNginxError], this[Sites.lastDockerError], this[Sites.lastReconciledAt]
     )
 }
