@@ -816,8 +816,10 @@ fun Application.configureNginxAdminRoutes() {
                     call.respondError(HttpStatusCode.BadRequest, "invalid_domain", it.message ?: "Invalid domain")
                     return@post
                 }
-                if (CertificateRepository.activeSiteCount(validatedDomain) > 0) {
-                    call.respondError(HttpStatusCode.Conflict, "certificate_in_use", "Certificate '$validatedDomain' is still referenced by active sites")
+                try {
+                    CertificateRepository.requireRemovable(validatedDomain)
+                } catch (e: IllegalArgumentException) {
+                    call.respondError(HttpStatusCode.Conflict, "certificate_in_use", e.message ?: "Certificate is still referenced by active sites")
                     return@post
                 }
                 val removed = nginxService.removeCertificate(validatedDomain)
@@ -825,6 +827,7 @@ fun Application.configureNginxAdminRoutes() {
                     call.respondError(HttpStatusCode.InternalServerError, "certificate_error", "Failed to remove SSL certificate")
                     return@post
                 }
+                CertificateRepository.deleteByDomain(validatedDomain)
 
                 call.respond(
                     CertificateResponse(

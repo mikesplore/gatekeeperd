@@ -9,6 +9,8 @@ import org.jetbrains.exposed.sql.insert
 import org.jetbrains.exposed.sql.selectAll
 import org.jetbrains.exposed.sql.transactions.transaction
 import org.jetbrains.exposed.sql.update
+import org.jetbrains.exposed.sql.deleteWhere
+import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
 import java.time.LocalDateTime
 import java.util.UUID
 
@@ -29,6 +31,12 @@ object CertificateRepository {
     fun findAll(): List<CertificateRecord> = transaction { Certificates.selectAll().orderBy(Certificates.expiresAt, SortOrder.ASC).map { it.toRecord() } }
     fun activeSiteCount(domain: String): Long = transaction {
         (Sites innerJoin Certificates innerJoin Projects).selectAll().where { (Certificates.domain eq domain) and Projects.deletedAt.isNull() }.count()
+    }
+    fun requireRemovable(domain: String, linkedActiveSites: Long = activeSiteCount(domain)) {
+        require(linkedActiveSites == 0L) { "Certificate '$domain' is still referenced by active sites" }
+    }
+    fun deleteByDomain(domain: String) = transaction {
+        Certificates.deleteWhere { Certificates.domain eq domain }
     }
     private fun org.jetbrains.exposed.sql.ResultRow.toRecord() = CertificateRecord(this[Certificates.id], this[Certificates.domain], this[Certificates.issuedAt], this[Certificates.expiresAt], this[Certificates.renewalStatus], this[Certificates.lastRenewalAttempt], this[Certificates.lastRenewalError])
 }
