@@ -39,6 +39,7 @@ data class NginxConfigInspection(
     val modifiedAt: String? = null,
     val sizeBytes: Long? = null
     ,val managed: Boolean = false,
+    val manual: Boolean = false,
     val drifted: Boolean = false,
     val actualSha256: String? = null,
     val managedSha256: String? = null

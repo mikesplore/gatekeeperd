@@ -196,8 +196,9 @@ class NginxServiceTest {
         Files.createSymbolicLink(File(enabled, slug).toPath(), File(available, slug).toPath())
         val service = isolatedService(root)
 
-        assertTrue(service.enableProject(slug, "new-config"))
-        assertEquals("new-config", File(available, slug).readText())
+        val newConfig = "# gatekeeperd:block:server\nnew-config"
+        assertTrue(service.enableProject(slug, newConfig))
+        assertEquals(newConfig, File(available, slug).readText())
         assertEquals(File(available, slug).toPath(), Files.readSymbolicLink(File(enabled, slug).toPath()))
         val backup = service.listBackups(slug).single()
         assertEquals("old-config", File(available, backup.name).readText())
@@ -377,5 +378,25 @@ class NginxServiceTest {
         assertEquals(1, dockerChecks)
         assertEquals("container stopped", persisted.last().dockerError)
         assertEquals(ReconciliationStatus.DOCKER_DOWN, dockerFailure.results.single().status)
+    }
+
+    @Test
+    fun `marker parsing manages generated files and refuses manual files`() {
+        val root = Files.createTempDirectory("gk-marker-parser").toFile()
+        val available = File(root, "available").apply { mkdirs() }
+        val enabled = File(root, "enabled").apply { mkdirs() }
+        val service = NginxService(available.absolutePath, enabled.absolutePath, 8080, root.absolutePath,
+            nginxTestRunner = { NginxTestResult(true, 0, "", "now") }, nginxReloadRunner = { true })
+        val generated = service.generateNginxConfig("acw", "acw.example.com", 3001, "http", false)
+        File(available, "acw").writeText(generated)
+        val inspection = service.inspectSite("acw")
+        assertTrue(inspection.managed)
+        assertFalse(inspection.manual)
+        assertEquals(setOf("server", "upstream", "auth_request", "paywall"), inspection.blocks.map { it.type }.toSet())
+
+        File(available, "manual").writeText("server { listen 80; }\n")
+        val manual = service.inspectSite("manual")
+        assertTrue(manual.manual)
+        assertFailsWith<IllegalArgumentException> { service.previewBlockUpdate("manual", 0, "server {}") }
     }
 }

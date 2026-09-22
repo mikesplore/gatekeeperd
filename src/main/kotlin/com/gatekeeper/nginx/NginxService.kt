@@ -72,7 +72,8 @@ class NginxService(
             blocks = content?.let(::extractBlocks).orEmpty(),
             modifiedAt = availableFile.takeIf { it.exists() }?.let { Instant.ofEpochMilli(it.lastModified()).toString() },
             sizeBytes = availableFile.takeIf { it.exists() }?.length()
-            ,managed = managedHash != null,
+            ,managed = content?.contains("# gatekeeperd:block:") == true,
+            manual = content != null && !content.contains("# gatekeeperd:block:"),
             drifted = managedHash != null && actualHash != managedHash,
             actualSha256 = actualHash,
             managedSha256 = managedHash
@@ -87,17 +88,15 @@ class NginxService(
     }
 
     private fun extractBlocks(content: String): List<NginxConfigBlock> {
-        val blocks = mutableListOf<NginxConfigBlock>()
-        val pattern = Regex("(?m)^\\s*(server|location(?:\\s*=|\\s+|\\s+@)[^\\{]*)\\s*\\{")
-        pattern.findAll(content).forEach { match ->
-            var depth = 0
-            var end = -1
-            for (index in match.range.last until content.length) {
-                when (content[index]) { '{' -> depth++; '}' -> { depth--; if (depth == 0) { end = index + 1; break } } }
-            }
-            if (end > 0) blocks += NginxConfigBlock(match.groupValues[1].trim().substringBefore('{').trim().split(Regex("\\s+"), 2).first(), match.groupValues[1].trim(), content.substring(match.range.first, end))
+        val marker = Regex("(?m)^\\s*# gatekeeperd:block:([a-z_]+)\\s*$")
+        val markers = marker.findAll(content).toList()
+        if (markers.isEmpty()) return emptyList()
+        return markers.mapIndexed { index, match ->
+            val name = match.groupValues[1]
+            val start = match.range.first
+            val end = if (name == "server") content.length else markers.getOrNull(index + 1)?.range?.first ?: content.length
+            NginxConfigBlock(name, "# gatekeeperd:block:$name", content.substring(start, end).trimEnd())
         }
-        return blocks
     }
 
     fun testNginxConfigDetailed(): NginxTestResult {
@@ -107,6 +106,7 @@ class NginxService(
     fun previewBlockUpdate(slug: String, blockIndex: Int, replacement: String): String {
         val current = inspectSite(slug)
         require(current.available) { "Nginx site '$slug' does not exist" }
+        require(!current.manual) { "Nginx site '$slug' is manual/unmanaged; edit the file directly. Gatekeeperd will only detect drift." }
         require(blockIndex in current.blocks.indices) { "Block index $blockIndex is out of range" }
         val block = current.blocks[blockIndex]
         val start = current.content!!.indexOf(block.content)
@@ -250,6 +250,7 @@ class NginxService(
         val effectiveUpstreamScheme = normalizeUpstreamScheme(appPort, upstreamScheme)
 
         return buildString {
+            appendLine("# gatekeeperd:block:server")
             appendLine("server {")
             if (sslEnabled) {
                 appendLine("    listen 443 ssl;")
@@ -305,6 +306,7 @@ class NginxService(
             appendLine("    # 2. Main Protected Application Route")
             appendLine("    # Evaluates gatekeeper auth_request on every incoming request")
             appendLine("    # -------------------------------------------------------------------------")
+            appendLine("    # gatekeeperd:block:upstream")
             appendLine("    location / {")
                 appendLine("        auth_request /gatekeeper-auth-$slug;")
                 appendLine("        error_page 403 = @gatekeeper_paywall_$slug;")
@@ -325,6 +327,7 @@ class NginxService(
             appendLine("    # 3. Isolated Gatekeeper Subrequest (Browser-Header Sanitizer)")
             appendLine("    # Strips all browser headers, CORS metadata, and POST bodies")
             appendLine("    # -------------------------------------------------------------------------")
+            appendLine("    # gatekeeperd:block:auth_request")
             appendLine("    location = /gatekeeper-auth-$slug {")
                 appendLine("        internal;")
                 appendLine("        proxy_pass http://127.0.0.1:$gatekeeperPort/api/gate/auth?project=$slug;")
@@ -365,6 +368,7 @@ class NginxService(
             appendLine("    # -------------------------------------------------------------------------")
             appendLine("    # 4. Paywall Fallback Location")
             appendLine("    # -------------------------------------------------------------------------")
+            appendLine("    # gatekeeperd:block:paywall")
             appendLine("    location @gatekeeper_paywall_$slug {")
             appendLine("        rewrite ^ /api/gate/paywall?project=$slug break;")
             appendLine("        proxy_pass http://127.0.0.1:$gatekeeperPort;")
