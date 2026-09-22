@@ -28,6 +28,9 @@ object DatabaseFactory {
         }
         dataSource = HikariDataSource(config)
         Database.connect(dataSource)
+        // Apply the schema before validating it so a freshly provisioned database
+        // can be initialized by the deployed application artifact itself.
+        DatabaseMigrations.migrate(url, user, password)
         DatabaseMigrations.validate(url, user, password)
 
         logger.info("Database connected: $url")
