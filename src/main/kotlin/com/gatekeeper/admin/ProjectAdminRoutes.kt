@@ -239,6 +239,15 @@ fun Application.configureProjectAdminRoutes() {
                 )
             }
 
+            get("/api/admin/projects/{slug}/payments") {
+                val slug = call.parameters["slug"] ?: return@get call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing slug path parameter")
+                val project = ProjectRepository.findBySlug(slug) ?: return@get call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
+                val limit = (call.request.queryParameters["limit"]?.toIntOrNull() ?: 25).coerceIn(1, 500)
+                val offset = (call.request.queryParameters["offset"]?.toIntOrNull() ?: 0).coerceAtLeast(0)
+                val (rows, total) = PaymentRepository.findByProjectIdPage(project.id, limit, offset)
+                call.respond(mapOf("payments" to rows.map { it.toResponse() }, "total" to total, "limit" to limit, "offset" to offset, "hasMore" to (offset + rows.size < total)))
+            }
+
             get("/api/admin/projects/{slug}/invoice") {
                 val slug = call.parameters["slug"]
                 val project = slug?.let { ProjectRepository.findBySlug(it) }
