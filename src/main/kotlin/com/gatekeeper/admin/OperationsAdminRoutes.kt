@@ -160,7 +160,8 @@ fun Application.configureOperationsAdminRoutes() {
                 val offset = call.request.queryParameters["offset"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0
                 val limit = call.request.queryParameters["limit"]?.toIntOrNull()?.coerceIn(1, 500) ?: 100
                 val filtered = SiteRepository.findAll().filter { status == null || it.reconciliationStatus.value == status }
-                call.respond(filtered.drop(offset).take(limit).map(::dashboardSite))
+                val rows = filtered.drop(offset).take(limit).map(::dashboardSite)
+                call.respond(mapOf("sites" to rows, "total" to filtered.size, "limit" to limit, "offset" to offset, "hasMore" to (offset + rows.size < filtered.size)))
             }
             get("/api/admin/dashboard/sites/{slug}") {
                 val slug = call.parameters["slug"] ?: run { call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing slug"); return@get }
