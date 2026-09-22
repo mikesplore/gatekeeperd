@@ -25,6 +25,7 @@ import com.gatekeeper.plugins.Metrics
 import java.time.OffsetDateTime
 import java.time.LocalDateTime
 import java.util.UUID
+import kotlin.time.Duration.Companion.milliseconds
 
 @Serializable
 data class ProjectHealthResponse(
@@ -108,7 +109,7 @@ fun Application.configureOperationsAdminRoutes() {
                                 write(": heartbeat\n\n")
                                 flush()
                             }
-                            kotlinx.coroutines.delay(3000)
+                            kotlinx.coroutines.delay(3000.milliseconds)
                         }
                     } catch (_: Throwable) {
                         // The browser commonly closes this stream during navigation or reload.
