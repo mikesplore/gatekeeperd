@@ -77,7 +77,7 @@ object SiteRepository {
             it[Sites.domain] = model.domain
             it[Sites.upstreamHost] = model.upstreamHost
             it[Sites.upstreamMode] = model.upstreamMode
-            it[Sites.upstreamContainerName] = model.upstreamContainerName
+            it[Sites.upstreamContainerName] = model.upstreamContainerName.takeIf { model.upstreamMode == UpstreamMode.DOCKER_DISCOVERY }
             it[Sites.upstreamExplicitPort] = if (model.upstreamMode == UpstreamMode.EXPLICIT_PORT) model.appPort else null
             it[Sites.tlsMode] = when (model.tlsMode) {
                 com.gatekeeper.nginx.TlsRenderMode.HTTP_ONLY -> TlsMode.HTTP_ONLY

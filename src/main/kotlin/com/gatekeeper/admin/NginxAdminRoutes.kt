@@ -631,7 +631,7 @@ fun Application.configureNginxAdminRoutes() {
                         certificatePath = plan.resolvedCertificate?.certificatePath,
                         certificateKeyPath = plan.resolvedCertificate?.privateKeyPath,
                         upstreamMode = UpstreamMode.EXPLICIT_PORT,
-                        upstreamContainerName = extractConfiguredContainerName(project.containerName),
+                        upstreamContainerName = null,
                         certMode = if (body.sslCertificatePath != null) CertMode.EXPLICIT_PATH else CertMode.AUTO_RESOLVE
                     )
                     nginxService.generateNginxConfig(
