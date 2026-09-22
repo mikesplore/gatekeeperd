@@ -53,14 +53,15 @@ object AuditRepository {
         statement.count()
     }
 
-    fun findPage(limit: Int, offset: Int, query: String? = null, action: String? = null): List<AuditRecord> = transaction {
+    fun findPage(limit: Int, offset: Int, query: String? = null, action: String? = null, sort: String = "createdAt", direction: SortOrder = SortOrder.DESC): List<AuditRecord> = transaction {
         val statement = AuditLog.selectAll()
         action?.takeIf { it.isNotBlank() }?.let { value -> statement.andWhere { AuditLog.action eq value } }
         query?.takeIf { it.isNotBlank() }?.let { value ->
             val pattern = "%${value.trim()}%"
             statement.andWhere { (AuditLog.actor like pattern) or (AuditLog.reason like pattern) or (AuditLog.action like pattern) }
         }
-        statement.orderBy(AuditLog.createdAt, SortOrder.DESC)
+        val column = when (sort) { "actor" -> AuditLog.actor; "action" -> AuditLog.action; else -> AuditLog.createdAt }
+        statement.orderBy(column, direction)
             .limit(limit.coerceIn(1, 500), offset.coerceAtLeast(0).toLong())
             .map { it.toAuditRecord() }
     }

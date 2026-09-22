@@ -26,6 +26,8 @@ import org.jetbrains.exposed.sql.deleteWhere
 import org.jetbrains.exposed.sql.insert
 import org.jetbrains.exposed.sql.selectAll
 import org.jetbrains.exposed.sql.update
+import org.jetbrains.exposed.sql.andWhere
+import org.jetbrains.exposed.sql.SqlExpressionBuilder.like
 import org.jetbrains.exposed.sql.transactions.transaction
 import org.mindrot.jbcrypt.BCrypt
 import org.slf4j.LoggerFactory
@@ -420,10 +422,13 @@ fun Application.configureAuthRoutes() {
                     call.respondError(HttpStatusCode.Forbidden, "forbidden", "Only administrators can manage users")
                     return@get
                 }
-                val users = transaction { Users.selectAll().orderBy(Users.createdAt).map { user ->
+                val offset = call.request.queryParameters["offset"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0
+                val limit = call.request.queryParameters["limit"]?.toIntOrNull()?.coerceIn(1, 500) ?: 100
+                val q = call.request.queryParameters["q"]?.trim()
+                val (users, total) = transaction { val statement = Users.selectAll(); q?.takeIf { it.isNotBlank() }?.let { value -> statement.andWhere { Users.email like "%$value%" } }; val total = statement.count(); statement.orderBy(Users.createdAt).limit(limit, offset.toLong()).map { user ->
                     AdminUserResponse(user[Users.id].toString(), user[Users.email], user[Users.role], user[Users.totpEnabled], user[Users.createdAt].toString(), user[Users.active])
-                } }
-                call.respond(users)
+                } to total }
+                call.respond(mapOf("users" to users, "total" to total, "limit" to limit, "offset" to offset, "hasMore" to (offset + users.size < total)))
             }
 
             post("/api/admin/users") {

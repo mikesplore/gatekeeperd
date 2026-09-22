@@ -217,8 +217,12 @@ fun Application.configureRouting() {
                     call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available")
                     return@get
                 }
-                val networks = svc.listNetworks()
-                call.respond(networks)
+                val search = call.request.queryParameters["q"]?.trim()?.lowercase()
+                val offset = call.request.queryParameters["offset"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0
+                val limit = call.request.queryParameters["limit"]?.toIntOrNull()?.coerceIn(1, 500) ?: 100
+                val all = svc.listNetworks().filter { search.isNullOrBlank() || it.name.lowercase().contains(search) }
+                val rows = all.drop(offset).take(limit)
+                call.respond(mapOf("items" to rows, "total" to all.size, "limit" to limit, "offset" to offset, "hasMore" to (offset + rows.size < all.size)))
             }
 
             post("/api/admin/networks") {
@@ -231,7 +235,14 @@ fun Application.configureRouting() {
                 val name = call.parameters["name"] ?: run { call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Network name is required"); return@delete }
                 runCatching { svc.deleteNetwork(name); call.respond(mapOf("status" to "deleted", "name" to name)) }.onFailure { call.respondError(HttpStatusCode.Conflict, "network_delete_failed", it.message ?: "Unable to delete network") }
             }
-            get("/api/admin/volumes") { dockerService?.let { call.respond(it.listVolumes()) } ?: call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available") }
+            get("/api/admin/volumes") { dockerService?.let { svc ->
+                val search = call.request.queryParameters["q"]?.trim()?.lowercase()
+                val offset = call.request.queryParameters["offset"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0
+                val limit = call.request.queryParameters["limit"]?.toIntOrNull()?.coerceIn(1, 500) ?: 100
+                val all = svc.listVolumes().filter { search.isNullOrBlank() || it.name.lowercase().contains(search) }
+                val rows = all.drop(offset).take(limit)
+                call.respond(mapOf("items" to rows, "total" to all.size, "limit" to limit, "offset" to offset, "hasMore" to (offset + rows.size < all.size)))
+            } ?: call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available") }
             post("/api/admin/volumes") {
                 val svc = dockerService ?: run { call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available"); return@post }
                 val body = runCatching { call.receive<CreateNetworkRequest>() }.getOrElse { call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid volume request"); return@post }

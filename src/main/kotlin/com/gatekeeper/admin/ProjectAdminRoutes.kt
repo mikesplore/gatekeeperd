@@ -878,8 +878,10 @@ fun Application.configureProjectAdminRoutes() {
                 val offset = (call.request.queryParameters["offset"]?.toIntOrNull() ?: 0).coerceAtLeast(0)
                 val query = call.request.queryParameters["q"]
                 val action = call.request.queryParameters["action"]
+                val sort = call.request.queryParameters["sort"] ?: "createdAt"
+                val direction = if (call.request.queryParameters["direction"]?.lowercase() == "asc") org.jetbrains.exposed.sql.SortOrder.ASC else org.jetbrains.exposed.sql.SortOrder.DESC
                 val total = AuditRepository.count(query, action)
-                val entries = AuditRepository.findPage(limit, offset, query, action).map { it.toResponse() }
+                val entries = AuditRepository.findPage(limit, offset, query, action, sort, direction).map { it.toResponse() }
                 call.respond(AuditLogPageResponse(entries, total, limit, offset, offset + entries.size < total))
             }
 
