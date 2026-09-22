@@ -13,7 +13,12 @@ object Projects : Table("projects") {
     val domain = text("domain")
     val containerName = text("container_name")
     val type = enumerationByName("type", 9, ProjectType::class)
-    val status = enumerationByName("status", 12, ProjectStatus::class).default(ProjectStatus.ACTIVE)
+    val status = customEnumeration(
+        "status",
+        "TEXT",
+        { value -> ProjectStatus.entries.first { it.value == (value as String) } },
+        { it.value }
+    ).default(ProjectStatus.ACTIVE)
     val blockReason = text("block_reason").nullable()
     val deploymentMode = text("deployment_mode").default("developer_hosted")
     val serviceMode = text("service_mode").default("development")
