@@ -88,6 +88,12 @@ data class BulkProjectResult(val slug: String, val status: String, val message: 
     val status: String
 )
 
+@Serializable data class DashboardCustomerTransactionResponse(
+    val id: String, val projectId: String, val projectName: String, val projectSlug: String,
+    val amount: Double, val status: String, val gatewayStatus: String,
+    val provider: String, val providerReference: String, val paidAt: String? = null, val createdAt: String
+)
+
 @Serializable data class DashboardSiteUpdateRequest(
     val domain: String? = null, val upstreamHost: String? = null, val upstreamMode: String? = null,
     val upstreamContainerName: String? = null, val upstreamExplicitPort: Int? = null,
@@ -242,6 +248,16 @@ fun Application.configureOperationsAdminRoutes() {
                     totalBilled = projects.sumOf { it.amountDue ?: 0.0 }, totalPaid = projects.sumOf { it.totalPaid },
                     balance = projects.sumOf { it.balance }, projects = projects
                 ))
+            }
+            get("/api/admin/dashboard/customers/{id}/transactions") {
+                val id = runCatching { UUID.fromString(call.parameters["id"]) }.getOrNull() ?: run { call.respondError(HttpStatusCode.BadRequest, "invalid_customer_id", "Invalid customer ID"); return@get }
+                if (CustomerRepository.findById(id) == null) { call.respondError(HttpStatusCode.NotFound, "customer_not_found", "Customer not found"); return@get }
+                val transactions = CustomerRepository.findSites(id).flatMap { owned ->
+                    PaymentRepository.findByProjectId(owned.project.id).map { payment ->
+                        DashboardCustomerTransactionResponse(payment.id.toString(), owned.project.id.toString(), owned.project.name, owned.project.slug, payment.amount.toDouble(), payment.status, payment.gatewayStatus, payment.provider.name, payment.providerReference, payment.paidAt?.toString(), payment.createdAt.toString())
+                    }
+                }.sortedByDescending { it.createdAt }
+                call.respond(transactions)
             }
             get("/api/admin/dashboard/summary") {
                 val projects = ProjectRepository.findAll()
