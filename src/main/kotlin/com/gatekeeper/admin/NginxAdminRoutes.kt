@@ -628,8 +628,8 @@ fun Application.configureNginxAdminRoutes() {
                         appPort = plan.appPort,
                         upstreamScheme = plan.upstreamScheme,
                         tlsMode = if (plan.sslEnabled) TlsRenderMode.HTTPS else TlsRenderMode.HTTP_ONLY,
-                        certificatePath = plan.resolvedCertificate?.certificatePath,
-                        certificateKeyPath = plan.resolvedCertificate?.privateKeyPath,
+                        certificatePath = plan.resolvedCertificate?.certificatePath.takeIf { body.sslCertificatePath != null },
+                        certificateKeyPath = plan.resolvedCertificate?.privateKeyPath.takeIf { body.sslCertificatePath != null },
                         upstreamMode = UpstreamMode.EXPLICIT_PORT,
                         upstreamContainerName = null,
                         certMode = if (body.sslCertificatePath != null) CertMode.EXPLICIT_PATH else CertMode.AUTO_RESOLVE

@@ -85,7 +85,7 @@ object SiteRepository {
                 com.gatekeeper.nginx.TlsRenderMode.HTTPS_HTTP2 -> TlsMode.HTTPS_HTTP2
             }
             it[Sites.certMode] = model.certMode
-            it[Sites.certExplicitPath] = model.certificatePath
+            it[Sites.certExplicitPath] = model.certificatePath.takeIf { model.certMode == CertMode.EXPLICIT_PATH }
             it[Sites.gateEnabled] = model.gateEnabled
             it[Sites.bypassPaths] = Json.encodeToString(model.bypassPaths)
         }
