@@ -111,7 +111,8 @@ data class UpdateProjectRequest(
     val gracePeriodDays: Int? = null,
     val deploymentMode: String? = null,
     val serviceMode: String? = null,
-    val lifecycleStatus: String? = null
+    val lifecycleStatus: String? = null,
+    val customerId: String? = null
 )
 
 @Serializable
@@ -486,6 +487,15 @@ fun Application.configureProjectAdminRoutes() {
                 }
                 val amountDue = body.amountDue?.let { BigDecimal.valueOf(it) }
 
+                val customerId = if ("customerId" in presentFields) body.customerId?.let {
+                    runCatching { UUID.fromString(it) }.getOrNull()
+                        ?: return@patch call.respondError(HttpStatusCode.BadRequest, "invalid_customer", "customerId must be a valid UUID")
+                } else null
+                if (customerId != null && CustomerRepository.findById(customerId) == null) {
+                    call.respondError(HttpStatusCode.NotFound, "customer_not_found", "Customer not found")
+                    return@patch
+                }
+
                 if ((body.deploymentMode != null && body.deploymentMode !in deploymentModes) ||
                     (body.serviceMode != null && body.serviceMode !in serviceModes) ||
                     (body.lifecycleStatus != null && body.lifecycleStatus !in lifecycleStatuses)
@@ -567,9 +577,13 @@ fun Application.configureProjectAdminRoutes() {
                     return@patch
                 }
 
+                val assignedProject = if ("customerId" in presentFields) {
+                    ProjectRepository.assignCustomer(project.id, customerId)
+                } else project
+
                 ProjectRepository.invalidateCache(slug)
                 logger.info("Project updated: $slug")
-                call.respond(project.toResponse())
+                call.respond((assignedProject ?: project).toResponse())
             }
 
             post("/api/admin/projects/{slug}/adjustments") {
