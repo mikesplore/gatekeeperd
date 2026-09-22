@@ -73,6 +73,12 @@ data class VolumeInfo(
 )
 
 @Serializable
+data class NetworkPage(val items: List<NetworkInfo>, val total: Int, val limit: Int, val offset: Int, val hasMore: Boolean)
+
+@Serializable
+data class VolumePage(val items: List<VolumeInfo>, val total: Int, val limit: Int, val offset: Int, val hasMore: Boolean)
+
+@Serializable
 data class CreateNetworkRequest(val name: String, val driver: String = "bridge")
 
 @Serializable

@@ -7,6 +7,8 @@ import com.gatekeeper.docker.PullImageRequest
 import com.gatekeeper.docker.ContainersListResponse
 import com.gatekeeper.docker.ContainerLogsResponse
 import com.gatekeeper.docker.CreateNetworkRequest
+import com.gatekeeper.docker.NetworkPage
+import com.gatekeeper.docker.VolumePage
 import com.gatekeeper.api.dto.*
 import com.gatekeeper.api.InputValidators
 import io.ktor.http.*
@@ -222,7 +224,7 @@ fun Application.configureRouting() {
                 val limit = call.request.queryParameters["limit"]?.toIntOrNull()?.coerceIn(1, 500) ?: 100
                 val all = svc.listNetworks().filter { search.isNullOrBlank() || it.name.lowercase().contains(search) }
                 val rows = all.drop(offset).take(limit)
-                call.respond(mapOf("items" to rows, "total" to all.size, "limit" to limit, "offset" to offset, "hasMore" to (offset + rows.size < all.size)))
+                call.respond(NetworkPage(rows, all.size, limit, offset, offset + rows.size < all.size))
             }
 
             post("/api/admin/networks") {
@@ -242,7 +244,7 @@ fun Application.configureRouting() {
                 runCatching {
                     val all = svc.listVolumes().filter { search.isNullOrBlank() || it.name.lowercase().contains(search) }
                     val rows = all.drop(offset).take(limit)
-                    call.respond(mapOf("items" to rows, "total" to all.size, "limit" to limit, "offset" to offset, "hasMore" to (offset + rows.size < all.size)))
+                    call.respond(VolumePage(rows, all.size, limit, offset, offset + rows.size < all.size))
                 }.onFailure { call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", it.message ?: "Unable to list Docker volumes") }
             } ?: call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available") }
             post("/api/admin/volumes") {
