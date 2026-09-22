@@ -63,7 +63,11 @@ fun main(args: Array<String>) {
 
 private fun operationalCommand(command: String, args: Array<String>) {
     when (command) {
-        "migrate" -> DatabaseMigrations.migrate(com.gatekeeper.config.AppConfig.dbUrl, com.gatekeeper.config.AppConfig.dbUser, com.gatekeeper.config.AppConfig.dbPassword, com.gatekeeper.config.AppConfig.dbMigrationBaselineVersion)
+        "migrate" -> if (args.firstOrNull() == "baseline") {
+            DatabaseMigrations.baseline(com.gatekeeper.config.AppConfig.dbUrl, com.gatekeeper.config.AppConfig.dbUser, com.gatekeeper.config.AppConfig.dbPassword, com.gatekeeper.config.AppConfig.dbMigrationBaselineVersion)
+        } else {
+            DatabaseMigrations.migrate(com.gatekeeper.config.AppConfig.dbUrl, com.gatekeeper.config.AppConfig.dbUser, com.gatekeeper.config.AppConfig.dbPassword, com.gatekeeper.config.AppConfig.dbMigrationBaselineVersion)
+        }
         "backfill" -> { DatabaseFactory.init(com.gatekeeper.config.AppConfig.dbUrl, com.gatekeeper.config.AppConfig.dbUser, com.gatekeeper.config.AppConfig.dbPassword); try { NginxBackfillRunner.run(args.firstOrNull { !it.startsWith("--") } ?: com.gatekeeper.config.AppConfig.nginxSitesAvailablePath, args.contains("--dry-run")) } finally { DatabaseFactory.close() } }
         "health-check" -> { DatabaseFactory.init(com.gatekeeper.config.AppConfig.dbUrl, com.gatekeeper.config.AppConfig.dbUser, com.gatekeeper.config.AppConfig.dbPassword); RedisService.init(com.gatekeeper.config.AppConfig.redisHost, com.gatekeeper.config.AppConfig.redisPort); val ready = DatabaseFactory.isHealthy() && RedisService.isHealthy() && DatabaseFactory.migrationsHealthy(); RedisService.close(); DatabaseFactory.close(); if (!ready) exitProcess(1); println("ready") }
         else -> error("Unknown command '$command'. Use serve, migrate, backfill, or health-check.")
