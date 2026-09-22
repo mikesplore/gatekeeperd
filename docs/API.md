@@ -685,7 +685,7 @@ Install an SSL certificate for a domain using certbot's nginx plugin.
 
 **Notes:**
 - Requires `certbot` to be installed on the host.
-- Runs `certbot certonly --nginx --non-interactive --agree-tos -d <domain> -m <email>`.
+- Runs the root-owned `gatekeeperd-certbot` helper through non-interactive `sudo` so Certbot can write to its system directories. See the [staging deployment guide](staging-deployment.md#allowing-gatekeeperd-to-manage-lets-encrypt-certificates) for setup.
 - The certificate paths follow the standard Let's Encrypt layout.
 
 ### POST /api/admin/nginx/certificate/remove/{domain}

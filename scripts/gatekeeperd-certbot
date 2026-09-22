@@ -1,0 +1,60 @@
+#!/bin/sh
+set -eu
+
+certbot=/usr/bin/certbot
+if [ ! -x "$certbot" ]; then
+    echo "Certbot executable not found at $certbot" >&2
+    exit 127
+fi
+
+valid_domain() {
+    domain=$1
+    [ "${#domain}" -le 253 ] || return 1
+    case "$domain" in
+        ''|-*|.*|*..*|*.) return 1 ;;
+        *[!A-Za-z0-9.-]*) return 1 ;;
+    esac
+    old_ifs=$IFS
+    IFS=.
+    set -f
+    set -- $domain
+    set +f
+    IFS=$old_ifs
+    for label do
+        [ "${#label}" -le 63 ] || return 1
+        case "$label" in ''|-*|*-) return 1 ;; esac
+    done
+}
+
+valid_email() {
+    email=$1
+    [ "${#email}" -le 254 ] || return 1
+    case "$email" in
+        ''|@*|*@|*@*@*|*@.*|*@*..*|*@*.) return 1 ;;
+        *[!A-Za-z0-9@._+-]*) return 1 ;;
+        *@*.*) ;;
+        *) return 1 ;;
+    esac
+}
+
+mode=${1-}
+case "$mode" in
+    install)
+        [ "$#" -eq 3 ] || { echo "Usage: gatekeeperd-certbot install DOMAIN EMAIL" >&2; exit 2; }
+        domain=$2
+        email=$3
+        valid_domain "$domain" || { echo "Invalid domain" >&2; exit 2; }
+        valid_email "$email" || { echo "Invalid email" >&2; exit 2; }
+        exec "$certbot" certonly --nginx --non-interactive --agree-tos -d "$domain" -m "$email"
+        ;;
+    remove)
+        [ "$#" -eq 2 ] || { echo "Usage: gatekeeperd-certbot remove DOMAIN" >&2; exit 2; }
+        domain=$2
+        valid_domain "$domain" || { echo "Invalid domain" >&2; exit 2; }
+        exec "$certbot" delete --cert-name "$domain" -n
+        ;;
+    *)
+        echo "Usage: gatekeeperd-certbot {install DOMAIN EMAIL|remove DOMAIN}" >&2
+        exit 2
+        ;;
+esac

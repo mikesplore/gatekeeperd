@@ -87,6 +87,28 @@ The `/api/admin/nginx/*` endpoints need host access to:
 
 The simplest setup is to run **gatekeeperd on the host (systemd)** and run client apps in Docker.
 
+### Allowing Gatekeeperd to manage Let's Encrypt certificates
+
+Certbot needs root access to its configuration, work, and log directories. Keep the
+application running as its normal service user and install the restricted helper:
+
+```bash
+sudo install -o root -g root -m 0755 scripts/gatekeeperd-certbot /usr/local/sbin/gatekeeperd-certbot
+sudo visudo -f /etc/sudoers.d/gatekeeperd-certbot
+```
+
+Add this line to the sudoers file, replacing `ubuntu` with the `User=` configured
+for `gatekeeperd.service`:
+
+```sudoers
+ubuntu ALL=(root) NOPASSWD: /usr/local/sbin/gatekeeperd-certbot *
+```
+
+The helper is root-owned and only accepts validated certificate install and remove
+requests. Validate the rule with `sudo visudo -cf /etc/sudoers.d/gatekeeperd-certbot`.
+Gatekeeperd invokes it with `sudo -n`, so missing permission is reported immediately
+instead of hanging for a password.
+
 ### Build artifact sources
 
 - GitHub Actions uploads a jar artifact named `gatekeeperd-all-jar` containing:

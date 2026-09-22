@@ -550,19 +550,15 @@ class NginxService(
         }
 
         return try {
-            val cmd = arrayOf(
-                "certbot", "certonly", "--nginx",
-                "--non-interactive", "--agree-tos",
-                "-d", domain,
-                "-m", email
-            )
-
-            val process = Runtime.getRuntime().exec(cmd)
+            val process = ProcessBuilder(
+                "sudo", "-n", "/usr/local/sbin/gatekeeperd-certbot",
+                "install", domain, email
+            ).redirectErrorStream(true).start()
+            val output = process.inputStream.bufferedReader().use { it.readText() }
             val exitCode = process.waitFor()
 
             if (exitCode != 0) {
-                val error = process.errorStream.bufferedReader().readText()
-                logger.error("Certbot failed for domain $domain: $error")
+                logger.error("Certbot failed for domain $domain (exit=$exitCode): $output")
                 return false
             }
 
@@ -582,14 +578,15 @@ class NginxService(
         }
 
         return try {
-            val cmd = arrayOf("certbot", "delete", "--cert-name", domain, "-n")
-
-            val process = Runtime.getRuntime().exec(cmd)
+            val process = ProcessBuilder(
+                "sudo", "-n", "/usr/local/sbin/gatekeeperd-certbot",
+                "remove", domain
+            ).redirectErrorStream(true).start()
+            val output = process.inputStream.bufferedReader().use { it.readText() }
             val exitCode = process.waitFor()
 
             if (exitCode != 0) {
-                val error = process.errorStream.bufferedReader().readText()
-                logger.error("Certbot delete failed for domain $domain: $error")
+                logger.error("Certbot delete failed for domain $domain (exit=$exitCode): $output")
                 return false
             }
 
