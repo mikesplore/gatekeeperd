@@ -1,0 +1,3 @@
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS billing_name TEXT;
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS billing_email TEXT;
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS billing_address TEXT;

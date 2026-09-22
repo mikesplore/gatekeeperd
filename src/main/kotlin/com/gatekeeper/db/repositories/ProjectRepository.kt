@@ -58,6 +58,7 @@ object ProjectRepository {
         val lifecycleStatus: String,
         val clientName: String?,
         val clientEmail: String?,
+        val billingName: String?, val billingEmail: String?, val billingAddress: String?,
         val paystackCustomerCode: String?,
         val amountDue: BigDecimal?,
         val baseAmount: BigDecimal?,
@@ -117,6 +118,7 @@ object ProjectRepository {
         type: String,
         clientName: String?,
         clientEmail: String?,
+        billingName: String?, billingEmail: String?, billingAddress: String?,
         amountDue: BigDecimal?,
         currency: String,
         dueDate: LocalDate?,
@@ -138,6 +140,9 @@ object ProjectRepository {
                 it[Projects.status] = ProjectStatus.ACTIVE
                 it[Projects.clientName] = clientName
                 it[Projects.clientEmail] = clientEmail
+                it[Projects.billingName] = billingName
+                it[Projects.billingEmail] = billingEmail
+                it[Projects.billingAddress] = billingAddress
                 it[Projects.amountDue] = amountDue
                 it[Projects.baseAmount] = amountDue?.takeIf { value -> value > BigDecimal.ZERO }
                 it[Projects.currency] = currency
@@ -166,6 +171,7 @@ object ProjectRepository {
         type: String?,
         clientName: String?,
         clientEmail: String?,
+        billingName: String? = null, billingEmail: String? = null, billingAddress: String? = null,
         amountDue: BigDecimal?,
         currency: String?,
         dueDate: LocalDate?,
@@ -189,6 +195,9 @@ object ProjectRepository {
                 type?.let { v -> it[Projects.type] = ProjectType.valueOf(v.uppercase()) }
                 if (clearClientName) it[Projects.clientName] = null else clientName?.let { v -> it[Projects.clientName] = v }
                 if (clearClientEmail) it[Projects.clientEmail] = null else clientEmail?.let { v -> it[Projects.clientEmail] = v }
+                billingName?.let { v -> it[Projects.billingName] = v }
+                billingEmail?.let { v -> it[Projects.billingEmail] = v }
+                billingAddress?.let { v -> it[Projects.billingAddress] = v }
                 if (clearAmountDue) it[Projects.amountDue] = null else amountDue?.let { v -> it[Projects.amountDue] = v }
                 currency?.let { v -> it[Projects.currency] = v }
                 if (clearDueDate) it[Projects.dueDate] = null else dueDate?.let { v -> it[Projects.dueDate] = v }
@@ -308,6 +317,7 @@ object ProjectRepository {
         val name: String,
         val clientName: String?,
         val clientEmail: String?,
+        val billingName: String?, val billingEmail: String?, val billingAddress: String?,
         val dueDate: LocalDate,
         val daysOverdue: Long,
         val gracePeriodDays: Int,
@@ -332,6 +342,7 @@ object ProjectRepository {
                         name = row[Projects.name],
                         clientName = row[Projects.clientName],
                         clientEmail = row[Projects.clientEmail],
+                        billingName = row[Projects.billingName], billingEmail = row[Projects.billingEmail], billingAddress = row[Projects.billingAddress],
                         dueDate = dueDate,
                         daysOverdue = java.time.temporal.ChronoUnit.DAYS.between(dueDate, asOf),
                         gracePeriodDays = grace,
@@ -417,6 +428,7 @@ object ProjectRepository {
         lifecycleStatus = this[Projects.lifecycleStatus],
         clientName = this[Projects.clientName],
         clientEmail = this[Projects.clientEmail],
+        billingName = this[Projects.billingName], billingEmail = this[Projects.billingEmail], billingAddress = this[Projects.billingAddress],
         paystackCustomerCode = this[Projects.paystackCustomerCode],
         amountDue = this[Projects.amountDue],
         baseAmount = this[Projects.baseAmount],
