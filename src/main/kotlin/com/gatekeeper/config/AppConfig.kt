@@ -31,6 +31,7 @@ object AppConfig {
     val dbUrl: String = requiredSetting("DB_URL")
     val dbUser: String = requiredSetting("DB_USER")
     val dbPassword: String = requiredSetting("DB_PASSWORD")
+    val dbMigrationBaselineVersion: String = optionalSetting("DB_MIGRATION_BASELINE_VERSION", "0")
 
     // Redis
     val redisHost: String = requiredSetting("REDIS_HOST")

@@ -16,11 +16,14 @@ object RedisService {
             maxTotal = 16
             maxIdle = 8
             minIdle = 2
+            setMaxWait(java.time.Duration.ofMillis(1500))
             testOnBorrow = true
             testOnReturn = true
         }
-        pool = JedisPool(config, host, port, 2000)
-        logger.info("Redis connected: $host:$port")
+        pool = runCatching { JedisPool(config, host, port, 2000) }
+            .onFailure { logger.warn("Redis unavailable at $host:$port; continuing with degraded Redis features", it) }
+            .getOrNull()
+        logger.info("Redis client initialized: available={}", pool != null)
     }
 
     fun get(key: String): String? {

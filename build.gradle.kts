@@ -23,6 +23,13 @@ tasks.register<JavaExec>("runNginxBackfill") {
         .orEmpty()
 }
 
+tasks.register<JavaExec>("runMigrations") {
+    group = "database"
+    description = "Apply pending Flyway database migrations"
+    classpath = sourceSets.main.get().runtimeClasspath
+    mainClass.set("com.gatekeeper.plugins.DatabaseMigrationMainKt")
+}
+
 kotlin {
     jvmToolchain(21)
 }
@@ -59,6 +66,8 @@ dependencies {
     implementation(libs.exposed.java.time)
     implementation(libs.postgresql)
     implementation(libs.hikaricp)
+    implementation(libs.flyway.core)
+    implementation(libs.flyway.database.postgresql)
 
     // Redis
     implementation(libs.jedis)
@@ -75,4 +84,8 @@ dependencies {
     // Test
     testImplementation(kotlin("test"))
     testImplementation(ktorLibs.server.testHost)
+    testImplementation("org.testcontainers:postgresql:1.20.4")
+    testImplementation("org.testcontainers:junit-jupiter:1.20.4")
+    testImplementation("com.redis:testcontainers-redis:2.2.2")
+    testImplementation("org.junit.jupiter:junit-jupiter:5.11.4")
 }

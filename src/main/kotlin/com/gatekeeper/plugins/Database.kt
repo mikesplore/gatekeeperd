@@ -27,7 +27,7 @@ object DatabaseFactory {
         }
         dataSource = HikariDataSource(config)
         Database.connect(dataSource)
-        DatabaseMigrations.apply(dataSource)
+        DatabaseMigrations.validate(url, user, password)
 
         logger.info("Database connected: $url")
     }

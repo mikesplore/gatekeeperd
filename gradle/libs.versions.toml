@@ -10,6 +10,7 @@ jbcrypt = "0.4"
 kotlin = "2.4.0"
 logback = "1.5.35"
 postgresql = "42.7.11"
+flyway = "11.7.2"
 
 [libraries]
 docker-java = { module = "com.github.docker-java:docker-java", version.ref = "docker-java" }
@@ -27,6 +28,8 @@ jedis = { module = "redis.clients:jedis", version.ref = "jedis" }
 jbcrypt = { module = "org.mindrot:jbcrypt", version.ref = "jbcrypt" }
 logback-classic = { module = "ch.qos.logback:logback-classic", version.ref = "logback" }
 postgresql = { module = "org.postgresql:postgresql", version.ref = "postgresql" }
+flyway-core = { module = "org.flywaydb:flyway-core", version.ref = "flyway" }
+flyway-database-postgresql = { module = "org.flywaydb:flyway-database-postgresql", version.ref = "flyway" }
 
 [plugins]
 kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }

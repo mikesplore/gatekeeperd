@@ -1,109 +1,25 @@
 package com.gatekeeper.plugins
 
-import com.zaxxer.hikari.HikariDataSource
+import org.flywaydb.core.Flyway
 import org.slf4j.LoggerFactory
 
-private val migrationLogger = LoggerFactory.getLogger("com.gatekeeper.plugins.DatabaseMigrations")
-
 object DatabaseMigrations {
-    private data class Migration(val version: String, val description: String, val resource: String)
+    private val logger = LoggerFactory.getLogger(DatabaseMigrations::class.java)
+    fun migrate(url: String, user: String, password: String, baselineVersion: String = "0") {
+        Flyway.configure().dataSource(url, user, password).locations("classpath:db/migration")
+            .baselineOnMigrate(true).baselineVersion(baselineVersion).load().migrate()
+        logger.info("Database migrations completed")
+    }
 
-    private val migrations = listOf(
-        Migration("1", "phase 2 state fields", "db/migration/V1__phase2_state_fields.sql"),
-        Migration("2", "phase 5 customer workflows", "db/migration/V2__phase_5_customer_workflows.sql")
-        ,Migration("3", "provider neutral payments", "db/migration/V3__provider_neutral_payments.sql")
-        ,Migration("4", "integration outbox", "db/migration/V4__integration_outbox.sql")
-        ,Migration("5", "outbox claims and dead letters", "db/migration/V5__outbox_claims_and_dead_letters.sql")
-        ,Migration("6", "password reset tokens", "db/migration/V6__password_reset_tokens.sql")
-        ,Migration("7", "deployment jobs", "db/migration/V7__deployment_jobs.sql")
-        ,Migration("8", "deployment container options", "db/migration/V8__deployment_container_options.sql")
-        ,Migration("9", "github deployment mapping", "db/migration/V9__github_deployment_mapping.sql")
-        ,Migration("10", "deployment reliability", "db/migration/V10__deployment_reliability.sql")
-        ,Migration("11", "github app installation", "db/migration/V11__github_app_installation.sql")
-        ,Migration("12", "github installation state", "db/migration/V12__github_installation_state.sql")
-        ,Migration("13", "deployment runtime spec", "db/migration/V13__deployment_runtime_spec.sql")
-        ,Migration("14", "encrypted deployment secrets", "db/migration/V14__encrypted_deployment_secrets.sql")
-        ,Migration("15", "notifications", "db/migration/V15__notifications.sql")
-        ,Migration("16", "registry credentials", "db/migration/V16__registry_credentials.sql")
-        ,Migration("17", "user profile fields", "db/migration/V17__user_profile_fields.sql")
-        ,Migration("18", "user two factor authentication fields", "db/migration/V18__user_2fa_fields.sql")
-        ,Migration("19", "immutable project base amount and adjustments", "db/migration/V19__immutable_project_base_amount_and_adjustments.sql")
-        ,Migration("20", "deployment trigger source", "db/migration/V20__deployment_trigger_source.sql")
-        ,Migration("21", "admin user lifecycle", "db/migration/V21__admin_user_lifecycle.sql")
-        ,Migration("22", "deployment configurations and executions", "db/migration/V22__deployment_configurations_and_executions.sql")
-        ,Migration("23", "nginx sites", "db/migration/V23__nginx_sites.sql")
-        ,Migration("24", "nginx site reconciliation status", "db/migration/V24__nginx_site_reconciliation_status.sql")
-        ,Migration("25", "customers and project ownership", "db/migration/V25__customers_and_project_ownership.sql")
-        ,Migration("26", "certificate lifecycle", "db/migration/V26__certificate_lifecycle.sql")
-        ,Migration("27", "site bypass paths", "db/migration/V27__site_bypass_paths.sql")
-        ,Migration("28", "project billing information", "db/migration/V28__project_billing_information.sql")
-    )
+    fun baseline(url: String, user: String, password: String, version: String) {
+        Flyway.configure().dataSource(url, user, password).locations("classpath:db/migration")
+            .baselineVersion(version).load().baseline()
+        logger.info("Database baseline created at version {}", version)
+    }
 
-    fun apply(dataSource: HikariDataSource) {
-        dataSource.connection.use { connection ->
-            connection.autoCommit = false
-            val hasProjectsTable = connection.prepareStatement("SELECT to_regclass('public.projects')")
-                .use { statement ->
-                    statement.executeQuery().use { result -> result.next() && result.getString(1) != null }
-                }
-
-            if (!hasProjectsTable) {
-                val baseline = DatabaseMigrations::class.java.classLoader
-                    .getResourceAsStream("db/migration/V0__baseline_schema.sql")
-                    ?.bufferedReader()
-                    ?.use { it.readText() }
-                    ?: error("Missing database baseline migration resource")
-                connection.createStatement().use { statement -> statement.execute(baseline) }
-            }
-
-            connection.createStatement().use { statement ->
-                statement.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS schema_migrations (
-                        version TEXT PRIMARY KEY,
-                        description TEXT NOT NULL,
-                        applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-                    )
-                    """.trimIndent()
-                )
-            }
-
-            if (!hasProjectsTable) {
-                connection.prepareStatement(
-                    "INSERT INTO schema_migrations(version, description) VALUES (?, ?)"
-                ).use { statement ->
-                    statement.setString(1, "0")
-                    statement.setString(2, "baseline schema")
-                    statement.executeUpdate()
-                }
-            }
-
-            migrations.forEach { migration ->
-                val applied = connection.prepareStatement(
-                    "SELECT 1 FROM schema_migrations WHERE version = ?"
-                ).use { statement ->
-                    statement.setString(1, migration.version)
-                    statement.executeQuery().use { result -> result.next() }
-                }
-                if (applied) return@forEach
-
-                val sql = DatabaseMigrations::class.java.classLoader
-                    .getResourceAsStream(migration.resource)
-                    ?.bufferedReader()
-                    ?.use { it.readText() }
-                    ?: error("Missing database migration resource: ${migration.resource}")
-
-                connection.createStatement().use { statement -> statement.execute(sql) }
-                connection.prepareStatement(
-                    "INSERT INTO schema_migrations(version, description) VALUES (?, ?)"
-                ).use { statement ->
-                    statement.setString(1, migration.version)
-                    statement.setString(2, migration.description)
-                    statement.executeUpdate()
-                }
-                migrationLogger.info("Applied database migration V${migration.version}__${migration.description}")
-            }
-            connection.commit()
-        }
+    fun validate(url: String, user: String, password: String) {
+        Flyway.configure().dataSource(url, user, password).locations("classpath:db/migration")
+            .baselineOnMigrate(true).baselineVersion("0").load().validate()
+        logger.info("Database migration validation completed")
     }
 }
