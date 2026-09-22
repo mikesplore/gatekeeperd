@@ -25,10 +25,14 @@ fun Application.configureMonitoring() {
             ?: UUID.randomUUID().toString()
         call.response.headers.append("X-Request-ID", requestId)
         MDC.put("requestId", requestId)
+        val span = Telemetry.tracer.spanBuilder("${call.request.httpMethod.value} ${call.request.path()}").setAttribute("http.method", call.request.httpMethod.value).setAttribute("http.route", call.request.path()).startSpan()
+        span.makeCurrent().use {
         try {
             proceed()
         } finally {
+            span.end()
             MDC.remove("requestId")
+        }
         }
     }
 

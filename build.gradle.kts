@@ -81,6 +81,9 @@ dependencies {
     // Logging
     implementation(libs.logback.classic)
     implementation(libs.logstash.logback.encoder)
+    implementation(libs.opentelemetry.api)
+    implementation(libs.opentelemetry.sdk)
+    implementation(libs.opentelemetry.exporter.otlp)
 
     // Test
     testImplementation(kotlin("test"))

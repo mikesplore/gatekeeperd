@@ -42,11 +42,32 @@ import org.jetbrains.exposed.sql.selectAll
 import org.jetbrains.exposed.sql.transactions.transaction
 import org.mindrot.jbcrypt.BCrypt
 import org.slf4j.LoggerFactory
+import com.gatekeeper.nginx.NginxBackfillRunner
+import com.gatekeeper.plugins.DatabaseFactory
+import com.gatekeeper.plugins.DatabaseMigrations
+import com.gatekeeper.plugins.RedisService
+import com.gatekeeper.plugins.Telemetry
+import kotlin.system.exitProcess
 
 fun main(args: Array<String>) {
+    val command = args.firstOrNull()?.takeIf { !it.startsWith("-") } ?: "serve"
+    if (command != "serve") {
+        operationalCommand(command, args.drop(1).toTypedArray())
+        return
+    }
+    Telemetry.init()
     val port = args.portArg() ?: System.getenv("PORT")?.toIntOrNull() ?: 8080
     embeddedServer(Netty, port = port, host = "0.0.0.0", module = Application::module)
         .start(wait = true)
+}
+
+private fun operationalCommand(command: String, args: Array<String>) {
+    when (command) {
+        "migrate" -> DatabaseMigrations.migrate(com.gatekeeper.config.AppConfig.dbUrl, com.gatekeeper.config.AppConfig.dbUser, com.gatekeeper.config.AppConfig.dbPassword, com.gatekeeper.config.AppConfig.dbMigrationBaselineVersion)
+        "backfill" -> { DatabaseFactory.init(com.gatekeeper.config.AppConfig.dbUrl, com.gatekeeper.config.AppConfig.dbUser, com.gatekeeper.config.AppConfig.dbPassword); try { NginxBackfillRunner.run(args.firstOrNull { !it.startsWith("--") } ?: com.gatekeeper.config.AppConfig.nginxSitesAvailablePath, args.contains("--dry-run")) } finally { DatabaseFactory.close() } }
+        "health-check" -> { DatabaseFactory.init(com.gatekeeper.config.AppConfig.dbUrl, com.gatekeeper.config.AppConfig.dbUser, com.gatekeeper.config.AppConfig.dbPassword); RedisService.init(com.gatekeeper.config.AppConfig.redisHost, com.gatekeeper.config.AppConfig.redisPort); val ready = DatabaseFactory.isHealthy() && RedisService.isHealthy() && DatabaseFactory.migrationsHealthy(); RedisService.close(); DatabaseFactory.close(); if (!ready) exitProcess(1); println("ready") }
+        else -> error("Unknown command '$command'. Use serve, migrate, backfill, or health-check.")
+    }
 }
 
 private fun Array<String>.portArg(): Int? =
@@ -90,6 +111,7 @@ fun Application.module() {
     monitor.subscribe(ApplicationStopping) {
         runCatching { PaystackClient.close() }
         runCatching { MpesaClient.close() }
+        runCatching { Telemetry.close() }
     }
 }
 
