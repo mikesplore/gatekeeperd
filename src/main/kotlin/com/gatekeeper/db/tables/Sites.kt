@@ -11,16 +11,36 @@ object Sites : Table("sites") {
     val certificateId = reference("certificate_id", Certificates.id).nullable().index()
     val domain = text("domain")
     val upstreamHost = text("upstream_host").default("127.0.0.1")
-    val upstreamMode = enumerationByName("upstream_mode", 18, UpstreamMode::class)
+    val upstreamMode = customEnumeration(
+        "upstream_mode",
+        "TEXT",
+        { value -> UpstreamMode.entries.first { it.value == (value as String) } },
+        { it.value }
+    )
     val upstreamContainerName = text("upstream_container_name").nullable()
     val upstreamExplicitPort = integer("upstream_explicit_port").nullable()
-    val tlsMode = enumerationByName("tls_mode", 12, TlsMode::class)
-    val certMode = enumerationByName("cert_mode", 13, CertMode::class)
+    val tlsMode = customEnumeration(
+        "tls_mode",
+        "TEXT",
+        { value -> TlsMode.entries.first { it.value == (value as String) } },
+        { it.value }
+    )
+    val certMode = customEnumeration(
+        "cert_mode",
+        "TEXT",
+        { value -> CertMode.entries.first { it.value == (value as String) } },
+        { it.value }
+    )
     val certExplicitPath = text("cert_explicit_path").nullable()
     val gateEnabled = bool("gate_enabled").default(true)
     val bypassPaths = text("bypass_paths").default("[\"/api/gate/\",\"/api/paystack/\",\"/api/mpesa/\"]")
     val configVersion = integer("config_version").default(1)
-    val reconciliationStatus = enumerationByName("reconciliation_status", 12, ReconciliationStatus::class).default(ReconciliationStatus.HEALTHY)
+    val reconciliationStatus = customEnumeration(
+        "reconciliation_status",
+        "TEXT",
+        { value -> ReconciliationStatus.entries.first { it.value == (value as String) } },
+        { it.value }
+    ).default(ReconciliationStatus.HEALTHY)
     val lastNginxError = text("last_nginx_error").nullable()
     val lastDockerError = text("last_docker_error").nullable()
     val lastReconciledAt = datetime("last_reconciled_at").nullable()
