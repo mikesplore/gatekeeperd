@@ -21,6 +21,7 @@ object AutoBlockerJob {
                     overdue.forEach { project ->
                         ProjectRepository.updateStatus(project.id, "blocked", actor = "system", reason = "auto-block: payment overdue", blockReason = "overdue")
                         ScribedIntegrationClient.notifySuspension(project.copy(status = "blocked", blockReason = "overdue"), "payment_overdue")
+                        ScribedIntegrationClient.notifyInvoiceDue(project)
                         logger.warn("Auto-blocked project: ${project.slug} (due: ${project.dueDate}, grace: ${project.gracePeriodDays} days)")
                     }
                 }.onFailure {

@@ -12,6 +12,9 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.decodeFromJsonElement
 import com.gatekeeper.db.repositories.IntegrationOutboxRepository
 import com.gatekeeper.db.repositories.ProjectAdjustmentRepository
@@ -23,6 +26,7 @@ import io.ktor.client.statement.bodyAsText
 @Serializable data class ScribedPaymentPayload(val project_id: String, val project_slug: String, val provider: String, val provider_reference: String, val amount: String, val currency: String, val paid_at: String, val status: String = "success")
 @Serializable data class ScribedLedgerAdjustment(val id: String, val type: String, val amount: String, val reason: String, val actor: String)
 @Serializable data class ScribedLedgerPayload(val project_id: String, val project_slug: String, val ledger_version: String, val base_amount: String, val additional_charges: String, val discounts: String, val successful_payments: String, val outstanding_balance: String, val currency: String, val adjustments: List<ScribedLedgerAdjustment>)
+@Serializable data class ScribedInvoiceEmailPayload(val invoice_id: Long)
 
 object ScribedIntegrationClient {
     private val logger = LoggerFactory.getLogger("com.gatekeeper.integrations.ScribedIntegrationClient")
@@ -64,6 +68,14 @@ object ScribedIntegrationClient {
             }
             response.status to response.body<ByteArray>().takeIf { response.status.isSuccess() }
         }.getOrElse { HttpStatusCode.BadGateway to null }
+    }
+
+    fun notifyInvoiceDue(project: ProjectRepository.ProjectRecord) {
+        runBlocking {
+            val lookup = invoiceStatus(project.id.toString())
+            val invoiceId = lookup.body?.get("invoice")?.jsonObject?.get("id")?.jsonPrimitive?.longOrNull ?: return@runBlocking
+            IntegrationOutboxRepository.enqueue("invoice_email", "invoice-email:$invoiceId", json.encodeToString(ScribedInvoiceEmailPayload(invoiceId)))
+        }
     }
 
     suspend fun receiptPdf(paymentId: Long): Pair<HttpStatusCode, ByteArray?> {
@@ -111,6 +123,17 @@ object ScribedIntegrationClient {
         val base = AppConfig.scribedCallbackUrl.trim().trimEnd('/'); val secret = AppConfig.scribedIntegrationSecret.trim()
         val apiToken = AppConfig.scribedApiToken.trim()
         if (base.isBlank() || secret.isBlank() || apiToken.isBlank()) return false
+        if (event.eventType == "invoice_email") {
+            return runCatching {
+                val payload = json.decodeFromString<ScribedInvoiceEmailPayload>(event.payload)
+                val response = http.post("$base/invoices/${payload.invoice_id}/send") {
+                    header(HttpHeaders.Authorization, "Bearer $apiToken")
+                    header("X-Gatekeeper-Secret", secret)
+                    header("Idempotency-Key", event.idempotencyKey)
+                }
+                response.status.isSuccess()
+            }.getOrElse { logger.warn("Scribed invoice email failed id=${event.id}: ${it.message}"); false }
+        }
         val path = when (event.eventType) { "payment" -> "/integrations/gatekeeper/payments"; "ledger" -> "/integrations/gatekeeper/ledger"; else -> "/integrations/gatekeeper/suspensions" }
         return runCatching {
             val response = http.post("$base$path") { contentType(ContentType.Application.Json); header(HttpHeaders.Authorization, "Bearer $apiToken"); header("X-Gatekeeper-Secret", secret); header("Idempotency-Key", event.idempotencyKey); setBody(event.payload) }
