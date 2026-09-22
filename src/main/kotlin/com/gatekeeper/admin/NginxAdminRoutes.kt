@@ -768,10 +768,21 @@ fun Application.configureNginxAdminRoutes() {
 
             get("/api/admin/nginx/certificate/list") {
                 val certificates = nginxService.listInstalledCertificates().map {
+                    val expiry = nginxService.certificateExpiry(it.certificateDomain)
+                    val expiresAt = expiry?.first?.let { value -> java.time.OffsetDateTime.parse(value).toLocalDateTime() }
+                    val renewalStatus = when {
+                        expiry == null -> "unknown"
+                        java.time.OffsetDateTime.parse(expiry.first).toInstant().isBefore(java.time.Instant.now()) -> "expired"
+                        else -> "active"
+                    }
+                    CertificateRepository.syncInventory(it.certificateDomain, expiresAt, renewalStatus)
                     InstalledCertificateInfo(
                         certificateDomain = it.certificateDomain,
                         certificatePath = it.certificatePath,
-                        privateKeyPath = it.privateKeyPath
+                        privateKeyPath = it.privateKeyPath,
+                        certificateExpiresAt = expiry?.first,
+                        certificateDaysRemaining = expiry?.second,
+                        renewalStatus = renewalStatus
                     )
                 }
 

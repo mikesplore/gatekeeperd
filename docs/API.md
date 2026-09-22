@@ -651,11 +651,16 @@ List installed certificates found under `/etc/letsencrypt/live`.
     {
       "certificateDomain": "example.com",
       "certificatePath": "/etc/letsencrypt/live/example.com/fullchain.pem",
-      "privateKeyPath": "/etc/letsencrypt/live/example.com/privkey.pem"
+      "privateKeyPath": "/etc/letsencrypt/live/example.com/privkey.pem",
+      "certificateExpiresAt": "2026-10-22T00:00:00Z",
+      "certificateDaysRemaining": 29,
+      "renewalStatus": "active"
     }
   ]
 }
 ```
+
+The endpoint reads the installed certificate's expiry and synchronizes `expires_at` and `renewal_status` in the `certificates` table. `renewalStatus` is `active`, `expired`, or `unknown` when the certificate file cannot be parsed.
 
 ### POST /api/admin/nginx/certificate/install
 Install an SSL certificate for a domain using certbot's nginx plugin.

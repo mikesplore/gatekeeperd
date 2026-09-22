@@ -83,7 +83,10 @@ data class CertificateResponse(
 data class InstalledCertificateInfo(
     val certificateDomain: String,
     val certificatePath: String,
-    val privateKeyPath: String
+    val privateKeyPath: String,
+    val certificateExpiresAt: String? = null,
+    val certificateDaysRemaining: Long? = null,
+    val renewalStatus: String = "unknown"
 )
 
 @Serializable
