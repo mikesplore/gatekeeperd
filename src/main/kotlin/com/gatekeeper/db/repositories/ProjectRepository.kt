@@ -123,7 +123,8 @@ object ProjectRepository {
         gracePeriodDays: Int,
         deploymentMode: String = "developer_hosted",
         serviceMode: String = "development",
-        lifecycleStatus: String = "active"
+        lifecycleStatus: String = "active",
+        customerId: UUID? = null
     ): ProjectRecord {
         return transaction {
             val id = UUID.randomUUID()
@@ -145,6 +146,7 @@ object ProjectRepository {
                 it[Projects.deploymentMode] = deploymentMode
                 it[Projects.serviceMode] = serviceMode
                 it[Projects.lifecycleStatus] = lifecycleStatus
+                it[Projects.customerId] = customerId
             }
             AuditLog.insert {
                 it[AuditLog.projectId] = id

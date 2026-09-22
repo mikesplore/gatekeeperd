@@ -15,6 +15,7 @@ import com.gatekeeper.config.AppConfig
 import com.gatekeeper.db.repositories.AuditRepository
 import com.gatekeeper.db.repositories.PaymentRepository
 import com.gatekeeper.db.repositories.ProjectRepository
+import com.gatekeeper.db.repositories.CustomerRepository
 import com.gatekeeper.db.repositories.ProjectAdjustmentRepository
 import com.gatekeeper.db.tables.AdjustmentType
 import com.gatekeeper.integrations.ScribedIntegrationClient
@@ -84,8 +85,13 @@ data class CreateProjectRequest(
     val gracePeriodDays: Int = 3,
     val deploymentMode: String = "developer_hosted",
     val serviceMode: String = "development",
-    val lifecycleStatus: String = "active"
+    val lifecycleStatus: String = "active",
+    val customerId: String? = null,
+    val newCustomer: NewCustomerRequest? = null
 )
+
+@Serializable
+data class NewCustomerRequest(val name: String, val contactEmail: String? = null, val contactPhone: String? = null)
 
 @Serializable
 data class UpdateProjectRequest(
@@ -373,6 +379,30 @@ fun Application.configureProjectAdminRoutes() {
 
                 val amountDue = body.amountDue?.let { BigDecimal.valueOf(it) }
 
+                val customerId = body.customerId?.let {
+                    runCatching { UUID.fromString(it) }.getOrNull()
+                        ?: return@post call.respondError(HttpStatusCode.BadRequest, "invalid_customer", "customerId must be a valid UUID")
+                }
+                if (customerId != null && CustomerRepository.findById(customerId) == null) {
+                    call.respondError(HttpStatusCode.NotFound, "customer_not_found", "Customer not found")
+                    return@post
+                }
+                if (body.customerId != null && body.newCustomer != null) {
+                    call.respondError(HttpStatusCode.BadRequest, "invalid_customer", "Choose an existing customer or create a new one")
+                    return@post
+                }
+                val createdCustomer = body.newCustomer?.let { customer ->
+                    if (customer.name.isBlank()) {
+                        call.respondError(HttpStatusCode.BadRequest, "invalid_customer", "New customer name is required")
+                        return@post
+                    }
+                    if (!customer.contactEmail.isNullOrBlank() && !InputValidators.isValidEmail(customer.contactEmail)) {
+                        call.respondError(HttpStatusCode.BadRequest, "invalid_customer", "New customer email is invalid")
+                        return@post
+                    }
+                    CustomerRepository.create(customer.name.trim(), customer.contactEmail?.trim(), customer.contactPhone?.trim())
+                }
+
                 // Enforce container-first flow: the referenced Docker container must exist.
                 val dockerService = try {
                     DockerService(AppConfig.dockerSocket)
@@ -417,7 +447,8 @@ fun Application.configureProjectAdminRoutes() {
                     gracePeriodDays = body.gracePeriodDays,
                     deploymentMode = body.deploymentMode,
                     serviceMode = body.serviceMode,
-                    lifecycleStatus = body.lifecycleStatus
+                    lifecycleStatus = body.lifecycleStatus,
+                    customerId = createdCustomer?.id ?: customerId
                 )
 
                 logger.info("Project created: $slug")
