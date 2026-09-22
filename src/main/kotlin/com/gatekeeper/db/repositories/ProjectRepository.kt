@@ -112,6 +112,11 @@ object ProjectRepository {
         }
     }
 
+    fun findByCustomerId(customerId: UUID): List<ProjectRecord> = transaction {
+        Projects.selectAll().where { (Projects.customerId eq customerId) and Projects.deletedAt.isNull() }
+            .orderBy(Projects.createdAt, SortOrder.DESC).map { it.toProjectRecord() }
+    }
+
     fun create(
         slug: String,
         name: String,

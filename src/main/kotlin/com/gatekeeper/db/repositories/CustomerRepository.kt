@@ -6,7 +6,6 @@ import com.gatekeeper.db.tables.Sites
 import org.jetbrains.exposed.sql.ResultRow
 import org.jetbrains.exposed.sql.SortOrder
 import org.jetbrains.exposed.sql.and
-import org.jetbrains.exposed.sql.innerJoin
 import org.jetbrains.exposed.sql.selectAll
 import org.jetbrains.exposed.sql.transactions.transaction
 import java.time.LocalDateTime
@@ -39,13 +38,11 @@ object CustomerRepository {
     }
 
     fun findSites(id: UUID): List<CustomerSiteRecord> = transaction {
-        Projects.innerJoin(Customers).selectAll()
-            .where { (Projects.customerId eq id) and Projects.deletedAt.isNull() }
-            .mapNotNull { row ->
-                val project = ProjectRepository.findById(row[Projects.id]) ?: return@mapNotNull null
-                val site = SiteRepository.findByProjectId(project.id)
-                CustomerSiteRecord(row.toRecord(), project, site)
-            }
+        val customer = Customers.selectAll().where { Customers.id eq id }.singleOrNull()?.toRecord()
+            ?: return@transaction emptyList()
+        val projects = ProjectRepository.findByCustomerId(id)
+        val sites = SiteRepository.findByProjectIds(projects.map { it.id })
+        projects.map { project -> CustomerSiteRecord(customer, project, sites[project.id]) }
     }
 
     private fun ResultRow.toRecord() = CustomerRecord(

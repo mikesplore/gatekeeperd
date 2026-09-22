@@ -14,9 +14,8 @@ object AutoBlockerJob {
     private val logger = LoggerFactory.getLogger("com.gatekeeper.scheduler.AutoBlockerJob")
     fun start(scope: CoroutineScope) {
         scope.launch {
-            // Wait for app + DB to stabilize
             delay(10.seconds)
-            while (isActive) {
+            runWorkerLoop("auto-blocker", AppConfig.autoBlockerIntervalMinutes.coerceAtLeast(1) * 60_000, "worker:auto-blocker", logger) {
                 runCatching {
                     val overdue = ProjectRepository.findPastDue(LocalDate.now())
                     overdue.forEach { project ->
@@ -24,14 +23,13 @@ object AutoBlockerJob {
                         ScribedIntegrationClient.notifySuspension(project.copy(status = "blocked", blockReason = "overdue"), "payment_overdue")
                         logger.warn("Auto-blocked project: ${project.slug} (due: ${project.dueDate}, grace: ${project.gracePeriodDays} days)")
                     }
-                }.onFailure { 
+                }.onFailure {
                     if (it.message?.contains("Database.connect") == true) {
                         logger.warn("AutoBlockerJob waiting for database...")
                     } else {
                         logger.error("AutoBlockerJob run failed", it)
                     }
-                }
-                delay(AppConfig.autoBlockerIntervalMinutes.coerceAtLeast(1).minutes)
+                }.getOrThrow()
             }
         }
     }

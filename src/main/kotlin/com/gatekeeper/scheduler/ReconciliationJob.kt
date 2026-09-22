@@ -14,13 +14,10 @@ object ReconciliationJob {
     fun start(scope: CoroutineScope) {
         scope.launch {
             delay(1.minutes)
-            while (isActive) {
+            runWorkerLoop("payment-reconciliation", AppConfig.reconciliationIntervalMinutes * 60_000, "worker:payment-reconciliation", logger) {
                 runCatching {
                     reconcilePendingPayments()
-                }.onFailure {
-                    logger.error("ReconciliationJob run failed", it)
-                }
-                delay(AppConfig.reconciliationIntervalMinutes.minutes)
+                }.getOrThrow()
             }
         }
     }

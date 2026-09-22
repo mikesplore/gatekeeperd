@@ -15,6 +15,7 @@ import org.jetbrains.exposed.sql.innerJoin
 import org.jetbrains.exposed.sql.selectAll
 import org.jetbrains.exposed.sql.transactions.transaction
 import org.jetbrains.exposed.sql.update
+import org.jetbrains.exposed.sql.*
 import java.time.LocalDateTime
 import java.util.UUID
 import kotlinx.serialization.json.Json
@@ -46,6 +47,11 @@ object SiteRepository {
         Sites.innerJoin(Projects).selectAll()
             .where { Projects.deletedAt.isNull() }
             .map { it.toRecord(it[Projects.slug]) }
+    }
+
+    fun findByProjectIds(projectIds: Collection<UUID>): Map<UUID, SiteRecord> = transaction {
+        if (projectIds.isEmpty()) return@transaction emptyMap()
+        Sites.selectAll().where { Sites.projectId inList projectIds }.associate { it[Sites.projectId] to it.toRecord() }
     }
 
     fun updateReconciliation(
