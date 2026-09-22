@@ -247,7 +247,7 @@ fun Application.configureOperationsAdminRoutes() {
                     val billed = financials.sumOf { it.billed }
                     val paid = financials.sumOf { it.paid }
                     val balance = financials.sumOf { it.balance }
-                    DashboardCustomerResponse(customer.id.toString(), customer.name, customer.contactEmail, customer.contactPhone, derivedBillingStatus(financials), sites.size, sites.groupingBy { it.reconciliationStatus.value }.eachCount(), billed.toDouble(), paid.toDouble(), balance.toDouble())
+                    DashboardCustomerResponse(customer.id.toString(), customer.name, customer.contactEmail, customer.contactPhone, derivedBillingStatus(financials), owned.size, sites.groupingBy { it.reconciliationStatus.value }.eachCount(), billed.toDouble(), paid.toDouble(), balance.toDouble())
                 })
             }
             get("/api/admin/dashboard/customers/{id}") {
@@ -268,7 +268,7 @@ fun Application.configureOperationsAdminRoutes() {
                 }
                 call.respond(DashboardCustomerResponse(
                     customer.id.toString(), customer.name, customer.contactEmail, customer.contactPhone, derivedBillingStatus(financials),
-                    sites.size, sites.groupingBy { it.status }.eachCount(),
+                    projects.size, sites.groupingBy { it.status }.eachCount(),
                     totalBilled = projects.sumOf { it.amountDue ?: 0.0 }, totalPaid = projects.sumOf { it.totalPaid },
                     balance = projects.sumOf { it.balance }, projects = projects
                 ))
