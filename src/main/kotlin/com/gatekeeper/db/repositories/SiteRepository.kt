@@ -90,6 +90,32 @@ object SiteRepository {
         Sites.deleteWhere { Sites.projectId eq projectId }
     }
 
+    fun updateDashboard(id: UUID, update: SiteDashboardUpdate): SiteRecord? = transaction {
+        val currentVersion = Sites.selectAll().where { Sites.id eq id }.singleOrNull()?.get(Sites.configVersion) ?: return@transaction null
+        Sites.update({ Sites.id eq id }) {
+            update.domain?.let { value -> it[Sites.domain] = value }
+            update.upstreamHost?.let { value -> it[Sites.upstreamHost] = value }
+            update.upstreamMode?.let { value -> it[Sites.upstreamMode] = value }
+            update.upstreamContainerName?.let { value -> it[Sites.upstreamContainerName] = value }
+            update.upstreamExplicitPort?.let { value -> it[Sites.upstreamExplicitPort] = value }
+            update.tlsMode?.let { value -> it[Sites.tlsMode] = value }
+            update.certMode?.let { value -> it[Sites.certMode] = value }
+            update.certExplicitPath?.let { value -> it[Sites.certExplicitPath] = value }
+            update.gateEnabled?.let { value -> it[Sites.gateEnabled] = value }
+            update.bypassPaths?.let { value -> it[Sites.bypassPaths] = Json.encodeToString(value) }
+            it[Sites.configVersion] = currentVersion + 1
+            it[Sites.updatedAt] = LocalDateTime.now()
+        }
+        Sites.selectAll().where { Sites.id eq id }.singleOrNull()?.toRecord()
+    }
+
+    data class SiteDashboardUpdate(
+        val domain: String? = null, val upstreamHost: String? = null, val upstreamMode: UpstreamMode? = null,
+        val upstreamContainerName: String? = null, val upstreamExplicitPort: Int? = null,
+        val tlsMode: TlsMode? = null, val certMode: CertMode? = null, val certExplicitPath: String? = null,
+        val gateEnabled: Boolean? = null, val bypassPaths: List<String>? = null
+    )
+
     fun linkCertificateForDomain(domain: String, certificateId: UUID) = transaction {
         Sites.update({ Sites.domain eq domain }) { it[Sites.certificateId] = certificateId }
     }

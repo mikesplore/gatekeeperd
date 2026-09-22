@@ -12,6 +12,9 @@ import com.gatekeeper.db.repositories.CustomerRepository
 import com.gatekeeper.db.repositories.CertificateRepository
 import com.gatekeeper.docker.DockerService
 import com.gatekeeper.nginx.NginxService
+import com.gatekeeper.nginx.NginxSiteRenderModel
+import com.gatekeeper.nginx.requireCertificatePath
+import com.gatekeeper.nginx.requireValidHostname
 import com.gatekeeper.db.tables.ReconciliationStatus
 import com.gatekeeper.config.AppConfig
 import com.gatekeeper.paystack.replayPaystackWebhook
@@ -30,6 +33,7 @@ import java.time.OffsetDateTime
 import java.time.LocalDateTime
 import java.util.UUID
 import kotlin.time.Duration.Companion.milliseconds
+import java.io.File
 
 @Serializable
 data class ProjectHealthResponse(
@@ -76,6 +80,20 @@ data class BulkProjectResult(val slug: String, val status: String, val message: 
     val billingStatus: String, val siteCount: Int, val health: Map<String, Int>
 )
 
+@Serializable data class DashboardSiteUpdateRequest(
+    val domain: String? = null, val upstreamHost: String? = null, val upstreamMode: String? = null,
+    val upstreamContainerName: String? = null, val upstreamExplicitPort: Int? = null,
+    val tlsMode: String? = null, val certMode: String? = null, val certExplicitPath: String? = null,
+    val gateEnabled: Boolean? = null, val bypassPaths: List<String>? = null
+)
+
+@Serializable data class DashboardCustomerCreateRequest(
+    val name: String, val contactEmail: String? = null, val contactPhone: String? = null,
+    val billingStatus: String = "unknown"
+)
+
+@Serializable data class DashboardConfirmationRequest(val confirm: Boolean = false)
+
 private fun dashboardSite(site: SiteRepository.SiteRecord): DashboardSiteResponse {
     val project = ProjectRepository.findById(site.projectId)
     val customer = project?.customerId?.let(CustomerRepository::findById)
@@ -115,8 +133,76 @@ fun Application.configureOperationsAdminRoutes() {
                 val expiry = cert?.let { nginx.certificateExpiry(it.certificateDomain) }
                 call.respond(DashboardSiteDetailResponse(dashboardSite(site), inspection.content?.takeIf { inspection.managed }, inspection.content, cert != null, expiry?.second, nginx.listBackups(slug).map { it.name }))
             }
+            patch("/api/admin/dashboard/sites/{slug}") {
+                val slug = call.parameters["slug"] ?: run { call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing slug"); return@patch }
+                val site = SiteRepository.findByProjectSlug(slug) ?: run { call.respondError(HttpStatusCode.NotFound, "site_not_found", "Site not found"); return@patch }
+                val body = runCatching { call.receive<DashboardSiteUpdateRequest>() }.getOrElse { call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid site update body"); return@patch }
+                val update = runCatching {
+                    SiteRepository.SiteDashboardUpdate(
+                        domain = body.domain?.let { requireValidHostname(it) }, upstreamHost = body.upstreamHost,
+                        upstreamMode = body.upstreamMode?.let { com.gatekeeper.db.tables.UpstreamMode.valueOf(it.uppercase()) },
+                        upstreamContainerName = body.upstreamContainerName, upstreamExplicitPort = body.upstreamExplicitPort?.also { require(it in 1..65535) },
+                        tlsMode = body.tlsMode?.let { com.gatekeeper.db.tables.TlsMode.valueOf(it.uppercase()) },
+                        certMode = body.certMode?.let { com.gatekeeper.db.tables.CertMode.valueOf(it.uppercase()) },
+                        certExplicitPath = body.certExplicitPath?.let { requireCertificatePath(it, AppConfig.nginxSslCertPath) },
+                        gateEnabled = body.gateEnabled, bypassPaths = body.bypassPaths
+                    )
+                }.getOrElse { call.respondError(HttpStatusCode.BadRequest, "invalid_site_update", it.message ?: "Invalid site update"); return@patch }
+                val updated = SiteRepository.updateDashboard(site.id, update) ?: run { call.respondError(HttpStatusCode.NotFound, "site_not_found", "Site not found"); return@patch }
+                val nginx = NginxService()
+                val port = updated.upstreamExplicitPort ?: run { call.respondError(HttpStatusCode.UnprocessableEntity, "site_configuration_invalid", "Docker discovery updates require a live container"); return@patch }
+                val cert = if (updated.certMode == com.gatekeeper.db.tables.CertMode.AUTO_RESOLVE) nginx.resolveCertificateForDomain(updated.domain) else null
+                val config = nginx.generateNginxConfig(NginxSiteRenderModel(
+                    slug = slug, domain = updated.domain, upstreamHost = updated.upstreamHost, appPort = port,
+                    upstreamScheme = if (updated.tlsMode == com.gatekeeper.db.tables.TlsMode.HTTP_ONLY) "http" else "https",
+                    tlsMode = when (updated.tlsMode) {
+                        com.gatekeeper.db.tables.TlsMode.HTTP_ONLY -> com.gatekeeper.nginx.TlsRenderMode.HTTP_ONLY
+                        com.gatekeeper.db.tables.TlsMode.HTTPS -> com.gatekeeper.nginx.TlsRenderMode.HTTPS
+                        com.gatekeeper.db.tables.TlsMode.HTTPS_HTTP2 -> com.gatekeeper.nginx.TlsRenderMode.HTTPS_HTTP2
+                    }, certificatePath = cert?.certificatePath ?: updated.certExplicitPath, certificateKeyPath = cert?.privateKeyPath,
+                    upstreamMode = updated.upstreamMode, upstreamContainerName = updated.upstreamContainerName,
+                    certMode = updated.certMode,
+                    gateEnabled = updated.gateEnabled, bypassPaths = updated.bypassPaths
+                ))
+                if (!nginx.enableProject(slug, config)) { call.respondError(HttpStatusCode.UnprocessableEntity, "nginx_error", "Validation or activation failed; previous configuration was preserved"); return@patch }
+                call.respond(dashboardSite(updated))
+            }
+            delete("/api/admin/dashboard/sites/{slug}") {
+                val slug = call.parameters["slug"] ?: run { call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing slug"); return@delete }
+                val project = ProjectRepository.findBySlug(slug) ?: run { call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found"); return@delete }
+                val nginx = NginxService()
+                if (!nginx.removeProject(slug)) { call.respondError(HttpStatusCode.InternalServerError, "nginx_cleanup_failed", "Unable to remove nginx artifacts"); return@delete }
+                SiteRepository.deleteByProjectId(project.id)
+                call.respond(mapOf("deleted" to true, "slug" to slug))
+            }
             get("/api/admin/dashboard/dead-configs") {
                 call.respond(SiteRepository.findAll().filter { it.reconciliationStatus == ReconciliationStatus.DEAD_CONFIG }.map(::dashboardSite))
+            }
+            delete("/api/admin/dashboard/dead-configs/{filename}") {
+                val filename = call.parameters["filename"] ?: run { call.respondError(HttpStatusCode.BadRequest, "missing_filename", "Missing filename"); return@delete }
+                if (filename != File(filename).name || !filename.matches(Regex("[A-Za-z0-9][A-Za-z0-9_.-]*"))) { call.respondError(HttpStatusCode.BadRequest, "invalid_filename", "Invalid config filename"); return@delete }
+                val body = runCatching { call.receive<DashboardConfirmationRequest>() }.getOrElse { call.respondError(HttpStatusCode.BadRequest, "confirmation_required", "Request body must contain confirm=true"); return@delete }
+                if (!body.confirm) { call.respondError(HttpStatusCode.Conflict, "confirmation_required", "Set confirm=true to move this dead config to backup"); return@delete }
+                val source = File(AppConfig.nginxSitesAvailablePath, filename)
+                if (!source.isFile) { call.respondError(HttpStatusCode.NotFound, "config_not_found", "Dead config not found"); return@delete }
+                val backup = File(source.parentFile, "$filename.bak-${System.currentTimeMillis()}")
+                java.nio.file.Files.move(source.toPath(), backup.toPath())
+                call.respond(mapOf("backedUp" to true, "backup" to backup.name))
+            }
+            post("/api/admin/dashboard/customers") {
+                val body = runCatching { call.receive<DashboardCustomerCreateRequest>() }.getOrElse { call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid customer body"); return@post }
+                if (body.name.isBlank()) { call.respondError(HttpStatusCode.BadRequest, "invalid_customer", "Customer name is required"); return@post }
+                val customer = CustomerRepository.create(body.name.trim(), body.contactEmail?.trim(), body.contactPhone?.trim(), body.billingStatus)
+                call.respond(HttpStatusCode.Created, DashboardCustomerResponse(customer.id.toString(), customer.name, customer.contactEmail, customer.contactPhone, customer.billingStatus, 0, emptyMap()))
+            }
+            patch("/api/admin/dashboard/projects/{id}") {
+                val id = runCatching { UUID.fromString(call.parameters["id"]) }.getOrNull() ?: run { call.respondError(HttpStatusCode.BadRequest, "invalid_project_id", "Invalid project ID"); return@patch }
+                val body = runCatching { call.receive<Map<String, String?>>() }.getOrElse { call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid project body"); return@patch }
+                val customerId = body["customerId"]?.let { runCatching { UUID.fromString(it) }.getOrNull() }
+                if (body.containsKey("customerId") && customerId == null) { call.respondError(HttpStatusCode.BadRequest, "invalid_customer_id", "Invalid customer ID"); return@patch }
+                if (customerId != null && CustomerRepository.findById(customerId) == null) { call.respondError(HttpStatusCode.NotFound, "customer_not_found", "Customer not found"); return@patch }
+                val project = ProjectRepository.assignCustomer(id, customerId) ?: run { call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found"); return@patch }
+                call.respond(project)
             }
             get("/api/admin/dashboard/customers") {
                 call.respond(CustomerRepository.findAll().map { customer ->

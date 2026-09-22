@@ -11,6 +11,7 @@ import org.jetbrains.exposed.sql.selectAll
 import org.jetbrains.exposed.sql.transactions.transaction
 import java.time.LocalDateTime
 import java.util.UUID
+import org.jetbrains.exposed.sql.insert
 
 object CustomerRepository {
     data class CustomerRecord(val id: UUID, val name: String, val contactEmail: String?, val contactPhone: String?, val billingStatus: String, val createdAt: LocalDateTime, val updatedAt: LocalDateTime)
@@ -23,6 +24,18 @@ object CustomerRepository {
 
     fun findById(id: UUID): CustomerRecord? = transaction {
         Customers.selectAll().where { Customers.id eq id }.singleOrNull()?.toRecord()
+    }
+
+    fun create(name: String, contactEmail: String?, contactPhone: String?, billingStatus: String = "unknown"): CustomerRecord = transaction {
+        val id = UUID.randomUUID()
+        Customers.insert {
+            it[Customers.id] = id
+            it[Customers.name] = name
+            it[Customers.contactEmail] = contactEmail
+            it[Customers.contactPhone] = contactPhone
+            it[Customers.billingStatus] = billingStatus
+        }
+        findById(id)!!
     }
 
     fun findSites(id: UUID): List<CustomerSiteRecord> = transaction {

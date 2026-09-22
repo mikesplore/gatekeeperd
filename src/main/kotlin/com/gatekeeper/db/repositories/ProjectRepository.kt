@@ -89,6 +89,14 @@ object ProjectRepository {
         }
     }
 
+    fun assignCustomer(id: UUID, customerId: UUID?): ProjectRecord? = transaction {
+        val updated = Projects.update({ Projects.id eq id }) {
+            it[Projects.customerId] = customerId
+            it[Projects.updatedAt] = LocalDateTime.now()
+        }
+        if (updated == 0) null else findById(id)
+    }
+
     fun findAll(includeArchived: Boolean = false): List<ProjectRecord> {
         return transaction {
             val query = if (includeArchived) {
