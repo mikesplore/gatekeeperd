@@ -71,7 +71,7 @@ rtk ./gradlew run
 rtk git status --short
 ```
 
-The CI workflow runs `./gradlew --no-daemon test buildFatJar` on Java 21 and publishes `build/libs/gatekeeperd-all.jar` plus its SHA-256 file. Run the relevant tests after Kotlin/API changes, and run the full test/build command before handing off broad changes.
+The CI workflow runs `./gradlew --no-daemon test buildFatJar` on Java 21 and publishes `build/libs/gatekeeperd-all.jar` plus its SHA-256 file. Run the relevant tests after Kotlin/API changes, and run the full test/build command before handing off broad changes. Run tests in the host environment using the normal project Gradle setup; do not create or use a custom downloaded Gradle installation or alternate `GRADLE_USER_HOME` for verification.
 
 The paired frontend project is located at `/home/mike/Development/gatekeeperd-frontend`. Run its production build from that directory with the NVM-provided Node.js toolchain:
 

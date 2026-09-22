@@ -134,7 +134,9 @@ private fun renderModelFromSite(
         certificateKeyPath = certificate?.privateKeyPath,
         upstreamMode = site.upstreamMode,
         upstreamContainerName = site.upstreamContainerName,
-        certMode = site.certMode
+        certMode = site.certMode,
+        gateEnabled = site.gateEnabled,
+        bypassPaths = site.bypassPaths
     )
 }
 

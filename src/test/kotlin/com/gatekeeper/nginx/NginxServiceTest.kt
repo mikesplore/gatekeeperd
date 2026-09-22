@@ -83,6 +83,26 @@ class NginxServiceTest {
     }
 
     @Test
+    fun `site with gate disabled and no bypasses is a plain proxy`() {
+        val config = service.generateNginxConfig(
+            slug = "plain",
+            domain = "plain.example.com",
+            appPort = 3001,
+            upstreamScheme = "http",
+            sslEnabled = false,
+            gateEnabled = false,
+            bypassPaths = emptyList()
+        )
+
+        assertContains(config, "proxy_pass http://127.0.0.1:3001;")
+        assertFalse(config.contains("auth_request"))
+        assertFalse(config.contains("gatekeeper_paywall"))
+        assertFalse(config.contains("/api/gate/"))
+        assertFalse(config.contains("/api/paystack/"))
+        assertFalse(config.contains("/api/mpesa/"))
+    }
+
+    @Test
     fun `rejects invalid upstream scheme`() {
         assertFailsWith<IllegalArgumentException> {
             service.generateNginxConfig(

@@ -228,7 +228,9 @@ class NginxService(
         sslCertificatePath = site.certificatePath,
         sslCertificateKeyPath = site.certificateKeyPath,
         upstreamHost = site.upstreamHost,
-        http2 = site.tlsMode == TlsRenderMode.HTTPS_HTTP2
+        http2 = site.tlsMode == TlsRenderMode.HTTPS_HTTP2,
+        gateEnabled = site.gateEnabled,
+        bypassPaths = site.bypassPaths
     )
 
     fun generateNginxConfig(
@@ -240,7 +242,9 @@ class NginxService(
         sslCertificatePath: String? = null,
         sslCertificateKeyPath: String? = null,
         upstreamHost: String = "127.0.0.1",
-        http2: Boolean = true
+        http2: Boolean = true,
+        gateEnabled: Boolean = true,
+        bypassPaths: List<String> = DEFAULT_GATEKEEPER_BYPASS_PATHS
     ): String {
         requireValidHostname(domain)
         val effectiveSslCert = sslCertificatePath?.let { requireCertificatePath(it, sslCertPath) }
@@ -270,46 +274,35 @@ class NginxService(
                 appendLine()
             }
 
+            if (gateEnabled) {
             appendLine("    # -------------------------------------------------------------------------")
             appendLine("    # 1. Gatekeeper Direct Bypass Route")
             appendLine("    # Payment callbacks, webhooks, and paywall APIs bypass auth_request")
             appendLine("    # -------------------------------------------------------------------------")
-            appendLine("    location /api/gate/ {")
-                appendLine("        proxy_pass http://127.0.0.1:$gatekeeperPort/api/gate/;")
+            bypassPaths.forEach { path ->
+                require(path.startsWith("/") && path.endsWith("/") && !path.contains(';')) { "Invalid bypass path" }
+                if (path == "/api/paystack/") appendLine("    # Payment provider callbacks must not be gated by the client project")
+                appendLine("    location $path {")
+                appendLine("        proxy_pass http://127.0.0.1:$gatekeeperPort$path;")
                 appendLine("        proxy_set_header Host \$host;")
                 appendLine("        proxy_set_header X-Real-IP \$remote_addr;")
                 appendLine("        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;")
                 appendLine("        proxy_set_header X-Forwarded-Proto \$scheme;")
-            appendLine("    }")
-            appendLine()
-
-            appendLine("    # Payment provider callbacks must not be gated by the client project")
-            appendLine("    location /api/paystack/ {")
-            appendLine("        proxy_pass http://127.0.0.1:$gatekeeperPort/api/paystack/;")
-            appendLine("        proxy_set_header Host \$host;")
-            appendLine("        proxy_set_header X-Real-IP \$remote_addr;")
-            appendLine("        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;")
-            appendLine("        proxy_set_header X-Forwarded-Proto \$scheme;")
-            appendLine("    }")
-            appendLine()
-
-            appendLine("    location /api/mpesa/ {")
-            appendLine("        proxy_pass http://127.0.0.1:$gatekeeperPort/api/mpesa/;")
-            appendLine("        proxy_set_header Host \$host;")
-            appendLine("        proxy_set_header X-Real-IP \$remote_addr;")
-            appendLine("        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;")
-            appendLine("        proxy_set_header X-Forwarded-Proto \$scheme;")
-            appendLine("    }")
-            appendLine()
+                appendLine("    }")
+                appendLine()
+            }
+            }
 
             appendLine("    # -------------------------------------------------------------------------")
-            appendLine("    # 2. Main Protected Application Route")
-            appendLine("    # Evaluates gatekeeper auth_request on every incoming request")
+            appendLine(if (gateEnabled) "    # 2. Main Protected Application Route" else "    # 2. Main Application Route")
+            if (gateEnabled) appendLine("    # Evaluates gatekeeper auth_request on every incoming request")
             appendLine("    # -------------------------------------------------------------------------")
             appendLine("    # gatekeeperd:block:upstream")
             appendLine("    location / {")
-                appendLine("        auth_request /gatekeeper-auth-$slug;")
-                appendLine("        error_page 403 = @gatekeeper_paywall_$slug;")
+                if (gateEnabled) {
+                    appendLine("        auth_request /gatekeeper-auth-$slug;")
+                    appendLine("        error_page 403 = @gatekeeper_paywall_$slug;")
+                }
                 appendLine()
                 appendLine("        proxy_pass $effectiveUpstreamScheme://$upstreamHost:$appPort;")
                 appendLine("        proxy_http_version 1.1;")
@@ -323,6 +316,7 @@ class NginxService(
             appendLine("    }")
             appendLine()
 
+            if (gateEnabled) {
             appendLine("    # -------------------------------------------------------------------------")
             appendLine("    # 3. Isolated Gatekeeper Subrequest (Browser-Header Sanitizer)")
             appendLine("    # Strips all browser headers, CORS metadata, and POST bodies")
@@ -364,7 +358,9 @@ class NginxService(
                 appendLine("        proxy_set_header Connection \"\";")
             appendLine("    }")
             appendLine()
+            }
 
+            if (gateEnabled) {
             appendLine("    # -------------------------------------------------------------------------")
             appendLine("    # 4. Paywall Fallback Location")
             appendLine("    # -------------------------------------------------------------------------")
@@ -377,6 +373,7 @@ class NginxService(
             appendLine("        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;")
             appendLine("        proxy_set_header X-Forwarded-Proto \$scheme;")
             appendLine("    }")
+            }
             appendLine("}")
         }
     }

@@ -18,6 +18,7 @@ object Sites : Table("sites") {
     val certMode = enumerationByName("cert_mode", 13, CertMode::class)
     val certExplicitPath = text("cert_explicit_path").nullable()
     val gateEnabled = bool("gate_enabled").default(true)
+    val bypassPaths = text("bypass_paths").default("[\"/api/gate/\",\"/api/paystack/\",\"/api/mpesa/\"]")
     val configVersion = integer("config_version").default(1)
     val reconciliationStatus = enumerationByName("reconciliation_status", 12, ReconciliationStatus::class).default(ReconciliationStatus.HEALTHY)
     val lastNginxError = text("last_nginx_error").nullable()

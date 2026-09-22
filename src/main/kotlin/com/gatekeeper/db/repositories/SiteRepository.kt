@@ -17,14 +17,19 @@ import org.jetbrains.exposed.sql.transactions.transaction
 import org.jetbrains.exposed.sql.update
 import java.time.LocalDateTime
 import java.util.UUID
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
+import com.gatekeeper.nginx.DEFAULT_GATEKEEPER_BYPASS_PATHS
 
 object SiteRepository {
     data class SiteRecord(
         val id: UUID, val projectId: UUID, val domain: String, val upstreamHost: String,
         val upstreamMode: UpstreamMode, val upstreamContainerName: String?, val upstreamExplicitPort: Int?,
         val tlsMode: TlsMode, val certMode: CertMode, val certExplicitPath: String?, val gateEnabled: Boolean,
-        val configVersion: Int, val createdAt: LocalDateTime, val updatedAt: LocalDateTime
-        , val reconciliationStatus: ReconciliationStatus, val lastNginxError: String?, val lastDockerError: String?, val lastReconciledAt: LocalDateTime?, val projectSlug: String? = null
+        val configVersion: Int, val createdAt: LocalDateTime, val updatedAt: LocalDateTime,
+        val bypassPaths: List<String> = DEFAULT_GATEKEEPER_BYPASS_PATHS,
+        val reconciliationStatus: ReconciliationStatus, val lastNginxError: String?, val lastDockerError: String?, val lastReconciledAt: LocalDateTime?, val projectSlug: String? = null
     )
 
     fun findByProjectId(projectId: UUID): SiteRecord? = transaction {
@@ -75,6 +80,8 @@ object SiteRepository {
             }
             it[Sites.certMode] = model.certMode
             it[Sites.certExplicitPath] = model.certificatePath
+            it[Sites.gateEnabled] = model.gateEnabled
+            it[Sites.bypassPaths] = Json.encodeToString(model.bypassPaths)
         }
         findByProjectId(projectId)!!
     }
@@ -95,7 +102,9 @@ object SiteRepository {
         this[Sites.id], this[Sites.projectId], this[Sites.domain], this[Sites.upstreamHost],
         this[Sites.upstreamMode], this[Sites.upstreamContainerName], this[Sites.upstreamExplicitPort],
         this[Sites.tlsMode], this[Sites.certMode], this[Sites.certExplicitPath], this[Sites.gateEnabled],
-        this[Sites.configVersion], this[Sites.createdAt], this[Sites.updatedAt], this[Sites.reconciliationStatus],
+        this[Sites.configVersion], this[Sites.createdAt], this[Sites.updatedAt],
+        runCatching { Json.decodeFromString<List<String>>(this[Sites.bypassPaths]) }.getOrDefault(DEFAULT_GATEKEEPER_BYPASS_PATHS),
+        this[Sites.reconciliationStatus],
         this[Sites.lastNginxError], this[Sites.lastDockerError], this[Sites.lastReconciledAt], projectSlug
     )
 }
