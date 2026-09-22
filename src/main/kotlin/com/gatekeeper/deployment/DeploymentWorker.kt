@@ -1,10 +1,12 @@
 package com.gatekeeper.deployment
 
 import com.gatekeeper.db.repositories.DeploymentJobRepository
+import com.gatekeeper.db.repositories.DeploymentJobRecord
 import com.gatekeeper.db.repositories.ProjectRepository
 import com.gatekeeper.db.repositories.AuditRepository
 import com.gatekeeper.db.repositories.RegistryCredentialRepository
 import com.gatekeeper.config.AppConfig
+import com.gatekeeper.plugins.DistributedLock
 import com.gatekeeper.docker.CreateContainerRequest
 import com.gatekeeper.docker.ContainerInfo
 import com.gatekeeper.docker.DockerService
@@ -36,6 +38,12 @@ object DeploymentWorker {
 
     private suspend fun processNext() {
         val job = DeploymentJobRepository.claimNext() ?: return
+        DistributedLock.withLock("deployment-project:${job.projectSlug ?: job.id}") {
+            runBlocking { processClaimedJob(job) }
+        }
+    }
+
+    private suspend fun processClaimedJob(job: DeploymentJobRecord) {
         val workspace = Files.createTempDirectory("gatekeeper-deployment-${job.id}-")
         var candidateName: String? = null
         try {
@@ -147,6 +155,10 @@ object DeploymentWorker {
     }
 
     fun rollback(id: java.util.UUID): Boolean {
+        return DistributedLock.withLock("deployment-project:$id") { rollbackLocked(id) }
+    }
+
+    private fun rollbackLocked(id: java.util.UUID): Boolean {
         val job = DeploymentJobRepository.find(id) ?: return false
         val oldImage = job.previousImage ?: return false
         val target = job.containerName ?: return false
