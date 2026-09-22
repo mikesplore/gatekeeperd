@@ -7,8 +7,11 @@ import com.gatekeeper.db.repositories.AuditRepository
 import com.gatekeeper.db.repositories.NotificationRepository
 import com.gatekeeper.db.repositories.PaymentEventRepository
 import com.gatekeeper.db.repositories.ProjectRepository
+import com.gatekeeper.db.repositories.SiteRepository
+import com.gatekeeper.db.repositories.CustomerRepository
 import com.gatekeeper.docker.DockerService
 import com.gatekeeper.nginx.NginxService
+import com.gatekeeper.db.tables.ReconciliationStatus
 import com.gatekeeper.config.AppConfig
 import com.gatekeeper.paystack.replayPaystackWebhook
 import io.ktor.http.*
@@ -53,6 +56,37 @@ data class BulkProjectResult(val slug: String, val status: String, val message: 
     val metrics: Map<String, Long>
 )
 
+@Serializable data class DashboardSiteResponse(
+    val slug: String, val projectId: String, val customerId: String? = null, val customerName: String? = null,
+    val domain: String, val status: String, val dockerState: String? = null,
+    val lastNginxError: String? = null, val lastDockerError: String? = null,
+    val configVersion: Int, val available: Boolean, val enabled: Boolean
+)
+
+@Serializable data class DashboardSiteDetailResponse(
+    val site: DashboardSiteResponse, val generatedConfig: String? = null, val currentConfig: String? = null,
+    val certificateInstalled: Boolean? = null, val certificateDaysRemaining: Long? = null,
+    val backups: List<String> = emptyList()
+)
+
+@Serializable data class DashboardCustomerResponse(
+    val id: String, val name: String, val contactEmail: String? = null, val contactPhone: String? = null,
+    val billingStatus: String, val siteCount: Int, val health: Map<String, Int>
+)
+
+private fun dashboardSite(site: SiteRepository.SiteRecord): DashboardSiteResponse {
+    val project = ProjectRepository.findById(site.projectId)
+    val customer = project?.customerId?.let(CustomerRepository::findById)
+    val slug = site.projectSlug ?: site.projectId.toString()
+    return DashboardSiteResponse(
+        slug, site.projectId.toString(), customer?.id?.toString(), customer?.name, site.domain,
+        site.reconciliationStatus.value, site.lastDockerError?.let { "down" } ?: "unknown",
+        site.lastNginxError, site.lastDockerError, site.configVersion,
+        java.io.File(AppConfig.nginxSitesAvailablePath, slug).isFile,
+        java.nio.file.Files.isSymbolicLink(java.io.File(AppConfig.nginxSitesEnabledPath, slug).toPath())
+    )
+}
+
 @Serializable data class NotificationResponse(
     val id: String,
     val title: String,
@@ -66,6 +100,34 @@ data class BulkProjectResult(val slug: String, val status: String, val message: 
 fun Application.configureOperationsAdminRoutes() {
     routing {
         authenticate("auth-jwt") {
+            get("/api/admin/dashboard/sites") {
+                val status = call.request.queryParameters["status"]?.lowercase()
+                call.respond(SiteRepository.findAll().filter { status == null || it.reconciliationStatus.value == status }.map(::dashboardSite))
+            }
+            get("/api/admin/dashboard/sites/{slug}") {
+                val slug = call.parameters["slug"] ?: run { call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing slug"); return@get }
+                val site = SiteRepository.findByProjectSlug(slug) ?: run { call.respondError(HttpStatusCode.NotFound, "site_not_found", "Site not found"); return@get }
+                val nginx = NginxService()
+                val inspection = nginx.inspectSite(slug)
+                val cert = nginx.resolveCertificateForDomain(site.domain)
+                val expiry = cert?.let { nginx.certificateExpiry(it.certificateDomain) }
+                call.respond(DashboardSiteDetailResponse(dashboardSite(site), inspection.content?.takeIf { inspection.managed }, inspection.content, cert != null, expiry?.second, nginx.listBackups(slug).map { it.name }))
+            }
+            get("/api/admin/dashboard/dead-configs") {
+                call.respond(SiteRepository.findAll().filter { it.reconciliationStatus == ReconciliationStatus.DEAD_CONFIG }.map(::dashboardSite))
+            }
+            get("/api/admin/dashboard/customers") {
+                call.respond(CustomerRepository.findAll().map { customer ->
+                    val sites = CustomerRepository.findSites(customer.id).mapNotNull { it.site }
+                    DashboardCustomerResponse(customer.id.toString(), customer.name, customer.contactEmail, customer.contactPhone, customer.billingStatus, sites.size, sites.groupingBy { it.reconciliationStatus.value }.eachCount())
+                })
+            }
+            get("/api/admin/dashboard/customers/{id}") {
+                val id = runCatching { UUID.fromString(call.parameters["id"]) }.getOrNull() ?: run { call.respondError(HttpStatusCode.BadRequest, "invalid_customer_id", "Invalid customer ID"); return@get }
+                val customer = CustomerRepository.findById(id) ?: run { call.respondError(HttpStatusCode.NotFound, "customer_not_found", "Customer not found"); return@get }
+                val sites = CustomerRepository.findSites(id).mapNotNull { it.site }.map(::dashboardSite)
+                call.respond(DashboardCustomerResponse(customer.id.toString(), customer.name, customer.contactEmail, customer.contactPhone, customer.billingStatus, sites.size, sites.groupingBy { it.status }.eachCount()))
+            }
             get("/api/admin/dashboard/summary") {
                 val projects = ProjectRepository.findAll()
                 val payments = PaymentRepository.findAllFiltered(null, null, null, null, 10000, 0).first.map { it.payment }
@@ -73,7 +135,8 @@ fun Application.configureOperationsAdminRoutes() {
                 val outbox = IntegrationOutboxRepository.summary()
                 val available = java.io.File(AppConfig.nginxSitesAvailablePath).listFiles()?.count { it.isFile && !it.name.startsWith(".") }?.toLong() ?: 0
                 val enabled = java.io.File(AppConfig.nginxSitesEnabledPath).listFiles()?.size?.toLong() ?: 0
-                call.respond(DashboardSummaryResponse(OffsetDateTime.now().toString(), projects.groupingBy { it.status.lowercase() }.eachCount().mapValues { it.value.toLong() }, payments.groupingBy { it.gatewayStatus.lowercase() }.eachCount().mapValues { it.value.toLong() }, mapOf("thisMonth" to revenue.first.toPlainString(), "lastMonth" to revenue.second.toPlainString()), mapOf("outboxPending" to outbox.pending, "outboxProcessing" to outbox.processing, "outboxDeadLetter" to outbox.deadLetter, "outboxDelivered" to outbox.delivered), mapOf("availableSites" to available, "enabledSites" to enabled), Metrics.snapshot()))
+                val siteCounts = SiteRepository.findAll().groupingBy { it.reconciliationStatus.value }.eachCount().mapValues { it.value.toLong() }
+                call.respond(DashboardSummaryResponse(OffsetDateTime.now().toString(), projects.groupingBy { it.status.lowercase() }.eachCount().mapValues { it.value.toLong() }, payments.groupingBy { it.gatewayStatus.lowercase() }.eachCount().mapValues { it.value.toLong() }, mapOf("thisMonth" to revenue.first.toPlainString(), "lastMonth" to revenue.second.toPlainString()), mapOf("outboxPending" to outbox.pending, "outboxProcessing" to outbox.processing, "outboxDeadLetter" to outbox.deadLetter, "outboxDelivered" to outbox.delivered), siteCounts + mapOf("availableSites" to available, "enabledSites" to enabled), Metrics.snapshot()))
             }
             get("/api/admin/notifications") {
                 val limit = call.request.queryParameters["limit"]?.toIntOrNull()?.coerceIn(1, 100) ?: 25
