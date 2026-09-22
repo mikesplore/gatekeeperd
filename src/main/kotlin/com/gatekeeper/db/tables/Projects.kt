@@ -12,7 +12,12 @@ object Projects : Table("projects") {
     val name = text("name")
     val domain = text("domain")
     val containerName = text("container_name")
-    val type = enumerationByName("type", 9, ProjectType::class)
+    val type = customEnumeration(
+        "type",
+        "TEXT",
+        { value -> ProjectType.entries.first { it.value == (value as String) } },
+        { it.value }
+    )
     val status = customEnumeration(
         "status",
         "TEXT",
