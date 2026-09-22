@@ -26,6 +26,7 @@ import com.gatekeeper.nginx.requireValidHostname
 import com.gatekeeper.db.repositories.ProjectRepository
 import com.gatekeeper.db.repositories.AuditRepository
 import com.gatekeeper.db.repositories.SiteRepository
+import com.gatekeeper.db.repositories.CertificateRepository
 import com.gatekeeper.db.tables.CertMode
 import com.gatekeeper.db.tables.TlsMode
 import com.gatekeeper.db.tables.UpstreamMode
@@ -783,6 +784,13 @@ fun Application.configureNginxAdminRoutes() {
                 }
 
                 val certInstalled = nginxService.isCertificateInstalled(validatedDomain)
+                val expiry = nginxService.certificateExpiry(validatedDomain)
+                CertificateRepository.upsert(
+                    domain = validatedDomain,
+                    issuedAt = java.time.LocalDateTime.now(),
+                    expiresAt = expiry?.first?.let { java.time.OffsetDateTime.parse(it).toLocalDateTime() },
+                    renewalStatus = if (expiry == null) "unknown" else "active"
+                )
 
                 call.respond(
                     CertificateResponse(
@@ -803,6 +811,10 @@ fun Application.configureNginxAdminRoutes() {
 
                 val validatedDomain = runCatching { requireValidHostname(domain) }.getOrElse {
                     call.respondError(HttpStatusCode.BadRequest, "invalid_domain", it.message ?: "Invalid domain")
+                    return@post
+                }
+                if (CertificateRepository.activeSiteCount(validatedDomain) > 0) {
+                    call.respondError(HttpStatusCode.Conflict, "certificate_in_use", "Certificate '$validatedDomain' is still referenced by active sites")
                     return@post
                 }
                 val removed = nginxService.removeCertificate(validatedDomain)

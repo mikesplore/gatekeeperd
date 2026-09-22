@@ -9,6 +9,7 @@ import com.gatekeeper.db.repositories.PaymentEventRepository
 import com.gatekeeper.db.repositories.ProjectRepository
 import com.gatekeeper.db.repositories.SiteRepository
 import com.gatekeeper.db.repositories.CustomerRepository
+import com.gatekeeper.db.repositories.CertificateRepository
 import com.gatekeeper.docker.DockerService
 import com.gatekeeper.nginx.NginxService
 import com.gatekeeper.db.tables.ReconciliationStatus
@@ -53,7 +54,8 @@ data class BulkProjectResult(val slug: String, val status: String, val message: 
     val revenue: Map<String, String>,
     val integrations: Map<String, Long>,
     val nginx: Map<String, Long>,
-    val metrics: Map<String, Long>
+    val metrics: Map<String, Long>,
+    val certificateAlerts: List<String> = emptyList()
 )
 
 @Serializable data class DashboardSiteResponse(
@@ -136,7 +138,17 @@ fun Application.configureOperationsAdminRoutes() {
                 val available = java.io.File(AppConfig.nginxSitesAvailablePath).listFiles()?.count { it.isFile && !it.name.startsWith(".") }?.toLong() ?: 0
                 val enabled = java.io.File(AppConfig.nginxSitesEnabledPath).listFiles()?.size?.toLong() ?: 0
                 val siteCounts = SiteRepository.findAll().groupingBy { it.reconciliationStatus.value }.eachCount().mapValues { it.value.toLong() }
-                call.respond(DashboardSummaryResponse(OffsetDateTime.now().toString(), projects.groupingBy { it.status.lowercase() }.eachCount().mapValues { it.value.toLong() }, payments.groupingBy { it.gatewayStatus.lowercase() }.eachCount().mapValues { it.value.toLong() }, mapOf("thisMonth" to revenue.first.toPlainString(), "lastMonth" to revenue.second.toPlainString()), mapOf("outboxPending" to outbox.pending, "outboxProcessing" to outbox.processing, "outboxDeadLetter" to outbox.deadLetter, "outboxDelivered" to outbox.delivered), siteCounts + mapOf("availableSites" to available, "enabledSites" to enabled), Metrics.snapshot()))
+                val now = LocalDateTime.now()
+                val certificateAlerts = CertificateRepository.findAll().flatMap { certificate ->
+                    buildList {
+                        certificate.lastRenewalError?.let { add("certificate for ${certificate.domain} renewal failed: $it") }
+                        certificate.expiresAt?.let { expires ->
+                            val days = java.time.Duration.between(now, expires).toDays()
+                            if (days <= 7) add("certificate for ${certificate.domain} expires in ${days.coerceAtLeast(0)} days")
+                        }
+                    }
+                }
+                call.respond(DashboardSummaryResponse(OffsetDateTime.now().toString(), projects.groupingBy { it.status.lowercase() }.eachCount().mapValues { it.value.toLong() }, payments.groupingBy { it.gatewayStatus.lowercase() }.eachCount().mapValues { it.value.toLong() }, mapOf("thisMonth" to revenue.first.toPlainString(), "lastMonth" to revenue.second.toPlainString()), mapOf("outboxPending" to outbox.pending, "outboxProcessing" to outbox.processing, "outboxDeadLetter" to outbox.deadLetter, "outboxDelivered" to outbox.delivered), siteCounts + mapOf("availableSites" to available, "enabledSites" to enabled), Metrics.snapshot(), certificateAlerts))
             }
             get("/api/admin/notifications") {
                 val limit = call.request.queryParameters["limit"]?.toIntOrNull()?.coerceIn(1, 100) ?: 25

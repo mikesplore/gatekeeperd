@@ -8,6 +8,7 @@ import org.jetbrains.exposed.sql.javatime.datetime
 object Sites : Table("sites") {
     val id = uuid("id").autoGenerate()
     val projectId = reference("project_id", Projects.id).uniqueIndex()
+    val certificateId = reference("certificate_id", Certificates.id).nullable().index()
     val domain = text("domain")
     val upstreamHost = text("upstream_host").default("127.0.0.1")
     val upstreamMode = enumerationByName("upstream_mode", 18, UpstreamMode::class)
