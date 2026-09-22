@@ -30,7 +30,27 @@ class NginxReconciliationService(
         SiteRepository.updateReconciliation(site.id, result.status, result.nginxError, result.dockerError)
     }
 ) {
-    fun reconcile(): NginxReconciliationReport {
+    private val cacheTtlMillis = 45_000L
+    @Volatile private var cached: Pair<Long, NginxReconciliationReport>? = null
+
+    fun getSiteStatuses(): NginxReconciliationReport {
+        val now = System.currentTimeMillis()
+        cached?.takeIf { now - it.first < cacheTtlMillis }?.let { return it.second }
+        return synchronized(this) {
+            val refreshedNow = System.currentTimeMillis()
+            cached?.takeIf { refreshedNow - it.first < cacheTtlMillis }?.second ?: evaluateAll().also {
+                cached = refreshedNow to it
+            }
+        }
+    }
+
+    fun invalidateCache() {
+        cached = null
+    }
+
+    fun reconcile(): NginxReconciliationReport = getSiteStatuses()
+
+    private fun evaluateAll(): NginxReconciliationReport {
         val sites = listSites()
         val bySlug = sites.mapNotNull { it.projectSlug?.let { slug -> slug to it } }.toMap()
         val fileNames = (siteFiles(sitesAvailablePath) + siteFiles(sitesEnabledPath)).toSet()

@@ -337,4 +337,45 @@ class NginxServiceTest {
         assertEquals(ReconciliationStatus.DEAD_CONFIG, states["dead"])
         assertEquals(listOf("orphan"), report.orphanedFiles)
     }
+
+    @Test
+    fun `reconciliation caches results and persists nginx and docker error text`() {
+        val root = Files.createTempDirectory("gk-reconcile-cache").toFile()
+        val available = File(root, "available").apply { mkdirs() }
+        val enabled = File(root, "enabled").apply { mkdirs() }
+        val site = SiteRepository.SiteRecord(
+            id = java.util.UUID.randomUUID(), projectId = java.util.UUID.randomUUID(), projectSlug = "faulty",
+            domain = "faulty.example.com", upstreamHost = "127.0.0.1", upstreamMode = UpstreamMode.EXPLICIT_PORT,
+            upstreamContainerName = null, upstreamExplicitPort = 3001, tlsMode = TlsMode.HTTP_ONLY,
+            certMode = CertMode.AUTO_RESOLVE, certExplicitPath = null, gateEnabled = true, configVersion = 1,
+            createdAt = LocalDateTime.now(), updatedAt = LocalDateTime.now(), reconciliationStatus = ReconciliationStatus.HEALTHY,
+            lastNginxError = null, lastDockerError = null, lastReconciledAt = null
+        )
+        File(available, "faulty").writeText("config")
+        Files.createSymbolicLink(File(enabled, "faulty").toPath(), File(available, "faulty").toPath())
+        var nginxChecks = 0
+        var dockerChecks = 0
+        val persisted = mutableListOf<NginxReconciliationResult>()
+        val service = NginxReconciliationService(
+            available, enabled, { listOf(site) }, { "config" },
+            { dockerChecks++; "container stopped" },
+            { nginxChecks++; if (nginxChecks == 1) "/etc/nginx/sites-available/faulty: syntax error" else null },
+            persist = { _, result -> persisted += result }
+        )
+
+        val first = service.getSiteStatuses()
+        val second = service.getSiteStatuses()
+        assertEquals(first.results, second.results)
+        assertEquals(1, nginxChecks)
+        assertEquals(0, dockerChecks)
+        assertEquals("/etc/nginx/sites-available/faulty: syntax error", persisted.single().nginxError)
+        assertEquals(ReconciliationStatus.ERROR, first.results.single().status)
+
+        service.invalidateCache()
+        val dockerFailure = service.getSiteStatuses()
+        assertEquals(2, nginxChecks)
+        assertEquals(1, dockerChecks)
+        assertEquals("container stopped", persisted.last().dockerError)
+        assertEquals(ReconciliationStatus.DOCKER_DOWN, dockerFailure.results.single().status)
+    }
 }
