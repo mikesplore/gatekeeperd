@@ -12,7 +12,7 @@ Project access status is separate from `blockReason`, which records why access i
 
 PostgreSQL stores projects, payments, audit log, and admin users. Redis caches gate status (60s TTL). Paystack handles checkout and payment confirmation.
 
-Database startup now records numbered migrations in `schema_migrations`. Fresh databases are created from `V0__baseline_schema.sql`, and existing databases receive subsequent numbered migrations. New schema changes should be added as files under `src/main/resources/db/migration/`; do not rely on implicit schema changes for new production behavior.
+Database startup now records migrations in Flyway's `flyway_schema_history`. Fresh databases are created from the single current-state migration `V1__current_schema.sql`. The production database is intentionally rebuilt from this migration; future schema changes should update this current-state migration while this deployment remains on the fresh-database strategy.
 
 Admin login attempts are rate-limited through Redis by email and client IP: five attempts per 15-minute window. If Redis is unavailable, login remains available and the outage is logged.
 
