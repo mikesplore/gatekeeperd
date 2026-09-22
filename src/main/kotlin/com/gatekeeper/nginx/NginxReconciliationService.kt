@@ -2,6 +2,8 @@ package com.gatekeeper.nginx
 
 import com.gatekeeper.db.repositories.SiteRepository
 import com.gatekeeper.db.tables.ReconciliationStatus
+import com.gatekeeper.db.tables.UpstreamMode
+import com.gatekeeper.docker.DockerService
 import java.io.File
 import java.nio.file.Files
 import java.security.MessageDigest
@@ -30,6 +32,23 @@ class NginxReconciliationService(
         SiteRepository.updateReconciliation(site.id, result.status, result.nginxError, result.dockerError)
     }
 ) {
+    companion object {
+        /** Docker-backed check used by production reconciliation wiring and integration tests. */
+        fun dockerCheck(docker: DockerService): (SiteRepository.SiteRecord) -> String? = { site ->
+            if (site.upstreamMode != UpstreamMode.DOCKER_DISCOVERY) {
+                null
+            } else {
+                val container = site.upstreamContainerName
+                when {
+                    container.isNullOrBlank() -> "Docker discovery site has no container name"
+                    docker.containerHealth(container) != "running" ->
+                        "Docker container '$container' is not running"
+                    else -> null
+                }
+            }
+        }
+    }
+
     private val cacheTtlMillis = 45_000L
     @Volatile private var cached: Pair<Long, NginxReconciliationReport>? = null
 
