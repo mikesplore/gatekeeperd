@@ -83,6 +83,14 @@ object SiteRepository {
         Sites.deleteWhere { Sites.projectId eq projectId }
     }
 
+    fun linkCertificateForDomain(domain: String, certificateId: UUID) = transaction {
+        Sites.update({ Sites.domain eq domain }) { it[Sites.certificateId] = certificateId }
+    }
+
+    fun linkCertificate(projectId: UUID, certificateId: UUID) = transaction {
+        Sites.update({ Sites.projectId eq projectId }) { it[Sites.certificateId] = certificateId }
+    }
+
     private fun ResultRow.toRecord(projectSlug: String? = null) = SiteRecord(
         this[Sites.id], this[Sites.projectId], this[Sites.domain], this[Sites.upstreamHost],
         this[Sites.upstreamMode], this[Sites.upstreamContainerName], this[Sites.upstreamExplicitPort],

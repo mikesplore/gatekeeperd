@@ -3,6 +3,7 @@ package com.gatekeeper.nginx
 import com.gatekeeper.config.AppConfig
 import com.gatekeeper.db.repositories.ProjectRepository
 import com.gatekeeper.db.repositories.SiteRepository
+import com.gatekeeper.db.repositories.CertificateRepository
 import com.gatekeeper.docker.DockerService
 import java.io.File
 
@@ -26,7 +27,15 @@ object NginxBackfillRunner {
                 },
                 autoCertificatePath = { domain -> nginx.resolveCertificateForDomain(domain)?.certificatePath },
                 render = { model -> nginx.generateNginxConfig(model) },
-                createSite = { project, model -> SiteRepository.create(project.id, model) },
+                createSite = { project, model ->
+                    val site = SiteRepository.create(project.id, model)
+                    if (model.certMode == com.gatekeeper.db.tables.CertMode.AUTO_RESOLVE) {
+                        nginx.resolveCertificateForDomain(model.domain)?.let { resolved ->
+                            val certificate = CertificateRepository.upsert(resolved.certificateDomain, null, null, "discovered")
+                            SiteRepository.linkCertificate(project.id, certificate.id)
+                        }
+                    }
+                },
                 deleteSite = { project -> SiteRepository.deleteByProjectId(project.id) },
                 dryRun = dryRun,
                 log = ::println

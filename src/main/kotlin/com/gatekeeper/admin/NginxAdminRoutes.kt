@@ -785,12 +785,13 @@ fun Application.configureNginxAdminRoutes() {
 
                 val certInstalled = nginxService.isCertificateInstalled(validatedDomain)
                 val expiry = nginxService.certificateExpiry(validatedDomain)
-                CertificateRepository.upsert(
+                val certificate = CertificateRepository.upsert(
                     domain = validatedDomain,
                     issuedAt = java.time.LocalDateTime.now(),
                     expiresAt = expiry?.first?.let { java.time.OffsetDateTime.parse(it).toLocalDateTime() },
                     renewalStatus = if (expiry == null) "unknown" else "active"
                 )
+                SiteRepository.linkCertificateForDomain(validatedDomain, certificate.id)
 
                 call.respond(
                     CertificateResponse(
