@@ -83,6 +83,10 @@ data class BulkProjectResult(val slug: String, val status: String, val message: 
     val projects: List<DashboardCustomerProjectResponse> = emptyList()
 )
 
+@Serializable data class DashboardCustomersPageResponse(
+    val customers: List<DashboardCustomerResponse>, val total: Int, val limit: Int, val offset: Int, val hasMore: Boolean
+)
+
 @Serializable data class DashboardCustomerProjectResponse(
     val id: String, val slug: String, val name: String, val domain: String,
     val amountDue: Double? = null, val totalPaid: Double = 0.0, val balance: Double = 0.0,
@@ -250,7 +254,7 @@ fun Application.configureOperationsAdminRoutes() {
                 val limit = call.request.queryParameters["limit"]?.toIntOrNull()?.coerceIn(1, 500) ?: 100
                 val query = call.request.queryParameters["q"]
                 val (customers, total) = CustomerRepository.findPage(query, limit, offset)
-                call.respond(mapOf("customers" to customers.map { customer ->
+                val responses = customers.map { customer ->
                     val owned = CustomerRepository.findSites(customer.id)
                     val sites = owned.mapNotNull { it.site }
                     val financials = owned.map { dashboardProjectFinancials(it.project) }
@@ -258,7 +262,8 @@ fun Application.configureOperationsAdminRoutes() {
                     val paid = financials.sumOf { it.paid }
                     val balance = financials.sumOf { it.balance }
                     DashboardCustomerResponse(customer.id.toString(), customer.name, customer.contactEmail, customer.contactPhone, derivedBillingStatus(financials), owned.size, sites.groupingBy { it.reconciliationStatus.value }.eachCount(), billed.toDouble(), paid.toDouble(), balance.toDouble())
-                }, "total" to total, "limit" to limit, "offset" to offset, "hasMore" to (offset + customers.size < total)))
+                }
+                call.respond(DashboardCustomersPageResponse(responses, total, limit, offset, offset + responses.size < total))
             }
             get("/api/admin/dashboard/customers/{id}") {
                 val id = runCatching { UUID.fromString(call.parameters["id"]) }.getOrNull() ?: run { call.respondError(HttpStatusCode.BadRequest, "invalid_customer_id", "Invalid customer ID"); return@get }
