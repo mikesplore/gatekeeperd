@@ -14,6 +14,7 @@ import org.jetbrains.exposed.sql.insert
 import org.jetbrains.exposed.sql.innerJoin
 import org.jetbrains.exposed.sql.selectAll
 import org.jetbrains.exposed.sql.transactions.transaction
+import org.jetbrains.exposed.sql.update
 import java.time.LocalDateTime
 import java.util.UUID
 
@@ -23,7 +24,7 @@ object SiteRepository {
         val upstreamMode: UpstreamMode, val upstreamContainerName: String?, val upstreamExplicitPort: Int?,
         val tlsMode: TlsMode, val certMode: CertMode, val certExplicitPath: String?, val gateEnabled: Boolean,
         val configVersion: Int, val createdAt: LocalDateTime, val updatedAt: LocalDateTime
-        , val reconciliationStatus: ReconciliationStatus, val lastNginxError: String?, val lastDockerError: String?, val lastReconciledAt: LocalDateTime?
+        , val reconciliationStatus: ReconciliationStatus, val lastNginxError: String?, val lastDockerError: String?, val lastReconciledAt: LocalDateTime?, val projectSlug: String? = null
     )
 
     fun findByProjectId(projectId: UUID): SiteRecord? = transaction {
@@ -33,7 +34,28 @@ object SiteRepository {
     fun findByProjectSlug(slug: String): SiteRecord? = transaction {
         Sites.innerJoin(Projects).selectAll()
             .where { (Projects.slug eq slug) and Projects.deletedAt.isNull() }
-            .singleOrNull()?.toRecord()
+            .singleOrNull()?.toRecord(slug)
+    }
+
+    fun findAll(): List<SiteRecord> = transaction {
+        Sites.innerJoin(Projects).selectAll()
+            .where { Projects.deletedAt.isNull() }
+            .map { it.toRecord(it[Projects.slug]) }
+    }
+
+    fun updateReconciliation(
+        id: UUID,
+        status: ReconciliationStatus,
+        nginxError: String?,
+        dockerError: String?,
+        reconciledAt: LocalDateTime = LocalDateTime.now()
+    ) = transaction {
+        Sites.update({ Sites.id eq id }) {
+            it[Sites.reconciliationStatus] = status
+            it[Sites.lastNginxError] = nginxError
+            it[Sites.lastDockerError] = dockerError
+            it[Sites.lastReconciledAt] = reconciledAt
+        }
     }
 
     fun create(projectId: UUID, model: com.gatekeeper.nginx.NginxSiteRenderModel): SiteRecord = transaction {
@@ -61,11 +83,11 @@ object SiteRepository {
         Sites.deleteWhere { Sites.projectId eq projectId }
     }
 
-    private fun ResultRow.toRecord() = SiteRecord(
+    private fun ResultRow.toRecord(projectSlug: String? = null) = SiteRecord(
         this[Sites.id], this[Sites.projectId], this[Sites.domain], this[Sites.upstreamHost],
         this[Sites.upstreamMode], this[Sites.upstreamContainerName], this[Sites.upstreamExplicitPort],
         this[Sites.tlsMode], this[Sites.certMode], this[Sites.certExplicitPath], this[Sites.gateEnabled],
         this[Sites.configVersion], this[Sites.createdAt], this[Sites.updatedAt], this[Sites.reconciliationStatus],
-        this[Sites.lastNginxError], this[Sites.lastDockerError], this[Sites.lastReconciledAt]
+        this[Sites.lastNginxError], this[Sites.lastDockerError], this[Sites.lastReconciledAt], projectSlug
     )
 }

@@ -10,6 +10,12 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import com.gatekeeper.db.repositories.SiteRepository
+import com.gatekeeper.db.tables.CertMode
+import com.gatekeeper.db.tables.ReconciliationStatus
+import com.gatekeeper.db.tables.TlsMode
+import com.gatekeeper.db.tables.UpstreamMode
+import java.time.LocalDateTime
 
 class NginxServiceTest {
 
@@ -287,5 +293,48 @@ class NginxServiceTest {
         )
         assertContains(rendered, "server_name unmigrated.example.com;")
         assertContains(rendered, "proxy_pass http://127.0.0.1:3001;")
+    }
+
+    @Test
+    fun `reconciliation evaluates disabled drift docker error dead and orphaned states`() {
+        val root = Files.createTempDirectory("gk-reconcile").toFile()
+        val available = File(root, "sites-available").apply { mkdirs() }
+        val enabled = File(root, "sites-enabled").apply { mkdirs() }
+        val slugs = listOf("healthy", "disabled", "drifted", "docker", "error", "dead")
+        val sites = slugs.map { slug ->
+            SiteRepository.SiteRecord(
+                id = java.util.UUID.randomUUID(), projectId = java.util.UUID.randomUUID(), projectSlug = slug,
+                domain = "$slug.example.com", upstreamHost = "127.0.0.1", upstreamMode = UpstreamMode.EXPLICIT_PORT,
+                upstreamContainerName = null, upstreamExplicitPort = 3001, tlsMode = TlsMode.HTTP_ONLY,
+                certMode = CertMode.AUTO_RESOLVE, certExplicitPath = null, gateEnabled = true, configVersion = 1,
+                createdAt = LocalDateTime.now(), updatedAt = LocalDateTime.now(), reconciliationStatus = ReconciliationStatus.HEALTHY,
+                lastNginxError = null, lastDockerError = null, lastReconciledAt = null
+            )
+        }
+        File(available, "healthy").writeText("healthy")
+        File(available, "disabled").writeText("disabled")
+        File(available, "drifted").writeText("on-disk")
+        File(available, "docker").writeText("docker")
+        File(available, "error").writeText("error")
+        File(available, "orphan").writeText("orphan")
+        listOf("healthy", "drifted", "docker", "error").forEach {
+            Files.createSymbolicLink(File(enabled, it).toPath(), File(available, it).toPath())
+        }
+        val report = NginxReconciliationService(
+            available, enabled, { sites },
+            renderExpected = { site -> if (site.projectSlug == "drifted") "expected" else File(available, site.projectSlug!!).readText() },
+            dockerCheck = { if (it.projectSlug == "docker") "container is not running" else null },
+            nginxTest = { "/etc/nginx/sites-available/error: syntax error" },
+            persist = { _, _ -> }
+        ).reconcile()
+
+        val states = report.results.associate { it.slug to it.status }
+        assertEquals(ReconciliationStatus.HEALTHY, states["healthy"])
+        assertEquals(ReconciliationStatus.DISABLED, states["disabled"])
+        assertEquals(ReconciliationStatus.DRIFTED, states["drifted"])
+        assertEquals(ReconciliationStatus.DOCKER_DOWN, states["docker"])
+        assertEquals(ReconciliationStatus.ERROR, states["error"])
+        assertEquals(ReconciliationStatus.DEAD_CONFIG, states["dead"])
+        assertEquals(listOf("orphan"), report.orphanedFiles)
     }
 }
