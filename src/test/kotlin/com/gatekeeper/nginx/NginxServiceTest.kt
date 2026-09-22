@@ -6,6 +6,10 @@ import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 class NginxServiceTest {
 
@@ -49,6 +53,27 @@ class NginxServiceTest {
 
         assertContains(config, "proxy_pass http://127.0.0.1:3001;")
         assertContains(config, "listen 80;")
+    }
+
+    @Test
+    fun `site render model preserves legacy output`() {
+        val legacy = service.generateNginxConfig(
+            slug = "acw",
+            domain = "acw.example.com",
+            appPort = 3001,
+            upstreamScheme = "http",
+            sslEnabled = false
+        )
+        val fromSite = service.generateNginxConfig(
+            NginxSiteRenderModel(
+                slug = "acw",
+                domain = "acw.example.com",
+                appPort = 3001,
+                upstreamScheme = "http",
+                tlsMode = TlsRenderMode.HTTP_ONLY
+            )
+        )
+        assertEquals(legacy, fromSite)
     }
 
     @Test
@@ -106,5 +131,161 @@ class NginxServiceTest {
         )
 
         assertEquals("shared.example.com", resolved?.certificateDomain)
+    }
+
+    @Test
+    fun `failed validation leaves existing site file and symlink unchanged`() {
+        val root = Files.createTempDirectory("gk-nginx-enable").toFile()
+        val available = File(root, "sites-available").apply { mkdirs() }
+        val enabled = File(root, "sites-enabled").apply { mkdirs() }
+        val slug = "acw"
+        val existing = File(available, slug).apply { writeText("server {\n    listen 80;\n}\n") }
+        val link = File(enabled, slug)
+        Files.createSymbolicLink(link.toPath(), existing.toPath())
+
+        val service = NginxService(
+            sitesAvailablePath = available.absolutePath,
+            sitesEnabledPath = enabled.absolutePath,
+            gatekeeperPort = 8080,
+            sslCertPath = root.resolve("certificates").absolutePath
+        )
+
+        assertFalse(service.enableProject(slug, "server {\n    listen 443;\n"))
+
+        assertEquals("server {\n    listen 80;\n}\n", existing.readText())
+        assertTrue(Files.isSymbolicLink(link.toPath()))
+        assertEquals(existing.toPath(), Files.readSymbolicLink(link.toPath()))
+        assertFalse(File(available, ".${slug}.staged").exists())
+    }
+
+    @Test
+    fun `rejects dangerous nginx inputs before filesystem or command use`() {
+        assertFailsWith<IllegalArgumentException> { requireValidHostname("example.com; touch /tmp/pwned") }
+        assertFailsWith<IllegalArgumentException> {
+            requireCertificatePath("/etc/letsencrypt/live/../../tmp/fullchain.pem", "/etc/letsencrypt/live")
+        }
+        assertFailsWith<IllegalArgumentException> { requireValidEmail("not-an-email") }
+    }
+
+    private fun isolatedService(root: File, reloads: MutableList<Boolean> = mutableListOf()): NginxService {
+        val available = File(root, "sites-available").apply { mkdirs() }
+        val enabled = File(root, "sites-enabled").apply { mkdirs() }
+        return NginxService(
+            sitesAvailablePath = available.absolutePath,
+            sitesEnabledPath = enabled.absolutePath,
+            sslCertPath = File(root, "certificates").absolutePath,
+            nginxTestRunner = { NginxTestResult(true, 0, "stub", "now") },
+            nginxReloadRunner = { reloads += true; true }
+        )
+    }
+
+    @Test
+    fun `successful activation writes file symlink hash and backup`() {
+        val root = Files.createTempDirectory("gk-nginx-activation").toFile()
+        val available = File(root, "sites-available").apply { mkdirs() }
+        val enabled = File(root, "sites-enabled").apply { mkdirs() }
+        val slug = "acw"
+        val old = "old-config"
+        File(available, slug).writeText(old)
+        Files.createSymbolicLink(File(enabled, slug).toPath(), File(available, slug).toPath())
+        val service = isolatedService(root)
+
+        assertTrue(service.enableProject(slug, "new-config"))
+        assertEquals("new-config", File(available, slug).readText())
+        assertEquals(File(available, slug).toPath(), Files.readSymbolicLink(File(enabled, slug).toPath()))
+        val backup = service.listBackups(slug).single()
+        assertEquals("old-config", File(available, backup.name).readText())
+        assertTrue(service.inspectSite(slug).managed)
+    }
+
+    @Test
+    fun `reload failure restores previous file and symlink`() {
+        val root = Files.createTempDirectory("gk-nginx-reload-failure").toFile()
+        val available = File(root, "sites-available").apply { mkdirs() }
+        val enabled = File(root, "sites-enabled").apply { mkdirs() }
+        val slug = "acw"
+        val existing = File(available, slug).apply { writeText("old-config") }
+        Files.createSymbolicLink(File(enabled, slug).toPath(), existing.toPath())
+        val service = NginxService(
+            sitesAvailablePath = available.absolutePath,
+            sitesEnabledPath = enabled.absolutePath,
+            nginxTestRunner = { NginxTestResult(true, 0, "stub", "now") },
+            nginxReloadRunner = { false }
+        )
+
+        assertFalse(service.enableProject(slug, "new-config"))
+        assertEquals("old-config", existing.readText())
+        assertEquals(existing.toPath(), Files.readSymbolicLink(File(enabled, slug).toPath()))
+    }
+
+    @Test
+    fun `different slugs can activate concurrently without crossing files or backups`() {
+        val root = Files.createTempDirectory("gk-nginx-concurrency").toFile()
+        val available = File(root, "sites-available").apply { mkdirs() }
+        val enabled = File(root, "sites-enabled").apply { mkdirs() }
+        val service = isolatedService(root)
+        val executor = Executors.newFixedThreadPool(2)
+        try {
+            val futures = listOf("alpha", "beta").map { slug ->
+                executor.submit<Boolean> { service.enableProject(slug, "config-$slug") }
+            }
+            assertTrue(futures.all { it.get(10, TimeUnit.SECONDS) })
+        } finally {
+            executor.shutdownNow()
+        }
+        assertEquals("config-alpha", File(available, "alpha").readText())
+        assertEquals("config-beta", File(available, "beta").readText())
+        assertEquals(File(available, "alpha").toPath(), Files.readSymbolicLink(File(enabled, "alpha").toPath()))
+        assertEquals(File(available, "beta").toPath(), Files.readSymbolicLink(File(enabled, "beta").toPath()))
+    }
+
+    @Test
+    fun `backfill reports migrated skipped and byte-diff failures`() {
+        val root = Files.createTempDirectory("gk-nginx-backfill").toFile()
+        val fixture = File(root, "sites-available").apply { mkdirs() }
+        fun config(domain: String, port: Int) = """
+            server {
+                listen 80;
+                server_name $domain;
+                location / { proxy_pass http://127.0.0.1:$port; }
+            }
+        """.trimIndent() + "\n"
+        File(fixture, "migrated").writeText(config("migrated.example.com", 3001))
+        File(fixture, "failed").writeText(config("failed.example.com", 3002))
+        File(fixture, "orphan").writeText(config("orphan.example.com", 3003))
+        val projects = mapOf(
+            "migrated" to BackfillProject(java.util.UUID.randomUUID(), "migrated", "migrated-container"),
+            "failed" to BackfillProject(java.util.UUID.randomUUID(), "failed", "failed-container")
+        )
+        val created = mutableListOf<String>()
+        val deleted = mutableListOf<String>()
+        val report = NginxSiteBackfill(
+            sitesAvailable = fixture,
+            findProject = { projects[it] },
+            expectedDockerPort = { project -> if (project.slug == "migrated") 3001 else 9999 },
+            autoCertificatePath = { null },
+            render = { model -> if (model.slug == "migrated") fixture.resolve(model.slug).readText() else "different" },
+            createSite = { project, _ -> created += project.slug },
+            deleteSite = { project -> deleted += project.slug }
+        ).run()
+
+        assertEquals(listOf("migrated"), report.migrated)
+        assertEquals(listOf("orphan"), report.skippedNoProject)
+        assertEquals(listOf("failed"), report.failedDiff.keys.toList())
+        assertEquals(listOf("failed", "migrated"), created)
+        assertEquals(listOf("failed"), deleted)
+    }
+
+    @Test
+    fun `legacy renderer remains available for an unmigrated slug`() {
+        val rendered = service.generateNginxConfig(
+            slug = "unmigrated",
+            domain = "unmigrated.example.com",
+            appPort = 3001,
+            upstreamScheme = "http",
+            sslEnabled = false
+        )
+        assertContains(rendered, "server_name unmigrated.example.com;")
+        assertContains(rendered, "proxy_pass http://127.0.0.1:3001;")
     }
 }

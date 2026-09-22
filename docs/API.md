@@ -498,6 +498,8 @@ Runs `nginx -t` on the host and returns the exit code, timestamp, validity, and 
 
 `GET /api/admin/nginx/config/{slug}/versions` lists available configuration backups. `POST /api/admin/nginx/config/{slug}/rollback/{backup}` restores a selected backup, validates it, reloads Nginx, and restores the current version if anything fails.
 
+`POST /api/admin/nginx/rollback/{slug}` is a convenience wrapper: it resolves the latest backup and delegates to the same selected-backup rollback implementation. Both endpoints return the same response shape and use the same validation, activation, reload, hash, and audit flow.
+
 Successful block updates and rollbacks are recorded in the project audit log.
 
 ## Deployment operations

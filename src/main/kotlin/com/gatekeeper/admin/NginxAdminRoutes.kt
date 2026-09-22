@@ -14,12 +14,21 @@ import com.gatekeeper.nginx.NginxService
 import com.gatekeeper.nginx.NginxConfigInspection
 import com.gatekeeper.nginx.NginxTestResult
 import com.gatekeeper.nginx.NginxBlockUpdateRequest
+import com.gatekeeper.nginx.NginxSiteRenderModel
+import com.gatekeeper.nginx.TlsRenderMode
 import com.gatekeeper.nginx.ResolvedCertificate
 import com.gatekeeper.nginx.extractConfiguredContainerName
 import com.gatekeeper.nginx.extractConfiguredPort
 import com.gatekeeper.nginx.parsePublishedHostPorts
+import com.gatekeeper.nginx.requireCertificatePath
+import com.gatekeeper.nginx.requireValidEmail
+import com.gatekeeper.nginx.requireValidHostname
 import com.gatekeeper.db.repositories.ProjectRepository
 import com.gatekeeper.db.repositories.AuditRepository
+import com.gatekeeper.db.repositories.SiteRepository
+import com.gatekeeper.db.tables.CertMode
+import com.gatekeeper.db.tables.TlsMode
+import com.gatekeeper.db.tables.UpstreamMode
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.Application
 import io.ktor.server.auth.authenticate
@@ -86,6 +95,52 @@ private sealed interface NginxPlanResult {
         val data: JsonObject? = null
     ) : NginxPlanResult
 }
+
+private fun renderModelFromSite(
+    slug: String,
+    site: SiteRepository.SiteRecord,
+    nginxService: NginxService,
+    dockerService: DockerService?
+): NginxSiteRenderModel {
+    val port = when (site.upstreamMode) {
+        UpstreamMode.EXPLICIT_PORT -> site.upstreamExplicitPort
+            ?: error("Site $slug has no explicit upstream port")
+        UpstreamMode.DOCKER_DISCOVERY -> {
+            val container = site.upstreamContainerName?.let { dockerService?.getContainer(it) }
+            parsePublishedHostPorts(container?.ports.orEmpty()).singleOrNull()
+                ?: error("Could not resolve one Docker upstream port for site $slug")
+        }
+    }
+    val certificate = when (site.certMode) {
+        CertMode.AUTO_RESOLVE -> nginxService.resolveCertificateForDomain(site.domain)
+        CertMode.EXPLICIT_PATH -> site.certExplicitPath?.let {
+            ResolvedCertificate("explicit", it, it.replace("fullchain.pem", "privkey.pem"))
+        } ?: error("Site $slug has no explicit certificate path")
+    }
+    val tls = when (site.tlsMode) {
+        TlsMode.HTTP_ONLY -> TlsRenderMode.HTTP_ONLY
+        TlsMode.HTTPS -> TlsRenderMode.HTTPS
+        TlsMode.HTTPS_HTTP2 -> TlsRenderMode.HTTPS_HTTP2
+    }
+    return NginxSiteRenderModel(
+        slug = slug,
+        domain = site.domain,
+        upstreamHost = site.upstreamHost,
+        appPort = port,
+        upstreamScheme = if (tls == TlsRenderMode.HTTP_ONLY) "http" else "https",
+        tlsMode = tls,
+        certificatePath = certificate?.certificatePath,
+        certificateKeyPath = certificate?.privateKeyPath,
+        upstreamMode = site.upstreamMode,
+        upstreamContainerName = site.upstreamContainerName,
+        certMode = site.certMode
+    )
+}
+
+internal fun hasRenderAffectingNginxParameters(body: NginxEnableRequest): Boolean =
+    body.port != null || body.domain != null || body.upstreamScheme != null ||
+        body.certificateDomain != null || body.sslCertificatePath != null ||
+        body.sslCertificateKeyPath != null || body.requireSsl != null
 
 private fun computeNginxEnablePlan(
     slug: String,
@@ -169,7 +224,9 @@ private fun computeNginxEnablePlan(
         return NginxPlanResult.Err(HttpStatusCode.BadRequest, "invalid_request", "upstreamScheme must be 'http' or 'https'")
     }
 
-    val domain = projectDomain.trim()
+    val domain = try { requireValidHostname(projectDomain) } catch (e: IllegalArgumentException) {
+        return NginxPlanResult.Err(HttpStatusCode.BadRequest, "invalid_domain", e.message ?: "Project domain is invalid")
+    }
     if (domain.isBlank()) {
         return NginxPlanResult.Err(HttpStatusCode.BadRequest, "no_domain", "Project has no domain configured")
     }
@@ -188,8 +245,14 @@ private fun computeNginxEnablePlan(
 
     val resolvedCertificate = when {
         explicitCertPath != null && explicitKeyPath != null -> {
-            val certFile = java.io.File(explicitCertPath)
-            val keyFile = java.io.File(explicitKeyPath)
+            val certPath = try { requireCertificatePath(explicitCertPath, AppConfig.nginxSslCertPath) } catch (e: IllegalArgumentException) {
+                return NginxPlanResult.Err(HttpStatusCode.BadRequest, "invalid_certificate_path", e.message ?: "Invalid SSL certificate path")
+            }
+            val keyPath = try { requireCertificatePath(explicitKeyPath, AppConfig.nginxSslCertPath) } catch (e: IllegalArgumentException) {
+                return NginxPlanResult.Err(HttpStatusCode.BadRequest, "invalid_certificate_path", e.message ?: "Invalid SSL certificate path")
+            }
+            val certFile = java.io.File(certPath)
+            val keyFile = java.io.File(keyPath)
             if (!certFile.exists() || !keyFile.exists()) {
                 return NginxPlanResult.Err(
                     HttpStatusCode.BadRequest,
@@ -507,7 +570,34 @@ fun Application.configureNginxAdminRoutes() {
                     return@post
                 }
 
-                val plan = when (val result = computeNginxEnablePlan(
+                val site = SiteRepository.findByProjectSlug(slug)
+                val renderAffectingRequest = hasRenderAffectingNginxParameters(body)
+                if (site != null && renderAffectingRequest) {
+                    call.respondError(
+                        HttpStatusCode.BadRequest,
+                        "site_parameters_not_allowed",
+                        "This project is DB-driven; update its Site row instead of sending render-affecting enable parameters"
+                    )
+                    return@post
+                }
+
+                val responseAppPort: Int?
+                val responseSslEnabled: Boolean
+                val responseCertificateDomain: String?
+                val config = if (site != null) {
+                    runCatching { renderModelFromSite(slug, site, nginxService, dockerService) }
+                        .getOrElse {
+                            call.respondError(HttpStatusCode.UnprocessableEntity, "site_configuration_invalid", it.message ?: "Stored Site configuration is invalid")
+                            return@post
+                        }
+                        .also {
+                            responseAppPort = it.appPort
+                            responseSslEnabled = it.tlsMode != TlsRenderMode.HTTP_ONLY
+                            responseCertificateDomain = if (site.certMode == CertMode.AUTO_RESOLVE) nginxService.resolveCertificateForDomain(site.domain)?.certificateDomain else "explicit"
+                        }
+                        .let { nginxService.generateNginxConfig(it) }
+                } else {
+                    val plan = when (val result = computeNginxEnablePlan(
                     slug = slug,
                     projectDomain = project.domain,
                     projectContainerName = project.containerName,
@@ -524,21 +614,28 @@ fun Application.configureNginxAdminRoutes() {
                         return@post
                     }
                     is NginxPlanResult.Ok -> result.plan
+                    }
+                    responseAppPort = plan.appPort
+                    responseSslEnabled = plan.sslEnabled
+                    responseCertificateDomain = plan.resolvedCertificate?.certificateDomain
+                    nginxService.generateNginxConfig(
+                        slug = slug,
+                        domain = plan.domain,
+                        appPort = responseAppPort,
+                        upstreamScheme = plan.upstreamScheme,
+                        sslEnabled = responseSslEnabled,
+                        sslCertificatePath = plan.resolvedCertificate?.certificatePath,
+                        sslCertificateKeyPath = plan.resolvedCertificate?.privateKeyPath
+                    )
                 }
-
-                val config = nginxService.generateNginxConfig(
-                    slug = slug,
-                    domain = plan.domain,
-                    appPort = plan.appPort,
-                    upstreamScheme = plan.upstreamScheme,
-                    sslEnabled = plan.sslEnabled,
-                    sslCertificatePath = plan.resolvedCertificate?.certificatePath,
-                    sslCertificateKeyPath = plan.resolvedCertificate?.privateKeyPath
-                )
 
                 val enabled = nginxService.enableProject(slug, config)
                 if (!enabled) {
-                    call.respondError(HttpStatusCode.InternalServerError, "nginx_error", "Failed to enable nginx site")
+                    call.respondError(
+                        HttpStatusCode.UnprocessableEntity,
+                        "nginx_error",
+                        "Nginx validation or activation failed; the previous site configuration was preserved"
+                    )
                     return@post
                 }
 
@@ -555,9 +652,9 @@ fun Application.configureNginxAdminRoutes() {
                         success = true,
                         message = "Nginx site enabled and reloaded successfully",
                         config = config,
-                        appPort = plan.appPort,
-                        sslEnabled = plan.sslEnabled,
-                        certificateDomain = plan.resolvedCertificate?.certificateDomain
+                        appPort = responseAppPort,
+                        sslEnabled = responseSslEnabled,
+                        certificateDomain = responseCertificateDomain
                     )
                 )
             }
@@ -596,16 +693,18 @@ fun Application.configureNginxAdminRoutes() {
                     call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing slug path parameter")
                     return@post
                 }
-                val restored = nginxService.restoreLatestBackup(slug)
-                if (!restored) {
+                val latest = runCatching { nginxService.listBackups(slug).firstOrNull()?.name }
+                    .getOrElse { call.respondError(HttpStatusCode.BadRequest, "invalid_slug", it.message ?: "Invalid site name"); return@post }
+                if (latest == null) {
                     call.respondError(HttpStatusCode.NotFound, "nginx_backup_not_found", "No nginx backup was found for this project")
                     return@post
                 }
-                if (!nginxService.reloadNginx()) {
-                    call.respondError(HttpStatusCode.InternalServerError, "nginx_error", "Rollback restored the file but nginx reload failed")
-                    return@post
+                val result = runCatching { nginxService.rollback(slug, latest) }
+                    .getOrElse { call.respondError(HttpStatusCode.BadRequest, "rollback_failed", it.message ?: "Unable to roll back configuration"); return@post }
+                if (!result.success) call.respond(HttpStatusCode.UnprocessableEntity, result) else call.respond(result)
+                if (result.success) ProjectRepository.findBySlug(slug)?.let { project ->
+                    AuditRepository.write(project.id, "nginx_rollback", "admin", "Rolled back Nginx configuration to $latest")
                 }
-                call.respond(mapOf("success" to true, "message" to "Nginx configuration rolled back and reloaded"))
             }
 
             post("/api/admin/nginx/remove/{slug}") {
@@ -659,8 +758,12 @@ fun Application.configureNginxAdminRoutes() {
                 val domain = body.domain.trim()
                 val email = body.email.trim()
 
-                if (domain.isBlank() || email.isBlank()) {
-                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "domain and email are required")
+                val validatedDomain = runCatching { requireValidHostname(domain) }.getOrElse {
+                    call.respondError(HttpStatusCode.BadRequest, "invalid_domain", it.message ?: "Invalid domain")
+                    return@post
+                }
+                val validatedEmail = runCatching { requireValidEmail(email) }.getOrElse {
+                    call.respondError(HttpStatusCode.BadRequest, "invalid_email", it.message ?: "Invalid email")
                     return@post
                 }
 
@@ -673,20 +776,20 @@ fun Application.configureNginxAdminRoutes() {
                     return@post
                 }
 
-                val installed = nginxService.installCertificate(domain, email)
+                val installed = nginxService.installCertificate(validatedDomain, validatedEmail)
                 if (!installed) {
                     call.respondError(HttpStatusCode.InternalServerError, "certificate_error", "Failed to install SSL certificate")
                     return@post
                 }
 
-                val certInstalled = nginxService.isCertificateInstalled(domain)
+                val certInstalled = nginxService.isCertificateInstalled(validatedDomain)
 
                 call.respond(
                     CertificateResponse(
-                        domain = domain,
+                        domain = validatedDomain,
                         installed = certInstalled,
-                        certificatePath = "/etc/letsencrypt/live/$domain/fullchain.pem",
-                        privateKeyPath = "/etc/letsencrypt/live/$domain/privkey.pem"
+                        certificatePath = "${AppConfig.nginxSslCertPath}/$validatedDomain/fullchain.pem",
+                        privateKeyPath = "${AppConfig.nginxSslCertPath}/$validatedDomain/privkey.pem"
                     )
                 )
             }
@@ -698,7 +801,11 @@ fun Application.configureNginxAdminRoutes() {
                     return@post
                 }
 
-                val removed = nginxService.removeCertificate(domain)
+                val validatedDomain = runCatching { requireValidHostname(domain) }.getOrElse {
+                    call.respondError(HttpStatusCode.BadRequest, "invalid_domain", it.message ?: "Invalid domain")
+                    return@post
+                }
+                val removed = nginxService.removeCertificate(validatedDomain)
                 if (!removed) {
                     call.respondError(HttpStatusCode.InternalServerError, "certificate_error", "Failed to remove SSL certificate")
                     return@post
@@ -706,7 +813,7 @@ fun Application.configureNginxAdminRoutes() {
 
                 call.respond(
                     CertificateResponse(
-                        domain = domain,
+                        domain = validatedDomain,
                         installed = false,
                         certificatePath = null,
                         privateKeyPath = null
@@ -721,14 +828,18 @@ fun Application.configureNginxAdminRoutes() {
                     return@get
                 }
 
-                val installed = nginxService.isCertificateInstalled(domain)
+                val validatedDomain = runCatching { requireValidHostname(domain) }.getOrElse {
+                    call.respondError(HttpStatusCode.BadRequest, "invalid_domain", it.message ?: "Invalid domain")
+                    return@get
+                }
+                val installed = nginxService.isCertificateInstalled(validatedDomain)
 
                 call.respond(
                     CertificateResponse(
-                        domain = domain,
+                        domain = validatedDomain,
                         installed = installed,
-                        certificatePath = if (installed) "/etc/letsencrypt/live/$domain/fullchain.pem" else null,
-                        privateKeyPath = if (installed) "/etc/letsencrypt/live/$domain/privkey.pem" else null
+                        certificatePath = if (installed) "${AppConfig.nginxSslCertPath}/$validatedDomain/fullchain.pem" else null,
+                        privateKeyPath = if (installed) "${AppConfig.nginxSslCertPath}/$validatedDomain/privkey.pem" else null
                     )
                 )
             }

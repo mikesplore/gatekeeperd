@@ -31,6 +31,7 @@ object DatabaseMigrations {
         ,Migration("20", "deployment trigger source", "db/migration/V20__deployment_trigger_source.sql")
         ,Migration("21", "admin user lifecycle", "db/migration/V21__admin_user_lifecycle.sql")
         ,Migration("22", "deployment configurations and executions", "db/migration/V22__deployment_configurations_and_executions.sql")
+        ,Migration("23", "nginx sites", "db/migration/V23__nginx_sites.sql")
     )
 
     fun apply(dataSource: HikariDataSource) {

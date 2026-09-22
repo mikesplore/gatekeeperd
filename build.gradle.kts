@@ -11,6 +11,18 @@ application {
     mainClass = "com.gatekeeper.ApplicationKt"
 }
 
+tasks.register<JavaExec>("runNginxBackfill") {
+    group = "application"
+    description = "Run the manual nginx Site backfill (use -PbackfillArgs=--dry-run)"
+    classpath = sourceSets.main.get().runtimeClasspath
+    mainClass.set("com.gatekeeper.nginx.NginxBackfillMainKt")
+    args = providers.gradleProperty("backfillArgs")
+        .orNull
+        ?.split(" ")
+        ?.filter { it.isNotBlank() }
+        .orEmpty()
+}
+
 kotlin {
     jvmToolchain(21)
 }

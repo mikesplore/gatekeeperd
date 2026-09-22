@@ -16,6 +16,29 @@ import java.security.MessageDigest
 
 private val logger = LoggerFactory.getLogger("com.gatekeeper.nginx.NginxService")
 
+private fun runNginxTestCommand(): NginxTestResult {
+    return try {
+        val process = ProcessBuilder("sudo", "-n", "/usr/sbin/nginx", "-t").redirectErrorStream(true).start()
+        val output = process.inputStream.bufferedReader().readText()
+        val exitCode = process.waitFor()
+        NginxTestResult(exitCode == 0, exitCode, output, OffsetDateTime.now().toString())
+    } catch (e: Exception) {
+        NginxTestResult(false, -1, "Unable to execute nginx -t non-interactively: ${e.message ?: "unknown error"}. Configure sudoers NOPASSWD for the Gatekeeperd service account.", OffsetDateTime.now().toString())
+    }
+}
+
+private fun runNginxReloadCommand(): Boolean {
+    return try {
+        val process = ProcessBuilder("sudo", "-n", "/bin/systemctl", "reload", "nginx").redirectErrorStream(true).start()
+        val exitCode = process.waitFor()
+        if (exitCode != 0) logger.error("Failed to reload nginx: ${process.inputStream.bufferedReader().readText()}")
+        exitCode == 0
+    } catch (e: Exception) {
+        logger.error("Failed to reload nginx", e)
+        false
+    }
+}
+
 data class ResolvedCertificate(
     val certificateDomain: String,
     val certificatePath: String,
@@ -26,7 +49,9 @@ class NginxService(
     private val sitesAvailablePath: String = AppConfig.nginxSitesAvailablePath,
     private val sitesEnabledPath: String = AppConfig.nginxSitesEnabledPath,
     private val gatekeeperPort: Int = 8080,
-    private val sslCertPath: String = AppConfig.nginxSslCertPath
+    private val sslCertPath: String = AppConfig.nginxSslCertPath,
+    private val nginxTestRunner: () -> NginxTestResult = ::runNginxTestCommand,
+    private val nginxReloadRunner: () -> Boolean = ::runNginxReloadCommand
 ) {
     fun inspectSite(slug: String): NginxConfigInspection {
         require(slug.matches(Regex("[a-zA-Z0-9][a-zA-Z0-9_-]*"))) { "Invalid nginx site name" }
@@ -76,14 +101,7 @@ class NginxService(
     }
 
     fun testNginxConfigDetailed(): NginxTestResult {
-        return try {
-            val process = ProcessBuilder("sudo", "-n", "/usr/sbin/nginx", "-t").redirectErrorStream(true).start()
-            val output = process.inputStream.bufferedReader().readText()
-            val exitCode = process.waitFor()
-            NginxTestResult(exitCode == 0, exitCode, output, OffsetDateTime.now().toString())
-        } catch (e: Exception) {
-            NginxTestResult(false, -1, "Unable to execute nginx -t non-interactively: ${e.message ?: "unknown error"}. Configure sudoers NOPASSWD for the Gatekeeperd service account.", OffsetDateTime.now().toString())
-        }
+        return nginxTestRunner()
     }
 
     fun previewBlockUpdate(slug: String, blockIndex: Int, replacement: String): String {
@@ -130,18 +148,38 @@ class NginxService(
         val backup = File(sitesAvailablePath, backupName)
         require(backup.isFile) { "Backup does not exist" }
         val target = File(sitesAvailablePath, slug)
-        val current = File(sitesAvailablePath, "$slug.bak-${Instant.now().toEpochMilli()}")
-        if (target.isFile) Files.copy(target.toPath(), current.toPath(), StandardCopyOption.REPLACE_EXISTING)
-        Files.copy(backup.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
-        val validation = testNginxConfigDetailed()
+        val enabledFile = File(sitesEnabledPath, slug)
+        val stagedFile = File(sitesAvailablePath, ".${slug}.staged")
+        Files.copy(backup.toPath(), stagedFile.toPath(), StandardCopyOption.REPLACE_EXISTING)
+        val validation = testNginxConfigWithStagedSite(slug, stagedFile)
         if (!validation.valid) {
-            if (current.isFile) Files.copy(current.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
-            return NginxRollbackResponse(false, "Rollback validation failed; previous configuration restored", validation)
+            Files.deleteIfExists(stagedFile.toPath())
+            return NginxRollbackResponse(false, "Rollback validation failed; previous configuration was preserved", validation)
         }
-        if (!reloadNginx()) {
-            if (current.isFile) Files.copy(current.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
-            reloadNginx()
-            return NginxRollbackResponse(false, "Rollback reload failed; previous configuration restored", validation)
+
+        val current = if (target.isFile) {
+            File(sitesAvailablePath, "$slug.bak-${Instant.now().toEpochMilli()}").also {
+                Files.copy(target.toPath(), it.toPath(), StandardCopyOption.REPLACE_EXISTING)
+            }
+        } else null
+        try {
+            try {
+                Files.move(stagedFile.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+            } catch (_: java.nio.file.AtomicMoveNotSupportedException) {
+                Files.move(stagedFile.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
+            }
+            replaceEnabledSymlink(target, enabledFile)
+            if (!reloadNginx()) {
+                restoreActivatedSite(target, enabledFile, current)
+                reloadNginx()
+                return NginxRollbackResponse(false, "Rollback reload failed; previous configuration was restored", validation)
+            }
+        } catch (e: Exception) {
+            restoreActivatedSite(target, enabledFile, current)
+            runCatching { reloadNginx() }
+            return NginxRollbackResponse(false, "Rollback activation failed; previous configuration was restored", validation)
+        } finally {
+            Files.deleteIfExists(stagedFile.toPath())
         }
         recordManagedVersion(slug, target.readText())
         return NginxRollbackResponse(true, "Configuration rolled back and Nginx reloaded successfully", validation, true)
@@ -149,6 +187,7 @@ class NginxService(
 
     fun certificateExpiry(domain: String): Pair<String, Long>? {
         return try {
+            requireValidHostname(domain)
             val certFile = File("$sslCertPath/$domain/fullchain.pem")
             if (!certFile.exists()) return null
             val pem = certFile.readBytes()
@@ -179,16 +218,35 @@ class NginxService(
     }
 
     fun generateNginxConfig(
+        site: NginxSiteRenderModel
+    ): String = generateNginxConfig(
+        slug = site.slug,
+        domain = site.domain,
+        appPort = site.appPort,
+        upstreamScheme = site.upstreamScheme,
+        sslEnabled = site.tlsMode != TlsRenderMode.HTTP_ONLY,
+        sslCertificatePath = site.certificatePath,
+        sslCertificateKeyPath = site.certificateKeyPath,
+        upstreamHost = site.upstreamHost,
+        http2 = site.tlsMode == TlsRenderMode.HTTPS_HTTP2
+    )
+
+    fun generateNginxConfig(
         slug: String,
         domain: String,
         appPort: Int,
         upstreamScheme: String? = null,
         sslEnabled: Boolean,
         sslCertificatePath: String? = null,
-        sslCertificateKeyPath: String? = null
+        sslCertificateKeyPath: String? = null,
+        upstreamHost: String = "127.0.0.1",
+        http2: Boolean = true
     ): String {
-        val effectiveSslCert = sslCertificatePath ?: "$sslCertPath/$domain/fullchain.pem"
-        val effectiveSslKey = sslCertificateKeyPath ?: "$sslCertPath/$domain/privkey.pem"
+        requireValidHostname(domain)
+        val effectiveSslCert = sslCertificatePath?.let { requireCertificatePath(it, sslCertPath) }
+            ?: "$sslCertPath/$domain/fullchain.pem"
+        val effectiveSslKey = sslCertificateKeyPath?.let { requireCertificatePath(it, sslCertPath) }
+            ?: "$sslCertPath/$domain/privkey.pem"
         val effectiveUpstreamScheme = normalizeUpstreamScheme(appPort, upstreamScheme)
 
         return buildString {
@@ -196,7 +254,7 @@ class NginxService(
             if (sslEnabled) {
                 appendLine("    listen 443 ssl;")
                 appendLine("    listen [::]:443 ssl;")
-                appendLine("    http2 on;")
+                if (http2) appendLine("    http2 on;")
                 appendLine()
                 appendLine("    server_name $domain;")
                 appendLine()
@@ -251,7 +309,7 @@ class NginxService(
                 appendLine("        auth_request /gatekeeper-auth-$slug;")
                 appendLine("        error_page 403 = @gatekeeper_paywall_$slug;")
                 appendLine()
-                appendLine("        proxy_pass $effectiveUpstreamScheme://127.0.0.1:$appPort;")
+                appendLine("        proxy_pass $effectiveUpstreamScheme://$upstreamHost:$appPort;")
                 appendLine("        proxy_http_version 1.1;")
                 appendLine()
                 appendLine("        proxy_set_header Upgrade \$http_upgrade;")
@@ -338,45 +396,81 @@ class NginxService(
             availableFile.parentFile?.mkdirs()
             enabledFile.parentFile?.mkdirs()
 
-            if (availableFile.exists()) {
-                val backup = File(availableFile.parent, "$slug.bak-${Instant.now().toEpochMilli()}")
-                Files.copy(availableFile.toPath(), backup.toPath(), StandardCopyOption.COPY_ATTRIBUTES)
-            }
+            val stagedFile = File(availableFile.parent, ".${slug}.staged")
+            Files.deleteIfExists(stagedFile.toPath())
+            Files.writeString(stagedFile.toPath(), configContent)
 
-            val temporaryFile = File(availableFile.parent, ".$slug.tmp-${System.nanoTime()}")
-            Files.writeString(temporaryFile.toPath(), configContent)
-            try {
-                Files.move(
-                    temporaryFile.toPath(),
-                    availableFile.toPath(),
-                    StandardCopyOption.ATOMIC_MOVE,
-                    StandardCopyOption.REPLACE_EXISTING
-                )
-            } catch (_: java.nio.file.AtomicMoveNotSupportedException) {
-                Files.move(temporaryFile.toPath(), availableFile.toPath(), StandardCopyOption.REPLACE_EXISTING)
-            }
-
-            if (enabledFile.exists()) {
-                Files.delete(enabledFile.toPath())
-            }
-
-            val result = Runtime.getRuntime().exec(
-                arrayOf("ln", "-s", availableFile.absolutePath, enabledFile.absolutePath),
-                null
-            )
-            result.waitFor()
-
-            if (result.exitValue() != 0) {
-                val error = result.errorStream.bufferedReader().readText()
-                logger.error("Failed to create symlink for $slug: $error")
+            // Validate the staged site through nginx's normal include tree while
+            // leaving the live site and its enabled link untouched.
+            if (!testNginxConfigWithStagedSite(slug, stagedFile).valid) {
+                Files.deleteIfExists(stagedFile.toPath())
+                logger.error("Nginx validation failed for staged site $slug; live configuration was not changed")
                 return false
             }
 
+            val backup = if (availableFile.isFile) {
+                File(availableFile.parent, "$slug.bak-${Instant.now().toEpochMilli()}").also {
+                    Files.copy(availableFile.toPath(), it.toPath(), StandardCopyOption.COPY_ATTRIBUTES)
+                }
+            } else null
+
+            try {
+                try {
+                    Files.move(stagedFile.toPath(), availableFile.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+                } catch (_: java.nio.file.AtomicMoveNotSupportedException) {
+                    Files.move(stagedFile.toPath(), availableFile.toPath(), StandardCopyOption.REPLACE_EXISTING)
+                }
+                replaceEnabledSymlink(availableFile, enabledFile)
+
+                if (!reloadNginx()) {
+                    restoreActivatedSite(availableFile, enabledFile, backup)
+                    reloadNginx()
+                    logger.error("Nginx reload failed for $slug; previous configuration was restored")
+                    return false
+                }
+            } catch (e: Exception) {
+                restoreActivatedSite(availableFile, enabledFile, backup)
+                runCatching { reloadNginx() }
+                logger.error("Failed to activate nginx site $slug; previous configuration was restored", e)
+                return false
+            } finally {
+                Files.deleteIfExists(stagedFile.toPath())
+            }
+
+            // Read the activated file rather than hashing the input so drift
+            // tracking always reflects the exact bytes now on disk.
+            recordManagedVersion(slug, availableFile.readText())
             logger.info("Enabled nginx site: $slug")
             true
         } catch (e: Exception) {
             logger.error("Failed to enable nginx site: $slug", e)
             false
+        }
+    }
+
+    private fun replaceEnabledSymlink(availableFile: File, enabledFile: File) {
+        Files.deleteIfExists(enabledFile.toPath())
+        Files.createSymbolicLink(enabledFile.toPath(), availableFile.toPath())
+    }
+
+    private fun restoreActivatedSite(availableFile: File, enabledFile: File, backup: File?) {
+        Files.deleteIfExists(enabledFile.toPath())
+        if (backup?.isFile == true) {
+            Files.copy(backup.toPath(), availableFile.toPath(), StandardCopyOption.REPLACE_EXISTING)
+            replaceEnabledSymlink(availableFile, enabledFile)
+        } else {
+            Files.deleteIfExists(availableFile.toPath())
+        }
+    }
+
+    private fun testNginxConfigWithStagedSite(slug: String, stagedFile: File): NginxTestResult {
+        // Keep the name visible to nginx's usual `sites-enabled/*` include glob.
+        val stagedLink = File(sitesEnabledPath, "gatekeeperd-staged-$slug-${System.nanoTime()}")
+        return try {
+            Files.createSymbolicLink(stagedLink.toPath(), stagedFile.toPath())
+            testNginxConfigDetailed()
+        } finally {
+            Files.deleteIfExists(stagedLink.toPath())
         }
     }
 
@@ -390,22 +484,6 @@ class NginxService(
             true
         } catch (e: Exception) {
             logger.error("Failed to disable nginx site: $slug", e)
-            false
-        }
-    }
-
-    fun restoreLatestBackup(slug: String): Boolean {
-        return try {
-            val availableFile = File("$sitesAvailablePath/$slug")
-            val backup = availableFile.parentFile?.listFiles { file ->
-                file.name.startsWith("$slug.bak-")
-            }?.maxByOrNull { it.lastModified() }
-                ?: return false
-            Files.copy(backup.toPath(), availableFile.toPath(), StandardCopyOption.REPLACE_EXISTING)
-            logger.info("Restored nginx site $slug from backup ${backup.name}")
-            true
-        } catch (e: Exception) {
-            logger.error("Failed to restore nginx backup for $slug", e)
             false
         }
     }
@@ -431,20 +509,7 @@ class NginxService(
     }
 
     fun testNginxConfig(): Boolean {
-        return try {
-            val process = ProcessBuilder("sudo", "-n", "/usr/sbin/nginx", "-t").redirectErrorStream(true).start()
-            val exitCode = process.waitFor()
-
-            if (exitCode != 0) {
-                val error = process.inputStream.bufferedReader().readText()
-                logger.error("Nginx configuration test failed: $error")
-                return false
-            }
-            true
-        } catch (e: Exception) {
-            logger.error("Failed to test Nginx config", e)
-            false
-        }
+        return testNginxConfigDetailed().valid
     }
 
     fun reloadNginx(): Boolean {
@@ -454,16 +519,7 @@ class NginxService(
                 return false
             }
 
-            // Executing with 'sudo' so sudoers NOPASSWD kicks in!
-            val process = ProcessBuilder("sudo", "-n", "/bin/systemctl", "reload", "nginx").redirectErrorStream(true).start()
-            val exitCode = process.waitFor()
-
-            if (exitCode != 0) {
-                val error = process.inputStream.bufferedReader().readText()
-                logger.error("Failed to reload nginx: $error")
-                return false
-            }
-
+            if (!nginxReloadRunner()) return false
             logger.info("Nginx reloaded successfully")
             true
         } catch (e: Exception) {
@@ -482,6 +538,8 @@ class NginxService(
     }
 
     fun installCertificate(domain: String, email: String): Boolean {
+        requireValidHostname(domain)
+        requireValidEmail(email)
         if (!isCertbotAvailable()) {
             logger.error("Certbot is not installed on this system")
             return false
@@ -513,6 +571,7 @@ class NginxService(
     }
 
     fun removeCertificate(domain: String): Boolean {
+        requireValidHostname(domain)
         if (!isCertbotAvailable()) {
             logger.warn("Certbot is not installed, skipping certificate removal for $domain")
             return true
@@ -539,6 +598,7 @@ class NginxService(
     }
 
     fun isCertificateInstalled(domain: String): Boolean {
+        requireValidHostname(domain)
         val certDir = File("$sslCertPath/$domain")
         return certDir.exists() &&
                 File(certDir, "fullchain.pem").exists() &&
@@ -546,7 +606,9 @@ class NginxService(
     }
 
     fun resolveCertificateForDomain(domain: String, requestedCertificateDomain: String? = null): ResolvedCertificate? {
+        requireValidHostname(domain)
         val requested = requestedCertificateDomain?.trim()?.takeIf { it.isNotBlank() }
+        requested?.let { requireValidHostname(it, "certificateDomain") }
         if (requested != null) {
             return resolveInstalledCertificateByName(requested)
         }
