@@ -1,5 +1,7 @@
 package com.gatekeeper.config
 
+// Centralized application settings loaded from the process environment or local .env file.
+
 import io.github.cdimascio.dotenv.dotenv
 import org.slf4j.LoggerFactory
 
@@ -156,27 +158,6 @@ object AppConfig {
     }
 
     fun logConfig() {
-        val source = when {
-            System.getenv("DB_URL") != null -> "environment"
-            dotenv["DB_URL"]?.isNotBlank() == true -> ".env file"
-            else -> "unknown"
-        }
-        val entries = linkedMapOf<String, String>()
-        entries["DB_URL"] = dbUrl
-        entries["DB_USER"] = dbUser
-        entries["REDIS_HOST"] = redisHost
-        entries["REDIS_PORT"] = redisPort.toString()
-        entries["JWT_SECRET"] = "***"
-        entries["JWT_ISSUER"] = jwtIssuer
-        entries["JWT_AUDIENCE"] = jwtAudience
-        entries["DOCKER_SOCKET"] = dockerSocket
-        entries["GATEKEEPER_INTERNAL_NETWORK"] = internalNetwork
-        entries["FAIL_MODE"] = failMode
-        entries["DEFAULT_GRACE_PERIOD_DAYS"] = defaultGracePeriodDays.toString()
-        entries["CORS_ALLOWED_ORIGINS"] = corsAllowedHosts.joinToString(", ") { "${it.schemes.first()}://${it.host}" }
-        logger.info("AppConfig loaded (source: $source):")
-        entries.forEach { (key, value) ->
-            logger.info("  $key = $value")
-        }
+        logger.info("AppConfig loaded; configuration values are hidden to protect secrets.")
     }
 }
