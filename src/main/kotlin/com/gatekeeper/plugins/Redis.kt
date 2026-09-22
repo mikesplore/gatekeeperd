@@ -27,9 +27,9 @@ object RedisService {
     }
 
     fun get(key: String): String? {
-        return pool?.resource?.use { jedis ->
+        return Telemetry.blockingSpan("redis.get") { pool?.resource?.use { jedis ->
             jedis.get(key)
-        }
+        } }
     }
 
     fun isHealthy(): Boolean {
@@ -41,9 +41,9 @@ object RedisService {
     }
 
     fun set(key: String, value: String, ttlSeconds: Int = 60) {
-        pool?.resource?.use { jedis ->
+        Telemetry.blockingSpan("redis.set") { pool?.resource?.use { jedis ->
             jedis.setex(key, ttlSeconds.toLong(), value)
-        }
+        } }
     }
 
     fun delete(key: String) {

@@ -23,4 +23,14 @@ object Telemetry {
     }
 
     fun close() { sdk?.close(); sdk = null }
+
+    suspend fun <T> span(name: String, block: suspend () -> T): T {
+        val span = tracer.spanBuilder(name).startSpan()
+        return try { span.makeCurrent().use { block() } } catch (error: Throwable) { span.recordException(error); throw error } finally { span.end() }
+    }
+
+    fun <T> blockingSpan(name: String, block: () -> T): T {
+        val span = tracer.spanBuilder(name).startSpan()
+        return try { span.makeCurrent().use { block() } } catch (error: Throwable) { span.recordException(error); throw error } finally { span.end() }
+    }
 }
