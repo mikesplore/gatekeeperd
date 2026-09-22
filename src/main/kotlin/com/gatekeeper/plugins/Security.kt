@@ -31,8 +31,7 @@ object JwtConfig {
     }
 
     fun isRevoked(jti: String?): Boolean {
-        if (jti.isNullOrBlank()) return true
-        return try {
+        return jti.isNullOrBlank() || try {
             RedisService.get("auth:revoked:$jti") != null
         } catch (e: Exception) {
             logger.warn("Token revocation check unavailable: ${e.message}")
