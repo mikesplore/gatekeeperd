@@ -157,7 +157,10 @@ fun Application.configureOperationsAdminRoutes() {
         authenticate("auth-jwt") {
             get("/api/admin/dashboard/sites") {
                 val status = call.request.queryParameters["status"]?.lowercase()
-                call.respond(SiteRepository.findAll().filter { status == null || it.reconciliationStatus.value == status }.map(::dashboardSite))
+                val offset = call.request.queryParameters["offset"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0
+                val limit = call.request.queryParameters["limit"]?.toIntOrNull()?.coerceIn(1, 500) ?: 100
+                val filtered = SiteRepository.findAll().filter { status == null || it.reconciliationStatus.value == status }
+                call.respond(filtered.drop(offset).take(limit).map(::dashboardSite))
             }
             get("/api/admin/dashboard/sites/{slug}") {
                 val slug = call.parameters["slug"] ?: run { call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing slug"); return@get }
@@ -211,7 +214,9 @@ fun Application.configureOperationsAdminRoutes() {
                 call.respond(mapOf("deleted" to true, "slug" to slug))
             }
             get("/api/admin/dashboard/dead-configs") {
-                call.respond(SiteRepository.findAll().filter { it.reconciliationStatus == ReconciliationStatus.DEAD_CONFIG }.map(::dashboardSite))
+                val offset = call.request.queryParameters["offset"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0
+                val limit = call.request.queryParameters["limit"]?.toIntOrNull()?.coerceIn(1, 500) ?: 100
+                call.respond(SiteRepository.findAll().filter { it.reconciliationStatus == ReconciliationStatus.DEAD_CONFIG }.drop(offset).take(limit).map(::dashboardSite))
             }
             delete("/api/admin/dashboard/dead-configs/{filename}") {
                 val filename = call.parameters["filename"] ?: run { call.respondError(HttpStatusCode.BadRequest, "missing_filename", "Missing filename"); return@delete }
@@ -240,7 +245,9 @@ fun Application.configureOperationsAdminRoutes() {
                 call.respond(project)
             }
             get("/api/admin/dashboard/customers") {
-                call.respond(CustomerRepository.findAll().map { customer ->
+                val offset = call.request.queryParameters["offset"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0
+                val limit = call.request.queryParameters["limit"]?.toIntOrNull()?.coerceIn(1, 500) ?: 100
+                call.respond(CustomerRepository.findAll().drop(offset).take(limit).map { customer ->
                     val owned = CustomerRepository.findSites(customer.id)
                     val sites = owned.mapNotNull { it.site }
                     val financials = owned.map { dashboardProjectFinancials(it.project) }
