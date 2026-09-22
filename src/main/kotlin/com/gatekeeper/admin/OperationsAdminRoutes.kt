@@ -76,6 +76,8 @@ data class BulkProjectResult(val slug: String, val status: String, val message: 
     val backups: List<String> = emptyList()
 )
 
+@Serializable data class DashboardSitesPageResponse(val sites: List<DashboardSiteResponse>, val total: Long, val limit: Int, val offset: Int, val hasMore: Boolean)
+
 @Serializable data class DashboardCustomerResponse(
     val id: String, val name: String, val contactEmail: String? = null, val contactPhone: String? = null,
     val billingStatus: String, val siteCount: Int, val health: Map<String, Int>,
@@ -165,7 +167,7 @@ fun Application.configureOperationsAdminRoutes() {
                 val limit = call.request.queryParameters["limit"]?.toIntOrNull()?.coerceIn(1, 500) ?: 100
                 val filtered = SiteRepository.findAll().filter { status == null || it.reconciliationStatus.value == status }
                 val rows = filtered.drop(offset).take(limit).map(::dashboardSite)
-                call.respond(mapOf("sites" to rows, "total" to filtered.size, "limit" to limit, "offset" to offset, "hasMore" to (offset + rows.size < filtered.size)))
+                call.respond(DashboardSitesPageResponse(rows, filtered.size.toLong(), limit, offset, offset + rows.size < filtered.size))
             }
             get("/api/admin/dashboard/sites/{slug}") {
                 val slug = call.parameters["slug"] ?: run { call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing slug"); return@get }

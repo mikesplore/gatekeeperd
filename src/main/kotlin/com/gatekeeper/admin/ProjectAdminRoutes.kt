@@ -142,6 +142,9 @@ data class InitializePaymentRequest(val email: String)
 data class InitializePaymentResponse(val payment_link: String)
 
 @Serializable
+data class ProjectPaymentsPageResponse(val payments: List<PaymentResponse>, val total: Long, val limit: Int, val offset: Int, val hasMore: Boolean)
+
+@Serializable
 data class StatusChangeRequest(val reason: String)
 
 @Serializable
@@ -245,7 +248,7 @@ fun Application.configureProjectAdminRoutes() {
                 val limit = (call.request.queryParameters["limit"]?.toIntOrNull() ?: 25).coerceIn(1, 500)
                 val offset = (call.request.queryParameters["offset"]?.toIntOrNull() ?: 0).coerceAtLeast(0)
                 val (rows, total) = PaymentRepository.findByProjectIdPage(project.id, limit, offset)
-                call.respond(mapOf("payments" to rows.map { it.toResponse() }, "total" to total, "limit" to limit, "offset" to offset, "hasMore" to (offset + rows.size < total)))
+                call.respond(ProjectPaymentsPageResponse(rows.map { it.toResponse() }, total, limit, offset, offset + rows.size < total))
             }
 
             get("/api/admin/projects/{slug}/invoice") {

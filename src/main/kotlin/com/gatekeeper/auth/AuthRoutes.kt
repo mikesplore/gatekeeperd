@@ -49,6 +49,7 @@ data class LoginRequest(val email: String, val password: String)
 @Serializable data class CreateAdminUserRequest(val email: String, val password: String, val role: String = "admin")
 @Serializable data class UpdateAdminUserRequest(val email: String? = null, val role: String? = null, val active: Boolean? = null)
 @Serializable data class AdminUserResponse(val id: String, val email: String, val role: String, val twoFactorEnabled: Boolean, val createdAt: String, val active: Boolean = true)
+@Serializable data class AdminUsersPageResponse(val users: List<AdminUserResponse>, val total: Long, val limit: Int, val offset: Int, val hasMore: Boolean)
 
 @Serializable
 data class LoginResponse(val token: String = "", val refreshToken: String = "", val requiresTwoFactor: Boolean = false, val challengeToken: String? = null)
@@ -428,7 +429,7 @@ fun Application.configureAuthRoutes() {
                 val (users, total) = transaction { val statement = Users.selectAll(); q?.takeIf { it.isNotBlank() }?.let { value -> statement.andWhere { Users.email like "%$value%" } }; val total = statement.count(); statement.orderBy(Users.createdAt).limit(limit, offset.toLong()).map { user ->
                     AdminUserResponse(user[Users.id].toString(), user[Users.email], user[Users.role], user[Users.totpEnabled], user[Users.createdAt].toString(), user[Users.active])
                 } to total }
-                call.respond(mapOf("users" to users, "total" to total, "limit" to limit, "offset" to offset, "hasMore" to (offset + users.size < total)))
+                call.respond(AdminUsersPageResponse(users, total, limit, offset, offset + users.size < total))
             }
 
             post("/api/admin/users") {
