@@ -226,6 +226,23 @@ class NginxServiceTest {
     }
 
     @Test
+    fun `freshly enabled site reports managed true through status inspection`() {
+        val root = Files.createTempDirectory("gk-nginx-managed-status").toFile()
+        val available = File(root, "sites-available").apply { mkdirs() }
+        val enabled = File(root, "sites-enabled").apply { mkdirs() }
+        val slug = "fresh-site"
+        val service = isolatedService(root)
+        val config = "# gatekeeperd:block:server\nserver { listen 80; }"
+
+        assertTrue(service.enableProject(slug, config))
+
+        val status = service.inspectSite(slug)
+        assertTrue(status.managed)
+        assertTrue(File(available, ".$slug.gatekeeperd.sha256").isFile)
+        assertEquals(status.actualSha256, status.managedSha256)
+    }
+
+    @Test
     fun `reload failure restores previous file and symlink`() {
         val root = Files.createTempDirectory("gk-nginx-reload-failure").toFile()
         val available = File(root, "sites-available").apply { mkdirs() }
