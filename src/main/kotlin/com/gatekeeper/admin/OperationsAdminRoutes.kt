@@ -18,6 +18,7 @@ import com.gatekeeper.nginx.requireValidHostname
 import com.gatekeeper.db.tables.ReconciliationStatus
 import com.gatekeeper.config.AppConfig
 import com.gatekeeper.paystack.replayPaystackWebhook
+import com.gatekeeper.payments.ProjectBalanceService
 import io.ktor.http.*
 import io.ktor.server.application.*
 import io.ktor.server.auth.*
@@ -121,6 +122,20 @@ private fun dashboardSite(site: SiteRepository.SiteRecord): DashboardSiteRespons
     )
 }
 
+private data class DashboardProjectFinancials(
+    val billed: java.math.BigDecimal,
+    val paid: java.math.BigDecimal,
+    val balance: java.math.BigDecimal
+)
+
+private fun dashboardProjectFinancials(project: ProjectRepository.ProjectRecord): DashboardProjectFinancials {
+    val billed = ProjectBalanceService.originalCharge(project) +
+        ProjectBalanceService.additionalCharges(project) -
+        ProjectBalanceService.discounts(project)
+    val paid = ProjectBalanceService.successfulPayments(project)
+    return DashboardProjectFinancials(billed, paid, ProjectBalanceService.outstandingBalance(project))
+}
+
 @Serializable data class NotificationResponse(
     val id: String,
     val title: String,
@@ -222,9 +237,11 @@ fun Application.configureOperationsAdminRoutes() {
                 call.respond(CustomerRepository.findAll().map { customer ->
                     val owned = CustomerRepository.findSites(customer.id)
                     val sites = owned.mapNotNull { it.site }
-                    val billed = owned.sumOf { it.project.amountDue ?: java.math.BigDecimal.ZERO }
-                    val paid = owned.sumOf { PaymentRepository.successfulAmountForProject(it.project.id) }
-                    DashboardCustomerResponse(customer.id.toString(), customer.name, customer.contactEmail, customer.contactPhone, customer.billingStatus, sites.size, sites.groupingBy { it.reconciliationStatus.value }.eachCount(), billed.toDouble(), paid.toDouble(), (billed - paid).max(java.math.BigDecimal.ZERO).toDouble())
+                    val financials = owned.map { dashboardProjectFinancials(it.project) }
+                    val billed = financials.sumOf { it.billed }
+                    val paid = financials.sumOf { it.paid }
+                    val balance = financials.sumOf { it.balance }
+                    DashboardCustomerResponse(customer.id.toString(), customer.name, customer.contactEmail, customer.contactPhone, customer.billingStatus, sites.size, sites.groupingBy { it.reconciliationStatus.value }.eachCount(), billed.toDouble(), paid.toDouble(), balance.toDouble())
                 })
             }
             get("/api/admin/dashboard/customers/{id}") {
@@ -234,11 +251,11 @@ fun Application.configureOperationsAdminRoutes() {
                 val sites = owned.mapNotNull { it.site }.map(::dashboardSite)
                 val projects = owned.map { ownedProject ->
                     val project = ownedProject.project
-                    val paid = PaymentRepository.successfulAmountForProject(project.id)
+                    val financials = dashboardProjectFinancials(project)
                     DashboardCustomerProjectResponse(
                         id = project.id.toString(), slug = project.slug, name = project.name, domain = project.domain,
-                        amountDue = project.amountDue?.toDouble(), totalPaid = paid.toDouble(),
-                        balance = ((project.amountDue ?: java.math.BigDecimal.ZERO) - paid).max(java.math.BigDecimal.ZERO).toDouble(),
+                        amountDue = financials.billed.toDouble(), totalPaid = financials.paid.toDouble(),
+                        balance = financials.balance.toDouble(),
                         status = project.status
                     )
                 }
