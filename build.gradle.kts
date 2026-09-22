@@ -11,6 +11,11 @@ application {
     mainClass = "com.gatekeeper.ApplicationKt"
 }
 
+tasks.withType<com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar>().configureEach {
+    duplicatesStrategy = DuplicatesStrategy.INCLUDE
+    mergeServiceFiles()
+}
+
 tasks.register<JavaExec>("runNginxBackfill") {
     group = "application"
     description = "Run the manual nginx Site backfill (use -PbackfillArgs=--dry-run)"
