@@ -77,7 +77,15 @@ data class BulkProjectResult(val slug: String, val status: String, val message: 
 
 @Serializable data class DashboardCustomerResponse(
     val id: String, val name: String, val contactEmail: String? = null, val contactPhone: String? = null,
-    val billingStatus: String, val siteCount: Int, val health: Map<String, Int>
+    val billingStatus: String, val siteCount: Int, val health: Map<String, Int>,
+    val totalBilled: Double = 0.0, val totalPaid: Double = 0.0, val balance: Double = 0.0,
+    val projects: List<DashboardCustomerProjectResponse> = emptyList()
+)
+
+@Serializable data class DashboardCustomerProjectResponse(
+    val id: String, val slug: String, val name: String, val domain: String,
+    val amountDue: Double? = null, val totalPaid: Double = 0.0, val balance: Double = 0.0,
+    val status: String
 )
 
 @Serializable data class DashboardSiteUpdateRequest(
@@ -206,15 +214,34 @@ fun Application.configureOperationsAdminRoutes() {
             }
             get("/api/admin/dashboard/customers") {
                 call.respond(CustomerRepository.findAll().map { customer ->
-                    val sites = CustomerRepository.findSites(customer.id).mapNotNull { it.site }
-                    DashboardCustomerResponse(customer.id.toString(), customer.name, customer.contactEmail, customer.contactPhone, customer.billingStatus, sites.size, sites.groupingBy { it.reconciliationStatus.value }.eachCount())
+                    val owned = CustomerRepository.findSites(customer.id)
+                    val sites = owned.mapNotNull { it.site }
+                    val billed = owned.sumOf { it.project.amountDue ?: java.math.BigDecimal.ZERO }
+                    val paid = owned.sumOf { PaymentRepository.successfulAmountForProject(it.project.id) }
+                    DashboardCustomerResponse(customer.id.toString(), customer.name, customer.contactEmail, customer.contactPhone, customer.billingStatus, sites.size, sites.groupingBy { it.reconciliationStatus.value }.eachCount(), billed.toDouble(), paid.toDouble(), (billed - paid).max(java.math.BigDecimal.ZERO).toDouble())
                 })
             }
             get("/api/admin/dashboard/customers/{id}") {
                 val id = runCatching { UUID.fromString(call.parameters["id"]) }.getOrNull() ?: run { call.respondError(HttpStatusCode.BadRequest, "invalid_customer_id", "Invalid customer ID"); return@get }
                 val customer = CustomerRepository.findById(id) ?: run { call.respondError(HttpStatusCode.NotFound, "customer_not_found", "Customer not found"); return@get }
-                val sites = CustomerRepository.findSites(id).mapNotNull { it.site }.map(::dashboardSite)
-                call.respond(DashboardCustomerResponse(customer.id.toString(), customer.name, customer.contactEmail, customer.contactPhone, customer.billingStatus, sites.size, sites.groupingBy { it.status }.eachCount()))
+                val owned = CustomerRepository.findSites(id)
+                val sites = owned.mapNotNull { it.site }.map(::dashboardSite)
+                val projects = owned.map { ownedProject ->
+                    val project = ownedProject.project
+                    val paid = PaymentRepository.successfulAmountForProject(project.id)
+                    DashboardCustomerProjectResponse(
+                        id = project.id.toString(), slug = project.slug, name = project.name, domain = project.domain,
+                        amountDue = project.amountDue?.toDouble(), totalPaid = paid.toDouble(),
+                        balance = ((project.amountDue ?: java.math.BigDecimal.ZERO) - paid).max(java.math.BigDecimal.ZERO).toDouble(),
+                        status = project.status
+                    )
+                }
+                call.respond(DashboardCustomerResponse(
+                    customer.id.toString(), customer.name, customer.contactEmail, customer.contactPhone, customer.billingStatus,
+                    sites.size, sites.groupingBy { it.status }.eachCount(),
+                    totalBilled = projects.sumOf { it.amountDue ?: 0.0 }, totalPaid = projects.sumOf { it.totalPaid },
+                    balance = projects.sumOf { it.balance }, projects = projects
+                ))
             }
             get("/api/admin/dashboard/summary") {
                 val projects = ProjectRepository.findAll()
