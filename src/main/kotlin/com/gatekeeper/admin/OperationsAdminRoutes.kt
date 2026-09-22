@@ -136,6 +136,12 @@ private fun dashboardProjectFinancials(project: ProjectRepository.ProjectRecord)
     return DashboardProjectFinancials(billed, paid, ProjectBalanceService.outstandingBalance(project))
 }
 
+private fun derivedBillingStatus(financials: List<DashboardProjectFinancials>): String = when {
+    financials.isEmpty() -> "unknown"
+    financials.sumOf { it.balance } > java.math.BigDecimal.ZERO -> "overdue"
+    else -> "current"
+}
+
 @Serializable data class NotificationResponse(
     val id: String,
     val title: String,
@@ -241,26 +247,27 @@ fun Application.configureOperationsAdminRoutes() {
                     val billed = financials.sumOf { it.billed }
                     val paid = financials.sumOf { it.paid }
                     val balance = financials.sumOf { it.balance }
-                    DashboardCustomerResponse(customer.id.toString(), customer.name, customer.contactEmail, customer.contactPhone, customer.billingStatus, sites.size, sites.groupingBy { it.reconciliationStatus.value }.eachCount(), billed.toDouble(), paid.toDouble(), balance.toDouble())
+                    DashboardCustomerResponse(customer.id.toString(), customer.name, customer.contactEmail, customer.contactPhone, derivedBillingStatus(financials), sites.size, sites.groupingBy { it.reconciliationStatus.value }.eachCount(), billed.toDouble(), paid.toDouble(), balance.toDouble())
                 })
             }
             get("/api/admin/dashboard/customers/{id}") {
                 val id = runCatching { UUID.fromString(call.parameters["id"]) }.getOrNull() ?: run { call.respondError(HttpStatusCode.BadRequest, "invalid_customer_id", "Invalid customer ID"); return@get }
                 val customer = CustomerRepository.findById(id) ?: run { call.respondError(HttpStatusCode.NotFound, "customer_not_found", "Customer not found"); return@get }
                 val owned = CustomerRepository.findSites(id)
+                val financials = owned.map { dashboardProjectFinancials(it.project) }
                 val sites = owned.mapNotNull { it.site }.map(::dashboardSite)
                 val projects = owned.map { ownedProject ->
                     val project = ownedProject.project
-                    val financials = dashboardProjectFinancials(project)
+                    val projectFinancials = dashboardProjectFinancials(project)
                     DashboardCustomerProjectResponse(
                         id = project.id.toString(), slug = project.slug, name = project.name, domain = project.domain,
-                        amountDue = financials.billed.toDouble(), totalPaid = financials.paid.toDouble(),
-                        balance = financials.balance.toDouble(),
+                        amountDue = projectFinancials.billed.toDouble(), totalPaid = projectFinancials.paid.toDouble(),
+                        balance = projectFinancials.balance.toDouble(),
                         status = project.status
                     )
                 }
                 call.respond(DashboardCustomerResponse(
-                    customer.id.toString(), customer.name, customer.contactEmail, customer.contactPhone, customer.billingStatus,
+                    customer.id.toString(), customer.name, customer.contactEmail, customer.contactPhone, derivedBillingStatus(financials),
                     sites.size, sites.groupingBy { it.status }.eachCount(),
                     totalBilled = projects.sumOf { it.amountDue ?: 0.0 }, totalPaid = projects.sumOf { it.totalPaid },
                     balance = projects.sumOf { it.balance }, projects = projects
