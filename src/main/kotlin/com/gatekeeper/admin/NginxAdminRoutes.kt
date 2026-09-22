@@ -587,6 +587,7 @@ fun Application.configureNginxAdminRoutes() {
                 val responseAppPort: Int?
                 val responseSslEnabled: Boolean
                 val responseCertificateDomain: String?
+                var siteToPersist: NginxSiteRenderModel? = null
                 val config = if (site != null) {
                     runCatching { renderModelFromSite(slug, site, nginxService, dockerService) }
                         .getOrElse {
@@ -621,6 +622,18 @@ fun Application.configureNginxAdminRoutes() {
                     responseAppPort = plan.appPort
                     responseSslEnabled = plan.sslEnabled
                     responseCertificateDomain = plan.resolvedCertificate?.certificateDomain
+                    siteToPersist = NginxSiteRenderModel(
+                        slug = slug,
+                        domain = plan.domain,
+                        appPort = plan.appPort,
+                        upstreamScheme = plan.upstreamScheme,
+                        tlsMode = if (plan.sslEnabled) TlsRenderMode.HTTPS else TlsRenderMode.HTTP_ONLY,
+                        certificatePath = plan.resolvedCertificate?.certificatePath,
+                        certificateKeyPath = plan.resolvedCertificate?.privateKeyPath,
+                        upstreamMode = UpstreamMode.EXPLICIT_PORT,
+                        upstreamContainerName = extractConfiguredContainerName(project.containerName),
+                        certMode = if (body.sslCertificatePath != null) CertMode.EXPLICIT_PATH else CertMode.AUTO_RESOLVE
+                    )
                     nginxService.generateNginxConfig(
                         slug = slug,
                         domain = plan.domain,
@@ -647,6 +660,21 @@ fun Application.configureNginxAdminRoutes() {
                     nginxService.disableProject(slug)
                     call.respondError(HttpStatusCode.InternalServerError, "nginx_error", "Failed to reload nginx")
                     return@post
+                }
+
+                siteToPersist?.let { model ->
+                    runCatching { SiteRepository.create(project.id, model) }
+                        .onFailure { error ->
+                            logger.error("Nginx site enabled but database registration failed for project $slug", error)
+                            nginxService.removeProject(slug)
+                            nginxService.reloadNginx()
+                            call.respondError(
+                                HttpStatusCode.InternalServerError,
+                                "site_registration_failed",
+                                "Nginx site was enabled but could not be registered in the dashboard"
+                            )
+                            return@post
+                        }
                 }
 
                 logger.info("Nginx enabled for project: $slug")
