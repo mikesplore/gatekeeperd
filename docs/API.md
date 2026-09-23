@@ -368,6 +368,8 @@ Generate a Paystack payment link for a project.
 
 `amount` is optional and defaults to the full available balance. Partial amounts are supported; the server rejects amounts above the available balance, including amounts already reserved by pending payments.
 
+If pending provider transactions are the only thing reserving the requested balance, Gatekeeperd verifies them with the provider before rejecting a retry. Confirmed or abandoned transactions update the available balance immediately; transactions still pending remain reserved.
+
 **Response:**
 ```json
 {
@@ -390,10 +392,10 @@ Create a Scribed invoice for a project that does not already have one.
 }
 ```
 
-Gatekeeperd supplies the project billing contact, current invoice total, currency, and due date from its project ledger. Scribed creates the invoice; Gatekeeperd then queues a ledger sync so prior payments and adjustments are reflected.
+Gatekeeperd supplies the project billing contact, current invoice total, currency, and due date from its project ledger. Scribed creates the invoice; Gatekeeperd then queues a ledger sync and replays successful payments so prior adjustments are reflected and missing receipts are generated.
 
 ### POST /api/admin/projects/{slug}/invoice/resync
-Queue the current project ledger for an existing Scribed invoice. This updates the invoice totals and payment status; it does not create a missing invoice.
+Queue the current project ledger and replay successful payments for an existing Scribed invoice. This refreshes invoice totals, retries failed or dead-lettered payment deliveries, and generates missing receipts idempotently; it does not create a missing invoice.
 
 ### GET /api/admin/projects/{slug}/audit
 Get audit log for a project.

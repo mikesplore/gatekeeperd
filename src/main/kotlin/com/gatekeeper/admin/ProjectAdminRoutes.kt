@@ -320,10 +320,10 @@ fun Application.configureProjectAdminRoutes() {
                     call.respondError(HttpStatusCode.BadGateway, "invoice_creation_failed", "Scribed could not create the invoice")
                     return@post
                 }
-                ScribedIntegrationClient.notifyLedger(project, "invoice-create-${java.util.UUID.randomUUID()}")
+                val syncedPayments = ScribedIntegrationClient.syncProject(project)
                 val lookup = ScribedIntegrationClient.invoiceStatus(project.id.toString())
                 val invoiceId = lookup.body?.get("invoice")?.jsonObject?.get("id")?.jsonPrimitive?.longOrNull
-                call.respond(HttpStatusCode.Created, mapOf("status" to "created", "invoiceId" to invoiceId))
+                call.respond(HttpStatusCode.Created, mapOf("status" to "created", "invoiceId" to invoiceId, "paymentsQueued" to syncedPayments))
             }
 
             get("/api/admin/projects/{slug}/invoice/download") {
@@ -376,8 +376,8 @@ fun Application.configureProjectAdminRoutes() {
                     call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
                     return@post
                 }
-                ScribedIntegrationClient.notifyLedger(project, "resync-${java.util.UUID.randomUUID()}")
-                call.respond(HttpStatusCode.Accepted, mapOf("status" to "queued", "project" to project.slug))
+                val syncedPayments = ScribedIntegrationClient.syncProject(project)
+                call.respond(HttpStatusCode.Accepted, mapOf("status" to "queued", "project" to project.slug, "paymentsQueued" to syncedPayments))
             }
 
             post("/api/admin/projects") {
@@ -921,7 +921,7 @@ fun Application.configureProjectAdminRoutes() {
                     BigDecimal.valueOf(it)
                 }
                 if (requestedAmount != null && runCatching {
-                        ProjectBalanceService.requireAvailableForNewPayment(project, requestedAmount)
+                        ProjectBalanceService.requireAvailableForNewPaymentWithReconciliation(project, requestedAmount)
                     }.isFailure
                 ) {
                     call.respondError(HttpStatusCode.BadRequest, "invalid_payment_amount", "Payment amount exceeds the available outstanding balance")

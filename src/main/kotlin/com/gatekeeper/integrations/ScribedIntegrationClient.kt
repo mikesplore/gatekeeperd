@@ -2,6 +2,7 @@ package com.gatekeeper.integrations
 
 import com.gatekeeper.config.AppConfig
 import com.gatekeeper.db.repositories.ProjectRepository
+import com.gatekeeper.db.repositories.PaymentRepository
 import io.ktor.client.*
 import io.ktor.client.call.body
 import io.ktor.client.request.*
@@ -164,6 +165,24 @@ object ScribedIntegrationClient {
             ProjectBalanceService.successfulPayments(project).toPlainString(),
             ProjectBalanceService.outstandingBalance(project).toPlainString(), project.currency, adjustments)
         IntegrationOutboxRepository.enqueue("ledger", "ledger:${project.id}:$ledgerVersion", json.encodeToString(payload))
+    }
+
+    fun syncProject(project: ProjectRepository.ProjectRecord): Int {
+        notifyLedger(project, "sync-${java.util.UUID.randomUUID()}")
+        val successfulPayments = PaymentRepository.findByProjectId(project.id)
+            .filter { it.gatewayStatus == "success" }
+            .sortedBy { it.paidAt ?: it.createdAt }
+        successfulPayments.forEach { payment ->
+            notifyPayment(
+                project = project,
+                provider = payment.provider.name.lowercase(),
+                reference = payment.providerReference,
+                amount = payment.amount.toPlainString(),
+                currency = project.currency,
+                paidAt = (payment.paidAt ?: payment.createdAt).toString()
+            )
+        }
+        return successfulPayments.size
     }
 
     suspend fun deliver(event: IntegrationOutboxRepository.Event): Boolean {

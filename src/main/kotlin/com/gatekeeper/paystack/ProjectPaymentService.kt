@@ -23,7 +23,7 @@ object ProjectPaymentService {
             return Result.failure(IllegalStateException("No client email configured for this project"))
         }
 
-        val amount = runCatching { ProjectBalanceService.requireAvailableForNewPayment(project, requestedAmount) }
+        val amount = runCatching { ProjectBalanceService.requireAvailableForNewPaymentWithReconciliation(project, requestedAmount) }
             .getOrElse { return Result.failure(it) }
 
         val publicBase = AppConfig.publicBaseUrl.trim().trimEnd('/')

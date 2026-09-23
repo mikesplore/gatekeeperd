@@ -39,7 +39,7 @@ object MpesaClient : PaymentProviderClient {
         require(isConfigured()) { "M-Pesa is not configured" }
         require(AppConfig.mpesaCallbackUrl.isNotBlank()) { "MPESA_CALLBACK_URL is not configured" }
         require(project.currency.equals("KES", ignoreCase = true)) { "M-Pesa payments are only supported in KES" }
-        val amount = ProjectBalanceService.requireAvailableForNewPayment(project, requestedAmount)
+        val amount = ProjectBalanceService.requireAvailableForNewPaymentWithReconciliation(project, requestedAmount)
         require(amount.stripTrailingZeros().scale() <= 0) { "M-Pesa payment amount must be a whole KES amount" }
         val timestamp = LocalDateTime.now(ZoneId.of("Africa/Nairobi")).format(DateTimeFormatter.ofPattern("yyyyMMddHHmmss"))
         val password = Base64.getEncoder().encodeToString("${AppConfig.mpesaShortCode}${AppConfig.mpesaPasskey}$timestamp".toByteArray())

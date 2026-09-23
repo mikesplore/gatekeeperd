@@ -42,7 +42,7 @@ fun Application.configureMpesaRoutes() {
                 call.respondError(HttpStatusCode.BadRequest, "invalid_payment_amount", "M-Pesa payment amount must be a whole KES amount")
                 return@post
             }
-            if (runCatching { ProjectBalanceService.requireAvailableForNewPayment(project, amount) }.isFailure) {
+            if (runCatching { ProjectBalanceService.requireAvailableForNewPaymentWithReconciliation(project, amount) }.isFailure) {
                 call.respondError(HttpStatusCode.BadRequest, "invalid_payment_amount", "Payment amount exceeds the available outstanding balance")
                 return@post
             }

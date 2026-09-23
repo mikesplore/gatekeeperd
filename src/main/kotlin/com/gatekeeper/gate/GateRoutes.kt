@@ -127,7 +127,7 @@ fun Application.configureGateRoutes() {
             }
 
             if (requestedAmount != null && runCatching {
-                    com.gatekeeper.payments.ProjectBalanceService.requireAvailableForNewPayment(project, requestedAmount)
+                    com.gatekeeper.payments.ProjectBalanceService.requireAvailableForNewPaymentWithReconciliation(project, requestedAmount)
                 }.isFailure
             ) {
                 call.respondError(HttpStatusCode.BadRequest, "invalid_payment_amount", "Payment amount exceeds the available outstanding balance")

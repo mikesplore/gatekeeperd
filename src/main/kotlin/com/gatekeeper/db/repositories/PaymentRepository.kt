@@ -72,6 +72,13 @@ object PaymentRepository {
         }
     }
 
+    fun findPendingByProjectId(projectId: UUID): List<PaymentRecord> = transaction {
+        Payments.selectAll()
+            .where { (Payments.projectId eq projectId) and (Payments.gatewayStatus eq "pending") }
+            .orderBy(Payments.createdAt)
+            .map { it.toPaymentRecord() }
+    }
+
     fun findByProjectIdPage(projectId: UUID, limit: Int, offset: Int): Pair<List<PaymentRecord>, Long> = transaction {
         val query = Payments.selectAll().where { Payments.projectId eq projectId }
         query.orderBy(Payments.createdAt, SortOrder.DESC).limit(limit, offset.toLong()).map { it.toPaymentRecord() } to query.count()

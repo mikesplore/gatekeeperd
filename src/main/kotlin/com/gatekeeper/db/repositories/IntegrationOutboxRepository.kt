@@ -23,6 +23,20 @@ object IntegrationOutboxRepository {
                 it[IntegrationOutbox.idempotencyKey] = idempotencyKey
                 it[IntegrationOutbox.payload] = payload
             }
+            // Explicit syncs should revive failed/dead-letter deliveries, while keeping
+            // completed events idempotent and leaving events currently being delivered alone.
+            IntegrationOutbox.update({
+                (IntegrationOutbox.idempotencyKey eq idempotencyKey) and
+                    IntegrationOutbox.deliveredAt.isNull() and
+                    (IntegrationOutbox.status neq "processing")
+            }) {
+                it[IntegrationOutbox.status] = "pending"
+                it[IntegrationOutbox.attempts] = 0
+                it[IntegrationOutbox.createdAt] = LocalDateTime.now()
+                it[IntegrationOutbox.nextAttemptAt] = LocalDateTime.now()
+                it[IntegrationOutbox.lastError] = null
+                it[IntegrationOutbox.leaseUntil] = null
+            }
         }
     }
 
