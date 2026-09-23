@@ -3,6 +3,7 @@ package com.gatekeeper.paystack
 import com.gatekeeper.config.AppConfig
 import com.gatekeeper.db.repositories.ProjectRepository
 import com.gatekeeper.payments.ProjectBalanceService
+import java.math.BigDecimal
 
 object ProjectPaymentService {
 
@@ -10,7 +11,8 @@ object ProjectPaymentService {
 
     suspend fun initializeForProject(
         project: ProjectRepository.ProjectRecord,
-        emailOverride: String? = null
+        emailOverride: String? = null,
+        requestedAmount: BigDecimal? = null
     ): Result<String> {
         if (!isPaystackConfigured()) {
             return Result.failure(IllegalStateException("Paystack is not configured on this server"))
@@ -21,7 +23,7 @@ object ProjectPaymentService {
             return Result.failure(IllegalStateException("No client email configured for this project"))
         }
 
-        val amount = runCatching { ProjectBalanceService.requireAvailableForNewPayment(project) }
+        val amount = runCatching { ProjectBalanceService.requireAvailableForNewPayment(project, requestedAmount) }
             .getOrElse { return Result.failure(it) }
 
         val publicBase = AppConfig.publicBaseUrl.trim().trimEnd('/')

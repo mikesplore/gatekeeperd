@@ -109,8 +109,8 @@ HTML payment page for blocked clients. Shows project name, domain, amount due, d
 
 **Response:** `402 Payment Required`, `Content-Type: text/html`
 
-### GET /api/gate/pay?project={slug}
-Public payment initiation for a suspended project. Creates a Paystack checkout session and redirects the browser to Paystack.
+### GET /api/gate/pay?project={slug}&amount={amount}
+Public payment initiation for a suspended project. Creates a Paystack checkout session and redirects the browser to Paystack. `amount` is optional; when omitted, Gatekeeper requests the full available balance. A requested amount must be greater than zero and no more than the available balance after pending payments.
 
 **Response:** `302` redirect to Paystack, or `4xx/5xx` JSON error if Paystack is not configured.
 
@@ -361,9 +361,12 @@ Generate a Paystack payment link for a project.
 **Request:**
 ```json
 {
-  "email": "john@acme.com"
+  "email": "john@acme.com",
+  "amount": 2500.00
 }
 ```
+
+`amount` is optional and defaults to the full available balance. Partial amounts are supported; the server rejects amounts above the available balance, including amounts already reserved by pending payments.
 
 **Response:**
 ```json
@@ -1033,7 +1036,7 @@ Delete a Docker image from the local Docker host.
 
 ### M-Pesa
 
-`POST /api/mpesa/pay?project={slug}&phone={msisdn}` starts an M-Pesa STK Push and returns `202` with a pending provider reference. `POST /api/mpesa/callback` receives the Daraja callback. M-Pesa payments are stored and reconciled through the same payment application and reconciliation service as Paystack.
+`POST /api/mpesa/pay?project={slug}&phone={msisdn}&amount={amount}` starts an M-Pesa STK Push and returns `202` with a pending provider reference. `amount` is optional and defaults to the full available balance; partial requests must be whole KES amounts and cannot exceed the available balance after pending payments. `POST /api/mpesa/callback` receives the Daraja callback. M-Pesa payments are stored and reconciled through the same payment application and reconciliation service as Paystack.
 
 Required configuration: `MPESA_CONSUMER_KEY`, `MPESA_CONSUMER_SECRET`, `MPESA_SHORT_CODE`, `MPESA_PASSKEY`, `MPESA_CALLBACK_URL`, and `MPESA_ENVIRONMENT` (`sandbox` or `production`).
 

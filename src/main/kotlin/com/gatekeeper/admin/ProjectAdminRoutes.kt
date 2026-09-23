@@ -136,7 +136,7 @@ data class ProjectAdjustmentResponse(
 )
 
 @Serializable
-data class InitializePaymentRequest(val email: String)
+data class InitializePaymentRequest(val email: String, val amount: Double? = null)
 
 @Serializable
 data class InitializePaymentResponse(val payment_link: String)
@@ -865,9 +865,25 @@ fun Application.configureProjectAdminRoutes() {
                     return@post
                 }
 
+                val requestedAmount = body.amount?.let {
+                    if (!it.isFinite() || it <= 0.0) {
+                        call.respondError(HttpStatusCode.BadRequest, "invalid_payment_amount", "Payment amount must be greater than zero")
+                        return@post
+                    }
+                    BigDecimal.valueOf(it)
+                }
+                if (requestedAmount != null && runCatching {
+                        ProjectBalanceService.requireAvailableForNewPayment(project, requestedAmount)
+                    }.isFailure
+                ) {
+                    call.respondError(HttpStatusCode.BadRequest, "invalid_payment_amount", "Payment amount exceeds the available outstanding balance")
+                    return@post
+                }
+
                 val result = ProjectPaymentService.initializeForProject(
                     project = project,
-                    emailOverride = emailOverride
+                    emailOverride = emailOverride,
+                    requestedAmount = requestedAmount
                 )
 
                 result.fold(

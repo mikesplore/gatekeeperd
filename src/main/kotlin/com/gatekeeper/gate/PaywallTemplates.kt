@@ -16,16 +16,20 @@ object PaywallTemplates {
 
     fun htmlPaywall(info: PaywallInfo, payEnabled: Boolean): String {
         val amountLabel = formatAmount(info.amountDue, info.currency)
+        val amountValue = info.amountDue?.stripTrailingZeros()?.toPlainString().orEmpty()
         val dueLabel = info.dueDate?.format(dateFormatter)
         val payUrl = "/api/gate/pay?project=${encode(info.slug)}"
         val mpesaUrl = "/api/mpesa/pay?project=${encode(info.slug)}"
+        val mpesaAvailable = MpesaClient.isConfigured() && info.currency.equals("KES", ignoreCase = true)
+        val paystackAvailable = ProjectPaymentService.isPaystackConfigured()
+        val defaultPaymentMethod = if (paystackAvailable) "paystack" else "mpesa"
         val illustrationBlock = if (illustrationDataUri.isNotBlank()) {
             """<img src="$illustrationDataUri" alt="Payment illustration" class="illustration">"""
         } else {
             """<div class="illustration-fallback">Payment</div>"""
         }
         val payDisabledReason = when {
-            !ProjectPaymentService.isPaystackConfigured() && !MpesaClient.isConfigured() ->
+            !paystackAvailable && !mpesaAvailable ->
                 "Online payment is not configured yet. Please contact support."
             info.amountDue == null -> "No payment amount is configured for this project."
             info.amountDue <= BigDecimal.ZERO -> "This project has no outstanding balance."
@@ -56,13 +60,16 @@ object PaywallTemplates {
                     ${if (dueLabel != null) """<span class="due">Due $dueLabel</span>""" else ""}
                 </div>
                 ${if (showPayButton) """
+                <label class="label" for="payment-amount">Amount to pay (${escapeHtml(info.currency)})</label>
+                <input id="payment-amount" class="input" type="number" min="0.01" max="$amountValue" step="0.01" value="$amountValue" required oninput="updatePaymentAmount()">
+                <p class="helper">You can pay part now; access is restored when the balance is paid in full.</p>
                 <label class="label" for="payment-method">Payment method</label>
                 <select id="payment-method" class="select" onchange="toggleMpesa()">
-                    ${if (ProjectPaymentService.isPaystackConfigured()) "<option value=\"paystack\">Card / bank (Paystack)</option>" else ""}
-                    ${if (MpesaClient.isConfigured()) "<option value=\"mpesa\">M-Pesa</option>" else ""}
+                    ${if (paystackAvailable) "<option value=\"paystack\">Card / bank (Paystack)</option>" else ""}
+                    ${if (mpesaAvailable) "<option value=\"mpesa\">M-Pesa</option>" else ""}
                 </select>
-                <a id="paystack-button" href="$payUrl" class="btn">Pay with Paystack</a>
-                <div id="mpesa-form" class="mpesa-form" data-url="$mpesaUrl" hidden>
+                <a id="paystack-button" href="$payUrl" data-base-url="$payUrl" class="btn" ${if (defaultPaymentMethod == "mpesa") "hidden" else ""}>Pay with Paystack</a>
+                <div id="mpesa-form" class="mpesa-form" data-base-url="$mpesaUrl" ${if (defaultPaymentMethod == "paystack") "hidden" else ""}>
                     <label class="label" for="mpesa-phone">M-Pesa phone number</label>
                     <input id="mpesa-phone" class="input" type="tel" inputmode="tel" placeholder="2547XXXXXXXX">
                     <button type="button" class="btn" onclick="payWithMpesa()">Pay with M-Pesa</button>
@@ -104,11 +111,24 @@ function toggleMpesa() {
     var isMpesa = document.getElementById('payment-method').value === 'mpesa';
     mpesa.hidden = !isMpesa;
     paystack.hidden = isMpesa;
+    updatePaymentAmount();
+}
+function updatePaymentAmount() {
+    var amount = document.getElementById('payment-amount').value.trim();
+    var paystack = document.getElementById('paystack-button');
+    var mpesa = document.getElementById('mpesa-form');
+    paystack.href = paystack.dataset.baseUrl + '&amount=' + encodeURIComponent(amount);
+    mpesa.dataset.url = mpesa.dataset.baseUrl + '&amount=' + encodeURIComponent(amount);
+    if (!Number.isInteger(Number(amount))) mpesa.querySelector('button').disabled = true;
+    else mpesa.querySelector('button').disabled = false;
 }
 async function payWithMpesa() {
     var form = document.getElementById('mpesa-form');
     var phone = document.getElementById('mpesa-phone').value.trim();
     var message = document.getElementById('mpesa-message');
+    var amount = document.getElementById('payment-amount');
+    if (!amount.reportValidity()) return;
+    if (!Number.isInteger(Number(amount.value))) { message.textContent = 'M-Pesa payments must be a whole KES amount.'; return; }
     if (!phone) { message.textContent = 'Enter your M-Pesa phone number.'; return; }
     message.textContent = 'Sending payment prompt…';
     try {
@@ -116,6 +136,12 @@ async function payWithMpesa() {
         if (!response.ok) throw new Error('Unable to initiate payment');
         message.textContent = 'Check your phone and approve the M-Pesa prompt.';
     } catch (error) { message.textContent = error.message; }
+}
+if (document.getElementById('payment-method')) {
+    toggleMpesa();
+    document.getElementById('paystack-button').addEventListener('click', function(event) {
+        if (!document.getElementById('payment-amount').reportValidity()) event.preventDefault();
+    });
 }
 </script>
 </body>

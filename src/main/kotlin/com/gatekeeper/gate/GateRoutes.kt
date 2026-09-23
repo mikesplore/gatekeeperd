@@ -110,6 +110,12 @@ fun Application.configureGateRoutes() {
 
         get("/api/gate/pay") {
             val slug = call.requireProjectSlug() ?: return@get
+            val amountText = call.request.queryParameters["amount"]
+            val requestedAmount = amountText?.toBigDecimalOrNull()
+            if (amountText != null && (requestedAmount == null || requestedAmount <= BigDecimal.ZERO || requestedAmount.scale().coerceAtLeast(0) > 2)) {
+                call.respondError(HttpStatusCode.BadRequest, "invalid_payment_amount", "Payment amount must be greater than zero and have at most two decimal places")
+                return@get
+            }
             val project = ProjectRepository.findBySlug(slug)
             if (project == null) {
                 call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
@@ -120,7 +126,15 @@ fun Application.configureGateRoutes() {
                 return@get
             }
 
-            ProjectPaymentService.initializeForProject(project).fold(
+            if (requestedAmount != null && runCatching {
+                    com.gatekeeper.payments.ProjectBalanceService.requireAvailableForNewPayment(project, requestedAmount)
+                }.isFailure
+            ) {
+                call.respondError(HttpStatusCode.BadRequest, "invalid_payment_amount", "Payment amount exceeds the available outstanding balance")
+                return@get
+            }
+
+            ProjectPaymentService.initializeForProject(project, requestedAmount = requestedAmount).fold(
                 onSuccess = { url -> call.respondRedirect(url, permanent = false) },
                 onFailure = { err ->
                     call.respondError(
