@@ -95,7 +95,7 @@ class NginxService(
         return markers.mapIndexed { index, match ->
             val name = match.groupValues[1]
             val start = match.range.first
-            val end = if (name == "server") content.length else markers.getOrNull(index + 1)?.range?.first ?: content.length
+            val end = markers.getOrNull(index + 1)?.range?.first ?: content.length
             NginxConfigBlock(name, "# gatekeeperd:block:$name", content.substring(start, end).trimEnd())
         }
     }
