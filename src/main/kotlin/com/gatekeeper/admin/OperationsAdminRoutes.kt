@@ -13,6 +13,7 @@ import com.gatekeeper.db.repositories.CertificateRepository
 import com.gatekeeper.docker.DockerService
 import com.gatekeeper.nginx.NginxService
 import com.gatekeeper.nginx.NginxSiteRenderModel
+import com.gatekeeper.nginx.parsePublishedHostPorts
 import com.gatekeeper.nginx.requireCertificatePath
 import com.gatekeeper.nginx.requireValidHostname
 import com.gatekeeper.db.tables.ReconciliationStatus
@@ -35,6 +36,8 @@ import java.time.LocalDateTime
 import java.util.UUID
 import kotlin.time.Duration.Companion.milliseconds
 import java.io.File
+import java.net.InetSocketAddress
+import java.net.Socket
 
 @Serializable
 data class ProjectHealthResponse(
@@ -118,19 +121,49 @@ data class BulkProjectResult(val slug: String, val status: String, val message: 
 
 @Serializable data class DashboardConfirmationRequest(val confirm: Boolean = false)
 
-private fun dashboardSite(site: SiteRepository.SiteRecord): DashboardSiteResponse {
+private fun dashboardUpstreamState(site: SiteRepository.SiteRecord, dockerService: DockerService?): String {
+    val port = when (site.upstreamMode) {
+        com.gatekeeper.db.tables.UpstreamMode.EXPLICIT_PORT -> site.upstreamExplicitPort ?: return "unknown"
+        com.gatekeeper.db.tables.UpstreamMode.DOCKER_DISCOVERY -> {
+            val name = site.upstreamContainerName?.takeIf(String::isNotBlank) ?: return "unknown"
+            val docker = dockerService ?: return "unknown"
+            val container = runCatching { docker.getContainer(name) }.getOrNull() ?: return "down"
+            if (!container.state.equals("running", ignoreCase = true)) return "down"
+            parsePublishedHostPorts(container.ports).singleOrNull() ?: return "unknown"
+        }
+    }
+    val reachable = runCatching {
+        Socket().use { socket ->
+            socket.connect(InetSocketAddress(site.upstreamHost, port), 500)
+            true
+        }
+    }.getOrDefault(false)
+    return if (reachable) "running" else "down"
+}
+
+private fun dashboardSite(site: SiteRepository.SiteRecord, dockerService: DockerService? = null): DashboardSiteResponse {
     val project = ProjectRepository.findById(site.projectId)
     val customer = project?.customerId?.let(CustomerRepository::findById)
     val slug = site.projectSlug ?: site.projectId.toString()
     return DashboardSiteResponse(
         slug, site.projectId.toString(), customer?.id?.toString(), customer?.name, site.domain,
-        site.reconciliationStatus.value, site.lastDockerError?.let { "down" } ?: "unknown",
+        site.reconciliationStatus.value, dashboardUpstreamState(site, dockerService),
         site.lastNginxError, site.lastDockerError, site.configVersion,
         java.io.File(AppConfig.nginxSitesAvailablePath, slug).isFile,
         java.nio.file.Files.isSymbolicLink(java.io.File(AppConfig.nginxSitesEnabledPath, slug).toPath()),
         site.upstreamHost, site.upstreamMode.value, site.upstreamContainerName, site.upstreamExplicitPort,
         site.tlsMode.value, site.gateEnabled
     )
+}
+
+private inline fun <T> withDashboardDocker(sites: List<SiteRepository.SiteRecord>, block: (DockerService?) -> T): T {
+    val needsDocker = sites.any { it.upstreamMode == com.gatekeeper.db.tables.UpstreamMode.DOCKER_DISCOVERY }
+    val docker = if (needsDocker) runCatching { DockerService(AppConfig.dockerSocket) }.getOrNull() else null
+    return try {
+        block(docker)
+    } finally {
+        docker?.close()
+    }
 }
 
 private data class DashboardProjectFinancials(
@@ -171,7 +204,8 @@ fun Application.configureOperationsAdminRoutes() {
                 val offset = call.request.queryParameters["offset"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0
                 val limit = call.request.queryParameters["limit"]?.toIntOrNull()?.coerceIn(1, 500) ?: 100
                 val filtered = SiteRepository.findAll().filter { status == null || it.reconciliationStatus.value == status }
-                val rows = filtered.drop(offset).take(limit).map(::dashboardSite)
+                val page = filtered.drop(offset).take(limit)
+                val rows = withDashboardDocker(page) { docker -> page.map { dashboardSite(it, docker) } }
                 call.respond(DashboardSitesPageResponse(rows, filtered.size.toLong(), limit, offset, offset + rows.size < filtered.size))
             }
             get("/api/admin/dashboard/sites/{slug}") {
@@ -181,7 +215,8 @@ fun Application.configureOperationsAdminRoutes() {
                 val inspection = nginx.inspectSite(slug)
                 val cert = nginx.resolveCertificateForDomain(site.domain)
                 val expiry = cert?.let { nginx.certificateExpiry(it.certificateDomain) }
-                call.respond(DashboardSiteDetailResponse(dashboardSite(site), inspection.content?.takeIf { inspection.managed }, inspection.content, cert != null, expiry?.second, nginx.listBackups(slug).map { it.name }))
+                val response = withDashboardDocker(listOf(site)) { docker -> dashboardSite(site, docker) }
+                call.respond(DashboardSiteDetailResponse(response, inspection.content?.takeIf { inspection.managed }, inspection.content, cert != null, expiry?.second, nginx.listBackups(slug).map { it.name }))
             }
             patch("/api/admin/dashboard/sites/{slug}") {
                 val slug = call.parameters["slug"] ?: run { call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing slug"); return@patch }
@@ -215,7 +250,8 @@ fun Application.configureOperationsAdminRoutes() {
                     gateEnabled = updated.gateEnabled, bypassPaths = updated.bypassPaths
                 ))
                 if (!nginx.enableProject(slug, config)) { call.respondError(HttpStatusCode.UnprocessableEntity, "nginx_error", "Validation or activation failed; previous configuration was preserved"); return@patch }
-                call.respond(dashboardSite(SiteRepository.findByProjectSlug(slug) ?: updated))
+                val responseSite = SiteRepository.findByProjectSlug(slug) ?: updated
+                call.respond(withDashboardDocker(listOf(responseSite)) { docker -> dashboardSite(responseSite, docker) })
             }
             delete("/api/admin/dashboard/sites/{slug}") {
                 val slug = call.parameters["slug"] ?: run { call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing slug"); return@delete }
@@ -228,7 +264,8 @@ fun Application.configureOperationsAdminRoutes() {
             get("/api/admin/dashboard/dead-configs") {
                 val offset = call.request.queryParameters["offset"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0
                 val limit = call.request.queryParameters["limit"]?.toIntOrNull()?.coerceIn(1, 500) ?: 100
-                call.respond(SiteRepository.findAll().filter { it.reconciliationStatus == ReconciliationStatus.DEAD_CONFIG }.drop(offset).take(limit).map(::dashboardSite))
+                val page = SiteRepository.findAll().filter { it.reconciliationStatus == ReconciliationStatus.DEAD_CONFIG }.drop(offset).take(limit)
+                call.respond(withDashboardDocker(page) { docker -> page.map { dashboardSite(it, docker) } })
             }
             delete("/api/admin/dashboard/dead-configs/{filename}") {
                 val filename = call.parameters["filename"] ?: run { call.respondError(HttpStatusCode.BadRequest, "missing_filename", "Missing filename"); return@delete }
@@ -277,7 +314,8 @@ fun Application.configureOperationsAdminRoutes() {
                 val customer = CustomerRepository.findById(id) ?: run { call.respondError(HttpStatusCode.NotFound, "customer_not_found", "Customer not found"); return@get }
                 val owned = CustomerRepository.findSites(id)
                 val financials = owned.map { dashboardProjectFinancials(it.project) }
-                val sites = owned.mapNotNull { it.site }.map(::dashboardSite)
+                val siteRecords = owned.mapNotNull { it.site }
+                val sites = withDashboardDocker(siteRecords) { docker -> siteRecords.map { dashboardSite(it, docker) } }
                 val projects = owned.map { ownedProject ->
                     val project = ownedProject.project
                     val projectFinancials = dashboardProjectFinancials(project)
