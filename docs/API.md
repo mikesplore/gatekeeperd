@@ -1059,7 +1059,7 @@ Delete a Docker image from the local Docker host.
 
 ### M-Pesa
 
-`POST /api/mpesa/pay?project={slug}&phone={msisdn}&amount={amount}` starts an M-Pesa STK Push and returns `202` with a pending provider reference. `amount` is optional and defaults to the full available balance; partial requests must be whole KES amounts and cannot exceed the available balance after pending payments. `POST /api/mpesa/callback` receives the Daraja callback. M-Pesa payments are stored and reconciled through the same payment application and reconciliation service as Paystack.
+`POST /api/mpesa/pay?project={slug}&phone={msisdn}&amount={amount}` starts an M-Pesa STK Push and returns `202` with a pending provider reference. Kenyan mobile numbers may use `07XXXXXXXX`, `01XXXXXXXX`, `2547XXXXXXXX`, `2541XXXXXXXX`, or `+254...` format; Gatekeeperd normalizes them to `254...` before sending them to Daraja. `amount` is optional and defaults to the full available balance; partial requests must be whole KES amounts and cannot exceed the available balance after pending payments. `POST /api/mpesa/callback` receives the Daraja callback. M-Pesa payments are stored and reconciled through the same payment application and reconciliation service as Paystack.
 
 Required configuration: `MPESA_CONSUMER_KEY`, `MPESA_CONSUMER_SECRET`, `MPESA_SHORT_CODE`, `MPESA_PASSKEY`, `MPESA_CALLBACK_URL`, and `MPESA_ENVIRONMENT` (`sandbox` or `production`).
 

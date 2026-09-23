@@ -25,6 +25,11 @@ fun Application.configureMpesaRoutes() {
                 call.respondError(HttpStatusCode.BadRequest, "missing_payment_details", "project and phone are required")
                 return@post
             }
+            val normalizedPhone = MpesaPhoneNumber.normalize(phone)
+            if (normalizedPhone == null) {
+                call.respondError(HttpStatusCode.BadRequest, "invalid_mpesa_phone", "Enter a valid Kenyan mobile number, such as 0712345678 or 254712345678")
+                return@post
+            }
             if (amountText != null && (amount == null || amount <= BigDecimal.ZERO || amount.scale().coerceAtLeast(0) > 2)) {
                 call.respondError(HttpStatusCode.BadRequest, "invalid_payment_amount", "Payment amount must be greater than zero and have at most two decimal places")
                 return@post
@@ -46,7 +51,7 @@ fun Application.configureMpesaRoutes() {
                 call.respondError(HttpStatusCode.BadRequest, "invalid_payment_amount", "Payment amount exceeds the available outstanding balance")
                 return@post
             }
-            MpesaClient.initiate(project, phone, amount).fold(
+            MpesaClient.initiate(project, normalizedPhone, amount).fold(
                 onSuccess = { reference -> call.respond(HttpStatusCode.Accepted, mapOf("provider" to "mpesa", "reference" to reference, "status" to "pending")) },
                 onFailure = { call.respondError(HttpStatusCode.BadGateway, "mpesa_unavailable", it.message ?: "Unable to initiate M-Pesa payment") }
             )
