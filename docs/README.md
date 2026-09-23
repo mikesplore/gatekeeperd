@@ -203,7 +203,7 @@ Copy [.env.example](../.env.example) to `.env`. Required vars have no safe defau
 | `PAYSTACK_PUBLIC_KEY` | Payments | Paystack public key |
 | `MPESA_CONSUMER_KEY` | Payments | Daraja consumer key |
 | `MPESA_CONSUMER_SECRET` | Payments | Daraja consumer secret |
-| `MPESA_SHORT_CODE` | Payments | Paybill/till short code |
+| `MPESA_SHORT_CODE` | Payments | Paybill/till short code (`MPESA_SHORTCODE` is also accepted) |
 | `MPESA_PASSKEY` | Payments | Daraja passkey |
 | `MPESA_ENVIRONMENT` | Payments | `sandbox` or `production` |
 | `MPESA_CALLBACK_URL` | Payments | Public `/api/mpesa/callback` URL |

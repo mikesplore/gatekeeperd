@@ -57,7 +57,7 @@ fun Application.configureMpesaRoutes() {
             val callback = runCatching { json.decodeFromString<MpesaCallback>(raw) }.getOrNull()
             val result = callback?.Body?.stkCallback
             if (result == null) {
-                call.respond(HttpStatusCode.OK, mapOf("ResultCode" to 0, "ResultDesc" to "Accepted"))
+                call.respond(HttpStatusCode.OK, MpesaCallbackAck())
                 return@post
             }
             val reference = result.CheckoutRequestID
@@ -67,9 +67,9 @@ fun Application.configureMpesaRoutes() {
                 val project = ProjectRepository.findById(payment.projectId)
                 if (project != null) PaymentApplicationService.applySuccessfulPayment(com.gatekeeper.payments.PaymentProvider.MPESA, reference, project.slug, amount, project.currency, "webhook", rawPayload = raw)
             } else if (payment != null && result.ResultCode != 0) {
-                com.gatekeeper.db.repositories.PaymentRepository.markGatewayStatusByProviderReference(com.gatekeeper.payments.PaymentProvider.MPESA, reference!!, "failed", "webhook")
+                com.gatekeeper.db.repositories.PaymentRepository.markGatewayStatusByProviderReference(com.gatekeeper.payments.PaymentProvider.MPESA, reference, "failed", "webhook")
             }
-            call.respond(HttpStatusCode.OK, mapOf("ResultCode" to 0, "ResultDesc" to "Accepted"))
+            call.respond(HttpStatusCode.OK, MpesaCallbackAck())
         }
     }
 }

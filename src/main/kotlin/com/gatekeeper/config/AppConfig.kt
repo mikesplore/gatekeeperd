@@ -52,6 +52,7 @@ object AppConfig {
     val mpesaConsumerKey: String = optionalSetting("MPESA_CONSUMER_KEY", "")
     val mpesaConsumerSecret: String = optionalSetting("MPESA_CONSUMER_SECRET", "")
     val mpesaShortCode: String = optionalSetting("MPESA_SHORT_CODE", "")
+        .ifBlank { optionalSetting("MPESA_SHORTCODE", "") }
     val mpesaPasskey: String = optionalSetting("MPESA_PASSKEY", "")
     val mpesaCallbackUrl: String = optionalSetting("MPESA_CALLBACK_URL", "")
     val mpesaEnvironment: String = optionalSetting("MPESA_ENVIRONMENT", "sandbox")
