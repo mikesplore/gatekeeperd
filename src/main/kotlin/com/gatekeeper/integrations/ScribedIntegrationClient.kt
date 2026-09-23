@@ -263,23 +263,32 @@ object ScribedIntegrationClient {
             logger.warn("Could not ensure Scribed invoice for project=${project.id}: status=${created.status}, error=${created.error}")
             return false
         }
-        return invoiceStatus(project.id.toString()).body != null
+        val confirmed = invoiceStatus(project.id.toString())
+        if (confirmed.body == null) {
+            logger.warn("Scribed invoice ensure did not create a retrievable invoice for project=${project.id}: status=${confirmed.status}, error=${confirmed.error}")
+        }
+        return confirmed.body != null
     }
 
     suspend fun deliver(event: IntegrationOutboxRepository.Event): Boolean {
         val base = AppConfig.scribedCallbackUrl.trim().trimEnd('/'); val secret = AppConfig.scribedIntegrationSecret.trim()
         val apiToken = AppConfig.scribedApiToken.trim()
         if (base.isBlank() || secret.isBlank() || apiToken.isBlank()) return false
-        if (event.eventType == "payment") {
-            val payload = runCatching { json.decodeFromString<ScribedPaymentPayload>(event.payload) }.getOrNull() ?: return false
-            val projectUuid = runCatching { java.util.UUID.fromString(payload.project_id) }.getOrNull() ?: return false
+        if (event.eventType == "payment" || event.eventType == "ledger") {
+            val projectId = runCatching {
+                when (event.eventType) {
+                    "payment" -> json.decodeFromString<ScribedPaymentPayload>(event.payload).project_id
+                    else -> json.decodeFromString<ScribedLedgerPayload>(event.payload).project_id
+                }
+            }.getOrNull() ?: return false
+            val projectUuid = runCatching { java.util.UUID.fromString(projectId) }.getOrNull() ?: return false
             val project = ProjectRepository.findById(projectUuid) ?: return false
-            val beforeEnsure = invoiceStatus(payload.project_id)
+            val beforeEnsure = invoiceStatus(projectId)
             if (beforeEnsure.status == HttpStatusCode.NotFound) {
                 if (!ensureInvoice(project)) return false
-                syncProject(project)
+                if (event.eventType == "payment") syncProject(project)
             } else if (beforeEnsure.body == null) {
-                logger.warn("Scribed invoice check failed before payment project=${project.id}: status=${beforeEnsure.status}, error=${beforeEnsure.error}")
+                logger.warn("Scribed invoice check failed before ${event.eventType} delivery project=${project.id}: status=${beforeEnsure.status}, error=${beforeEnsure.error}")
                 return false
             }
         }
