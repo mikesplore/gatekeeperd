@@ -56,7 +56,7 @@ object MpesaClient : PaymentProviderClient {
         val password = Base64.getEncoder().encodeToString("${AppConfig.mpesaShortCode}${AppConfig.mpesaPasskey}$timestamp".toByteArray())
         val response = http.post("$baseUrl/mpesa/stkpush/v1/processrequest") {
             bearerAuth(token()); contentType(ContentType.Application.Json)
-            setBody(MpesaStkRequest(AppConfig.mpesaShortCode, password, timestamp, Amount = amount.longValueExact(), PartyA = phone, PartyB = AppConfig.mpesaShortCode, PhoneNumber = phone, CallBackURL = AppConfig.mpesaCallbackUrl, AccountReference = project.slug, TransactionDesc = "Gatekeeper payment"))
+            setBody(MpesaStkRequest(AppConfig.mpesaShortCode, password, timestamp, TransactionType = "CustomerPayBillOnline", Amount = amount.longValueExact(), PartyA = phone, PartyB = AppConfig.mpesaShortCode, PhoneNumber = phone, CallBackURL = AppConfig.mpesaCallbackUrl, AccountReference = project.slug, TransactionDesc = "Gatekeeper payment"))
         }
         val responseBody = response.bodyAsText()
         if (!response.status.isSuccess()) {

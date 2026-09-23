@@ -5,7 +5,7 @@ import kotlinx.serialization.Serializable
 @Serializable data class MpesaTokenResponse(val access_token: String, val expires_in: String)
 @Serializable data class MpesaStkRequest(
     val BusinessShortCode: String, val Password: String, val Timestamp: String,
-    val TransactionType: String = "CustomerPayBillOnline", val Amount: Long,
+    val TransactionType: String, val Amount: Long,
     val PartyA: String, val PartyB: String, val PhoneNumber: String,
     val CallBackURL: String, val AccountReference: String, val TransactionDesc: String
 )
