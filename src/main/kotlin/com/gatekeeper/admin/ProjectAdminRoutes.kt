@@ -333,7 +333,11 @@ fun Application.configureProjectAdminRoutes() {
                     call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
                     return@get
                 }
-                val lookup = ScribedIntegrationClient.invoiceStatus(project.id.toString())
+                var lookup = ScribedIntegrationClient.invoiceStatus(project.id.toString())
+                if (lookup.status == HttpStatusCode.NotFound && ScribedIntegrationClient.ensureInvoice(project)) {
+                    ScribedIntegrationClient.syncProject(project)
+                    lookup = ScribedIntegrationClient.invoiceStatus(project.id.toString())
+                }
                 val invoiceId = lookup.body?.get("invoice")?.jsonObject?.get("id")?.jsonPrimitive?.longOrNull
                 if (invoiceId == null) {
                     call.respondError(HttpStatusCode.NotFound, "invoice_unavailable", "No Scribed invoice is available for this project")
@@ -345,6 +349,33 @@ fun Application.configureProjectAdminRoutes() {
                     return@get
                 }
                 call.response.header(HttpHeaders.ContentDisposition, "attachment; filename=invoice-${project.slug}.pdf")
+                call.respondBytes(bytes, ContentType.Application.Pdf)
+            }
+
+            get("/api/admin/projects/{slug}/payments/{paymentId}/receipt") {
+                val slug = call.parameters["slug"]
+                val project = slug?.let { ProjectRepository.findBySlug(it) }
+                if (project == null) {
+                    call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
+                    return@get
+                }
+                val paymentId = call.parameters["paymentId"]?.let { runCatching { UUID.fromString(it) }.getOrNull() }
+                if (paymentId == null) {
+                    call.respondError(HttpStatusCode.BadRequest, "invalid_payment_id", "Invalid payment ID")
+                    return@get
+                }
+                val payment = PaymentRepository.findById(paymentId)?.takeIf { it.projectId == project.id }
+                    ?: return@get call.respondError(HttpStatusCode.NotFound, "payment_not_found", "Payment not found")
+                if (payment.gatewayStatus != "success") {
+                    call.respondError(HttpStatusCode.Conflict, "payment_not_complete", "A receipt is available after successful payment")
+                    return@get
+                }
+                val (status, bytes) = ScribedIntegrationClient.receiptPdfForPayment(project, payment)
+                if (bytes == null) {
+                    call.respondError(if (status == HttpStatusCode.NotFound) status else HttpStatusCode.BadGateway, "receipt_download_failed", "Scribed could not generate or retrieve this receipt")
+                    return@get
+                }
+                call.response.header(HttpHeaders.ContentDisposition, "inline; filename=receipt-${project.slug}-${payment.providerReference}.pdf")
                 call.respondBytes(bytes, ContentType.Application.Pdf)
             }
 
@@ -374,6 +405,10 @@ fun Application.configureProjectAdminRoutes() {
                 val project = slug?.let { ProjectRepository.findBySlug(it) }
                 if (project == null) {
                     call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
+                    return@post
+                }
+                if (!ScribedIntegrationClient.ensureInvoice(project)) {
+                    call.respondError(HttpStatusCode.BadGateway, "invoice_sync_failed", "Scribed could not create or locate the project invoice")
                     return@post
                 }
                 val syncedPayments = ScribedIntegrationClient.syncProject(project)

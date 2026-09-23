@@ -392,10 +392,16 @@ Create a Scribed invoice for a project that does not already have one.
 }
 ```
 
-Gatekeeperd supplies the project billing contact, current invoice total, currency, and due date from its project ledger. Scribed creates the invoice; Gatekeeperd then queues a ledger sync and replays successful payments so prior adjustments are reflected and missing receipts are generated.
+Gatekeeperd supplies the project billing contact, current invoice total, currency, and due date from its project ledger. Scribed creates or links the invoice; Gatekeeperd then queues a ledger sync and replays successful payments so prior adjustments are reflected and missing receipts are generated. Verified payments also bootstrap a missing Scribed invoice automatically.
+
+### GET /api/admin/projects/{slug}/invoice/download
+Download the current Scribed invoice PDF. If no invoice exists yet, Gatekeeperd creates or links one and queues a ledger/payment sync before returning the PDF.
 
 ### POST /api/admin/projects/{slug}/invoice/resync
-Queue the current project ledger and replay successful payments for an existing Scribed invoice. This refreshes invoice totals, retries failed or dead-lettered payment deliveries, and generates missing receipts idempotently; it does not create a missing invoice.
+Ensure the project has a Scribed invoice, then queue the current project ledger and replay successful payments. This refreshes invoice totals, retries failed or dead-lettered payment deliveries, and generates missing receipts idempotently.
+
+### GET /api/admin/projects/{slug}/payments/{paymentId}/receipt
+Ensure the Scribed invoice and receipt exist for a successful Gatekeeper payment, then return the receipt PDF. The path `paymentId` is the Gatekeeper payment UUID; repeated requests are idempotent.
 
 ### GET /api/admin/projects/{slug}/audit
 Get audit log for a project.
