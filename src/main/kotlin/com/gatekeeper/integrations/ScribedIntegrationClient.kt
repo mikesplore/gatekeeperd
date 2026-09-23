@@ -5,8 +5,10 @@ import com.gatekeeper.db.repositories.ProjectRepository
 import com.gatekeeper.db.repositories.PaymentRepository
 import io.ktor.client.*
 import io.ktor.client.call.body
+import io.ktor.client.plugins.contentnegotiation.*
 import io.ktor.client.request.*
 import io.ktor.http.*
+import io.ktor.serialization.kotlinx.json.*
 import kotlinx.serialization.Serializable
 import org.slf4j.LoggerFactory
 import kotlinx.coroutines.runBlocking
@@ -44,7 +46,7 @@ import io.ktor.client.statement.bodyAsText
 
 object ScribedIntegrationClient {
     private val logger = LoggerFactory.getLogger("com.gatekeeper.integrations.ScribedIntegrationClient")
-    private val http = HttpClient()
+    private val http = HttpClient { install(ContentNegotiation) { json(Json { ignoreUnknownKeys = true }) } }
     private val json = Json { encodeDefaults = true }
 
     data class InvoiceLookupResult(val status: HttpStatusCode?, val body: JsonObject? = null, val error: String? = null)
