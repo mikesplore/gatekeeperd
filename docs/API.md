@@ -380,6 +380,21 @@ Generate a Paystack payment link for a project.
 - Creates a pending `payments` row with the Paystack reference.
 - The client pays via the returned link. After successful payment, Paystack sends a webhook to `/api/paystack/webhook`, which activates the project.
 
+### POST /api/admin/projects/{slug}/invoice
+Create a Scribed invoice for a project that does not already have one.
+
+**Request:**
+```json
+{
+  "description": "Hosting and maintenance services"
+}
+```
+
+Gatekeeperd supplies the project billing contact, current invoice total, currency, and due date from its project ledger. Scribed creates the invoice; Gatekeeperd then queues a ledger sync so prior payments and adjustments are reflected.
+
+### POST /api/admin/projects/{slug}/invoice/resync
+Queue the current project ledger for an existing Scribed invoice. This updates the invoice totals and payment status; it does not create a missing invoice.
+
 ### GET /api/admin/projects/{slug}/audit
 Get audit log for a project.
 

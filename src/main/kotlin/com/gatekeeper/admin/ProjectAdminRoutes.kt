@@ -142,6 +142,9 @@ data class InitializePaymentRequest(val email: String, val amount: Double? = nul
 data class InitializePaymentResponse(val payment_link: String)
 
 @Serializable
+data class CreateProjectInvoiceRequest(val description: String)
+
+@Serializable
 data class ProjectPaymentsPageResponse(val payments: List<PaymentResponse>, val total: Long, val limit: Int, val offset: Int, val hasMore: Boolean)
 
 @Serializable
@@ -276,6 +279,51 @@ fun Application.configureProjectAdminRoutes() {
                     JsonObject(lookup.body + ("invoice" to JsonObject(invoice + ("download_url" to JsonPrimitive(invoiceUrl)))))
                 } else lookup.body
                 call.respond(response)
+            }
+
+            post("/api/admin/projects/{slug}/invoice") {
+                val slug = call.parameters["slug"]
+                val project = slug?.let { ProjectRepository.findBySlug(it) }
+                if (project == null) {
+                    call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
+                    return@post
+                }
+                val body = runCatching { call.receive<CreateProjectInvoiceRequest>() }.getOrNull()
+                val description = body?.description?.trim()
+                if (description.isNullOrBlank()) {
+                    call.respondError(HttpStatusCode.BadRequest, "invalid_invoice_description", "Invoice description is required")
+                    return@post
+                }
+                val existingInvoice = ScribedIntegrationClient.invoiceStatus(project.id.toString())
+                if (existingInvoice.body?.get("invoice")?.jsonObject?.get("id")?.jsonPrimitive?.longOrNull != null) {
+                    call.respondError(HttpStatusCode.Conflict, "invoice_already_exists", "An invoice already exists for this project")
+                    return@post
+                }
+                if (existingInvoice.status != HttpStatusCode.NotFound && existingInvoice.body == null) {
+                    logger.warn("Scribed invoice pre-check failed for project ${project.id}: status=${existingInvoice.status}, error=${existingInvoice.error}")
+                    call.respondError(HttpStatusCode.BadGateway, "invoice_integration_unavailable", "Could not check whether an invoice already exists")
+                    return@post
+                }
+                val invoiceAmount = ProjectBalanceService.originalCharge(project) +
+                    ProjectBalanceService.additionalCharges(project) - ProjectBalanceService.discounts(project)
+                if (invoiceAmount <= BigDecimal.ZERO) {
+                    call.respondError(HttpStatusCode.BadRequest, "invoice_amount_unavailable", "Project has no billable amount for an invoice")
+                    return@post
+                }
+                val result = ScribedIntegrationClient.createInvoice(project, description, invoiceAmount.toPlainString())
+                if (result.status == HttpStatusCode.Conflict) {
+                    call.respondError(HttpStatusCode.Conflict, "invoice_already_exists", "Scribed already has an invoice for this project")
+                    return@post
+                }
+                if (result.status == null || !result.status.isSuccess()) {
+                    logger.warn("Scribed invoice creation failed for project ${project.id}: status=${result.status}, error=${result.error}")
+                    call.respondError(HttpStatusCode.BadGateway, "invoice_creation_failed", "Scribed could not create the invoice")
+                    return@post
+                }
+                ScribedIntegrationClient.notifyLedger(project, "invoice-create-${java.util.UUID.randomUUID()}")
+                val lookup = ScribedIntegrationClient.invoiceStatus(project.id.toString())
+                val invoiceId = lookup.body?.get("invoice")?.jsonObject?.get("id")?.jsonPrimitive?.longOrNull
+                call.respond(HttpStatusCode.Created, mapOf("status" to "created", "invoiceId" to invoiceId))
             }
 
             get("/api/admin/projects/{slug}/invoice/download") {

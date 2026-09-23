@@ -27,6 +27,18 @@ import io.ktor.client.statement.bodyAsText
 @Serializable data class ScribedLedgerAdjustment(val id: String, val type: String, val amount: String, val reason: String, val actor: String)
 @Serializable data class ScribedLedgerPayload(val project_id: String, val project_slug: String, val ledger_version: String, val base_amount: String, val additional_charges: String, val discounts: String, val successful_payments: String, val outstanding_balance: String, val currency: String, val adjustments: List<ScribedLedgerAdjustment>)
 @Serializable data class ScribedInvoiceEmailPayload(val invoice_id: Long)
+@Serializable data class ScribedInvoiceCreatePayload(
+    val client_name: String,
+    val client_email: String?,
+    val project_name: String,
+    val description: String,
+    val amount: String,
+    val currency: String,
+    val due_date: String?,
+    val gatekeeper_project_id: String,
+    val original_amount: String,
+    val amount_paid: String
+)
 
 object ScribedIntegrationClient {
     private val logger = LoggerFactory.getLogger("com.gatekeeper.integrations.ScribedIntegrationClient")
@@ -34,6 +46,41 @@ object ScribedIntegrationClient {
     private val json = Json { encodeDefaults = true }
 
     data class InvoiceLookupResult(val status: HttpStatusCode?, val body: JsonObject? = null, val error: String? = null)
+
+    data class InvoiceCreateResult(val status: HttpStatusCode?, val error: String? = null)
+
+    suspend fun createInvoice(project: ProjectRepository.ProjectRecord, description: String, amount: String): InvoiceCreateResult {
+        val base = AppConfig.scribedCallbackUrl.trim().trimEnd('/')
+        val secret = AppConfig.scribedIntegrationSecret.trim()
+        val apiToken = AppConfig.scribedApiToken.trim()
+        if (base.isBlank() || secret.isBlank() || apiToken.isBlank()) {
+            return InvoiceCreateResult(null, "Scribed integration is not configured")
+        }
+        val payload = ScribedInvoiceCreatePayload(
+            client_name = project.billingName?.takeIf { it.isNotBlank() }
+                ?: project.customerName?.takeIf { it.isNotBlank() } ?: project.name,
+            client_email = project.billingEmail ?: project.customerEmail,
+            project_name = project.name,
+            description = description,
+            amount = amount,
+            currency = project.currency,
+            due_date = project.dueDate?.toString(),
+            gatekeeper_project_id = project.id.toString(),
+            original_amount = amount,
+            amount_paid = ProjectBalanceService.successfulPayments(project).toPlainString()
+        )
+        return runCatching {
+            val response = http.post("$base/invoices") {
+                contentType(ContentType.Application.Json)
+                header(HttpHeaders.Authorization, "Bearer $apiToken")
+                header("X-Gatekeeper-Secret", secret)
+                header("Idempotency-Key", "gatekeeper-invoice:${project.id}")
+                setBody(payload)
+            }
+            if (response.status.isSuccess()) InvoiceCreateResult(response.status)
+            else InvoiceCreateResult(response.status, response.bodyAsText().take(500))
+        }.getOrElse { InvoiceCreateResult(null, it.message ?: it::class.simpleName) }
+    }
 
     suspend fun invoiceStatus(projectId: String): InvoiceLookupResult {
         val base = AppConfig.scribedCallbackUrl.trim().trimEnd('/')
