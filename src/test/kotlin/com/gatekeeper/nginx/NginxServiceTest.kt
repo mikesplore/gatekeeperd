@@ -430,7 +430,20 @@ class NginxServiceTest {
         val inspection = service.inspectSite("acw")
         assertTrue(inspection.managed)
         assertFalse(inspection.manual)
-        assertEquals(setOf("server", "upstream", "auth_request", "paywall"), inspection.blocks.map { it.type }.toSet())
+        assertEquals(setOf("server", "bypass", "upstream", "auth_request", "paywall"), inspection.blocks.map { it.type }.toSet())
+        val serverBlock = inspection.blocks.single { it.type == "server" }
+        val bypassBlock = inspection.blocks.single { it.type == "bypass" }
+        assertTrue("listen 80;" in serverBlock.content)
+        assertFalse("/api/gate/" in serverBlock.content)
+        assertTrue("/api/gate/" in bypassBlock.content)
+
+        val legacyGenerated = generated
+            .replace("server {\n    # gatekeeperd:block:server\n", "# gatekeeperd:block:server\nserver {\n")
+            .replace("    # gatekeeperd:block:bypass\n", "")
+        File(available, "legacy").writeText(legacyGenerated)
+        val legacyBlocks = service.inspectSite("legacy").blocks
+        assertEquals(setOf("server", "bypass", "upstream", "auth_request", "paywall"), legacyBlocks.map { it.type }.toSet())
+        assertTrue("/api/gate/" in legacyBlocks.single { it.type == "bypass" }.content)
 
         File(available, "manual").writeText("server { listen 80; }\n")
         val manual = service.inspectSite("manual")
