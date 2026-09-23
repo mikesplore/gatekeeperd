@@ -67,7 +67,10 @@ data class BulkProjectResult(val slug: String, val status: String, val message: 
     val slug: String, val projectId: String, val customerId: String? = null, val customerName: String? = null,
     val domain: String, val status: String, val dockerState: String? = null,
     val lastNginxError: String? = null, val lastDockerError: String? = null,
-    val configVersion: Int, val available: Boolean, val enabled: Boolean
+    val configVersion: Int, val available: Boolean, val enabled: Boolean,
+    val upstreamHost: String? = null, val upstreamMode: String? = null,
+    val upstreamContainerName: String? = null, val upstreamExplicitPort: Int? = null,
+    val tlsMode: String? = null, val gateEnabled: Boolean? = null
 )
 
 @Serializable data class DashboardSiteDetailResponse(
@@ -124,7 +127,9 @@ private fun dashboardSite(site: SiteRepository.SiteRecord): DashboardSiteRespons
         site.reconciliationStatus.value, site.lastDockerError?.let { "down" } ?: "unknown",
         site.lastNginxError, site.lastDockerError, site.configVersion,
         java.io.File(AppConfig.nginxSitesAvailablePath, slug).isFile,
-        java.nio.file.Files.isSymbolicLink(java.io.File(AppConfig.nginxSitesEnabledPath, slug).toPath())
+        java.nio.file.Files.isSymbolicLink(java.io.File(AppConfig.nginxSitesEnabledPath, slug).toPath()),
+        site.upstreamHost, site.upstreamMode.value, site.upstreamContainerName, site.upstreamExplicitPort,
+        site.tlsMode.value, site.gateEnabled
     )
 }
 
