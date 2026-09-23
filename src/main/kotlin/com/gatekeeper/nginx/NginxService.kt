@@ -92,11 +92,28 @@ class NginxService(
         val marker = Regex("(?m)^\\s*# gatekeeperd:block:([a-z_]+)\\s*$")
         val markers = marker.findAll(content).toList()
         if (markers.isEmpty()) return emptyList()
-        return markers.mapIndexed { index, match ->
-            val name = match.groupValues[1]
-            val start = match.range.first
-            val end = markers.getOrNull(index + 1)?.range?.first ?: content.length
-            NginxConfigBlock(name, "# gatekeeperd:block:$name", content.substring(start, end).trimEnd())
+        val serverIndex = markers.indexOfFirst { it.groupValues[1] == "server" }
+        val hasBypassMarker = markers.any { it.groupValues[1] == "bypass" }
+        val legacyBypassStart = if (serverIndex >= 0 && !hasBypassMarker) {
+            Regex("(?m)^\\s*# 1\\. Gatekeeper Direct Bypass Route\\s*$")
+                .find(content)
+                ?.range
+                ?.first
+                ?.takeIf { split -> split > markers[serverIndex].range.first }
+        } else null
+
+        return buildList {
+            markers.forEachIndexed { index, match ->
+                val name = match.groupValues[1]
+                val start = match.range.first
+                val nextMarkerStart = markers.getOrNull(index + 1)?.range?.first ?: content.length
+                val splitBeforeBypass = name == "server" && legacyBypassStart != null && legacyBypassStart < nextMarkerStart
+                val end = if (splitBeforeBypass) legacyBypassStart!! else nextMarkerStart
+                add(NginxConfigBlock(name, "# gatekeeperd:block:$name", content.substring(start, end).trimEnd()))
+                if (splitBeforeBypass) {
+                    add(NginxConfigBlock("bypass", "# gatekeeperd:block:bypass", content.substring(end, nextMarkerStart).trimEnd()))
+                }
+            }
         }
     }
 
@@ -255,8 +272,8 @@ class NginxService(
         val effectiveUpstreamScheme = normalizeUpstreamScheme(appPort, upstreamScheme)
 
         return buildString {
-            appendLine("# gatekeeperd:block:server")
             appendLine("server {")
+            appendLine("    # gatekeeperd:block:server")
             if (sslEnabled) {
                 appendLine("    listen 443 ssl;")
                 appendLine("    listen [::]:443 ssl;")
@@ -276,6 +293,7 @@ class NginxService(
             }
 
             if (gateEnabled) {
+            appendLine("    # gatekeeperd:block:bypass")
             appendLine("    # -------------------------------------------------------------------------")
             appendLine("    # 1. Gatekeeper Direct Bypass Route")
             appendLine("    # Payment callbacks, webhooks, and paywall APIs bypass auth_request")
