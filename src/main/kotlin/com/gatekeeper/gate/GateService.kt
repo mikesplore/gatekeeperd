@@ -3,8 +3,6 @@ package com.gatekeeper.gate
 import com.gatekeeper.config.AppConfig
 import com.gatekeeper.db.repositories.PaymentRepository
 import com.gatekeeper.db.repositories.ProjectRepository
-import com.gatekeeper.gate.PaywallInfo
-import com.gatekeeper.gate.GateResult
 import com.gatekeeper.plugins.RedisService
 import com.gatekeeper.plugins.Metrics
 import org.slf4j.LoggerFactory

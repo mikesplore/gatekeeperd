@@ -39,7 +39,6 @@ object SiteRepository {
                 it[Sites.domain] = domain
                 it[Sites.upstreamHost] = "127.0.0.1"
                 it[Sites.upstreamMode] = UpstreamMode.DOCKER_DISCOVERY
-                it[Sites.upstreamContainerName] = null
                 it[Sites.upstreamExplicitPort] = null
                 it[Sites.tlsMode] = tlsMode
                 it[Sites.certMode] = certMode
@@ -71,7 +70,7 @@ object SiteRepository {
 
     data class SiteRecord(
         val id: UUID, val projectId: UUID, val domain: String, val upstreamHost: String,
-        val upstreamMode: UpstreamMode, val upstreamContainerName: String?, val upstreamExplicitPort: Int?,
+        val upstreamMode: UpstreamMode, val upstreamExplicitPort: Int?,
         val tlsMode: TlsMode, val certMode: CertMode, val certExplicitPath: String?, val gateEnabled: Boolean,
         val configVersion: Int, val createdAt: LocalDateTime, val updatedAt: LocalDateTime,
         val bypassPaths: List<String> = DEFAULT_GATEKEEPER_BYPASS_PATHS,
@@ -122,7 +121,6 @@ object SiteRepository {
             it[Sites.domain] = model.domain
             it[Sites.upstreamHost] = model.upstreamHost
             it[Sites.upstreamMode] = model.upstreamMode
-            it[Sites.upstreamContainerName] = model.upstreamContainerName.takeIf { model.upstreamMode == UpstreamMode.DOCKER_DISCOVERY }
             it[Sites.upstreamExplicitPort] = if (model.upstreamMode == UpstreamMode.EXPLICIT_PORT) model.appPort else null
             it[Sites.tlsMode] = when (model.tlsMode) {
                 com.gatekeeper.nginx.TlsRenderMode.HTTP_ONLY -> TlsMode.HTTP_ONLY
@@ -147,7 +145,6 @@ object SiteRepository {
             update.domain?.let { value -> it[Sites.domain] = value }
             update.upstreamHost?.let { value -> it[Sites.upstreamHost] = value }
             update.upstreamMode?.let { value -> it[Sites.upstreamMode] = value }
-            update.upstreamContainerName?.let { value -> it[Sites.upstreamContainerName] = value }
             update.upstreamExplicitPort?.let { value -> it[Sites.upstreamExplicitPort] = value }
             update.tlsMode?.let { value -> it[Sites.tlsMode] = value }
             update.certMode?.let { value -> it[Sites.certMode] = value }
@@ -168,7 +165,6 @@ object SiteRepository {
             it[Sites.upstreamHost] = host
             it[Sites.upstreamMode] = UpstreamMode.EXPLICIT_PORT
             it[Sites.upstreamExplicitPort] = port
-            it[Sites.upstreamContainerName] = null
             it[Sites.configVersion] = site[Sites.configVersion] + 1
             it[Sites.reconciliationStatus] = ReconciliationStatus.HEALTHY
             it[Sites.lastNginxError] = null
@@ -178,25 +174,11 @@ object SiteRepository {
         Sites.selectAll().where { Sites.id eq site[Sites.id] }.singleOrNull()?.toRecord()
     }
 
-    /** Refreshes the legacy Docker-name projection from the canonical active deployment runtime. */
-    fun refreshDockerUpstreamContainerCache(projectId: UUID, containerName: String) = transaction {
-        require(containerName.isNotBlank()) { "Docker upstream container name must not be blank" }
-        val current = Sites.selectAll().where { Sites.projectId eq projectId }.singleOrNull() ?: return@transaction false
-        if (current[Sites.upstreamMode] != UpstreamMode.DOCKER_DISCOVERY || current[Sites.upstreamContainerName] == containerName) {
-            return@transaction false
-        }
-        Sites.update({ Sites.projectId eq projectId }) {
-            it[Sites.upstreamContainerName] = containerName
-            it[Sites.updatedAt] = LocalDateTime.now()
-        } == 1
-    }
-
     fun restoreDeploymentUpstream(projectId: UUID, site: SiteRecord): SiteRecord? = transaction {
         val existing = Sites.selectAll().where { Sites.projectId eq projectId }.singleOrNull() ?: return@transaction null
         Sites.update({ Sites.id eq existing[Sites.id] }) {
             it[Sites.upstreamHost] = site.upstreamHost
             it[Sites.upstreamMode] = site.upstreamMode
-            it[Sites.upstreamContainerName] = site.upstreamContainerName
             it[Sites.upstreamExplicitPort] = site.upstreamExplicitPort
             it[Sites.configVersion] = existing[Sites.configVersion] + 1
             it[Sites.updatedAt] = LocalDateTime.now()
@@ -206,7 +188,7 @@ object SiteRepository {
 
     data class SiteDashboardUpdate(
         val domain: String? = null, val upstreamHost: String? = null, val upstreamMode: UpstreamMode? = null,
-        val upstreamContainerName: String? = null, val upstreamExplicitPort: Int? = null,
+        val upstreamExplicitPort: Int? = null,
         val tlsMode: TlsMode? = null, val certMode: CertMode? = null, val certExplicitPath: String? = null,
         val gateEnabled: Boolean? = null, val bypassPaths: List<String>? = null
     )
@@ -221,7 +203,7 @@ object SiteRepository {
 
     private fun ResultRow.toRecord(projectSlug: String? = null) = SiteRecord(
         this[Sites.id], this[Sites.projectId], this[Sites.domain], this[Sites.upstreamHost],
-        this[Sites.upstreamMode], this[Sites.upstreamContainerName], this[Sites.upstreamExplicitPort],
+        this[Sites.upstreamMode], this[Sites.upstreamExplicitPort],
         this[Sites.tlsMode], this[Sites.certMode], this[Sites.certExplicitPath], this[Sites.gateEnabled],
         this[Sites.configVersion], this[Sites.createdAt], this[Sites.updatedAt],
         runCatching { Json.decodeFromString<List<String>>(this[Sites.bypassPaths]) }.getOrDefault(DEFAULT_GATEKEEPER_BYPASS_PATHS),

@@ -1,11 +1,8 @@
 package com.gatekeeper.db.repositories
 
 import com.gatekeeper.db.tables.Customers
-import com.gatekeeper.db.tables.Projects
-import com.gatekeeper.db.tables.Sites
 import org.jetbrains.exposed.sql.ResultRow
 import org.jetbrains.exposed.sql.SortOrder
-import org.jetbrains.exposed.sql.and
 import org.jetbrains.exposed.sql.selectAll
 import org.jetbrains.exposed.sql.transactions.transaction
 import java.time.LocalDateTime

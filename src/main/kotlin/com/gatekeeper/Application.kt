@@ -5,7 +5,6 @@ import com.gatekeeper.api.InputValidators
 import com.gatekeeper.auth.configureAuthRoutes
 import com.gatekeeper.config.AppConfig
 import com.gatekeeper.customer.configureCustomerRoutes
-import com.gatekeeper.db.repositories.DeploymentOwnershipReport
 import com.gatekeeper.db.tables.Users
 import com.gatekeeper.deployment.DeploymentWorker
 import com.gatekeeper.gate.configureGateRoutes
@@ -77,13 +76,6 @@ private fun operationalCommand(command: String, args: Array<String>) {
             }
         }
 
-        "deployment-ownership-report" -> DeploymentOwnershipReport.run(
-            AppConfig.dbUrl,
-            AppConfig.dbUser,
-            AppConfig.dbPassword,
-            applyBackfill = args.contains("--apply")
-        )
-
         "health-check" -> {
             DatabaseFactory.init(
                 AppConfig.dbUrl,
@@ -96,7 +88,7 @@ private fun operationalCommand(command: String, args: Array<String>) {
             ); println("ready")
         }
 
-        else -> error("Unknown command '$command'. Use serve, migrate, backfill, deployment-ownership-report, or health-check.")
+        else -> error("Unknown command '$command'. Use serve, migrate, backfill, or health-check.")
     }
 }
 

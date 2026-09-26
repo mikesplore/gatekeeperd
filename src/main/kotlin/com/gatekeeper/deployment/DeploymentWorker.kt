@@ -2,13 +2,11 @@ package com.gatekeeper.deployment
 
 import com.gatekeeper.db.repositories.DeploymentJobRepository
 import com.gatekeeper.db.repositories.DeploymentJobRecord
-import com.gatekeeper.db.repositories.ProjectRepository
 import com.gatekeeper.db.repositories.AuditRepository
 import com.gatekeeper.db.repositories.RegistryCredentialRepository
 import com.gatekeeper.config.AppConfig
 import com.gatekeeper.plugins.DistributedLock
 import com.gatekeeper.docker.CreateContainerRequest
-import com.gatekeeper.docker.ContainerInfo
 import com.gatekeeper.docker.DockerService
 import com.gatekeeper.docker.DockerCleanupService
 import com.gatekeeper.nginx.NginxService
@@ -25,6 +23,7 @@ import java.net.Socket
 import java.net.URL
 import java.net.HttpURLConnection
 import java.util.UUID
+import kotlin.time.Duration.Companion.milliseconds
 
 object DeploymentWorker {
     private val logger = LoggerFactory.getLogger("com.gatekeeper.deployment.DeploymentWorker")
@@ -36,14 +35,14 @@ object DeploymentWorker {
             DeploymentJobRepository.recoverStale(AppConfig.deploymentStaleMinutes)
             while (isActive) {
                 runCatching { processNext() }.onFailure { logger.error("Deployment worker cycle failed", it) }
-                delay(1000)
+                delay(1000.milliseconds)
             }
         }
     }
 
     private suspend fun processNext() {
         val job = DeploymentJobRepository.claimNext() ?: return
-        DistributedLock.withLock("deployment-project:${job.projectId ?: job.projectSlug ?: job.id}") {
+        DistributedLock.withLock("deployment-project:${job.projectId}") {
             runBlocking { processClaimedJob(job) }
         }
     }
@@ -64,7 +63,9 @@ object DeploymentWorker {
             }
             return
         }
-        val workspace = Files.createTempDirectory("gatekeeper-deployment-${job.id}-")
+        val workspace = withContext(Dispatchers.IO) {
+            Files.createTempDirectory("gatekeeper-deployment-${job.id}-")
+        }
         var candidateName: String? = null
         var routeRollback: (() -> Boolean)? = null
         try {
@@ -93,7 +94,9 @@ object DeploymentWorker {
                     if (githubToken.isBlank()) throw error
                     logger.info("Authenticated clone unavailable for {}; retrying as public repository", job.repository)
                     workspace.toFile().deleteRecursively()
-                    Files.createDirectories(workspace)
+                    withContext(Dispatchers.IO) {
+                        Files.createDirectories(workspace)
+                    }
                     runCommand(job.id, workspace, cloneCommand)
                 }
                 commit = commandOutput(workspace, listOf("git", "rev-parse", "HEAD")).trim()
@@ -120,39 +123,8 @@ object DeploymentWorker {
             try {
                 val digest = docker.imageDigest(image)
                 DeploymentJobRepository.update(job.id, log = "Image digest: ${digest ?: "unavailable"}", imageDigest = digest)
-                // Redeployments must reuse the project's stable container name. A new
-                // execution id must not become a new host identity, otherwise the old
-                // container keeps the published port and the replacement cannot start.
-                val projectContainerName = if (job.projectId != null) ProjectRepository.findActiveById(job.projectId)?.containerName
-                    else job.projectSlug?.let { ProjectRepository.findBySlug(it)?.containerName }
-                val targetName = projectContainerName ?: job.containerName
-                    ?: "deployment-${job.id.toString().take(8)}"
                 if (job.network != "bridge" && job.createNetworkIfMissing) docker.createNetworkIfMissing(job.network)
-                val lookupStrategies = listOf<Pair<String, () -> ContainerInfo?>>(
-                    "configured container name" to { job.containerName?.takeIf { it == targetName }?.let { docker.getContainer(it) } },
-                    "stable target name" to { docker.getContainer(targetName) },
-                    "image $image" to { docker.findContainerByImage(image) },
-                    "published host port ${job.hostPort}" to { job.hostPort?.let { docker.findContainerByHostPort(it) } }
-                )
-                var existingMatch: Pair<String, ContainerInfo?>? = null
-                for ((strategy, lookup) in lookupStrategies) {
-                    val match = runCatching { lookup() }.getOrNull()
-                    if (match != null) {
-                        existingMatch = strategy to match
-                        break
-                    }
-                }
-                val existing = existingMatch?.second
-                DeploymentJobRepository.update(
-                    job.id,
-                    log = if (existing != null) {
-                        "Replacement container found via ${existingMatch.first}: ${existing.name} (image=${existing.image})"
-                    } else {
-                        "No existing container found to replace; creating a new container"
-                    }
-                )
-                DeploymentJobRepository.setPreviousContainer(job.id, existing?.name, existing?.image)
-                candidateName = "${targetName.take(220)}-${job.id.toString().take(8)}"
+                candidateName = "deployment-${job.id}"
                 val readinessContainerPort = when (job.readinessType?.lowercase()) {
                     "http" -> job.readinessTarget?.substringBefore('/')?.toIntOrNull() ?: job.containerPort
                     "tcp" -> job.readinessTarget?.toIntOrNull() ?: job.containerPort
@@ -223,10 +195,10 @@ object DeploymentWorker {
         val previousDeployment = DeploymentApplicationService.activeRuntime(runtime.projectId, job.environment)
         val previousContainer = previousDeployment?.name
         val changesProductionRoute = job.environment == "production"
-        val hasManagedSite = changesProductionRoute && runtime.projectId?.let(SiteRepository::existsForProject) == true
+        val hasManagedSite = changesProductionRoute && SiteRepository.existsForProject(runtime.projectId)
         var rollbackRoute: (() -> Boolean)? = null
         if (hasManagedSite) {
-            val ownerId = requireNotNull(runtime.projectId)
+            val ownerId = runtime.projectId
             val ownerSlug = requireNotNull(runtime.projectSlug)
             val siteService = NginxService()
             val previousConfig = siteService.inspectSite(ownerSlug).content
@@ -307,7 +279,7 @@ object DeploymentWorker {
         return changed
     }
 
-    private fun ensureNotCancelled(id: java.util.UUID) {
+    private fun ensureNotCancelled(id: UUID) {
         if (DeploymentJobRepository.isCancelled(id)) throw CancellationException("Deployment cancelled")
     }
 
@@ -370,7 +342,7 @@ object DeploymentWorker {
         return if (host.isBlank() || host == "docker.io") "$name:$tag" else "$host/$name:$tag"
     }
 
-    private fun runCommand(id: java.util.UUID, directory: Path, command: List<String>, githubToken: String = "") {
+    private fun runCommand(id: UUID, directory: Path, command: List<String>, githubToken: String = "") {
         val builder = ProcessBuilder(command).directory(directory.toFile()).redirectErrorStream(true)
         if (githubToken.isNotBlank()) {
             builder.environment()["GIT_CONFIG_COUNT"] = "1"

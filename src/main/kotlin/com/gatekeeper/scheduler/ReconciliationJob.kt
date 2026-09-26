@@ -15,9 +15,9 @@ object ReconciliationJob {
         scope.launch {
             delay(1.minutes)
             runWorkerLoop("payment-reconciliation", AppConfig.reconciliationIntervalMinutes * 60_000, "worker:payment-reconciliation", logger) {
-                runCatching {
+                run {
                     reconcilePendingPayments()
-                }.getOrThrow()
+                }
             }
         }
     }

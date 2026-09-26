@@ -11,7 +11,6 @@ data class NginxSiteRenderModel(
     val certificatePath: String? = null,
     val certificateKeyPath: String? = null,
     val upstreamMode: com.gatekeeper.db.tables.UpstreamMode = com.gatekeeper.db.tables.UpstreamMode.EXPLICIT_PORT,
-    val upstreamContainerName: String? = null,
     val certMode: com.gatekeeper.db.tables.CertMode = com.gatekeeper.db.tables.CertMode.AUTO_RESOLVE,
     val gateEnabled: Boolean = true,
     val bypassPaths: List<String> = listOf("/api/gate/", "/api/paystack/", "/api/mpesa/")

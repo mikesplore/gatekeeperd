@@ -15,38 +15,6 @@ import java.time.LocalDateTime
 import java.util.*
 
 object ProjectRepository {
-    data class AutoDeployTarget(val id: UUID, val slug: String, val repository: String, val gitRef: String, val imageName: String, val imageTag: String, val containerName: String?)
-
-    fun findAutoDeployTargets(repository: String, gitRef: String): List<AutoDeployTarget> = transaction {
-        Projects.selectAll().where { (Projects.githubRepository eq repository) and (Projects.githubRef eq gitRef) and (Projects.autoDeploy eq true) and Projects.deletedAt.isNull() }
-            .mapNotNull { row -> row[Projects.deployImageName]?.let { AutoDeployTarget(row[Projects.id], row[Projects.slug], repository, gitRef, it, row[Projects.deployImageTag], row[Projects.containerName]) } }
-    }
-
-    fun syncDeployment(projectId: UUID?, slug: String?, containerName: String, commit: String?) {
-        transaction {
-            val row = if (projectId != null) {
-                Projects.selectAll().where { (Projects.id eq projectId) and Projects.deletedAt.isNull() }.singleOrNull()
-            } else {
-                slug?.let { Projects.selectAll().where { (Projects.slug eq it) and Projects.deletedAt.isNull() }.singleOrNull() }
-            } ?: return@transaction
-            Projects.update({ Projects.id eq row[Projects.id] }) { it[Projects.containerName] = containerName as String?; it[Projects.updatedAt] = LocalDateTime.now() }
-            AuditLog.insert { it[AuditLog.projectId] = row[Projects.id]; it[AuditLog.action] = "deployment_synchronized"; it[AuditLog.actor] = "deployment-worker"; it[AuditLog.reason] = "container=$containerName commit=${commit ?: "unknown"}" }
-        }
-    }
-
-    fun updateGithubDeployment(slug: String, repository: String?, gitRef: String, imageName: String?, imageTag: String, autoDeploy: Boolean): ProjectRecord? = transaction {
-        val existing = Projects.selectAll().where { (Projects.slug eq slug) and Projects.deletedAt.isNull() }.singleOrNull() ?: return@transaction null
-        Projects.update({ Projects.id eq existing[Projects.id] }) {
-            it[githubRepository] = repository
-            it[Projects.githubRef] = gitRef
-            it[deployImageName] = imageName
-            it[deployImageTag] = imageTag
-            it[Projects.autoDeploy] = autoDeploy
-            it[updatedAt] = LocalDateTime.now()
-        }
-        findBySlug(slug)
-    }
-
     private const val REDIS_KEY_PREFIX = "project:status:"
 
     data class ProjectRecord(
@@ -54,7 +22,6 @@ object ProjectRepository {
         val slug: String,
         val name: String,
         val domain: String,
-        val containerName: String?,
         val type: String,
         val status: String,
         val blockReason: String?,
@@ -73,7 +40,6 @@ object ProjectRepository {
         val gracePeriodDays: Int,
         val createdAt: LocalDateTime,
         val updatedAt: LocalDateTime,
-        val githubRepository: String?, val githubRef: String, val deployImageName: String?, val deployImageTag: String, val autoDeploy: Boolean,
         val customerId: UUID? = null
     )
 
@@ -130,7 +96,6 @@ object ProjectRepository {
         slug: String,
         name: String,
         domain: String,
-        containerName: String?,
         type: String,
         billingName: String?, billingEmail: String?, billingAddress: String?,
         amountDue: BigDecimal?,
@@ -149,7 +114,6 @@ object ProjectRepository {
                 it[Projects.slug] = slug
                 it[Projects.name] = name
                 it[Projects.domain] = domain
-                it[Projects.containerName] = containerName
                 it[Projects.type] = ProjectType.valueOf(type.uppercase())
                 it[Projects.status] = ProjectStatus.ACTIVE
                 it[Projects.billingName] = billingName
@@ -179,7 +143,6 @@ object ProjectRepository {
         slug: String,
         name: String?,
         domain: String?,
-        containerName: String?,
         type: String?,
         billingName: String? = null, billingEmail: String? = null, billingAddress: String? = null,
         amountDue: BigDecimal?,
@@ -199,7 +162,6 @@ object ProjectRepository {
             Projects.update({ Projects.slug eq slug }) {
                 name?.let { v -> it[Projects.name] = v }
                 domain?.let { v -> it[Projects.domain] = v }
-                containerName?.let { v -> it[Projects.containerName] = v }
                 type?.let { v -> it[Projects.type] = ProjectType.valueOf(v.uppercase()) }
                 billingName?.let { v -> it[Projects.billingName] = v }
                 billingEmail?.let { v -> it[Projects.billingEmail] = v }
@@ -254,20 +216,18 @@ object ProjectRepository {
                 ?: return@transaction false
 
             val now = LocalDateTime.now()
-            val previousContainerName = project[Projects.containerName]
             Projects.update({ Projects.id eq project[Projects.id] }) {
                 it[Projects.deletedAt] = now
                 it[Projects.status] = ProjectStatus.BLOCKED
                 it[Projects.blockReason] = "archived"
                 it[Projects.lifecycleStatus] = "archived"
-                it[Projects.containerName] = "archived-$slug"
                 it[Projects.updatedAt] = now
             }
             AuditLog.insert {
                 it[AuditLog.projectId] = project[Projects.id]
                 it[AuditLog.action] = "project_archived"
                 it[AuditLog.actor] = actor
-                it[AuditLog.reason] = reason ?: "Project archived (soft delete). Unlinked container '$previousContainerName'."
+                it[AuditLog.reason] = reason ?: "Project archived (soft delete)."
             }
             true
         }.also { archived ->
@@ -427,7 +387,6 @@ object ProjectRepository {
         slug = this[Projects.slug],
         name = this[Projects.name],
         domain = this[Projects.domain],
-        containerName = this[Projects.containerName],
         type = this[Projects.type].value,
         status = this[Projects.status].value,
         blockReason = this[Projects.blockReason],
@@ -446,6 +405,6 @@ object ProjectRepository {
         gracePeriodDays = this[Projects.gracePeriodDays],
         createdAt = this[Projects.createdAt],
         updatedAt = this[Projects.updatedAt],
-        githubRepository = this[Projects.githubRepository], githubRef = this[Projects.githubRef], deployImageName = this[Projects.deployImageName], deployImageTag = this[Projects.deployImageTag], autoDeploy = this[Projects.autoDeploy], customerId = this[Projects.customerId]
+        customerId = this[Projects.customerId]
     )
 }

@@ -11,15 +11,12 @@ import com.gatekeeper.nginx.InstalledCertificateInfo
 import com.gatekeeper.nginx.NginxEnableRequest
 import com.gatekeeper.nginx.NginxStatusResponse
 import com.gatekeeper.nginx.NginxService
-import com.gatekeeper.nginx.NginxConfigInspection
-import com.gatekeeper.nginx.NginxTestResult
 import com.gatekeeper.nginx.NginxBlockUpdateRequest
 import com.gatekeeper.nginx.NginxSiteRenderModel
 import com.gatekeeper.nginx.DeploymentUpstreamResolver
+import com.gatekeeper.deployment.DeploymentApplicationService
 import com.gatekeeper.nginx.TlsRenderMode
 import com.gatekeeper.nginx.ResolvedCertificate
-import com.gatekeeper.nginx.extractConfiguredContainerName
-import com.gatekeeper.nginx.extractConfiguredPort
 import com.gatekeeper.nginx.parsePublishedHostPorts
 import com.gatekeeper.nginx.requireCertificatePath
 import com.gatekeeper.nginx.requireValidEmail
@@ -68,12 +65,10 @@ data class NginxDisableResponse(
 data class NginxWizardContextResponse(
     val slug: String,
     val domain: String,
-    val containerName: String?,
     val nginxEnabled: Boolean,
-    val configuredContainerName: String? = null,
+    val resolvedUpstreamHost: String? = null,
     val configuredPort: Int? = null,
-    val dockerContainerHealth: String? = null,
-    val dockerPublishedHostPorts: List<Int>? = null,
+    val runtimeHealth: String? = null,
     val installedCertificates: List<String> = emptyList(),
     val resolvedCertificateDomain: String? = null
 )
@@ -103,19 +98,15 @@ private fun renderModelFromSite(
     site: SiteRepository.SiteRecord,
     nginxService: NginxService
 ): NginxSiteRenderModel {
-    val (upstreamHost, port, upstreamContainerName) = when (site.upstreamMode) {
-        UpstreamMode.EXPLICIT_PORT -> Triple(
-            site.upstreamHost,
-            site.upstreamExplicitPort ?: error("Site $slug has no explicit upstream port"),
-            site.upstreamContainerName
-        )
+    val (upstreamHost, port) = when (site.upstreamMode) {
+        UpstreamMode.EXPLICIT_PORT -> site.upstreamHost to
+            (site.upstreamExplicitPort ?: error("Site $slug has no explicit upstream port"))
         UpstreamMode.DOCKER_DISCOVERY -> {
             val target = DeploymentUpstreamResolver.resolve(site.projectId, "production")
                 ?: error("Could not resolve the active deployment upstream for Docker site $slug")
             val containerName = target.containerName
                 ?: error("Active deployment runtime has no container name for Docker site $slug")
-            SiteRepository.refreshDockerUpstreamContainerCache(site.projectId, containerName)
-            Triple(target.host, target.port, containerName)
+            target.host to target.port
         }
     }
     val certificate = when (site.certMode) {
@@ -140,7 +131,6 @@ private fun renderModelFromSite(
         certificatePath = certificate?.certificatePath,
         certificateKeyPath = certificate?.privateKeyPath,
         upstreamMode = site.upstreamMode,
-        upstreamContainerName = upstreamContainerName,
         certMode = site.certMode,
         gateEnabled = site.gateEnabled,
         bypassPaths = site.bypassPaths
@@ -155,7 +145,7 @@ internal fun hasRenderAffectingNginxParameters(body: NginxEnableRequest): Boolea
 private fun computeNginxEnablePlan(
     slug: String,
     projectDomain: String,
-    projectContainerName: String?,
+    activeRuntimeName: String?,
     request: NginxEnableRequest,
     nginxService: NginxService,
     dockerService: DockerService?
@@ -165,7 +155,7 @@ private fun computeNginxEnablePlan(
         return NginxPlanResult.Err(HttpStatusCode.BadRequest, "invalid_request", "port must be between 1 and 65535")
     }
 
-    val configuredContainerName = projectContainerName?.let(::extractConfiguredContainerName)
+    val configuredContainerName = activeRuntimeName?.takeIf(String::isNotBlank)
     val dockerPublishedHostPorts = run {
         if (dockerService == null || configuredContainerName == null) return@run null
         val health = dockerService.containerHealth(configuredContainerName)
@@ -180,9 +170,7 @@ private fun computeNginxEnablePlan(
         parsePublishedHostPorts(info?.ports.orEmpty())
     }
 
-    val appPort = explicitPort
-        ?: projectContainerName?.let(::extractConfiguredPort)
-        ?: dockerPublishedHostPorts?.singleOrNull()
+    val appPort = explicitPort ?: dockerPublishedHostPorts?.singleOrNull()
 
     if (appPort == null) {
         if (dockerPublishedHostPorts != null) {
@@ -191,12 +179,12 @@ private fun computeNginxEnablePlan(
                 "missing_port",
                 when {
                     dockerPublishedHostPorts.isEmpty() ->
-                        "Could not infer upstream port from Docker. Provide 'port' in the request body or encode containerName as name:port."
+                        "Could not infer the active deployment upstream port. Provide 'port' in the request body or configure a deployment runtime."
                     else ->
-                        "Multiple published host ports detected. Provide 'port' in the request body or encode containerName as name:port."
+                        "Multiple published host ports detected. Provide 'port' in the request body or configure the deployment container port."
                 },
                 buildJsonObject {
-                    put("containerName", JsonPrimitive(configuredContainerName ?: projectContainerName.orEmpty()))
+                    put("resolvedUpstream", JsonPrimitive(configuredContainerName.orEmpty()))
                     putJsonArray("publishedHostPorts") { dockerPublishedHostPorts.sorted().forEach { add(JsonPrimitive(it)) } }
                 }
             )
@@ -205,7 +193,7 @@ private fun computeNginxEnablePlan(
         return NginxPlanResult.Err(
             HttpStatusCode.BadRequest,
             "missing_port",
-            "Provide a valid port in the request body, encode containerName as name:port, or ensure Docker is available for port inference."
+                "Provide a valid port in the request body, or configure an active deployment runtime for port inference."
         )
     }
 
@@ -223,7 +211,7 @@ private fun computeNginxEnablePlan(
             return NginxPlanResult.Err(
                 HttpStatusCode.BadRequest,
                 "port_not_active",
-                "Port $appPort is not reachable on 127.0.0.1 for project $slug. Ensure the upstream is listening on the host, or set containerName to a Docker container so Docker-based validation can be used."
+                "Port $appPort is not reachable on 127.0.0.1 for project $slug. Ensure the active deployment upstream is listening on the host."
             )
         }
     }
@@ -360,33 +348,26 @@ fun Application.configureNginxAdminRoutes() {
                     available && enabledLink
                 }
 
-                val configuredContainerName = project.containerName?.let(::extractConfiguredContainerName)
-                val configuredPort = project.containerName?.let(::extractConfiguredPort)
+                val activeRuntime = DeploymentApplicationService.activeDeploymentRuntime(project.id, "production")
+                val resolvedTarget = DeploymentUpstreamResolver.resolve(project.id, "production")
+                val configuredPort = resolvedTarget?.port
 
                 val dockerHealth = runCatching {
-                    if (dockerService == null || configuredContainerName == null) null
-                    else dockerService.containerHealth(configuredContainerName)
-                }.getOrNull()
-
-                val publishedPorts = runCatching {
-                    if (dockerService == null || configuredContainerName == null) null
-                    else parsePublishedHostPorts(dockerService.getContainer(configuredContainerName)?.ports.orEmpty()).sorted()
+                    if (dockerService == null || activeRuntime?.containerName == null) null
+                    else dockerService.containerHealth(activeRuntime.containerName)
                 }.getOrNull()
 
                 val installedCerts = nginxService.listInstalledCertificates().map { it.certificateDomain }.sorted()
                 val resolvedCert = nginxService.resolveCertificateForDomain(project.domain)
-                val expiry = nginxService.certificateExpiry(resolvedCert?.certificateDomain ?: project.domain)
 
                 call.respond(
                     NginxWizardContextResponse(
                         slug = slug,
                         domain = project.domain,
-                        containerName = project.containerName,
                         nginxEnabled = nginxEnabled,
-                        configuredContainerName = configuredContainerName,
+                        resolvedUpstreamHost = resolvedTarget?.host,
                         configuredPort = configuredPort,
-                        dockerContainerHealth = dockerHealth,
-                        dockerPublishedHostPorts = publishedPorts,
+                        runtimeHealth = dockerHealth,
                         installedCertificates = installedCerts,
                         resolvedCertificateDomain = resolvedCert?.certificateDomain
                     )
@@ -416,7 +397,7 @@ fun Application.configureNginxAdminRoutes() {
                 when (val result = computeNginxEnablePlan(
                     slug = slug,
                     projectDomain = project.domain,
-                    projectContainerName = project.containerName,
+                    activeRuntimeName = DeploymentApplicationService.activeDeploymentRuntime(project.id, "production")?.containerName,
                     request = body,
                     nginxService = nginxService,
                     dockerService = dockerService
@@ -484,7 +465,7 @@ fun Application.configureNginxAdminRoutes() {
                         enabled = enabled,
                         configPath = "$sitesAvailablePath/$slug",
                         enabledPath = "$sitesEnabledPath/$slug",
-                        port = project.containerName?.let(::extractConfiguredPort),
+                        port = DeploymentUpstreamResolver.resolve(project.id, "production")?.port,
                         sslEnabled = resolvedCert != null,
                         certificateDomain = resolvedCert?.certificateDomain,
                         domain = project.domain,
@@ -575,7 +556,7 @@ fun Application.configureNginxAdminRoutes() {
 
                 val body = try {
                     call.receive<NginxEnableRequest>()
-                } catch (e: Exception) {
+                } catch (_: Exception) {
                     call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid request body")
                     return@post
                 }
@@ -611,7 +592,7 @@ fun Application.configureNginxAdminRoutes() {
                     val plan = when (val result = computeNginxEnablePlan(
                     slug = slug,
                     projectDomain = project.domain,
-                    projectContainerName = project.containerName,
+                    activeRuntimeName = DeploymentApplicationService.activeDeploymentRuntime(project.id, "production")?.containerName,
                     request = body,
                     nginxService = nginxService,
                     dockerService = dockerService
@@ -639,7 +620,6 @@ fun Application.configureNginxAdminRoutes() {
                         certificatePath = plan.resolvedCertificate?.certificatePath.takeIf { body.sslCertificatePath != null },
                         certificateKeyPath = plan.resolvedCertificate?.privateKeyPath.takeIf { body.sslCertificatePath != null },
                         upstreamMode = UpstreamMode.EXPLICIT_PORT,
-                        upstreamContainerName = null,
                         certMode = if (body.sslCertificatePath != null) CertMode.EXPLICIT_PATH else CertMode.AUTO_RESOLVE
                     )
                     nginxService.generateNginxConfig(
@@ -801,7 +781,7 @@ fun Application.configureNginxAdminRoutes() {
             post("/api/admin/nginx/certificate/install") {
                 val body = try {
                     call.receive<CertificateInstallRequest>()
-                } catch (e: Exception) {
+                } catch (_: Exception) {
                     call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid request body")
                     return@post
                 }

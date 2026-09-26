@@ -198,7 +198,7 @@ class NginxService(
                 reloadNginx()
                 return NginxRollbackResponse(false, "Rollback reload failed; previous configuration was restored", validation)
             }
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             restoreActivatedSite(target, enabledFile, current)
             runCatching { reloadNginx() }
             return NginxRollbackResponse(false, "Rollback activation failed; previous configuration was restored", validation)
@@ -236,7 +236,7 @@ class NginxService(
                     true
                 }
             }
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             false
         }
     }

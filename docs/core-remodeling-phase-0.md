@@ -1,6 +1,6 @@
 # Core Remodeling — Phase 0 Baseline
 
-This document records the current code-level compatibility baseline for the [core remodeling plan](core-remodeling-plan.md). It is intentionally an inventory, not a schema proposal or migration. File and behavior references describe the repository at the time of this review; verify them again before Phase 1 implementation.
+This document records the historical code-level compatibility baseline for the [core remodeling plan](core-remodeling-plan.md). It is an inventory of the repository at review time, not a description of current behavior. Phase 6's direct cleanup supersedes the listed compatibility paths.
 
 ## Summary
 
@@ -15,7 +15,7 @@ The repository already separates customers from projects and has durable deploym
 
 The broad Phase 0 consumer inventory is in the matrices below. What cannot be established from source alone is the deployed database's actual rows, orphan counts, active runtime mapping, client/API usage beyond checked-in frontend code, and current production migration history. Those require read-only production queries and operational evidence before a data migration is designed.
 
-The deployment ownership report is available as the operational command `deployment-ownership-report`. Run it against a sanitized production copy after applying the additive ownership migration. By default it uses a read-only connection and prints counts by table for uniquely resolved, null slug, missing project slug, archived project, and ambiguous slug; it performs no writes and omits slug values from output. After reviewing the dry-run counts, `deployment-ownership-report --apply` backfills only uniquely resolved, non-archived rows with null `project_id`, in committed batches of 500. The command prints the counts again afterward and logs unresolved deployment row IDs, categories, and slugs for manual repair. It never infers ownership from runtime or customer fields.
+The Phase 1 ownership report command described in this historical baseline was retired by Phase 6. Current migrations require project IDs and stop when unresolved rows would be discarded.
 
 ## Consumer and compatibility matrix
 

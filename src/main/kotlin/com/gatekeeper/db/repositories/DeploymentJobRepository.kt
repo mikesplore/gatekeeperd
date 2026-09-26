@@ -9,8 +9,6 @@ import org.jetbrains.exposed.sql.transactions.transaction
 import java.time.LocalDateTime
 import java.util.UUID
 import com.gatekeeper.docker.VolumeMount
-import kotlinx.serialization.encodeToString
-import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
 import com.gatekeeper.security.SecretValueCipher
 import com.gatekeeper.deployment.UpdateDeploymentConfigurationRequest
@@ -22,11 +20,11 @@ private data class SecretSetReference(val id: UUID, val version: Int)
 
 data class DeploymentJobRecord(
     val id: UUID, val repository: String, val gitRef: String, val registry: String,
-    val imageName: String, val imageTag: String, val containerName: String?, val hostPort: Int?, val containerPort: Int?, val network: String, val restartPolicy: String, val env: Map<String, String>, val secretEnv: Map<String, String>, val volumes: List<VolumeMount>, val createNetworkIfMissing: Boolean,
+    val imageName: String, val imageTag: String, val hostPort: Int?, val containerPort: Int?, val network: String, val restartPolicy: String, val env: Map<String, String>, val secretEnv: Map<String, String>, val volumes: List<VolumeMount>, val createNetworkIfMissing: Boolean,
     val status: String, val currentStep: String,
     val logs: String, val commitSha: String?, val imageDigest: String?, val errorMessage: String?,
     val createdAt: LocalDateTime, val startedAt: LocalDateTime?, val completedAt: LocalDateTime?, val updatedAt: LocalDateTime,
-    val previousContainerName: String?, val previousImage: String?, val projectSlug: String?, val projectId: UUID?, val triggerSource: String,
+    val projectId: UUID, val triggerSource: String,
     val environment: String = "production",
     val readinessType: String? = null,
     val readinessTarget: String? = null,
@@ -38,6 +36,27 @@ data class DeploymentJobRecord(
 )
 
 object DeploymentJobRepository {
+    data class AutoDeployTarget(
+        val projectId: UUID, val repository: String, val gitRef: String, val registry: String,
+        val imageName: String, val imageTag: String, val environment: String
+    )
+
+    fun findAutoDeployTargets(repository: String, gitRef: String): List<AutoDeployTarget> = transaction {
+        DeploymentConfigurations.selectAll().where {
+            (DeploymentConfigurations.repository eq repository) and
+                (DeploymentConfigurations.gitRef eq gitRef) and
+                (DeploymentConfigurations.autoDeploy eq true)
+        }.mapNotNull { row ->
+            val projectId = row[DeploymentConfigurations.projectId]
+            if (Projects.selectAll().where { (Projects.id eq projectId) and Projects.deletedAt.isNull() }.count() == 0L) return@mapNotNull null
+            AutoDeployTarget(
+                projectId, row[DeploymentConfigurations.repository], row[DeploymentConfigurations.gitRef],
+                row[DeploymentConfigurations.registry], row[DeploymentConfigurations.imageName],
+                row[DeploymentConfigurations.imageTag], row[DeploymentConfigurations.environment] ?: "production"
+            )
+        }
+    }
+
     data class ConfigurationSummary(
         val id: UUID,
         val repository: String,
@@ -45,6 +64,7 @@ object DeploymentJobRepository {
         val registry: String,
         val imageName: String,
         val imageTag: String,
+        val autoDeploy: Boolean,
         val containerPort: Int?,
         val hostPort: Int?,
         val network: String,
@@ -57,13 +77,9 @@ object DeploymentJobRepository {
     )
 
     fun configurationIdForProject(projectId: UUID, environment: String = "production"): UUID? = transaction {
-        val slug = Projects.selectAll().where { Projects.id eq projectId }.singleOrNull()?.get(Projects.slug)
-            ?: return@transaction null
-        DeploymentConfigurations.selectAll().toList().firstOrNull {
-            (it[DeploymentConfigurations.projectId] == projectId ||
-                (it[DeploymentConfigurations.projectId] == null && it[DeploymentConfigurations.projectSlug] == slug)) &&
-                (it[DeploymentConfigurations.environment] ?: "production") == environment
-        }?.get(DeploymentConfigurations.id)
+        DeploymentConfigurations.selectAll().where { DeploymentConfigurations.projectId eq projectId }
+            .toList().singleOrNull { (it[DeploymentConfigurations.environment] ?: "production") == environment }
+            ?.get(DeploymentConfigurations.id)
     }
 
     fun configurationSummary(projectId: UUID, environment: String = "production"): ConfigurationSummary? = transaction {
@@ -73,7 +89,7 @@ object DeploymentJobRepository {
         val env = runCatching { Json.decodeFromString<Map<String, String>>(row[DeploymentConfigurations.envJson]) }.getOrDefault(emptyMap())
         ConfigurationSummary(
             id, row[DeploymentConfigurations.repository], row[DeploymentConfigurations.gitRef], row[DeploymentConfigurations.registry],
-            row[DeploymentConfigurations.imageName], row[DeploymentConfigurations.imageTag], row[DeploymentConfigurations.containerPort],
+            row[DeploymentConfigurations.imageName], row[DeploymentConfigurations.imageTag], row[DeploymentConfigurations.autoDeploy], row[DeploymentConfigurations.containerPort],
             row[DeploymentConfigurations.hostPort], row[DeploymentConfigurations.network], row[DeploymentConfigurations.restartPolicy],
             row[DeploymentConfigurations.environment] ?: "production", env, env.keys.sorted(),
             row[DeploymentConfigurations.secretSetId], row[DeploymentConfigurations.secretSetVersion]
@@ -85,10 +101,10 @@ object DeploymentJobRepository {
         if (currentId == null) return createConfiguration(projectId, request)
         val updated = updateConfiguration(currentId, com.gatekeeper.deployment.UpdateDeploymentConfigurationRequest(
             repository = request.repository, gitRef = request.gitRef, registry = request.registry,
-            imageName = request.imageName, imageTag = request.imageTag, containerName = request.containerName,
+            imageName = request.imageName, imageTag = request.imageTag,
             hostPort = request.hostPort, containerPort = request.containerPort, network = request.network,
             restartPolicy = request.restartPolicy, env = request.env, volumes = request.volumes,
-            createNetworkIfMissing = request.createNetworkIfMissing, environment = request.environment,
+            createNetworkIfMissing = request.createNetworkIfMissing, autoDeploy = request.autoDeploy, environment = request.environment,
             readinessType = request.readinessType, readinessTarget = request.readinessTarget,
             readinessTimeoutSeconds = request.readinessTimeoutSeconds,
             readinessIntervalSeconds = request.readinessIntervalSeconds,
@@ -120,10 +136,11 @@ object DeploymentJobRepository {
         val request = com.gatekeeper.deployment.CreateDeploymentRequest(
                 repository = saved[DeploymentConfigurations.repository], gitRef = saved[DeploymentConfigurations.gitRef],
                 registry = saved[DeploymentConfigurations.registry], imageName = saved[DeploymentConfigurations.imageName],
-                imageTag = saved[DeploymentConfigurations.imageTag], containerName = saved[DeploymentConfigurations.containerName],
+                imageTag = saved[DeploymentConfigurations.imageTag],
                 hostPort = saved[DeploymentConfigurations.hostPort], containerPort = saved[DeploymentConfigurations.containerPort],
                 network = saved[DeploymentConfigurations.network], restartPolicy = saved[DeploymentConfigurations.restartPolicy],
-                projectSlug = saved[DeploymentConfigurations.projectSlug], triggerSource = "secret_rotation",
+                projectId = saved[DeploymentConfigurations.projectId]?.toString(), autoDeploy = saved[DeploymentConfigurations.autoDeploy],
+                triggerSource = "secret_rotation",
                 env = Json.decodeFromString(saved[DeploymentConfigurations.envJson]), secretEnv = secretEnv,
                 volumes = Json.decodeFromString(saved[DeploymentConfigurations.volumesJson]),
                 createNetworkIfMissing = saved[DeploymentConfigurations.createNetworkIfMissing], environment = environment,
@@ -141,8 +158,7 @@ object DeploymentJobRepository {
         val environment = requireEnvironment(request.environment)
         validateReadiness(request.readinessType, request.readinessTarget, request.readinessTimeoutSeconds, request.readinessIntervalSeconds, request.readinessProbeTimeoutMillis)
         check(DeploymentConfigurations.selectAll().where {
-            (DeploymentConfigurations.projectId eq projectId) or
-                (DeploymentConfigurations.projectId.isNull() and (DeploymentConfigurations.projectSlug eq project[Projects.slug]))
+            DeploymentConfigurations.projectId eq projectId
         }.none { (it[DeploymentConfigurations.environment] ?: "production") == environment }) {
             "Project already has a deployment configuration"
         }
@@ -158,7 +174,7 @@ object DeploymentJobRepository {
         DeploymentConfigurations.insert {
             it[DeploymentConfigurations.id] = id
             it[repository] = request.repository; it[gitRef] = request.gitRef; it[registry] = request.registry
-            it[imageName] = request.imageName; it[imageTag] = request.imageTag; it[containerName] = request.containerName
+            it[imageName] = request.imageName; it[imageTag] = request.imageTag
             it[hostPort] = request.hostPort; it[containerPort] = request.containerPort; it[network] = request.network
             it[restartPolicy] = request.restartPolicy; it[DeploymentConfigurations.envJson] = envJson
             it[DeploymentConfigurations.secretEnvEncrypted] = secretCiphertext
@@ -166,7 +182,7 @@ object DeploymentJobRepository {
             it[DeploymentConfigurations.secretSetVersion] = secretSet?.version
             it[DeploymentConfigurations.volumesJson] = Json.encodeToString(request.volumes)
             it[createNetworkIfMissing] = request.createNetworkIfMissing
-            it[projectSlug] = project[Projects.slug]
+            it[DeploymentConfigurations.autoDeploy] = request.autoDeploy
             it[DeploymentConfigurations.projectId] = projectId
             it[DeploymentConfigurations.environment] = environment
             it[DeploymentConfigurations.readinessType] = request.readinessType?.lowercase()
@@ -180,7 +196,7 @@ object DeploymentJobRepository {
 
     fun updateConfiguration(id: UUID, request: UpdateDeploymentConfigurationRequest): Boolean = transaction {
         val row = DeploymentConfigurations.selectAll().where { DeploymentConfigurations.id eq id }.singleOrNull() ?: return@transaction false
-        val projectId = row[DeploymentConfigurations.projectId] ?: resolveProjectId(row[DeploymentConfigurations.projectSlug])
+        val projectId = row[DeploymentConfigurations.projectId] ?: error("Deployment configuration has no project_id")
         val newSecrets = request.secretEnv?.let { values ->
             check(SecretValueCipher.isConfigured()) { "Deployment secret encryption is not configured" }
             SecretValueCipher.encrypt(Json.encodeToString(values))
@@ -200,7 +216,7 @@ object DeploymentJobRepository {
             row[DeploymentConfigurations.secretEnvEncrypted] != null
         val shouldCreateSecretVersion = request.secretEnv != null || (environmentChanged && hasExistingSecretSnapshot)
         val newSecretSet = if (shouldCreateSecretVersion) {
-            projectId?.let { createSecretSetVersion(it, targetEnvironment, secretsForNewVersion.orEmpty(), "admin") }
+            createSecretSetVersion(projectId, targetEnvironment, secretsForNewVersion.orEmpty(), "admin")
         } else null
         val readinessType = request.readinessType?.let { it.trim().lowercase().also { type -> require(type in supportedReadinessTypes) { "Readiness type must be docker, http, tcp, or process" } } }
         val readinessTarget = request.readinessTarget?.also { require(it.isNotBlank()) { "Readiness target must not be blank" } }
@@ -210,11 +226,12 @@ object DeploymentJobRepository {
         DeploymentConfigurations.update({ DeploymentConfigurations.id eq id }) {
             request.repository?.let { value -> it[repository] = value }; request.gitRef?.let { value -> it[gitRef] = value }
             request.registry?.let { value -> it[registry] = value }; request.imageName?.let { value -> it[imageName] = value }
-            request.imageTag?.let { value -> it[imageTag] = value }; request.containerName?.let { value -> it[containerName] = value }
+            request.imageTag?.let { value -> it[imageTag] = value }
             request.hostPort?.let { value -> it[hostPort] = value }; request.containerPort?.let { value -> it[containerPort] = value }
             request.network?.let { value -> it[network] = value }; request.restartPolicy?.let { value -> it[restartPolicy] = value }
             envJson?.let { value -> it[DeploymentConfigurations.envJson] = value }; volumesJson?.let { value -> it[DeploymentConfigurations.volumesJson] = value }
             request.createNetworkIfMissing?.let { value -> it[createNetworkIfMissing] = value }
+            request.autoDeploy?.let { value -> it[DeploymentConfigurations.autoDeploy] = value }
             newSecrets?.let { value -> it[secretEnvEncrypted] = value }
             if (shouldCreateSecretVersion) {
                 it[DeploymentConfigurations.secretSetId] = newSecretSet?.id
@@ -226,14 +243,14 @@ object DeploymentJobRepository {
             request.readinessTimeoutSeconds?.let { value -> it[DeploymentConfigurations.readinessTimeoutSeconds] = value }
             request.readinessIntervalSeconds?.let { value -> it[DeploymentConfigurations.readinessIntervalSeconds] = value }
             request.readinessProbeTimeoutMillis?.let { value -> it[DeploymentConfigurations.readinessProbeTimeoutMillis] = value }
-            projectId?.let { value -> it[DeploymentConfigurations.projectId] = value }
+            projectId.let { value -> it[DeploymentConfigurations.projectId] = value }
             it[updatedAt] = LocalDateTime.now()
         }
-        // Keep the compatibility row aligned until workers are fully moved to executions.
+        // Keep the private worker queue snapshot aligned with the saved configuration.
         DeploymentJobs.update({ DeploymentJobs.id eq id }) {
             request.repository?.let { value -> it[repository] = value }; request.gitRef?.let { value -> it[gitRef] = value }
             request.registry?.let { value -> it[registry] = value }; request.imageName?.let { value -> it[imageName] = value }
-            request.imageTag?.let { value -> it[imageTag] = value }; request.containerName?.let { value -> it[containerName] = value }
+            request.imageTag?.let { value -> it[imageTag] = value }
             request.hostPort?.let { value -> it[hostPort] = value }; request.containerPort?.let { value -> it[containerPort] = value }
             request.network?.let { value -> it[network] = value }; request.restartPolicy?.let { value -> it[restartPolicy] = value }
             envJson?.let { value -> it[DeploymentJobs.envJson] = value }; volumesJson?.let { value -> it[DeploymentJobs.volumesJson] = value }
@@ -249,7 +266,7 @@ object DeploymentJobRepository {
             it[updatedAt] = LocalDateTime.now()
         }
         DeploymentExecutions.update({ DeploymentExecutions.id eq id }) {
-            projectId?.let { value -> it[DeploymentExecutions.projectId] = value }
+            projectId.let { value -> it[DeploymentExecutions.projectId] = value }
             readinessType?.let { value -> it[DeploymentExecutions.readinessType] = value }
             readinessTarget?.let { value -> it[DeploymentExecutions.readinessTarget] = value }
             request.readinessTimeoutSeconds?.let { value -> it[DeploymentExecutions.readinessTimeoutSeconds] = value }
@@ -259,27 +276,21 @@ object DeploymentJobRepository {
         true
     }
 
-    fun configurationExists(id: UUID): Boolean = transaction { DeploymentConfigurations.selectAll().where { DeploymentConfigurations.id eq id }.count() > 0 }
-
     fun redeployConfiguration(id: UUID): UUID? {
         val prepared = transaction {
             val row = DeploymentConfigurations.selectAll().where { DeploymentConfigurations.id eq id }.singleOrNull() ?: return@transaction null
-            val projectId = row[DeploymentConfigurations.projectId] ?: resolveProjectId(row[DeploymentConfigurations.projectSlug])
-            val projectSlug = projectId?.let { project ->
-                Projects.selectAll().where { (Projects.id eq project) and Projects.deletedAt.isNull() }.singleOrNull()?.get(Projects.slug)
-            } ?: row[DeploymentConfigurations.projectSlug]
+            val projectId = row[DeploymentConfigurations.projectId] ?: error("Deployment configuration has no project_id")
             val request = com.gatekeeper.deployment.CreateDeploymentRequest(
                 repository = row[DeploymentConfigurations.repository],
                 gitRef = row[DeploymentConfigurations.gitRef],
                 registry = row[DeploymentConfigurations.registry],
                 imageName = row[DeploymentConfigurations.imageName],
                 imageTag = row[DeploymentConfigurations.imageTag],
-                containerName = row[DeploymentConfigurations.containerName],
                 hostPort = row[DeploymentConfigurations.hostPort],
                 containerPort = row[DeploymentConfigurations.containerPort],
                 network = row[DeploymentConfigurations.network],
                 restartPolicy = row[DeploymentConfigurations.restartPolicy],
-                projectSlug = projectSlug,
+                projectId = projectId.toString(), autoDeploy = row[DeploymentConfigurations.autoDeploy],
                 triggerSource = "manual_redeploy",
                 env = runCatching { Json.decodeFromString<Map<String, String>>(row[DeploymentConfigurations.envJson]) }.getOrDefault(emptyMap()),
                 secretEnv = row[DeploymentConfigurations.secretEnvEncrypted]?.let { encrypted ->
@@ -297,7 +308,7 @@ object DeploymentJobRepository {
             var secretSet = row[DeploymentConfigurations.secretSetId]?.let { secretId ->
                 row[DeploymentConfigurations.secretSetVersion]?.let { version -> SecretSetReference(secretId, version) }
             }
-            if (secretSet == null && projectId != null && request.secretEnv.isNotEmpty()) {
+            if (secretSet == null && request.secretEnv.isNotEmpty()) {
                 val createdSecretSet = createSecretSetVersion(projectId, request.environment, request.secretEnv, "manual_redeploy")
                 secretSet = createdSecretSet
                 DeploymentConfigurations.update({ DeploymentConfigurations.id eq id }) {
@@ -310,18 +321,11 @@ object DeploymentJobRepository {
         return create(prepared.first, prepared.second)
     }
 
-    fun latestForProject(projectId: UUID, slug: String): DeploymentJobRecord? = transaction {
-        val projectOwned = DeploymentJobs.selectAll().where { DeploymentJobs.projectId eq projectId }
+    fun latestForProject(projectId: UUID): DeploymentJobRecord? = transaction {
+        DeploymentJobs.selectAll().where { DeploymentJobs.projectId eq projectId }
             .orderBy(DeploymentJobs.createdAt to SortOrder.DESC).limit(1).singleOrNull()
-        val row = projectOwned ?: DeploymentJobs.selectAll().where {
-            (DeploymentJobs.projectId.isNull()) and (DeploymentJobs.projectSlug eq slug)
-        }.orderBy(DeploymentJobs.createdAt to SortOrder.DESC).limit(1).singleOrNull()
-        row?.toRecord()
+            ?.toRecord()
     }
-    fun list(limit: Int, offset: Int): List<DeploymentJobRecord> = transaction {
-        DeploymentJobs.selectAll().orderBy(DeploymentJobs.createdAt to SortOrder.DESC).limit(limit, offset.toLong()).map { it.toRecord() }
-    }
-
     fun cancel(id: UUID): Boolean = transaction {
         val changed = DeploymentJobs.update({ (DeploymentJobs.id eq id) and (DeploymentJobs.status inList listOf("queued", "running", "awaiting_build", "awaiting_container")) }) {
             it[status] = "cancelled"; it[currentStep] = "cancelled"; it[completedAt] = LocalDateTime.now(); it[cancelledAt] = LocalDateTime.now(); it[updatedAt] = LocalDateTime.now()
@@ -333,21 +337,15 @@ object DeploymentJobRepository {
         changed
     }
 
-    fun retry(id: UUID): Boolean = transaction {
-        val changed = DeploymentJobs.update({ DeploymentJobs.id eq id and (DeploymentJobs.status inList listOf("failed", "cancelled")) }) {
-            it[status] = "queued"; it[currentStep] = "queued"; it[errorMessage] = null; it[completedAt] = null; it[updatedAt] = LocalDateTime.now()
-        } > 0
-        if (changed) DeploymentApplicationService.transition(id, DeploymentStatus.QUEUED)
-        if (changed) DeploymentExecutions.update({ DeploymentExecutions.id eq id }) {
-            it[status] = "queued"; it[currentStep] = "queued"; it[errorMessage] = null; it[completedAt] = null; it[updatedAt] = LocalDateTime.now()
-        }
-        changed
-    }
     fun create(request: com.gatekeeper.deployment.CreateDeploymentRequest): UUID = create(request, null)
 
     private fun create(request: com.gatekeeper.deployment.CreateDeploymentRequest, existingSecretSet: SecretSetReference?): UUID = transaction {
         val id = UUID.randomUUID()
-        val projectId = resolveProjectId(request.projectSlug)
+        val projectId = request.projectId?.let { runCatching { UUID.fromString(it) }.getOrNull() }
+            ?: error("A valid project_id is required")
+        check(Projects.selectAll().where { (Projects.id eq projectId) and Projects.deletedAt.isNull() }.count() == 1L) {
+            "Project not found"
+        }
         val environment = requireEnvironment(request.environment)
         validateReadiness(request.readinessType, request.readinessTarget, request.readinessTimeoutSeconds, request.readinessIntervalSeconds, request.readinessProbeTimeoutMillis)
         val envJson = Json.encodeToString(request.env)
@@ -356,21 +354,20 @@ object DeploymentJobRepository {
             SecretValueCipher.encrypt(Json.encodeToString(values))
         }
         val secretSet = existingSecretSet ?: request.secretEnv.takeIf { it.isNotEmpty() }?.let { values ->
-            projectId?.let { createSecretSetVersion(it, environment, values, request.triggerSource) }
+            createSecretSetVersion(projectId, environment, values, request.triggerSource)
         }
         val volumesJson = Json.encodeToString(request.volumes)
-        // Keep the legacy row during rollout for worker compatibility. The new rows are the
-        // durable source of configuration and the immutable execution snapshot.
+        // Save editable configuration and immutable execution snapshot before queuing work.
         DeploymentConfigurations.insert {
             it[DeploymentConfigurations.id] = id
             it[repository] = request.repository; it[gitRef] = request.gitRef; it[registry] = request.registry
-            it[imageName] = request.imageName; it[imageTag] = request.imageTag; it[containerName] = request.containerName
+            it[imageName] = request.imageName; it[imageTag] = request.imageTag
             it[hostPort] = request.hostPort; it[containerPort] = request.containerPort; it[network] = request.network
             it[restartPolicy] = request.restartPolicy; it[DeploymentConfigurations.envJson] = envJson
             it[DeploymentConfigurations.secretEnvEncrypted] = secretCiphertext; it[DeploymentConfigurations.volumesJson] = volumesJson
             it[DeploymentConfigurations.secretSetId] = secretSet?.id
             it[DeploymentConfigurations.secretSetVersion] = secretSet?.version
-            it[createNetworkIfMissing] = request.createNetworkIfMissing; it[projectSlug] = request.projectSlug
+            it[createNetworkIfMissing] = request.createNetworkIfMissing; it[DeploymentConfigurations.autoDeploy] = request.autoDeploy
             it[DeploymentConfigurations.projectId] = projectId
             it[DeploymentConfigurations.environment] = environment
             it[DeploymentConfigurations.readinessType] = request.readinessType?.lowercase()
@@ -382,13 +379,13 @@ object DeploymentJobRepository {
         DeploymentExecutions.insert {
             it[DeploymentExecutions.id] = id; it[configurationId] = id
             it[repository] = request.repository; it[gitRef] = request.gitRef; it[registry] = request.registry
-            it[imageName] = request.imageName; it[imageTag] = request.imageTag; it[containerName] = request.containerName
+            it[imageName] = request.imageName; it[imageTag] = request.imageTag
             it[hostPort] = request.hostPort; it[containerPort] = request.containerPort; it[network] = request.network
             it[restartPolicy] = request.restartPolicy; it[DeploymentExecutions.envJson] = envJson
             it[DeploymentExecutions.secretEnvEncrypted] = secretCiphertext; it[DeploymentExecutions.volumesJson] = volumesJson
             it[DeploymentExecutions.secretSetId] = secretSet?.id
             it[DeploymentExecutions.secretSetVersion] = secretSet?.version
-            it[createNetworkIfMissing] = request.createNetworkIfMissing; it[projectSlug] = request.projectSlug
+            it[createNetworkIfMissing] = request.createNetworkIfMissing
             it[DeploymentExecutions.projectId] = projectId
             it[DeploymentExecutions.environment] = environment
             it[DeploymentExecutions.readinessType] = request.readinessType?.lowercase()
@@ -405,7 +402,6 @@ object DeploymentJobRepository {
             it[registry] = request.registry
             it[imageName] = request.imageName
             it[imageTag] = request.imageTag
-            it[containerName] = request.containerName
             it[hostPort] = request.hostPort
             it[containerPort] = request.containerPort
             it[network] = request.network
@@ -414,7 +410,6 @@ object DeploymentJobRepository {
             it[DeploymentJobs.secretEnvEncrypted] = secretCiphertext
             it[DeploymentJobs.volumesJson] = volumesJson
             it[DeploymentJobs.createNetworkIfMissing] = request.createNetworkIfMissing
-            it[DeploymentJobs.projectSlug] = request.projectSlug
             it[DeploymentJobs.projectId] = projectId
             it[DeploymentJobs.environment] = environment
             it[DeploymentJobs.readinessType] = request.readinessType?.lowercase()
@@ -470,12 +465,12 @@ object DeploymentJobRepository {
             registry = execution[DeploymentExecutions.registry],
             imageName = execution[DeploymentExecutions.imageName],
             imageTag = execution[DeploymentExecutions.imageTag],
-            containerName = execution[DeploymentExecutions.containerName],
+            projectId = ownerId.toString(),
+            autoDeploy = false,
             hostPort = execution[DeploymentExecutions.hostPort],
             containerPort = execution[DeploymentExecutions.containerPort],
             network = execution[DeploymentExecutions.network],
             restartPolicy = execution[DeploymentExecutions.restartPolicy],
-            projectSlug = execution[DeploymentExecutions.projectSlug],
             triggerSource = "rollback",
             env = Json.decodeFromString<Map<String, String>>(execution[DeploymentExecutions.envJson]),
             secretEnv = secrets,
@@ -500,14 +495,14 @@ object DeploymentJobRepository {
         DeploymentConfigurations.insert {
             it[DeploymentConfigurations.id] = id
             it[repository] = request.repository; it[gitRef] = request.gitRef; it[registry] = request.registry
-            it[imageName] = request.imageName; it[imageTag] = request.imageTag; it[containerName] = request.containerName
+            it[imageName] = request.imageName; it[imageTag] = request.imageTag
             it[hostPort] = request.hostPort; it[containerPort] = request.containerPort
             it[network] = request.network; it[restartPolicy] = request.restartPolicy
             it[DeploymentConfigurations.envJson] = envJson; it[DeploymentConfigurations.secretEnvEncrypted] = secretCiphertext
             it[DeploymentConfigurations.secretSetId] = secretSet?.id
             it[DeploymentConfigurations.secretSetVersion] = secretSet?.version
             it[DeploymentConfigurations.volumesJson] = volumesJson; it[createNetworkIfMissing] = request.createNetworkIfMissing
-            it[projectSlug] = request.projectSlug; it[DeploymentConfigurations.projectId] = projectId
+            it[DeploymentConfigurations.autoDeploy] = request.autoDeploy; it[DeploymentConfigurations.projectId] = projectId
             it[DeploymentConfigurations.environment] = environment
             it[DeploymentConfigurations.readinessType] = request.readinessType
             it[DeploymentConfigurations.readinessTarget] = request.readinessTarget
@@ -518,14 +513,14 @@ object DeploymentJobRepository {
         DeploymentExecutions.insert {
             it[DeploymentExecutions.id] = id; it[configurationId] = id
             it[repository] = request.repository; it[gitRef] = request.gitRef; it[registry] = request.registry
-            it[imageName] = request.imageName; it[imageTag] = request.imageTag; it[containerName] = request.containerName
+            it[imageName] = request.imageName; it[imageTag] = request.imageTag
             it[hostPort] = request.hostPort; it[containerPort] = request.containerPort
             it[network] = request.network; it[restartPolicy] = request.restartPolicy
             it[DeploymentExecutions.envJson] = envJson; it[DeploymentExecutions.secretEnvEncrypted] = secretCiphertext
             it[DeploymentExecutions.secretSetId] = secretSet?.id
             it[DeploymentExecutions.secretSetVersion] = secretSet?.version
             it[DeploymentExecutions.volumesJson] = volumesJson; it[createNetworkIfMissing] = request.createNetworkIfMissing
-            it[projectSlug] = request.projectSlug; it[DeploymentExecutions.projectId] = projectId
+            it[DeploymentExecutions.projectId] = projectId
             it[DeploymentExecutions.environment] = environment
             it[DeploymentExecutions.readinessType] = request.readinessType
             it[DeploymentExecutions.readinessTarget] = request.readinessTarget
@@ -537,12 +532,12 @@ object DeploymentJobRepository {
         DeploymentJobs.insert {
             it[DeploymentJobs.id] = id
             it[repository] = request.repository; it[gitRef] = request.gitRef; it[registry] = request.registry
-            it[imageName] = request.imageName; it[imageTag] = request.imageTag; it[containerName] = request.containerName
+            it[imageName] = request.imageName; it[imageTag] = request.imageTag
             it[hostPort] = request.hostPort; it[containerPort] = request.containerPort
             it[network] = request.network; it[restartPolicy] = request.restartPolicy
             it[DeploymentJobs.envJson] = envJson; it[DeploymentJobs.secretEnvEncrypted] = secretCiphertext
             it[DeploymentJobs.volumesJson] = volumesJson; it[createNetworkIfMissing] = request.createNetworkIfMissing
-            it[DeploymentJobs.projectSlug] = request.projectSlug; it[DeploymentJobs.projectId] = projectId
+            it[DeploymentJobs.projectId] = projectId
             it[DeploymentJobs.environment] = environment; it[DeploymentJobs.readinessType] = request.readinessType
             it[DeploymentJobs.readinessTarget] = request.readinessTarget
             it[DeploymentJobs.readinessTimeoutSeconds] = request.readinessTimeoutSeconds
@@ -588,7 +583,7 @@ object DeploymentJobRepository {
         DeploymentJobs.selectAll().where { DeploymentJobs.id eq id }.singleOrNull()?.toRecord()
     }
 
-    /** Called immediately before creating a runtime. New snapshots resolve by immutable reference; legacy rows fall back to encrypted execution/job columns. */
+    /** Called immediately before creating a runtime, resolving the immutable secret-set reference. */
     fun resolveSecretEnvForExecution(executionId: UUID): Map<String, String> = transaction {
         resolveSecretEnvForExecutionInTransaction(executionId)
     }
@@ -624,7 +619,6 @@ object DeploymentJobRepository {
         }
             .orderBy(DeploymentJobs.createdAt to SortOrder.ASC).limit(1).singleOrNull() ?: return@transaction null
         val now = LocalDateTime.now()
-        populateProjectId(row[DeploymentJobs.id], row[DeploymentJobs.projectSlug])
         val isReadyForCutover = row[DeploymentJobs.currentStep] in setOf("readiness_succeeded", "cutover_in_progress")
         DeploymentJobs.update({ DeploymentJobs.id eq row[DeploymentJobs.id] }) {
             it[status] = "running"; it[currentStep] = if (isReadyForCutover) "cutover_in_progress" else "building"; it[startedAt] = now; it[updatedAt] = now
@@ -658,8 +652,7 @@ object DeploymentJobRepository {
 
     fun update(id: UUID, step: String? = null, log: String? = null, commitSha: String? = null, imageDigest: String? = null, status: String? = null, error: String? = null) = transaction {
         val existing = DeploymentJobs.selectAll().where { DeploymentJobs.id eq id }.singleOrNull() ?: return@transaction
-        populateProjectId(id, existing[DeploymentJobs.projectSlug])
-        // Continue using the dual-written compatibility blob for log/error redaction during rollout.
+        // Use the private queue snapshot for log/error redaction while the worker processes this job.
         val deploymentSecrets = existing[DeploymentJobs.secretEnvEncrypted]?.let { encoded ->
             Json.decodeFromString<Map<String, String>>(SecretValueCipher.decrypt(encoded)).values
         }.orEmpty()
@@ -700,27 +693,17 @@ object DeploymentJobRepository {
         }
     }
 
-    fun setPreviousContainer(id: UUID, name: String?, image: String?) = transaction {
-        DeploymentJobs.update({ DeploymentJobs.id eq id }) { it[previousContainerName] = name; it[previousImage] = image; it[updatedAt] = LocalDateTime.now() }
-        DeploymentExecutions.update({ DeploymentExecutions.id eq id }) { it[previousContainerName] = name; it[previousImage] = image; it[updatedAt] = LocalDateTime.now() }
-    }
-
     private fun ResultRow.toRecord(includeSecretEnv: Boolean = true): DeploymentJobRecord {
         val id = this[DeploymentJobs.id]
         val execution = DeploymentExecutions.selectAll().where { DeploymentExecutions.id eq id }.singleOrNull()
         return DeploymentJobRecord(
         this[DeploymentJobs.id], this[DeploymentJobs.repository], this[DeploymentJobs.gitRef], this[DeploymentJobs.registry],
-        this[DeploymentJobs.imageName], this[DeploymentJobs.imageTag], this[DeploymentJobs.containerName], this[DeploymentJobs.hostPort], this[DeploymentJobs.containerPort], this[DeploymentJobs.network], this[DeploymentJobs.restartPolicy], runCatching { Json.decodeFromString<Map<String, String>>(this[DeploymentJobs.envJson]) }.getOrDefault(emptyMap()), if (includeSecretEnv) this[DeploymentJobs.secretEnvEncrypted]?.let { Json.decodeFromString<Map<String, String>>(SecretValueCipher.decrypt(it)) }.orEmpty() else emptyMap(), runCatching { Json.decodeFromString<List<VolumeMount>>(this[DeploymentJobs.volumesJson]) }.getOrDefault(emptyList()), this[DeploymentJobs.createNetworkIfMissing], this[DeploymentJobs.status], this[DeploymentJobs.currentStep],
+        this[DeploymentJobs.imageName], this[DeploymentJobs.imageTag], this[DeploymentJobs.hostPort], this[DeploymentJobs.containerPort], this[DeploymentJobs.network], this[DeploymentJobs.restartPolicy], runCatching { Json.decodeFromString<Map<String, String>>(this[DeploymentJobs.envJson]) }.getOrDefault(emptyMap()), if (includeSecretEnv) this[DeploymentJobs.secretEnvEncrypted]?.let { Json.decodeFromString<Map<String, String>>(SecretValueCipher.decrypt(it)) }.orEmpty() else emptyMap(), runCatching { Json.decodeFromString<List<VolumeMount>>(this[DeploymentJobs.volumesJson]) }.getOrDefault(emptyList()), this[DeploymentJobs.createNetworkIfMissing], this[DeploymentJobs.status], this[DeploymentJobs.currentStep],
         this[DeploymentJobs.logs], this[DeploymentJobs.commitSha], this[DeploymentJobs.imageDigest], this[DeploymentJobs.errorMessage],
-        this[DeploymentJobs.createdAt], this[DeploymentJobs.startedAt], this[DeploymentJobs.completedAt], this[DeploymentJobs.updatedAt], this[DeploymentJobs.previousContainerName], this[DeploymentJobs.previousImage], this[DeploymentJobs.projectSlug], this[DeploymentJobs.projectId] ?: resolveProjectId(this[DeploymentJobs.projectSlug]), this[DeploymentJobs.triggerSource], this[DeploymentJobs.environment] ?: "production",
+        this[DeploymentJobs.createdAt], this[DeploymentJobs.startedAt], this[DeploymentJobs.completedAt], this[DeploymentJobs.updatedAt], this[DeploymentJobs.projectId], this[DeploymentJobs.triggerSource], this[DeploymentJobs.environment],
         this[DeploymentJobs.readinessType], this[DeploymentJobs.readinessTarget], this[DeploymentJobs.readinessTimeoutSeconds], this[DeploymentJobs.readinessIntervalSeconds], this[DeploymentJobs.readinessProbeTimeoutMillis],
         execution?.get(DeploymentExecutions.secretSetId), execution?.get(DeploymentExecutions.secretSetVersion)
         )
-    }
-
-    private fun resolveProjectId(slug: String?): UUID? = slug?.let { projectSlug ->
-        Projects.selectAll().where { (Projects.slug eq projectSlug) and Projects.deletedAt.isNull() }
-            .singleOrNull()?.get(Projects.id)
     }
 
     private fun requireEnvironment(value: String): String = value.trim().also {
@@ -739,16 +722,4 @@ object DeploymentJobRepository {
         }
     }
 
-    private fun populateProjectId(id: UUID, slug: String?) {
-        val projectId = resolveProjectId(slug) ?: return
-        DeploymentConfigurations.update({ (DeploymentConfigurations.id eq id) and DeploymentConfigurations.projectId.isNull() }) {
-            it[DeploymentConfigurations.projectId] = projectId
-        }
-        DeploymentExecutions.update({ (DeploymentExecutions.id eq id) and DeploymentExecutions.projectId.isNull() }) {
-            it[DeploymentExecutions.projectId] = projectId
-        }
-        DeploymentJobs.update({ (DeploymentJobs.id eq id) and DeploymentJobs.projectId.isNull() }) {
-            it[DeploymentJobs.projectId] = projectId
-        }
-    }
 }

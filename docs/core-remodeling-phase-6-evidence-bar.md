@@ -1,5 +1,7 @@
 # Core Remodeling — Phase 6 Evidence Bar
 
+> **Superseded:** The owner later chose direct removal and frontend migration. See [Phase 6 Direct Retirement](core-remodeling-phase-6-retirement.md). The 30-day evidence window below was not run and is not a gate for that owner-directed change.
+
 This document locks the evidence required before retiring project-level runtime compatibility fields or slug-based deployment ownership. It applies to [Phase 6 of the remodeling plan](core-remodeling-plan.md#phase-6--retire-compatibility-projections). It authorizes no field removal or destructive migration.
 
 ## Evidence window

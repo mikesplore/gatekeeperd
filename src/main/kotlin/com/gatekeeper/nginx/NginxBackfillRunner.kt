@@ -18,21 +18,20 @@ object NginxBackfillRunner {
                 sitesAvailable = File(sitesAvailablePath),
                 findProject = { slug ->
                     ProjectRepository.findBySlug(slug)?.let {
-                        BackfillProject(it.id, it.slug, it.containerName)
+                        BackfillProject(it.id, it.slug, null)
                     }
                 },
                 findProjectById = { projectId ->
                     ProjectRepository.findActiveById(projectId)?.let {
-                        BackfillProject(it.id, it.slug, it.containerName)
+                        BackfillProject(it.id, it.slug, null)
                     }
                 },
                 siteExists = SiteRepository::existsForProject,
                 expectedDockerTarget = { project ->
-                    val activeRuntime = DeploymentApplicationService.activeDeploymentRuntime(project.id, "production")
-                    val containerName = if (activeRuntime != null) activeRuntime.containerName
-                    else project.containerName?.let(::extractConfiguredContainerName)
-                    if (docker == null || containerName.isNullOrBlank()) null
-                    else solePublishedDockerTarget(containerName, docker.getContainer(containerName)?.ports.orEmpty())
+                    val target = DeploymentUpstreamResolver.resolve(project.id, "production")
+                    val containerName = target?.containerName
+                    if (docker == null || target == null || containerName.isNullOrBlank()) null
+                    else BackfillDockerTarget(containerName, target.port)
                 },
                 autoCertificatePath = { domain -> nginx.resolveCertificateForDomain(domain)?.certificatePath },
                 render = { model -> nginx.generateNginxConfig(model) },
@@ -40,7 +39,8 @@ object NginxBackfillRunner {
                     val site = SiteRepository.create(project.id, model)
                     if (model.certMode == com.gatekeeper.db.tables.CertMode.AUTO_RESOLVE) {
                         nginx.resolveCertificateForDomain(model.domain)?.let { resolved ->
-                            val certificate = CertificateRepository.upsert(resolved.certificateDomain, null, null, "discovered")
+                            val certificate =
+                                CertificateRepository.upsert(resolved.certificateDomain, null, null, "discovered")
                             SiteRepository.linkCertificate(project.id, certificate.id)
                         }
                     }
@@ -49,7 +49,6 @@ object NginxBackfillRunner {
                 dryRun = dryRun,
                 log = ::println
             ).run()
-            println("nginx backfill summary: migrated=${report.migratedCount}, skipped=${report.skippedCount}, failed=${report.failedCount}")
             if (report.failedDiff.isNotEmpty()) {
                 report.failedDiff.forEach { (slug, diff) -> println("$slug: $diff") }
             }

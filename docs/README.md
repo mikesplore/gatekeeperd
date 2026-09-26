@@ -151,12 +151,7 @@ For private Docker Hub images, set `pullViaCli=true` (or `DOCKER_PULL_VIA_CLI=tr
 
 ### Project creation and setup
 
-The legacy container-first flow remains available for existing dashboard clients and scripts:
-
-1. **Container dropdown + slug hints**: `GET /api/admin/projects/wizard/context`
-2. **Create project**: `POST /api/admin/projects` with an existing `containerName` (`name` or `name:port`)
-
-The new project-centered flow creates a durable project first and saves each setup step independently:
+The project setup flow creates a durable project first and saves each setup step independently. Container-first project creation has been removed; Docker container creation remains available as a runtime setup operation.
 
 1. **Create project without Docker**: `POST /api/admin/project-setup/projects`
 2. **Save source/runtime configuration**: `PUT /api/admin/project-setup/projects/{projectId}/source-runtime`

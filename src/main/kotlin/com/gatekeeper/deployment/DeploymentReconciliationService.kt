@@ -9,6 +9,7 @@ import com.gatekeeper.db.tables.Projects
 import com.gatekeeper.db.tables.UpstreamMode
 import com.gatekeeper.docker.DockerService
 import com.gatekeeper.nginx.NginxService
+import com.gatekeeper.nginx.DeploymentUpstreamResolver
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
@@ -21,7 +22,7 @@ data class DeploymentDriftItem(val code: String, val detail: String)
 
 @Serializable
 data class ActiveDeploymentReconciliation(
-    val projectId: String?,
+    val projectId: String,
     val projectSlug: String?,
     val environment: String,
     val deploymentId: String,
@@ -62,7 +63,7 @@ class DeploymentReconciliationService(
 
     private data class ActiveDeployment(
         val id: UUID,
-        val projectId: UUID?,
+        val projectId: UUID,
         val slug: String?,
         val environment: String,
         val containerName: String?,
@@ -76,7 +77,8 @@ class DeploymentReconciliationService(
                 .map { row ->
                     val execution = DeploymentExecutions.selectAll()
                         .where { DeploymentExecutions.id eq row[Deployments.executionId] }.singleOrNull()
-                    val project = row[Deployments.projectId]?.let { projectId ->
+                    val projectId = row[Deployments.projectId] ?: error("Active deployment has no project_id")
+                    val project = run {
                         Projects.selectAll().where { Projects.id eq projectId }.singleOrNull()
                     }
                     val rawPorts = row[Deployments.runtimePortsJson]
@@ -86,8 +88,8 @@ class DeploymentReconciliationService(
                             emptyMap()
                         }
                     ActiveDeployment(
-                        id = row[Deployments.id], projectId = row[Deployments.projectId],
-                        slug = project?.get(Projects.slug) ?: execution?.get(DeploymentExecutions.projectSlug),
+                        id = row[Deployments.id], projectId = projectId,
+                        slug = project?.get(Projects.slug),
                         environment = row[Deployments.environment], containerName = row[Deployments.runtimeContainerName],
                         hostPort = row[Deployments.runtimeHostPort], ports = ports
                     )
@@ -138,29 +140,24 @@ class DeploymentReconciliationService(
             }
         }
 
-        if (deployment.projectId == null) {
-            drift += DeploymentDriftItem("project_identity_missing", "Active deployment has no persisted project_id")
-        } else {
-            val project = runCatching { ProjectRepository.findById(deployment.projectId) }.getOrElse {
-                errors += "project lookup failed for deployment ${deployment.id}: ${it.message ?: it.javaClass.simpleName}"
-                null
-            }
-            if (project == null) {
-                drift += DeploymentDriftItem("project_missing", "Persisted project_id ${deployment.projectId} has no project row")
-            } else if (deployment.environment == "production" && containerName != null && project.containerName != containerName) {
-                drift += DeploymentDriftItem("project_runtime_pointer_mismatch", "Project container_name does not match active deployment runtime '$containerName'")
-            }
+        val project = runCatching { ProjectRepository.findById(deployment.projectId) }.getOrElse {
+            errors += "project lookup failed for deployment ${deployment.id}: ${it.message ?: it.javaClass.simpleName}"
+            null
+        }
+        if (project == null) {
+            drift += DeploymentDriftItem("project_missing", "Persisted project_id ${deployment.projectId} has no project row")
+        }
 
-            val site = runCatching { SiteRepository.findByProjectId(deployment.projectId) }.getOrElse {
+        val site = runCatching { SiteRepository.findByProjectId(deployment.projectId) }.getOrElse {
                 errors += "gateway site lookup failed for deployment ${deployment.id}: ${it.message ?: it.javaClass.simpleName}"
                 null
             }
-            if (site == null) {
+        if (site == null) {
                 drift += DeploymentDriftItem("gateway_site_missing", "Project has no persisted gateway site")
-            } else {
+        } else {
                 gatewayTarget = when (site.upstreamMode) {
                     UpstreamMode.EXPLICIT_PORT -> "${site.upstreamHost}:${site.upstreamExplicitPort ?: "missing-port"}"
-                    UpstreamMode.DOCKER_DISCOVERY -> site.upstreamContainerName ?: "missing-container"
+                    UpstreamMode.DOCKER_DISCOVERY -> DeploymentUpstreamResolver.resolve(site.projectId, deployment.environment)?.let { "${it.host}:${it.port}" } ?: "missing-runtime"
                 }
                 val siteSlug = slug ?: project?.slug ?: run {
                     drift += DeploymentDriftItem("project_slug_missing", "Project slug is unavailable for managed gateway inspection")
@@ -187,7 +184,7 @@ class DeploymentReconciliationService(
                         .firstOrNull { it.substringBefore('/') != "127.0.0.1:8080" }
                     val expectedTarget = when (site.upstreamMode) {
                         UpstreamMode.EXPLICIT_PORT -> site.upstreamExplicitPort?.let { "${site.upstreamHost}:$it" }
-                        UpstreamMode.DOCKER_DISCOVERY -> site.upstreamContainerName
+                        UpstreamMode.DOCKER_DISCOVERY -> DeploymentUpstreamResolver.resolve(site.projectId, deployment.environment)?.let { "${it.host}:${it.port}" }
                     }
                     if (configuredTarget == null || expectedTarget == null || configuredTarget != expectedTarget) {
                         drift += DeploymentDriftItem("gateway_config_drift", "Persisted gateway target '$expectedTarget' does not match nginx target '${configuredTarget ?: "missing"}'")
@@ -199,15 +196,15 @@ class DeploymentReconciliationService(
                             drift += DeploymentDriftItem("gateway_active_runtime_mismatch", "Gateway targets ${site.upstreamHost}:${site.upstreamExplicitPort}; active deployment runtime is published on $expectedHostPort")
                         }
                     }
-                    if (deployment.environment == "production" && site.upstreamMode == UpstreamMode.DOCKER_DISCOVERY && site.upstreamContainerName != containerName) {
-                        drift += DeploymentDriftItem("gateway_active_runtime_mismatch", "Gateway discovery target '${site.upstreamContainerName}' does not match active deployment runtime '$containerName'")
+                    val resolvedDockerTarget = if (site.upstreamMode == UpstreamMode.DOCKER_DISCOVERY) DeploymentUpstreamResolver.resolve(site.projectId, deployment.environment) else null
+                    if (deployment.environment == "production" && site.upstreamMode == UpstreamMode.DOCKER_DISCOVERY && resolvedDockerTarget?.containerName != containerName) {
+                        drift += DeploymentDriftItem("gateway_active_runtime_mismatch", "Gateway discovery target '${resolvedDockerTarget?.containerName ?: "missing"}' does not match active deployment runtime '$containerName'")
                     }
                 }
-            }
         }
 
         return ActiveDeploymentReconciliation(
-            projectId = deployment.projectId?.toString(), projectSlug = slug, environment = deployment.environment,
+            projectId = deployment.projectId.toString(), projectSlug = slug, environment = deployment.environment,
             deploymentId = deployment.id.toString(), containerName = containerName, expectedPorts = deployment.ports,
             observedContainerState = observedState, observedPorts = observedPorts, gatewayTarget = gatewayTarget,
             drift = drift.distinctBy { it.code to it.detail }

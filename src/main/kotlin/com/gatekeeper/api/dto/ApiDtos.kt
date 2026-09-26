@@ -25,7 +25,6 @@ data class ProjectResponse(
     val slug: String,
     val name: String,
     val domain: String,
-    val containerName: String?,
     val type: String,
     val status: String,
     val blockReason: String? = null,
@@ -51,11 +50,6 @@ data class ProjectResponse(
     val gracePeriodDays: Int,
     val createdAt: String,
     val updatedAt: String,
-    val githubRepository: String? = null,
-    val githubRef: String = "main",
-    val deployImageName: String? = null,
-    val deployImageTag: String = "latest",
-    val autoDeploy: Boolean = false
 )
 
 @Serializable
@@ -197,7 +191,6 @@ fun ProjectRepository.ProjectRecord.toResponse(remainingBalance: BigDecimal? = n
     slug = slug,
     name = name,
     domain = domain,
-    containerName = containerName,
     type = type,
     status = status,
     blockReason = blockReason,
@@ -223,11 +216,6 @@ fun ProjectRepository.ProjectRecord.toResponse(remainingBalance: BigDecimal? = n
     gracePeriodDays = gracePeriodDays,
     createdAt = createdAt.toNairobiTimestamp(),
     updatedAt = updatedAt.toNairobiTimestamp(),
-    githubRepository = githubRepository,
-    githubRef = githubRef,
-    deployImageName = deployImageName,
-    deployImageTag = deployImageTag,
-    autoDeploy = autoDeploy
 )
 
 fun PaymentRepository.PaymentRecord.toResponse(): PaymentResponse = PaymentResponse(

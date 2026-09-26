@@ -84,7 +84,6 @@ class NginxSiteBackfill(
                         certificatePath = if (autoCert) null else actual.certPath,
                         certificateKeyPath = if (autoCert) null else actual.keyPath,
                         upstreamMode = if (dockerDiscovery) com.gatekeeper.db.tables.UpstreamMode.DOCKER_DISCOVERY else com.gatekeeper.db.tables.UpstreamMode.EXPLICIT_PORT,
-                        upstreamContainerName = if (dockerDiscovery) expectedDockerTarget.containerName else null,
                         certMode = if (autoCert) com.gatekeeper.db.tables.CertMode.AUTO_RESOLVE else com.gatekeeper.db.tables.CertMode.EXPLICIT_PATH
                     )
                     if (!dryRun) {

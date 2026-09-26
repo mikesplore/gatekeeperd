@@ -1,17 +1,15 @@
 package com.gatekeeper.admin
 
-import com.gatekeeper.api.dto.AuditLogResponse
 import com.gatekeeper.api.dto.AuditLogPageResponse
 import com.gatekeeper.api.dto.PaymentResponse
 import com.gatekeeper.api.dto.ProjectDetailResponse
-import com.gatekeeper.api.dto.ProjectResponse
 import com.gatekeeper.api.dto.ProjectsListResponse
 import com.gatekeeper.api.dto.StatusChangeResponse
 import com.gatekeeper.api.dto.toResponse
 import com.gatekeeper.api.InputValidators
+import com.gatekeeper.config.AppConfig
 import com.gatekeeper.api.respondError
 import com.gatekeeper.api.respondErrorWithData
-import com.gatekeeper.config.AppConfig
 import com.gatekeeper.db.repositories.AuditRepository
 import com.gatekeeper.db.repositories.PaymentRepository
 import com.gatekeeper.db.repositories.ProjectRepository
@@ -20,15 +18,14 @@ import com.gatekeeper.db.repositories.ProjectAdjustmentRepository
 import com.gatekeeper.db.tables.AdjustmentType
 import com.gatekeeper.integrations.ScribedIntegrationClient
 import com.gatekeeper.docker.ContainerCreatePlanResult
-import com.gatekeeper.docker.CreateContainerRequest
-import com.gatekeeper.docker.CreateContainerResponse
+import com.gatekeeper.docker.DockerService
 import com.gatekeeper.docker.ContainerWizardContextResponse
+import com.gatekeeper.docker.CreateContainerRequest
 import com.gatekeeper.docker.ContainerWizardValidateResponse
 import com.gatekeeper.docker.DockerWizardInspect
 import com.gatekeeper.docker.computeContainerCreatePlan
 import com.gatekeeper.docker.DeleteImageRequest
 import com.gatekeeper.docker.DeleteImageResponse
-import com.gatekeeper.docker.DockerService
 import com.gatekeeper.docker.ContainerCreationTracker
 import com.gatekeeper.docker.ImageStatusRequest
 import com.gatekeeper.docker.ImageStatusResponse
@@ -36,7 +33,6 @@ import com.gatekeeper.docker.PortsAvailabilityRequest
 import com.gatekeeper.docker.PortsAvailabilityResponse
 import com.gatekeeper.docker.parseImageRef
 import com.gatekeeper.nginx.NginxService
-import com.gatekeeper.nginx.extractConfiguredContainerName
 import com.gatekeeper.paystack.ProjectPaymentService
 import com.gatekeeper.payments.ProjectBalanceService
 import io.ktor.http.*
@@ -62,45 +58,14 @@ import java.math.BigDecimal
 
 private val logger = LoggerFactory.getLogger("com.gatekeeper.admin.ProjectAdminRoutes")
 private val json = Json { ignoreUnknownKeys = true; coerceInputValues = true }
-
-private class DockerServiceWizardInspect(private val dockerService: DockerService) : DockerWizardInspect {
-    override fun imageExists(imageRef: String): Boolean = dockerService.imageExists(imageRef)
-    override fun containerExists(name: String): Boolean = dockerService.getContainer(name) != null
-    override fun listNetworkNames(): Set<String> = dockerService.listNetworks().map { it.name }.toSet()
-    override fun hostPortsInUse(): Set<Int> = dockerService.hostPortsInUse()
-}
-
-@Serializable
-data class CreateProjectRequest(
-    val slug: String,
-    val name: String,
-    val domain: String,
-    val containerName: String? = null,
-    val type: String,
-    val billingName: String? = null,
-    val billingEmail: String? = null,
-    val billingAddress: String? = null,
-    val amountDue: Double? = null,
-    val currency: String = "KES",
-    val dueDate: String? = null,
-    val gracePeriodDays: Int = 3,
-    val deploymentMode: String = "developer_hosted",
-    val serviceMode: String = "development",
-    val lifecycleStatus: String = "active",
-    val customerId: String? = null,
-    val newCustomer: NewCustomerRequest? = null
-)
-
-@Serializable
-data class NewCustomerRequest(val name: String, val contactEmail: String? = null, val contactPhone: String? = null)
+private val deploymentModes = setOf("developer_hosted", "client_hosted", "external_hosted")
+private val serviceModes = setOf("development", "testing", "production")
+private val lifecycleStatuses = setOf("active", "transferred", "archived", "cancelled")
 
 @Serializable
 data class UpdateProjectRequest(
-    // Accepted for backwards compatibility with response-shaped edit payloads; the path slug is authoritative.
-    val slug: String? = null,
     val name: String? = null,
     val domain: String? = null,
-    val containerName: String? = null,
     val type: String? = null,
     val billingName: String? = null,
     val billingEmail: String? = null,
@@ -156,47 +121,9 @@ data class TransferProjectRequest(
     val serviceMode: String = "production"
 )
 
-@Serializable
-data class GithubDeploymentSourceRequest(
-    val repository: String? = null,
-    val gitRef: String = "main",
-    val imageName: String? = null,
-    val imageTag: String = "latest",
-    val autoDeploy: Boolean = false
-)
-
-private val deploymentModes = setOf("developer_hosted", "client_hosted", "external_hosted")
-private val serviceModes = setOf("development", "testing", "production")
-private val lifecycleStatuses = setOf("active", "transferred", "archived", "cancelled")
-
-@Serializable
-data class ProjectWizardContainerOption(
-    val id: String,
-    val name: String,
-    val image: String,
-    val state: String,
-    val ports: String,
-    val suggestedSlug: String? = null
-)
-
-@Serializable
-data class ProjectCreateWizardContextResponse(
-    val containers: List<ProjectWizardContainerOption>,
-    val existingProjectSlugs: List<String>
-)
-
 fun Application.configureProjectAdminRoutes() {
     routing {
         authenticate("auth-jwt") {
-            patch("/api/admin/projects/{slug}/deployment-source") {
-                val slug = call.parameters["slug"] ?: run { call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing project slug"); return@patch }
-                val body = runCatching { call.receive<GithubDeploymentSourceRequest>() }.getOrNull() ?: run { call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid deployment source"); return@patch }
-                if ((body.repository != null && !body.repository.matches(Regex("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"))) || !body.gitRef.matches(Regex("^[A-Za-z0-9._/-]+$")) || (body.imageName != null && !body.imageName.matches(Regex("^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*$"))) || !body.imageTag.matches(Regex("^[A-Za-z0-9_.-]+$"))) {
-                    call.respondError(HttpStatusCode.BadRequest, "invalid_deployment_source", "Repository, ref, image name, or tag is invalid"); return@patch
-                }
-                val project = ProjectRepository.updateGithubDeployment(slug, body.repository, body.gitRef, body.imageName, body.imageTag, body.autoDeploy) ?: run { call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found"); return@patch }
-                call.respond(project.toResponse())
-            }
             get("/api/admin/projects") {
                 val search = call.request.queryParameters["search"]?.trim()?.lowercase()
                 val status = call.request.queryParameters["status"]
@@ -274,7 +201,7 @@ fun Application.configureProjectAdminRoutes() {
                 val scribedBase = AppConfig.scribedCallbackUrl.trim().trimEnd('/')
                 val invoice = lookup.body["invoice"]?.jsonObject
                 val invoiceId = invoice?.get("id")?.jsonPrimitive?.longOrNull
-                val response = if (invoiceId != null && scribedBase.isNotBlank() && invoice != null) {
+                val response = if (invoiceId != null && scribedBase.isNotBlank()) {
                     val invoiceUrl = "$scribedBase/invoices/$invoiceId"
                     JsonObject(lookup.body + ("invoice" to JsonObject(invoice + ("download_url" to JsonPrimitive(invoiceUrl)))))
                 } else lookup.body
@@ -415,139 +342,6 @@ fun Application.configureProjectAdminRoutes() {
                 call.respond(HttpStatusCode.Accepted, mapOf("status" to "queued", "project" to project.slug, "paymentsQueued" to syncedPayments))
             }
 
-            post("/api/admin/projects") {
-                val body = try {
-                    call.receive<CreateProjectRequest>()
-                } catch (e: Exception) {
-                    logger.warn("Failed to parse create project request", e)
-                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "The request body could not be parsed")
-                    return@post
-                }
-
-                if (body.slug.isBlank() || body.name.isBlank() || body.domain.isBlank()) {
-                    call.respondError(
-                        HttpStatusCode.BadRequest,
-                        "invalid_request",
-                        "slug, name, and domain are required"
-                    )
-                    return@post
-                }
-
-                val slug = InputValidators.normalizeSlug(body.slug)
-                if (slug == null) {
-                    call.respondError(
-                        HttpStatusCode.BadRequest,
-                        "invalid_request",
-                        "slug must be 2-64 lowercase letters, numbers, or hyphens"
-                    )
-                    return@post
-                }
-
-                val containerRef = body.containerName?.trim()
-                if (containerRef != null && (containerRef.isBlank() || !InputValidators.isValidContainerRef(containerRef))) {
-                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "containerName must be 'name' or 'name:port'")
-                    return@post
-                }
-
-                if (body.type.lowercase() !in listOf("frontend", "backend")) {
-                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "type must be 'frontend' or 'backend'")
-                    return@post
-                }
-
-                if (body.deploymentMode !in deploymentModes || body.serviceMode !in serviceModes || body.lifecycleStatus !in lifecycleStatuses) {
-                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid deployment, service, or lifecycle mode")
-                    return@post
-                }
-
-                val existing = ProjectRepository.findBySlug(slug, includeArchived = true)
-                if (existing != null) {
-                    call.respondError(HttpStatusCode.Conflict, "project_exists", "A project with this slug already exists")
-                    return@post
-                }
-
-                val dueDate = InputValidators.parseDueDate(body.dueDate)
-                if (body.dueDate?.isNotBlank() == true && dueDate == null) {
-                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "dueDate must be ISO format YYYY-MM-DD")
-                    return@post
-                }
-
-                val amountDue = body.amountDue?.let { BigDecimal.valueOf(it) }
-
-                val customerId = body.customerId?.let {
-                    runCatching { UUID.fromString(it) }.getOrNull()
-                        ?: return@post call.respondError(HttpStatusCode.BadRequest, "invalid_customer", "customerId must be a valid UUID")
-                }
-                if (customerId != null && CustomerRepository.findById(customerId) == null) {
-                    call.respondError(HttpStatusCode.NotFound, "customer_not_found", "Customer not found")
-                    return@post
-                }
-                if (body.customerId != null && body.newCustomer != null) {
-                    call.respondError(HttpStatusCode.BadRequest, "invalid_customer", "Choose an existing customer or create a new one")
-                    return@post
-                }
-                val createdCustomer = body.newCustomer?.let { customer ->
-                    if (customer.name.isBlank()) {
-                        call.respondError(HttpStatusCode.BadRequest, "invalid_customer", "New customer name is required")
-                        return@post
-                    }
-                    if (!customer.contactEmail.isNullOrBlank() && !InputValidators.isValidEmail(customer.contactEmail)) {
-                        call.respondError(HttpStatusCode.BadRequest, "invalid_customer", "New customer email is invalid")
-                        return@post
-                    }
-                    CustomerRepository.create(customer.name.trim(), customer.contactEmail?.trim(), customer.contactPhone?.trim())
-                }
-
-                if (containerRef != null) {
-                    val dockerService = try {
-                        DockerService(AppConfig.dockerSocket)
-                    } catch (e: Exception) {
-                        logger.warn("Docker not available for project create validation (non-fatal): ${e.message}")
-                        call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available")
-                        return@post
-                    }
-
-                    val containerName = extractConfiguredContainerName(containerRef)
-                    if (containerName == null) {
-                        dockerService.close()
-                        call.respondError(HttpStatusCode.BadRequest, "invalid_request", "containerName is invalid")
-                        return@post
-                    }
-
-                    try {
-                        if (dockerService.getContainer(containerName) == null) {
-                            call.respondError(
-                                HttpStatusCode.BadRequest,
-                                "container_not_found",
-                                "Docker container '$containerName' was not found. Create/start the container first, then create the project."
-                            )
-                            return@post
-                        }
-                    } finally {
-                        dockerService.close()
-                    }
-                }
-
-                val project = ProjectRepository.create(
-                    slug = slug,
-                    name = body.name.trim(),
-                    domain = body.domain.trim(),
-                    containerName = containerRef,
-                    type = body.type.lowercase(),
-                    billingName = body.billingName?.trim(), billingEmail = body.billingEmail?.trim(), billingAddress = body.billingAddress?.trim(),
-                    amountDue = amountDue,
-                    currency = body.currency,
-                    dueDate = dueDate,
-                    gracePeriodDays = body.gracePeriodDays,
-                    deploymentMode = body.deploymentMode,
-                    serviceMode = body.serviceMode,
-                    lifecycleStatus = body.lifecycleStatus,
-                    customerId = createdCustomer?.id ?: customerId
-                )
-
-                logger.info("Project created: $slug")
-                call.respond(HttpStatusCode.Created, project.toResponse())
-            }
-
             patch("/api/admin/projects/{slug}") {
                 val slug = call.parameters["slug"]
                 if (slug == null) {
@@ -568,11 +362,6 @@ fun Application.configureProjectAdminRoutes() {
 
                 if (body.type != null && !InputValidators.isValidProjectType(body.type)) {
                     call.respondError(HttpStatusCode.BadRequest, "invalid_request", "type must be 'frontend' or 'backend'")
-                    return@patch
-                }
-
-                if (body.containerName != null && !InputValidators.isValidContainerRef(body.containerName)) {
-                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "containerName must be 'name' or 'name:port'")
                     return@patch
                 }
 
@@ -616,43 +405,10 @@ fun Application.configureProjectAdminRoutes() {
                     }
                 }
 
-                // If containerName is updated, enforce that the referenced Docker container exists.
-                if (body.containerName != null) {
-                    val dockerService = try {
-                        DockerService(AppConfig.dockerSocket)
-                    } catch (e: Exception) {
-                        logger.warn("Docker not available for project update validation (non-fatal): ${e.message}")
-                        call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available")
-                        return@patch
-                    }
-
-                    val containerRef = body.containerName.trim()
-                    val containerName = extractConfiguredContainerName(containerRef)
-                    if (containerName == null) {
-                        dockerService.close()
-                        call.respondError(HttpStatusCode.BadRequest, "invalid_request", "containerName is invalid")
-                        return@patch
-                    }
-
-                    try {
-                        if (dockerService.getContainer(containerName) == null) {
-                            call.respondError(
-                                HttpStatusCode.BadRequest,
-                                "container_not_found",
-                                "Docker container '$containerName' was not found. Create/start the container first, then update the project."
-                            )
-                            return@patch
-                        }
-                    } finally {
-                        dockerService.close()
-                    }
-                }
-
                 val project = ProjectRepository.update(
                     slug = slug,
                     name = body.name?.trim(),
                     domain = body.domain?.trim(),
-                    containerName = body.containerName?.trim(),
                     type = body.type?.lowercase(),
                     billingName = body.billingName?.trim(),
                     billingEmail = body.billingEmail?.trim(),
@@ -739,7 +495,7 @@ fun Application.configureProjectAdminRoutes() {
                 }
                 val body = try {
                     call.receive<TransferProjectRequest>()
-                } catch (e: Exception) {
+                } catch (_: Exception) {
                     call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid transfer request")
                     return@post
                 }
@@ -775,7 +531,7 @@ fun Application.configureProjectAdminRoutes() {
                     return@delete
                 }
 
-                val principal = call.principal<io.ktor.server.auth.jwt.JWTPrincipal>()
+                val principal = call.principal<JWTPrincipal>()
                 val actor = principal?.payload?.subject ?: "unknown"
 
                 val archived = ProjectRepository.archive(
@@ -807,43 +563,6 @@ fun Application.configureProjectAdminRoutes() {
                 call.respond(HttpStatusCode.NoContent)
             }
 
-            // Wizard helpers: drive a container-first deployment flow (container -> project -> nginx).
-            get("/api/admin/projects/wizard/context") {
-                val dockerService = try {
-                    DockerService(AppConfig.dockerSocket)
-                } catch (e: Exception) {
-                    logger.warn("Docker not available for project wizard context (non-fatal): ${e.message}")
-                    call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available")
-                    return@get
-                }
-
-                try {
-                    val containers = dockerService.listContainers(all = true)
-                        .sortedBy { it.name.lowercase() }
-                        .map { c ->
-                            val suggested = InputValidators.normalizeSlug(
-                                c.name.lowercase()
-                                    .replace(Regex("[^a-z0-9-]"), "-")
-                                    .replace(Regex("-{2,}"), "-")
-                                    .trim('-')
-                            )
-                            ProjectWizardContainerOption(
-                                id = c.id,
-                                name = c.name,
-                                image = c.image,
-                                state = c.state,
-                                ports = c.ports,
-                                suggestedSlug = suggested
-                            )
-                        }
-
-                    val existingSlugs = ProjectRepository.findAll(includeArchived = true).map { it.slug }.sorted()
-                    call.respond(ProjectCreateWizardContextResponse(containers = containers, existingProjectSlugs = existingSlugs))
-                } finally {
-                    dockerService.close()
-                }
-            }
-
             post("/api/admin/projects/{slug}/block") {
                 val slug = call.parameters["slug"]
                 if (slug == null) {
@@ -869,7 +588,7 @@ fun Application.configureProjectAdminRoutes() {
                     return@post
                 }
 
-                val principal = call.principal<io.ktor.server.auth.jwt.JWTPrincipal>()
+                val principal = call.principal<JWTPrincipal>()
                 val actor = principal?.payload?.subject ?: "unknown"
 
                 ProjectRepository.updateStatus(project.id, "manual_block", actor, reason, blockReason = "manual")
@@ -888,7 +607,7 @@ fun Application.configureProjectAdminRoutes() {
                 }
                 val body = try {
                     call.receive<StatusChangeRequest>()
-                } catch (e: Exception) {
+                } catch (_: Exception) {
                     call.respondError(HttpStatusCode.BadRequest, "invalid_request", "A reason is required")
                     return@post
                 }
@@ -905,7 +624,7 @@ fun Application.configureProjectAdminRoutes() {
                     return@post
                 }
 
-                val principal = call.principal<io.ktor.server.auth.jwt.JWTPrincipal>()
+                val principal = call.principal<JWTPrincipal>()
                 val actor = principal?.payload?.subject ?: "unknown"
 
                 ProjectRepository.updateStatus(project.id, "active", actor, reason)
@@ -923,7 +642,7 @@ fun Application.configureProjectAdminRoutes() {
                 }
                 val body = try {
                     call.receive<InitializePaymentRequest>()
-                } catch (e: Exception) {
+                } catch (_: Exception) {
                     call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Email is required")
                     return@post
                 }
@@ -1031,7 +750,12 @@ fun Application.configureProjectAdminRoutes() {
                 }
 
                 try {
-                    val inspect = DockerServiceWizardInspect(dockerService)
+                    val inspect = object : DockerWizardInspect {
+                        override fun imageExists(imageRef: String) = dockerService.imageExists(imageRef)
+                        override fun containerExists(name: String) = dockerService.getContainer(name) != null
+                        override fun listNetworkNames() = dockerService.listNetworks().map { it.name }.toSet()
+                        override fun hostPortsInUse() = dockerService.hostPortsInUse()
+                    }
                     when (val planResult = computeContainerCreatePlan(
                         request = body,
                         internalNetwork = AppConfig.internalNetwork,
@@ -1075,7 +799,7 @@ fun Application.configureProjectAdminRoutes() {
                                     dockerService.close()
                                 }
                             }
-                            call.respond(HttpStatusCode.Accepted, mapOf("id" to operation.id.toString(), "status" to "queued", "name" to plan.normalizedRequest.name))
+                            call.respond(HttpStatusCode.Accepted, mapOf("id" to operation.id, "status" to "queued", "name" to plan.normalizedRequest.name))
                         }
                     }
                     
@@ -1138,7 +862,12 @@ fun Application.configureProjectAdminRoutes() {
                 }
 
                 try {
-                    val inspect = DockerServiceWizardInspect(dockerService)
+                    val inspect = object : DockerWizardInspect {
+                        override fun imageExists(imageRef: String) = dockerService.imageExists(imageRef)
+                        override fun containerExists(name: String) = dockerService.getContainer(name) != null
+                        override fun listNetworkNames() = dockerService.listNetworks().map { it.name }.toSet()
+                        override fun hostPortsInUse() = dockerService.hostPortsInUse()
+                    }
                     when (val planResult = computeContainerCreatePlan(
                         request = body,
                         internalNetwork = AppConfig.internalNetwork,

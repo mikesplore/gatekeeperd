@@ -39,7 +39,7 @@ class NginxReconciliationService(
             if (site.upstreamMode != UpstreamMode.DOCKER_DISCOVERY) {
                 null
             } else {
-                val container = site.upstreamContainerName
+                val container = DeploymentUpstreamResolver.resolve(site.projectId, "production")?.containerName
                 when {
                     container.isNullOrBlank() -> "Docker discovery site has no container name"
                     docker.containerHealth(container) != "running" ->
@@ -73,13 +73,12 @@ class NginxReconciliationService(
     private fun evaluateAll(): NginxReconciliationReport {
         val sites = listSites()
         val sitesByProjectId = sites.associateBy { it.projectId }
-        val sitesBySlug = sites.mapNotNull { site -> site.projectSlug?.let { it to site } }.toMap()
         val fileNames = (siteFiles(sitesAvailablePath) + siteFiles(sitesEnabledPath)).toSet()
         val resolvedFiles = fileNames.associateWith { fileName ->
             val marker = projectIdMarker(fileName)
             when {
                 marker.present -> marker.projectId?.let(sitesByProjectId::get)
-                else -> sitesBySlug[fileName]
+                else -> null
             }
         }
         val filesByProjectId = resolvedFiles.entries.mapNotNull { (fileName, site) ->
@@ -91,15 +90,15 @@ class NginxReconciliationService(
             val ownedFiles = filesByProjectId[site.projectId].orEmpty().sorted()
             val result = when {
                 ownedFiles.size > 1 -> NginxReconciliationResult(
-                    site.projectSlug ?: site.id.toString(), ReconciliationStatus.ERROR,
+                    site.id.toString(), ReconciliationStatus.ERROR,
                     "Multiple nginx files identify project ${site.projectId}: ${ownedFiles.joinToString()}",
                     projectId = site.projectId
                 )
-                ownedFiles.isEmpty() && (site.projectSlug ?: site.id.toString()) in orphaned -> NginxReconciliationResult(
-                    site.projectSlug ?: site.id.toString(), ReconciliationStatus.DEAD_CONFIG,
+                ownedFiles.isEmpty() && site.id.toString() in orphaned -> NginxReconciliationResult(
+                    site.id.toString(), ReconciliationStatus.DEAD_CONFIG,
                     "Nginx file does not identify project ${site.projectId}", projectId = site.projectId
                 )
-                else -> evaluate(site, ownedFiles.singleOrNull() ?: site.projectSlug ?: site.id.toString(), nginxOutput)
+                else -> evaluate(site, ownedFiles.singleOrNull() ?: site.id.toString(), nginxOutput)
             }
             result.also { persist(site, it) }
         }

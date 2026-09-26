@@ -6,6 +6,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import org.slf4j.Logger
 import kotlin.math.min
+import kotlin.time.Duration.Companion.milliseconds
 
 internal suspend fun runWorkerLoop(
     name: String,
@@ -30,6 +31,6 @@ internal suspend fun runWorkerLoop(
             logger.debug("{} worker run completed in {}ms", name, (System.nanoTime() - started) / 1_000_000)
         }
         val backoff = if (failures == 0) intervalMillis else min(intervalMillis, 1_000L * (1L shl min(failures, 6)))
-        delay(backoff)
+        delay(backoff.milliseconds)
     }
 }

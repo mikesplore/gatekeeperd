@@ -17,7 +17,6 @@ object Sites : Table("sites") {
         { value -> UpstreamMode.entries.first { it.value == (value as String) } },
         { it.value }
     )
-    val upstreamContainerName = text("upstream_container_name").nullable()
     val upstreamExplicitPort = integer("upstream_explicit_port").nullable()
     val tlsMode = customEnumeration(
         "tls_mode",

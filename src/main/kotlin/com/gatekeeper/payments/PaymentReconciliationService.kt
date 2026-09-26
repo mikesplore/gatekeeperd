@@ -47,7 +47,6 @@ object PaymentReconciliationService {
                     verified.status.name.lowercase(),
                     "reconciliation"
                 )
-                true
             }
             VerifiedPaymentStatus.PENDING -> false
         }

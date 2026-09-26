@@ -27,7 +27,6 @@ import org.jetbrains.exposed.sql.insert
 import org.jetbrains.exposed.sql.selectAll
 import org.jetbrains.exposed.sql.update
 import org.jetbrains.exposed.sql.andWhere
-import org.jetbrains.exposed.sql.SqlExpressionBuilder.like
 import org.jetbrains.exposed.sql.transactions.transaction
 import org.mindrot.jbcrypt.BCrypt
 import org.slf4j.LoggerFactory
@@ -144,7 +143,7 @@ fun Application.configureAuthRoutes() {
         post("/api/auth/login") {
             val body = try {
                 call.receive<LoginRequest>()
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 call.respondError(HttpStatusCode.BadRequest, "invalid_request", "The request body could not be parsed")
                 return@post
             }

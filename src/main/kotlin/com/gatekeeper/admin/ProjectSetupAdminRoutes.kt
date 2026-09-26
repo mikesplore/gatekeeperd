@@ -79,6 +79,7 @@ data class ProjectSetupConfigurationResponse(
     val registry: String,
     val imageName: String,
     val imageTag: String,
+    val autoDeploy: Boolean,
     val containerPort: Int?,
     val hostPort: Int?,
     val network: String,
@@ -148,7 +149,6 @@ data class ProjectOverviewCurrentDeployment(
     val imageTag: String?,
     val imageDigest: String?,
     val commitSha: String?,
-    val runtimeContainerName: String?,
     val runtimeHealth: String,
     val runtimeUpstreamHost: String?,
     val runtimeUpstreamPort: Int?,
@@ -244,6 +244,22 @@ fun Application.configureProjectSetupAdminRoutes() {
                         it.version, it.current, it.rotatedAt?.toString(), it.rotatedBy, it.createdAt.toString())
                 })
             }
+            get("/api/admin/deployment-history") {
+                val limit = call.request.queryParameters["limit"]?.toIntOrNull()?.coerceIn(1, 100) ?: 50
+                val offset = call.request.queryParameters["offset"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0
+                val (page, total) = DeploymentApplicationService.deploymentHistoryPage(limit, offset)
+                call.respond(mapOf("items" to page.map { (slug, item) ->
+                    mapOf(
+                        "id" to item.id.toString(), "projectId" to item.projectId.toString(), "projectSlug" to slug,
+                        "environment" to item.environment, "sourceCommit" to item.sourceCommit, "imageName" to item.imageName,
+                        "imageTag" to item.imageTag, "imageDigest" to item.imageDigest, "trigger" to item.triggerSource,
+                        "status" to item.status, "createdAt" to item.createdAt.toString(), "activeAt" to item.activeAt?.toString(),
+                        "healthCheckResult" to item.healthCheckResult, "failureReason" to item.failureReason,
+                        "credentialSetId" to item.credentialSetId?.toString(), "credentialSetVersion" to item.credentialSetVersion,
+                        "secretSetId" to item.secretSetId?.toString(), "secretSetVersion" to item.secretSetVersion
+                    )
+                }, "total" to total, "limit" to limit, "offset" to offset))
+            }
             post("/api/admin/project-setup/projects") {
                 val body = runCatching { call.receive<CreateProjectSetupRequest>() }.getOrNull()
                     ?: return@post call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid project setup request")
@@ -273,7 +289,7 @@ fun Application.configureProjectSetupAdminRoutes() {
                     return@post call.respondError(HttpStatusCode.BadRequest, "invalid_billing", "Billing values are invalid")
                 }
                 val project = ProjectRepository.create(
-                    slug = slug, name = body.name.trim(), domain = domain, containerName = null,
+                    slug = slug, name = body.name.trim(), domain = domain,
                     type = body.type.lowercase(), billingName = null, billingEmail = null, billingAddress = null,
                     amountDue = body.amountDue?.let(BigDecimal::valueOf), currency = body.currency.uppercase(),
                     dueDate = dueDate, gracePeriodDays = body.gracePeriodDays,
@@ -287,7 +303,6 @@ fun Application.configureProjectSetupAdminRoutes() {
                 val project = ProjectRepository.findActiveById(projectId)
                     ?: return@get call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
                 val config = DeploymentJobRepository.configurationSummary(projectId)
-                val legacyOrCurrentCredential = config?.let { c -> RegistryCredentialRepository.list().any { it.first == c.registry } } == true
                 val credential = config?.let { c ->
                     ProviderCredentialRepository.listMetadata("docker", "registry")
                         .firstOrNull { it.scope == c.registry && it.current }
@@ -297,7 +312,7 @@ fun Application.configureProjectSetupAdminRoutes() {
                 val latest = DeploymentApplicationService.latestDeploymentState(projectId, "production")
                 call.respond(ProjectSetupStatusResponse(
                     projectId.toString(), project.slug, project.name, project.domain,
-                    config?.toSetupResponse(), legacyOrCurrentCredential || credential != null, credential?.version,
+                    config?.toSetupResponse(), credential != null, credential?.version,
                     site?.let { ProjectSetupGatewayResponse(it.domain, it.tlsMode.value, it.gateEnabled, it.reconciliationStatus.value) },
                     active?.id?.toString(), active?.status, latest?.first?.toString(), latest?.second
                 ))
@@ -316,7 +331,7 @@ fun Application.configureProjectSetupAdminRoutes() {
                     return@put call.respondError(HttpStatusCode.BadRequest, "secrets_use_credentials_step", "Send application secrets through the credentials step")
                 }
                 val configurationId = runCatching {
-                    DeploymentJobRepository.upsertProjectConfiguration(projectId, body.copy(projectSlug = project.slug, triggerSource = "project_setup"))
+                    DeploymentJobRepository.upsertProjectConfiguration(projectId, body.copy(projectId = projectId.toString(), triggerSource = "project_setup"))
                 }.getOrElse { error ->
                     return@put call.respondError(HttpStatusCode.BadRequest, "invalid_deployment_configuration", error.message ?: "Configuration could not be saved")
                 }
@@ -360,7 +375,7 @@ fun Application.configureProjectSetupAdminRoutes() {
                 val currentCredential = ProviderCredentialRepository.listMetadata("docker", "registry")
                     .firstOrNull { it.scope == registry && it.current }
                 call.respond(ProjectSetupCredentialsResponse(
-                    registry, providerCredential != null || currentCredential != null || RegistryCredentialRepository.list().any { it.first == registry },
+                    registry, providerCredential != null || currentCredential != null,
                     providerCredential?.version ?: currentCredential?.version,
                     updated?.secretSetId?.toString(), updated?.secretSetVersion
                 ))
@@ -378,7 +393,7 @@ fun Application.configureProjectSetupAdminRoutes() {
                 val tls = TlsMode.entries.firstOrNull { it.value == body.tlsMode.lowercase() }
                     ?: return@put call.respondError(HttpStatusCode.BadRequest, "invalid_tls_mode", "tlsMode must be http_only, https, or https_http2")
                 ProjectRepository.update(
-                    slug = project.slug, name = null, domain = domain, containerName = null, type = null,
+                    slug = project.slug, name = null, domain = domain, type = null,
                     amountDue = null, currency = null, dueDate = null, gracePeriodDays = null
                 ) ?: return@put call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
                 val site = SiteRepository.saveSetupDraft(projectId, domain, tls, body.gateEnabled, CertMode.AUTO_RESOLVE)
@@ -445,7 +460,7 @@ fun Application.configureProjectSetupAdminRoutes() {
                     ProjectOverviewCurrentDeployment(
                         active?.id?.toString(), active?.status ?: "none", active?.environment ?: "production", active?.triggerSource,
                         active?.createdAt?.toString(), active?.activeAt?.toString(), active?.imageName, active?.imageTag,
-                        active?.imageDigest, active?.commitSha, active?.containerName, dockerHealth,
+                        active?.imageDigest, active?.commitSha, dockerHealth,
                         upstream?.host, upstream?.port, active?.credentialSetId?.toString(), active?.credentialSetVersion,
                         active?.secretSetId?.toString(), active?.secretSetVersion
                     ),
@@ -528,7 +543,7 @@ private fun validSetupDeployment(body: CreateDeploymentRequest): Boolean =
         (body.hostPort == null || body.hostPort in 1..65535)
 
 private fun DeploymentJobRepository.ConfigurationSummary.toSetupResponse() = ProjectSetupConfigurationResponse(
-    id.toString(), repository, gitRef, registry, imageName, imageTag, containerPort, hostPort, network, restartPolicy,
+    id.toString(), repository, gitRef, registry, imageName, imageTag, autoDeploy, containerPort, hostPort, network, restartPolicy,
     environment, env, envKeys, secretSetId?.toString(), secretSetVersion
 )
 

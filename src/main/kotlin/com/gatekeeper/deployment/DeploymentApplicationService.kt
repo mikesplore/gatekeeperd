@@ -30,7 +30,7 @@ object DeploymentApplicationService {
 
     fun createQueued(
         id: UUID,
-        projectId: UUID?,
+        projectId: UUID,
         configurationId: UUID,
         executionId: UUID,
         triggerSource: String,
@@ -100,16 +100,14 @@ object DeploymentApplicationService {
     }
 
     data class CandidateRuntime(
-        val projectId: UUID?, val projectSlug: String?, val name: String?, val hostPort: Int?,
+        val projectId: UUID, val projectSlug: String?, val name: String?, val hostPort: Int?,
         val ports: Map<Int, Int>, val status: DeploymentStatus
     )
 
     fun candidateRuntime(id: UUID): CandidateRuntime? = transaction {
         val deployment = Deployments.selectAll().where { Deployments.id eq id }.singleOrNull() ?: return@transaction null
-        val projectId = deployment[Deployments.projectId]
-        val slug = projectId?.let { owner ->
-            Projects.selectAll().where { Projects.id eq owner }.singleOrNull()?.get(Projects.slug)
-        }
+        val projectId = deployment[Deployments.projectId] ?: error("Deployment has no project_id")
+        val slug = Projects.selectAll().where { Projects.id eq projectId }.singleOrNull()?.get(Projects.slug)
         val ports = runCatching {
             kotlinx.serialization.json.Json.decodeFromString<Map<String, Int>>(deployment[Deployments.runtimePortsJson]).mapKeys { it.key.toInt() }
         }.getOrDefault(emptyMap())
@@ -122,8 +120,7 @@ object DeploymentApplicationService {
         val env: Map<String, String>, val secretEnv: Map<String, String>, val volumes: List<com.gatekeeper.docker.VolumeMount>
     )
 
-    fun activeRuntime(projectId: UUID?, environment: String): ActiveRuntime? = transaction {
-        if (projectId == null) return@transaction null
+    fun activeRuntime(projectId: UUID, environment: String): ActiveRuntime? = transaction {
         Deployments.selectAll().where {
             (Deployments.projectId eq projectId) and (Deployments.environment eq environment) and (Deployments.status eq DeploymentStatus.ACTIVE)
         }.singleOrNull()?.let { row ->
@@ -145,7 +142,7 @@ object DeploymentApplicationService {
 
     data class ActiveDeploymentRuntime(
         val id: UUID,
-        val projectId: UUID?,
+        val projectId: UUID,
         val environment: String,
         val status: DeploymentStatus,
         val containerName: String?,
@@ -176,7 +173,7 @@ object DeploymentApplicationService {
 
     data class DeploymentHistoryEntry(
         val id: UUID,
-        val projectId: UUID?,
+        val projectId: UUID,
         val environment: String,
         val status: String,
         val sourceCommit: String?,
@@ -222,7 +219,7 @@ object DeploymentApplicationService {
                 it[Deployments.status] == DeploymentStatus.ACTIVE && it[Deployments.environment] == environment
             }
             DeploymentHistoryEntry(
-                targetId, deployment[Deployments.projectId], deployment[Deployments.environment], status.value,
+                targetId, deployment[Deployments.projectId] ?: error("Deployment has no project_id"), deployment[Deployments.environment], status.value,
                 execution[com.gatekeeper.db.tables.DeploymentExecutions.commitSha],
                 execution[com.gatekeeper.db.tables.DeploymentExecutions.imageName],
                 execution[com.gatekeeper.db.tables.DeploymentExecutions.imageTag],
@@ -235,6 +232,47 @@ object DeploymentApplicationService {
                 canRollback, status == DeploymentStatus.ACTIVE, deployment[Deployments.configurationId]
             )
         }
+    }
+
+    fun deploymentHistoryPage(limit: Int, offset: Int): Pair<List<Pair<String, DeploymentHistoryEntry>>, Long> = transaction {
+        val rows = Deployments.selectAll()
+            .orderBy(Deployments.createdAt to org.jetbrains.exposed.sql.SortOrder.DESC)
+        val total = rows.count()
+        val page = rows.limit(limit, offset.toLong()).mapNotNull { deployment ->
+            val projectId = deployment[Deployments.projectId] ?: error("Deployment has no project_id")
+            val project = Projects.selectAll().where { Projects.id eq projectId }.singleOrNull() ?: return@mapNotNull null
+            val execution = com.gatekeeper.db.tables.DeploymentExecutions.selectAll()
+                .where { com.gatekeeper.db.tables.DeploymentExecutions.id eq deployment[Deployments.executionId] }
+                .singleOrNull() ?: return@mapNotNull null
+            val environment = deployment[Deployments.environment]
+            val status = deployment[Deployments.status]
+            val currentStep = execution[com.gatekeeper.db.tables.DeploymentExecutions.currentStep]
+            val health = when {
+                currentStep == "readiness_succeeded" || currentStep == "cutover_in_progress" ||
+                    status == DeploymentStatus.ACTIVE || status == DeploymentStatus.SUPERSEDED || status == DeploymentStatus.ROLLED_BACK -> "passed"
+                status == DeploymentStatus.FAILED && currentStep == "health_checking" -> "failed"
+                status == DeploymentStatus.HEALTH_CHECKING -> "running"
+                status == DeploymentStatus.FAILED -> "not_passed"
+                else -> "not_run"
+            }
+            val hasActive = Deployments.selectAll().where {
+                (Deployments.projectId eq projectId) and (Deployments.environment eq environment) and (Deployments.status eq DeploymentStatus.ACTIVE)
+            }.count() > 0
+            val entry = DeploymentHistoryEntry(
+                deployment[Deployments.id], projectId, environment, status.value,
+                execution[com.gatekeeper.db.tables.DeploymentExecutions.commitSha],
+                execution[com.gatekeeper.db.tables.DeploymentExecutions.imageName], execution[com.gatekeeper.db.tables.DeploymentExecutions.imageTag],
+                execution[com.gatekeeper.db.tables.DeploymentExecutions.imageDigest], deployment[Deployments.triggerSource], null,
+                deployment[Deployments.createdAt], deployment[Deployments.activeAt], deployment[Deployments.failureReason], health,
+                deployment[Deployments.credentialSetId], deployment[Deployments.credentialSetVersion],
+                deployment[Deployments.secretSetId] ?: execution[com.gatekeeper.db.tables.DeploymentExecutions.secretSetId],
+                deployment[Deployments.secretSetVersion] ?: execution[com.gatekeeper.db.tables.DeploymentExecutions.secretSetVersion],
+                status == DeploymentStatus.SUPERSEDED && hasActive, status == DeploymentStatus.ACTIVE,
+                deployment[Deployments.configurationId]
+            )
+            project[Projects.slug] to entry
+        }
+        page to total
     }
 
     /** Metadata for the active pointer only. Never selects or decrypts environment values. */
@@ -283,7 +321,7 @@ object DeploymentApplicationService {
                 .mapKeys { it.key.toInt() }
         }.getOrDefault(emptyMap())
         ActiveDeploymentRuntime(
-            row[Deployments.id], row[Deployments.projectId], row[Deployments.environment], row[Deployments.status],
+            row[Deployments.id], row[Deployments.projectId] ?: error("Active deployment has no project_id"), row[Deployments.environment], row[Deployments.status],
             row[Deployments.runtimeContainerName], containerPort, publishedPorts
         )
     }
@@ -303,9 +341,12 @@ object DeploymentApplicationService {
             ?: return@transaction null
         val registry = execution[com.gatekeeper.db.tables.DeploymentExecutions.registry].trim().trimEnd('/')
         val name = execution[com.gatekeeper.db.tables.DeploymentExecutions.imageName]
-        val image = execution[com.gatekeeper.db.tables.DeploymentExecutions.imageDigest]?.let { digest ->
-            "${if (registry.isBlank() || registry == "docker.io") "" else "$registry/"}$name@$digest"
-        } ?: "${if (registry.isBlank() || registry == "docker.io") "" else "$registry/"}$name:${execution[com.gatekeeper.db.tables.DeploymentExecutions.imageTag]}"
+        val image = rollbackImageReference(
+            registry,
+            name,
+            execution[com.gatekeeper.db.tables.DeploymentExecutions.imageDigest],
+            execution[com.gatekeeper.db.tables.DeploymentExecutions.imageTag]
+        )
         RollbackArtifact(image, execution[com.gatekeeper.db.tables.DeploymentExecutions.commitSha])
     }
 
@@ -313,9 +354,9 @@ object DeploymentApplicationService {
     fun activateAfterCutover(id: UUID, replacesDeploymentId: UUID?): Boolean = transaction {
         val row = Deployments.selectAll().where { Deployments.id eq id }.singleOrNull() ?: return@transaction false
         check(row[Deployments.status] == DeploymentStatus.HEALTH_CHECKING) { "Deployment $id is not health-checking" }
-        val projectId = row[Deployments.projectId]
+        val projectId = row[Deployments.projectId] ?: error("Deployment has no project_id")
         val environment = row[Deployments.environment]
-        val activeRows = if (projectId == null) emptyList() else Deployments.selectAll().where {
+        val activeRows = Deployments.selectAll().where {
             (Deployments.projectId eq projectId) and (Deployments.environment eq environment) and (Deployments.status eq DeploymentStatus.ACTIVE)
         }.toList()
         check(activeRows.size <= 1) { "Multiple active deployments found for $projectId/$environment" }
@@ -337,26 +378,18 @@ object DeploymentApplicationService {
             it[updatedAt] = now
         }
         check(updated == 1) { "Unable to activate deployment $id" }
-        if (projectId != null && environment == "production") {
-            val runtimeName = row[Deployments.runtimeContainerName]
-            val project = Projects.selectAll().where { (Projects.id eq projectId) and Projects.deletedAt.isNull() }.singleOrNull()
-            if (runtimeName != null && project != null) {
-                Projects.update({ Projects.id eq projectId }) {
-                    it[Projects.containerName] = runtimeName
-                    it[Projects.updatedAt] = now
-                }
-                AuditLog.insert {
-                    it[AuditLog.projectId] = projectId
-                    it[AuditLog.action] = "deployment_activated"
-                    it[AuditLog.actor] = "deployment-worker"
-                    it[AuditLog.reason] = "deployment=$id previous=${previousId ?: "none"}"
-                }
+        if (environment == "production") {
+            AuditLog.insert {
+                it[AuditLog.projectId] = projectId
+                it[AuditLog.action] = "deployment_activated"
+                it[AuditLog.actor] = "deployment-worker"
+                it[AuditLog.reason] = "deployment=$id previous=${previousId ?: "none"}"
             }
         }
         true
     }
 
-    /** Returns false only for pre-state-machine legacy rows with no canonical record. */
+    /** Updates canonical deployment state through the centralized transition graph. */
     fun transition(
         id: UUID,
         target: DeploymentStatus,
@@ -373,8 +406,8 @@ object DeploymentApplicationService {
         val now = LocalDateTime.now()
         var effectiveReplacementId = replacesDeploymentId
         if (target == DeploymentStatus.ACTIVE) {
-            val projectId = row[Deployments.projectId]
-            if (projectId != null) {
+            val projectId = row[Deployments.projectId] ?: error("Deployment has no project_id")
+            run {
                 val environment = row[Deployments.environment]
                 val prior = Deployments.selectAll().where {
                     (Deployments.projectId eq projectId) and
@@ -423,4 +456,14 @@ object DeploymentApplicationService {
         check(changed == 1) { "Deployment state changed concurrently for $id" }
         true
     }
+}
+
+internal fun rollbackImageReference(registry: String, imageName: String, imageDigest: String?, imageTag: String): String {
+    val registryPrefix = registry.trim().trimEnd('/').takeUnless { it.isBlank() || it == "docker.io" }
+        ?.let { "$it/" }.orEmpty()
+    val digest = imageDigest?.trim()?.takeIf(String::isNotBlank)
+    val immutableReference = digest?.let { value ->
+        if ('@' in value) value else "$registryPrefix$imageName@$value"
+    }
+    return immutableReference ?: "$registryPrefix$imageName:$imageTag"
 }

@@ -82,7 +82,7 @@ object AuditRepository {
             .filter { it.reason?.contains("job=$jobId") == true }
             .take(limit)
 
-    private fun org.jetbrains.exposed.sql.ResultRow.toAuditRecord() = AuditRecord(
+    private fun ResultRow.toAuditRecord() = AuditRecord(
         id = this[AuditLog.id],
         projectId = this[AuditLog.projectId],
         action = this[AuditLog.action],

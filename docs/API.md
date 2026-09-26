@@ -163,7 +163,6 @@ List all projects with their status, client info, and due dates.
     "slug": "acme-corp",
     "name": "Acme Corp",
     "domain": "acme.com",
-    "containerName": "acme-container",
     "type": "backend",
     "status": "active",
     "blockReason": null,
@@ -217,37 +216,9 @@ Project responses include independent `deploymentMode`, `serviceMode`, `lifecycl
 }
 ```
 
-### POST /api/admin/projects
-Create a new project registration.
+### Project setup flow
 
-**Request:**
-```json
-{
-  "slug": "acme-corp",
-  "name": "Acme Corp",
-  "domain": "acme.com",
-  "containerName": "acme-container",
-  "type": "backend",
-  "clientName": "John Doe",
-  "clientEmail": "john@acme.com",
-  "amountDue": 5000.00,
-  "currency": "KES",
-  "dueDate": "2026-08-01",
-  "gracePeriodDays": 3
-}
-```
-
-**Response:** `201 Created` with the project object.
-
-**Notes:**
-- `slug` must be unique and lowercase; it is used in Traefik labels and gate checks.
-- `type` must be `"frontend"` or `"backend"`.
-- `containerName` is optional. When supplied, it must be either `name` or `name:port`, and the referenced Docker container must already exist (`400 container_not_found` otherwise). This preserves the existing container-first flow for current clients.
-- When omitted, the project is created without a runtime container and Docker availability is not required. A later deployment can attach its runtime.
-
-### Project-centered setup flow (additive)
-
-These endpoints support a re-enterable setup flow while preserving the existing container-first `POST /api/admin/projects` contract. Existing clients can continue using the old endpoint. A project created through this setup surface remains valid if source/runtime, credentials, gateway, or deployment are not configured yet.
+Create projects with the re-enterable setup API. `POST /api/admin/projects` was removed. Projects remain valid if source/runtime, credentials, gateway, or deployment are not configured yet.
 
 #### POST /api/admin/project-setup/projects
 
@@ -295,35 +266,6 @@ Lists provider credential metadata only. Optional `provider` (`docker`, `github`
 
 Registry credentials rotate through `PUT /api/admin/registries/{registry}`. GitHub webhook secrets and App private keys rotate through `PUT /api/admin/github/credentials/{webhook_secret|app_private_key}`. These routes accept a value once and return only write-only/version metadata; later list/detail requests never return plaintext.
 
-### POST /api/admin/projects/{projectId}/deployment-configuration
-Create the initial desired deployment configuration for an existing project that does not have one. This operation does not queue or run a deployment; call the existing deployment operation when ready to deploy.
-
-**Request:** Same shape as `POST /api/admin/deployments` (`repository`, `gitRef`, `registry`, `imageName`, `imageTag`, optional runtime settings, `environment`, `readinessType`, `readinessTarget`, `readinessTimeoutSeconds`, `readinessIntervalSeconds`, `readinessProbeTimeoutMillis`, `env`, write-only `secretEnv`, and `volumes`). `environment` defaults to `production`. `readinessType` may be `docker`, `http`, `tcp`, or `process`; HTTP/TCP require `readinessTarget` (path for HTTP, port for TCP). Omitted readiness type preserves compatibility behavior: TCP when a candidate host port is available, otherwise process-running. Defaults are 60 seconds overall, 2 seconds between probes, and a 1 second probe timeout. `projectId` is the UUID returned in the project object; ownership is assigned by this path and any `projectSlug` in the body is ignored.
-
-**Response:** `201 Created` with `{ "id": "<configuration UUID>", "projectId": "<project UUID>", "environment": "production", "status": "configured", "secretEnv": "write-only" }`.
-
-Returns `404` if the project does not exist or is archived, and `409` if it already has a deployment configuration. Configuration is attached through nullable `project_id`; legacy slug fields remain populated for compatibility. Secret values are encrypted at rest and never returned.
-
-### GET /api/admin/projects/wizard/context
-Wizard helper: list Docker containers (for a dropdown) and currently-used project slugs (to avoid collisions).
-
-**Response:**
-```json
-{
-  "containers": [
-    {
-      "id": "abc123def456",
-      "name": "acw",
-      "image": "mikesplore/acw:latest",
-      "state": "running",
-      "ports": "9921->8080/tcp",
-      "suggestedSlug": "acw"
-    }
-  ],
-  "existingProjectSlugs": ["acw"]
-}
-```
-
 ### PATCH /api/admin/projects/{slug}
 Update project fields.
 
@@ -340,7 +282,7 @@ Update project fields.
 **Response:** Updated project object.
 
 **Notes:**
-- If `containerName` is updated, Gatekeeper validates that the referenced Docker container exists.
+- Deployment source and runtime settings are managed through the project setup API.
 
 ### POST /api/admin/projects/{slug}/adjustments
 Append a financial adjustment without overwriting the project’s original charge or payment history.
@@ -362,9 +304,8 @@ Archive a project (soft delete). Sets `deleted_at`, blocks gating, and **preserv
 **Response:** `204 No Content`
 
 **Notes:**
-- Does not stop or remove the client container — that remains a manual DevOps step.
+- Does not stop or remove the active deployment runtime.
 - Best-effort nginx cleanup is attempted (`sites-available/sites-enabled` removal + reload) so orphan nginx configs don't continue pointing at archived slugs.
-- The project is unlinked from its container by replacing `containerName` with an `archived-{slug}` placeholder.
 - Clears the Redis gate cache; the slug behaves as unknown to nginx/Traefik after archive.
 - The slug stays reserved while archived (cannot create a new project with the same slug).
 - Writes an audit log entry with action `project_archived`.
@@ -594,11 +535,11 @@ Registry credentials are managed through `GET /api/admin/registries`, `PUT /api/
 
 Deployment administration is JWT-protected:
 
-- `POST /api/admin/deployments` queues a GitHub-to-container deployment. The request accepts `repository`, `gitRef`, `registry` (`docker.io` or a registry host), `imageName`, `imageTag`, optional `containerName`, published `hostPort`/`containerPort`, `network`, `restartPolicy`, optional `projectSlug`, `environment` (defaults to `production`), and readiness settings: `readinessType` (`docker`, `http`, `tcp`, or `process`), optional `readinessTarget` (HTTP path or TCP port), `readinessTimeoutSeconds` (default 60), `readinessIntervalSeconds` (default 2), and `readinessProbeTimeoutMillis` (default 1000). If `readinessType` is omitted, compatibility behavior checks TCP when a candidate host port is available, then process-running otherwise. Environment is a real deployment ownership dimension; at most one canonical deployment can be active per project/environment.
-- `GET /api/admin/deployments` and `GET /api/admin/deployments/{id}` expose lifecycle state, environment, logs, commit SHA, image digest, failure details, `projectId` when the deployment resolves to an active project, and `rolledBackToDeploymentId` for rollback attempts. Repository reads use `project_id` first and fall back to `project_slug` only for rows whose `project_id` is null.
-- `GET /api/admin/deployments/reconciliation` compares persisted active deployments against their recorded Docker runtime and managed nginx target. It reports drift and inspection errors only, with an empty `actionsTaken` list; it does not alter deployment, project, Docker, or gateway state. Docker containers are inspected only by the container name already stored on the deployment. Discovered containers are never assigned to a project or deployment.
-- `GET /api/admin/deployments/{id}/audit` exposes deployment-worker audit records.
-- `POST /api/admin/deployments/{id}/cancel`, `/retry`, and `/rollback` control the job lifecycle. Rollback returns `202 Accepted` with a new deployment ID and `rolledBackToDeploymentId`; it creates a deployment from the target deployment's configuration and immutable image digest when available, then runs through the regular candidate readiness and cutover flow. After success, the new rollback attempt becomes `active`; the target remains historical, and the relation is recorded in the canonical row and audit log.
+- Configure and deploy through `/api/admin/project-setup/projects/{projectId}/source-runtime` and `/deploy`. Projects and configurations are bound by required `project_id`; the project slug is not used to resolve deployment ownership.
+- `GET /api/admin/deployment-history` returns paginated canonical deployment history across projects. `GET /api/admin/projects/{slug}/deployments/history` returns one project's history and supported actions. These responses expose only credential/secret version references.
+- Redeploy and rollback use `/api/admin/projects/{slug}/deployments/{id}/redeploy` and `/rollback`. Rollback creates a new canonical deployment with an explicit prior-deployment reference.
+- `GET /api/admin/deployments/reconciliation` compares canonical active deployment records with their Docker runtime and managed nginx target. It reports drift only and takes no corrective actions.
+- The job-based global deployment endpoints and configuration-ID update/redeploy routes were removed. The worker queue remains internal.
 - `POST /api/admin/system/prune?dryRun=true&imagePrefix=owner/image` performs reference-aware Docker image cleanup. It never runs `docker system prune`; active container images and the current/previous deployment images are preserved. The response reports candidate image sizes and reclaimed bytes, and every cleanup is written to the audit trail. Omit `dryRun` or set it to `false` to remove candidates.
 - `POST /api/integrations/github/webhook` accepts signed GitHub events. `X-GitHub-Delivery` is required and is persisted for idempotency; duplicate deliveries are acknowledged without queueing another deployment.
 - `PUT /api/admin/github/credentials/{type}` creates or rotates a GitHub App private key (`app_private_key`) or webhook HMAC secret (`webhook_secret`) encrypted at rest. Send `{ "value": "..." }`; the response contains metadata and `writeOnly: true`, never the value. Earlier versions remain available as superseded records. Existing `GITHUB_APP_PRIVATE_KEY_PATH` and `GITHUB_WEBHOOK_SECRET` settings remain fallbacks during rollout.
@@ -608,19 +549,17 @@ After candidate readiness, the worker switches a managed nginx site's upstream t
 These endpoints manage nginx site configurations for client projects. They require `nginx` CLI and `systemctl` access on the host.
 
 ### GET /api/admin/nginx/wizard/context/{slug}
-Wizard helper: fetch project + nginx context to drive a step-by-step UI (status, container hints, certificate options).
+Fetch project nginx state, the active deployment's resolved upstream host/port and runtime health, and certificate options.
 
 **Response:**
 ```json
 {
   "slug": "acw",
   "domain": "acw.example.com",
-  "containerName": "acw-container:9921",
   "nginxEnabled": false,
-  "configuredContainerName": "acw-container",
+  "resolvedUpstreamHost": "127.0.0.1",
   "configuredPort": 9921,
-  "dockerContainerHealth": "running",
-  "dockerPublishedHostPorts": [9921],
+  "runtimeHealth": "running",
   "installedCertificates": ["example.com"],
   "resolvedCertificateDomain": "example.com"
 }
@@ -652,7 +591,7 @@ Check if a project has an nginx site configured and enabled, and whether SSL is 
 **Notes:**
 - `enabled` is `true` only if both the sites-available file exists AND the symlink in sites-enabled exists.
 - `sslEnabled` is `true` if Gatekeeper can find a usable certificate for the project's `domain` (either a direct match, or a parent domain certificate).
-- `port` is extracted from the project's `containerName` field (format `name:port`).
+- `port` comes from the active deployment runtime record for Docker-discovery sites.
 
 ### POST /api/admin/nginx/enable/{slug}
 Generate and enable an nginx site config for a project. Validates that the project's container is running before creating the config.
@@ -669,7 +608,7 @@ Generate and enable an nginx site config for a project. Validates that the proje
 }
 ```
 
-- `port` is optional if `containerName` already contains a port (e.g. `myapp:9921`). If Docker is available and the container publishes exactly one host port, Gatekeeper can also infer the port automatically.
+- `port` is optional when the project has an active deployment with a resolvable runtime port.
 - `upstreamScheme` is optional. If omitted, Gatekeeper infers `https` for port `443` and `http` for other ports.
 - `certificateDomain` is optional. If provided, it selects an installed certificate under `/etc/letsencrypt/live/{certificateDomain}/`.
 - `sslCertificatePath` and `sslCertificateKeyPath` are optional. If both are provided, they override all other certificate selection.

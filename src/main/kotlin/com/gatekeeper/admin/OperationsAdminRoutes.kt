@@ -20,6 +20,8 @@ import com.gatekeeper.db.tables.ReconciliationStatus
 import com.gatekeeper.config.AppConfig
 import com.gatekeeper.paystack.replayPaystackWebhook
 import com.gatekeeper.payments.ProjectBalanceService
+import com.gatekeeper.deployment.DeploymentApplicationService
+import com.gatekeeper.nginx.DeploymentUpstreamResolver
 import io.ktor.http.*
 import io.ktor.server.application.*
 import io.ktor.server.auth.*
@@ -42,8 +44,7 @@ import java.net.Socket
 @Serializable
 data class ProjectHealthResponse(
     val project: com.gatekeeper.api.dto.ProjectResponse,
-    val container: String? = null,
-    val containerHealth: String? = null,
+    val runtimeHealth: String? = null,
     val nginxEnabled: Boolean,
     val certificateInstalled: Boolean,
     val readiness: String
@@ -68,11 +69,12 @@ data class BulkProjectResult(val slug: String, val status: String, val message: 
 
 @Serializable data class DashboardSiteResponse(
     val slug: String, val projectId: String, val customerId: String? = null, val customerName: String? = null,
-    val domain: String, val status: String, val dockerState: String? = null,
+    val domain: String, val status: String,
     val lastNginxError: String? = null, val lastDockerError: String? = null,
     val configVersion: Int, val available: Boolean, val enabled: Boolean,
     val upstreamHost: String? = null, val upstreamMode: String? = null,
-    val upstreamContainerName: String? = null, val upstreamExplicitPort: Int? = null,
+    val upstreamExplicitPort: Int? = null, val runtimeHealth: String? = null,
+    val resolvedUpstreamHost: String? = null, val resolvedUpstreamPort: Int? = null,
     val tlsMode: String? = null, val gateEnabled: Boolean? = null
 )
 
@@ -110,7 +112,7 @@ data class BulkProjectResult(val slug: String, val status: String, val message: 
 
 @Serializable data class DashboardSiteUpdateRequest(
     val domain: String? = null, val upstreamHost: String? = null, val upstreamMode: String? = null,
-    val upstreamContainerName: String? = null, val upstreamExplicitPort: Int? = null,
+    val upstreamExplicitPort: Int? = null,
     val tlsMode: String? = null, val certMode: String? = null, val certExplicitPath: String? = null,
     val gateEnabled: Boolean? = null, val bypassPaths: List<String>? = null
 )
@@ -126,11 +128,12 @@ private fun dashboardUpstreamState(site: SiteRepository.SiteRecord, dockerServic
     val port = when (site.upstreamMode) {
         com.gatekeeper.db.tables.UpstreamMode.EXPLICIT_PORT -> site.upstreamExplicitPort ?: return "unknown"
         com.gatekeeper.db.tables.UpstreamMode.DOCKER_DISCOVERY -> {
-            val name = site.upstreamContainerName?.takeIf(String::isNotBlank) ?: return "unknown"
+            val target = DeploymentUpstreamResolver.resolve(site.projectId, "production") ?: return "unknown"
             val docker = dockerService ?: return "unknown"
+            val name = target.containerName ?: return "unknown"
             val container = runCatching { docker.getContainer(name) }.getOrNull() ?: return "down"
             if (!container.state.equals("running", ignoreCase = true)) return "down"
-            parsePublishedHostPorts(container.ports).singleOrNull() ?: return "unknown"
+            target.port
         }
     }
     val reachable = runCatching {
@@ -146,14 +149,19 @@ private fun dashboardSite(site: SiteRepository.SiteRecord, dockerService: Docker
     val project = ProjectRepository.findById(site.projectId)
     val customer = project?.customerId?.let(CustomerRepository::findById)
     val slug = site.projectSlug ?: site.projectId.toString()
+    val resolved = DeploymentUpstreamResolver.resolve(site.projectId, "production")
     return DashboardSiteResponse(
         slug, site.projectId.toString(), customer?.id?.toString(), customer?.name, site.domain,
-        site.reconciliationStatus.value, dashboardUpstreamState(site, dockerService),
+        site.reconciliationStatus.value,
         site.lastNginxError, site.lastDockerError, site.configVersion,
-        java.io.File(AppConfig.nginxSitesAvailablePath, slug).isFile,
-        java.nio.file.Files.isSymbolicLink(java.io.File(AppConfig.nginxSitesEnabledPath, slug).toPath()),
-        site.upstreamHost, site.upstreamMode.value, site.upstreamContainerName, site.upstreamExplicitPort,
-        site.tlsMode.value, site.gateEnabled
+        File(AppConfig.nginxSitesAvailablePath, slug).isFile,
+        java.nio.file.Files.isSymbolicLink(File(AppConfig.nginxSitesEnabledPath, slug).toPath()),
+        resolved?.host ?: site.upstreamHost, site.upstreamMode.value, resolved?.port ?: site.upstreamExplicitPort,
+        if (site.upstreamMode == com.gatekeeper.db.tables.UpstreamMode.DOCKER_DISCOVERY) {
+            val name = resolved?.containerName
+            if (name == null || dockerService == null) null else runCatching { dockerService.containerHealth(name) }.getOrNull()
+        } else null,
+        resolved?.host, resolved?.port, site.tlsMode.value, site.gateEnabled
     )
 }
 
@@ -227,7 +235,7 @@ fun Application.configureOperationsAdminRoutes() {
                     SiteRepository.SiteDashboardUpdate(
                         domain = body.domain?.let { requireValidHostname(it) }, upstreamHost = body.upstreamHost,
                         upstreamMode = body.upstreamMode?.let { com.gatekeeper.db.tables.UpstreamMode.valueOf(it.uppercase()) },
-                        upstreamContainerName = body.upstreamContainerName, upstreamExplicitPort = body.upstreamExplicitPort?.also { require(it in 1..65535) },
+                        upstreamExplicitPort = body.upstreamExplicitPort?.also { require(it in 1..65535) },
                         tlsMode = body.tlsMode?.let { com.gatekeeper.db.tables.TlsMode.valueOf(it.uppercase()) },
                         certMode = body.certMode?.let { com.gatekeeper.db.tables.CertMode.valueOf(it.uppercase()) },
                         certExplicitPath = body.certExplicitPath?.let { requireCertificatePath(it, AppConfig.nginxSslCertPath) },
@@ -236,17 +244,19 @@ fun Application.configureOperationsAdminRoutes() {
                 }.getOrElse { call.respondError(HttpStatusCode.BadRequest, "invalid_site_update", it.message ?: "Invalid site update"); return@patch }
                 val updated = SiteRepository.updateDashboard(site.id, update) ?: run { call.respondError(HttpStatusCode.NotFound, "site_not_found", "Site not found"); return@patch }
                 val nginx = NginxService()
-                val port = updated.upstreamExplicitPort ?: run { call.respondError(HttpStatusCode.UnprocessableEntity, "site_configuration_invalid", "Docker discovery updates require a live container"); return@patch }
+                val resolved = if (updated.upstreamMode == com.gatekeeper.db.tables.UpstreamMode.DOCKER_DISCOVERY) DeploymentUpstreamResolver.resolve(updated.projectId, "production") else null
+                val port = (if (updated.upstreamMode == com.gatekeeper.db.tables.UpstreamMode.EXPLICIT_PORT) updated.upstreamExplicitPort else resolved?.port)
+                    ?: run { call.respondError(HttpStatusCode.UnprocessableEntity, "site_configuration_invalid", "No active deployment runtime is available"); return@patch }
                 val cert = if (updated.certMode == com.gatekeeper.db.tables.CertMode.AUTO_RESOLVE) nginx.resolveCertificateForDomain(updated.domain) else null
                 val config = nginx.generateNginxConfig(NginxSiteRenderModel(
-                    slug = slug, projectId = updated.projectId, domain = updated.domain, upstreamHost = updated.upstreamHost, appPort = port,
+                    slug = slug, projectId = updated.projectId, domain = updated.domain, upstreamHost = resolved?.host ?: updated.upstreamHost, appPort = port,
                     upstreamScheme = if (updated.tlsMode == com.gatekeeper.db.tables.TlsMode.HTTP_ONLY) "http" else "https",
                     tlsMode = when (updated.tlsMode) {
                         com.gatekeeper.db.tables.TlsMode.HTTP_ONLY -> com.gatekeeper.nginx.TlsRenderMode.HTTP_ONLY
                         com.gatekeeper.db.tables.TlsMode.HTTPS -> com.gatekeeper.nginx.TlsRenderMode.HTTPS
                         com.gatekeeper.db.tables.TlsMode.HTTPS_HTTP2 -> com.gatekeeper.nginx.TlsRenderMode.HTTPS_HTTP2
                     }, certificatePath = cert?.certificatePath ?: updated.certExplicitPath, certificateKeyPath = cert?.privateKeyPath,
-                    upstreamMode = updated.upstreamMode, upstreamContainerName = updated.upstreamContainerName,
+                    upstreamMode = updated.upstreamMode,
                     certMode = updated.certMode,
                     gateEnabled = updated.gateEnabled, bypassPaths = updated.bypassPaths
                 ))
@@ -346,8 +356,8 @@ fun Application.configureOperationsAdminRoutes() {
                 val payments = PaymentRepository.findAllFiltered(null, null, null, null, 10000, 0).first.map { it.payment }
                 val revenue = PaymentRepository.revenueTotals()
                 val outbox = IntegrationOutboxRepository.summary()
-                val available = java.io.File(AppConfig.nginxSitesAvailablePath).listFiles()?.count { it.isFile && !it.name.startsWith(".") }?.toLong() ?: 0
-                val enabled = java.io.File(AppConfig.nginxSitesEnabledPath).listFiles()?.size?.toLong() ?: 0
+                val available = File(AppConfig.nginxSitesAvailablePath).listFiles()?.count { it.isFile && !it.name.startsWith(".") }?.toLong() ?: 0
+                val enabled = File(AppConfig.nginxSitesEnabledPath).listFiles()?.size?.toLong() ?: 0
                 val siteCounts = SiteRepository.findAll().groupingBy { it.reconciliationStatus.value }.eachCount().mapValues { it.value.toLong() }
                 val now = LocalDateTime.now()
                 val certificateAlerts = CertificateRepository.findAll().flatMap { certificate ->
@@ -411,22 +421,23 @@ fun Application.configureOperationsAdminRoutes() {
                     call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
                     return@get
                 }
-                val docker = runCatching { DockerService(AppConfig.dockerSocket) }.getOrNull()
-                val containerName = project.containerName?.substringBefore(":")
-                val containerHealth = containerName?.let { name -> docker?.let { service ->
-                    try { service.containerHealth(name) } finally { service.close() }
-                }
+                val active = DeploymentApplicationService.activeDeploymentSummary(project.id, "production")
+                val containerName = active?.containerName
+                val containerHealth = containerName?.let { name ->
+                    runCatching {
+                        val service = DockerService(AppConfig.dockerSocket)
+                        try { service.containerHealth(name) } finally { service.close() }
+                    }.getOrNull()
                 }
                 val nginx = NginxService()
-                val nginxEnabled = java.io.File("${AppConfig.nginxSitesAvailablePath}/$slug").exists() &&
-                    java.io.File("${AppConfig.nginxSitesEnabledPath}/$slug").exists()
+                val nginxEnabled = File("${AppConfig.nginxSitesAvailablePath}/$slug").exists() &&
+                    File("${AppConfig.nginxSitesEnabledPath}/$slug").exists()
                 val certificateInstalled = nginx.isCertificateInstalled(project.domain)
-                val ready = project.status == "active" && containerName != null && (containerHealth == null || containerHealth == "running")
+                val ready = project.status == "active" && active != null && (containerHealth == null || containerHealth == "running")
                 call.respond(
                     ProjectHealthResponse(
                         project = project.toResponse(),
-                        container = containerName,
-                        containerHealth = containerHealth,
+                        runtimeHealth = containerHealth,
                         nginxEnabled = nginxEnabled,
                         certificateInstalled = certificateInstalled,
                         readiness = if (ready) "healthy" else "attention_required"
@@ -467,7 +478,7 @@ fun Application.configureOperationsAdminRoutes() {
             }
 
             post("/api/admin/payment-events/{id}/replay") {
-                val id = call.parameters["id"]?.let { runCatching { java.util.UUID.fromString(it) }.getOrNull() } ?: run {
+                val id = call.parameters["id"]?.let { runCatching { UUID.fromString(it) }.getOrNull() } ?: run {
                     call.respondError(HttpStatusCode.BadRequest, "invalid_event_id", "Invalid payment event ID")
                     return@post
                 }

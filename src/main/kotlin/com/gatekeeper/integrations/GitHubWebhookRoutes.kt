@@ -3,7 +3,6 @@ package com.gatekeeper.integrations
 import com.gatekeeper.api.respondError
 import com.gatekeeper.config.AppConfig
 import com.gatekeeper.db.repositories.DeploymentJobRepository
-import com.gatekeeper.db.repositories.ProjectRepository
 import com.gatekeeper.db.repositories.GitHubWebhookRepository
 import com.gatekeeper.db.repositories.AuditRepository
 import com.gatekeeper.db.repositories.GitHubCredentialRepository
@@ -64,15 +63,24 @@ private fun queuePushDeployments(body: String): Int {
     val root = Json.parseToJsonElement(body).jsonObject
     val repository = root["repository"]?.jsonObject?.get("full_name")?.jsonPrimitive?.content ?: return 0
     val ref = root["ref"]?.jsonPrimitive?.content?.removePrefix("refs/heads/") ?: return 0
-    return ProjectRepository.findAutoDeployTargets(repository, ref).count { target ->
-        val saved = DeploymentJobRepository.latestForProject(target.id, target.slug)
+    return DeploymentJobRepository.findAutoDeployTargets(repository, ref).count { target ->
+        val saved = DeploymentJobRepository.latestForProject(target.projectId)
         val request = if (saved != null) {
-            CreateDeploymentRequest(saved.repository, ref, saved.registry, saved.imageName, saved.imageTag, target.containerName,
-                saved.hostPort, saved.containerPort, saved.network, saved.restartPolicy, saved.projectSlug, "github_push",
-                saved.env, saved.secretEnv, saved.volumes, saved.createNetworkIfMissing, saved.environment)
+            CreateDeploymentRequest(
+                repository = saved.repository, gitRef = ref, registry = saved.registry,
+                imageName = saved.imageName, imageTag = saved.imageTag,
+                hostPort = saved.hostPort, containerPort = saved.containerPort, network = saved.network,
+                restartPolicy = saved.restartPolicy, projectId = target.projectId.toString(), triggerSource = "github_push",
+                env = saved.env, secretEnv = saved.secretEnv, volumes = saved.volumes,
+                createNetworkIfMissing = saved.createNetworkIfMissing, environment = target.environment,
+                autoDeploy = true
+            )
         } else {
-            CreateDeploymentRequest(target.repository, target.gitRef, imageName = target.imageName, imageTag = target.imageTag,
-                containerName = target.containerName, projectSlug = target.slug, triggerSource = "github_push")
+            CreateDeploymentRequest(
+                repository = target.repository, gitRef = target.gitRef, registry = target.registry,
+                imageName = target.imageName, imageTag = target.imageTag, projectId = target.projectId.toString(),
+                triggerSource = "github_push", environment = target.environment, autoDeploy = true
+            )
         }
         DeploymentJobRepository.create(request)
         true
