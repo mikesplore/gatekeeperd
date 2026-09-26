@@ -24,6 +24,47 @@ import kotlinx.serialization.encodeToString
 import com.gatekeeper.nginx.DEFAULT_GATEKEEPER_BYPASS_PATHS
 
 object SiteRepository {
+    fun saveSetupDraft(
+        projectId: UUID,
+        domain: String,
+        tlsMode: TlsMode,
+        gateEnabled: Boolean,
+        certMode: CertMode = CertMode.AUTO_RESOLVE
+    ): SiteRecord = transaction {
+        val current = Sites.selectAll().where { Sites.projectId eq projectId }.singleOrNull()
+        if (current == null) {
+            Sites.insert {
+                it[Sites.id] = UUID.randomUUID()
+                it[Sites.projectId] = projectId
+                it[Sites.domain] = domain
+                it[Sites.upstreamHost] = "127.0.0.1"
+                it[Sites.upstreamMode] = UpstreamMode.DOCKER_DISCOVERY
+                it[Sites.upstreamContainerName] = null
+                it[Sites.upstreamExplicitPort] = null
+                it[Sites.tlsMode] = tlsMode
+                it[Sites.certMode] = certMode
+                it[Sites.certExplicitPath] = null
+                it[Sites.gateEnabled] = gateEnabled
+                it[Sites.reconciliationStatus] = ReconciliationStatus.DISABLED
+            }
+        } else {
+            val changed = current[Sites.domain] != domain || current[Sites.tlsMode] != tlsMode ||
+                current[Sites.certMode] != certMode || current[Sites.gateEnabled] != gateEnabled
+            if (changed) {
+                Sites.update({ Sites.projectId eq projectId }) {
+                    it[Sites.domain] = domain
+                    it[Sites.tlsMode] = tlsMode
+                    it[Sites.certMode] = certMode
+                    it[Sites.gateEnabled] = gateEnabled
+                    it[Sites.configVersion] = current[Sites.configVersion] + 1
+                    it[Sites.reconciliationStatus] = ReconciliationStatus.DRIFTED
+                    it[Sites.updatedAt] = LocalDateTime.now()
+                }
+            }
+        }
+        Sites.selectAll().where { Sites.projectId eq projectId }.single().toRecord()
+    }
+
     fun existsForProject(projectId: UUID): Boolean = transaction {
         Sites.selectAll().where { Sites.projectId eq projectId }.count() > 0
     }

@@ -38,6 +38,66 @@ data class DeploymentJobRecord(
 )
 
 object DeploymentJobRepository {
+    data class ConfigurationSummary(
+        val id: UUID,
+        val repository: String,
+        val gitRef: String,
+        val registry: String,
+        val imageName: String,
+        val imageTag: String,
+        val containerPort: Int?,
+        val hostPort: Int?,
+        val network: String,
+        val restartPolicy: String,
+        val environment: String,
+        val env: Map<String, String>,
+        val envKeys: List<String>,
+        val secretSetId: UUID?,
+        val secretSetVersion: Int?
+    )
+
+    fun configurationIdForProject(projectId: UUID, environment: String = "production"): UUID? = transaction {
+        val slug = Projects.selectAll().where { Projects.id eq projectId }.singleOrNull()?.get(Projects.slug)
+            ?: return@transaction null
+        DeploymentConfigurations.selectAll().toList().firstOrNull {
+            (it[DeploymentConfigurations.projectId] == projectId ||
+                (it[DeploymentConfigurations.projectId] == null && it[DeploymentConfigurations.projectSlug] == slug)) &&
+                (it[DeploymentConfigurations.environment] ?: "production") == environment
+        }?.get(DeploymentConfigurations.id)
+    }
+
+    fun configurationSummary(projectId: UUID, environment: String = "production"): ConfigurationSummary? = transaction {
+        val id = configurationIdForProject(projectId, environment) ?: return@transaction null
+        val row = DeploymentConfigurations.selectAll().where { DeploymentConfigurations.id eq id }.singleOrNull()
+            ?: return@transaction null
+        val env = runCatching { Json.decodeFromString<Map<String, String>>(row[DeploymentConfigurations.envJson]) }.getOrDefault(emptyMap())
+        ConfigurationSummary(
+            id, row[DeploymentConfigurations.repository], row[DeploymentConfigurations.gitRef], row[DeploymentConfigurations.registry],
+            row[DeploymentConfigurations.imageName], row[DeploymentConfigurations.imageTag], row[DeploymentConfigurations.containerPort],
+            row[DeploymentConfigurations.hostPort], row[DeploymentConfigurations.network], row[DeploymentConfigurations.restartPolicy],
+            row[DeploymentConfigurations.environment] ?: "production", env, env.keys.sorted(),
+            row[DeploymentConfigurations.secretSetId], row[DeploymentConfigurations.secretSetVersion]
+        )
+    }
+
+    fun upsertProjectConfiguration(projectId: UUID, request: com.gatekeeper.deployment.CreateDeploymentRequest): UUID {
+        val currentId = configurationIdForProject(projectId, request.environment)
+        if (currentId == null) return createConfiguration(projectId, request)
+        val updated = updateConfiguration(currentId, com.gatekeeper.deployment.UpdateDeploymentConfigurationRequest(
+            repository = request.repository, gitRef = request.gitRef, registry = request.registry,
+            imageName = request.imageName, imageTag = request.imageTag, containerName = request.containerName,
+            hostPort = request.hostPort, containerPort = request.containerPort, network = request.network,
+            restartPolicy = request.restartPolicy, env = request.env, volumes = request.volumes,
+            createNetworkIfMissing = request.createNetworkIfMissing, environment = request.environment,
+            readinessType = request.readinessType, readinessTarget = request.readinessTarget,
+            readinessTimeoutSeconds = request.readinessTimeoutSeconds,
+            readinessIntervalSeconds = request.readinessIntervalSeconds,
+            readinessProbeTimeoutMillis = request.readinessProbeTimeoutMillis
+        ))
+        check(updated) { "Deployment configuration disappeared while saving" }
+        return currentId
+    }
+
     fun createConfiguration(projectId: UUID, request: com.gatekeeper.deployment.CreateDeploymentRequest): UUID = transaction {
         val project = Projects.selectAll().where { (Projects.id eq projectId) and Projects.deletedAt.isNull() }.singleOrNull()
             ?: error("Project not found")

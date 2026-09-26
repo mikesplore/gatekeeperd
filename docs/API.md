@@ -245,6 +245,42 @@ Create a new project registration.
 - `containerName` is optional. When supplied, it must be either `name` or `name:port`, and the referenced Docker container must already exist (`400 container_not_found` otherwise). This preserves the existing container-first flow for current clients.
 - When omitted, the project is created without a runtime container and Docker availability is not required. A later deployment can attach its runtime.
 
+### Project-centered setup flow (additive)
+
+These endpoints support a re-enterable setup flow while preserving the existing container-first `POST /api/admin/projects` contract. Existing clients can continue using the old endpoint. A project created through this setup surface remains valid if source/runtime, credentials, gateway, or deployment are not configured yet.
+
+#### POST /api/admin/project-setup/projects
+
+Create a project without a Docker container. Accepts `slug`, `name`, `domain`, `type`, and optional `customerId`, `amountDue`, `currency`, `dueDate`, and `gracePeriodDays`.
+
+Returns `201 Created` with `{ "projectId": "<uuid>", "slug": "<slug>", "status": "created" }`.
+
+#### GET /api/admin/project-setup/projects/{projectId}
+
+Read setup progress for resuming the wizard. Returns the project identity, saved source/runtime configuration (non-secret environment values only), whether registry credentials are configured and their version, desired gateway/site state, and both the active deployment pointer and latest deployment attempt status. It never returns registry passwords or application secret values.
+
+#### PUT /api/admin/project-setup/projects/{projectId}/source-runtime
+
+Create or update the desired configuration for the project/environment. Accepts the deployment request fields for repository/ref, registry/image, required `containerPort`, optional `hostPort`, network/restart policy, non-secret `env`, `environment`, and readiness settings. The host port may be omitted so Docker can allocate an ephemeral port for candidate coexistence. `environment` defaults to `production`. This saves desired state only and is safe to repeat; it does not queue a deployment. Send application secrets through the credentials step.
+
+Returns `{ "configurationId": "<uuid>", "environment": "production", "status": "configured" }`.
+
+#### PUT /api/admin/project-setup/projects/{projectId}/credentials
+
+Optionally accepts `registry`, `username`, and `password` to create/rotate registry credentials, plus `secretEnv` to create a new project/environment secret-set version. Omitting registry username/password preserves the existing credential; omitting `secretEnv` preserves the current secret set. Supplying an empty `secretEnv` replaces it with an empty version. Returned data is metadata and version references only; values are write-only. Saving credentials does not deploy them.
+
+#### PUT /api/admin/project-setup/projects/{projectId}/domain-gateway
+
+Save project domain and desired gateway settings before a runtime exists. Accepts `domain`, `tlsMode` (`http_only`, `https`, or `https_http2`), and `gateEnabled`. This stores a site draft; the worker activates/renders it only after a candidate passes readiness and gateway validation.
+
+#### POST /api/admin/project-setup/projects/{projectId}/deploy
+
+Queue a deployment from the saved desired configuration. Returns `202 Accepted` with `{ "deploymentId": "<uuid>", "status": "queued" }`.
+
+### GET /api/admin/projects/{slug}/overview
+
+Returns sectioned project state: `accessLifecycle`, `desiredConfiguration`, `currentDeployment`, `domainsGateway`, and `customerBilling`. The current runtime and upstream come from the canonical active deployment and Phase 3 resolver, not `projects.container_name`. `runtimeHealth` is inspected from the active deployment's persisted runtime container. Secret and credential values are never included; only version references are returned.
+
 ### POST /api/admin/projects/{projectId}/deployment-configuration
 Create the initial desired deployment configuration for an existing project that does not have one. This operation does not queue or run a deployment; call the existing deployment operation when ready to deploy.
 

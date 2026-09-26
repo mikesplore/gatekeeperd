@@ -153,6 +153,59 @@ object DeploymentApplicationService {
         val publishedPorts: Map<Int, Int>
     )
 
+    data class ActiveDeploymentSummary(
+        val id: UUID,
+        val projectId: UUID,
+        val environment: String,
+        val status: String,
+        val triggerSource: String,
+        val createdAt: LocalDateTime,
+        val activeAt: LocalDateTime?,
+        val containerName: String?,
+        val runtimeHostPort: Int?,
+        val runtimePorts: Map<Int, Int>,
+        val imageName: String,
+        val imageTag: String,
+        val imageDigest: String?,
+        val commitSha: String?,
+        val credentialSetId: UUID?,
+        val credentialSetVersion: Int?,
+        val secretSetId: UUID?,
+        val secretSetVersion: Int?
+    )
+
+    /** Metadata for the active pointer only. Never selects or decrypts environment values. */
+    fun activeDeploymentSummary(projectId: UUID, environment: String): ActiveDeploymentSummary? = transaction {
+        val deployment = Deployments.selectAll().where {
+            (Deployments.projectId eq projectId) and (Deployments.environment eq environment) and
+                (Deployments.status eq DeploymentStatus.ACTIVE)
+        }.singleOrNull() ?: return@transaction null
+        val execution = com.gatekeeper.db.tables.DeploymentExecutions.selectAll()
+            .where { com.gatekeeper.db.tables.DeploymentExecutions.id eq deployment[Deployments.executionId] }
+            .singleOrNull() ?: return@transaction null
+        val runtimePorts = runCatching {
+            kotlinx.serialization.json.Json.decodeFromString<Map<String, Int>>(deployment[Deployments.runtimePortsJson])
+                .mapKeys { it.key.toInt() }
+        }.getOrDefault(emptyMap())
+        ActiveDeploymentSummary(
+            deployment[Deployments.id], projectId, deployment[Deployments.environment], deployment[Deployments.status].value,
+            deployment[Deployments.triggerSource], deployment[Deployments.createdAt], deployment[Deployments.activeAt],
+            deployment[Deployments.runtimeContainerName], deployment[Deployments.runtimeHostPort], runtimePorts,
+            execution[com.gatekeeper.db.tables.DeploymentExecutions.imageName],
+            execution[com.gatekeeper.db.tables.DeploymentExecutions.imageTag],
+            execution[com.gatekeeper.db.tables.DeploymentExecutions.imageDigest],
+            execution[com.gatekeeper.db.tables.DeploymentExecutions.commitSha],
+            deployment[Deployments.credentialSetId], deployment[Deployments.credentialSetVersion],
+            deployment[Deployments.secretSetId], deployment[Deployments.secretSetVersion]
+        )
+    }
+
+    fun latestDeploymentState(projectId: UUID, environment: String): Pair<UUID, String>? = transaction {
+        Deployments.selectAll().where {
+            (Deployments.projectId eq projectId) and (Deployments.environment eq environment)
+        }.maxByOrNull { it[Deployments.createdAt] }?.let { it[Deployments.id] to it[Deployments.status].value }
+    }
+
     /** Lightweight active-pointer lookup for gateway resolution; never loads secret environment values. */
     fun activeDeploymentRuntime(projectId: UUID, environment: String): ActiveDeploymentRuntime? = transaction {
         val row = Deployments.selectAll().where {

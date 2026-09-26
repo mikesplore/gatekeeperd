@@ -116,6 +116,7 @@ fun Application.module() {
     configureCustomerRoutes()
     configureAuthRoutes()
     configureProjectAdminRoutes()
+    configureProjectSetupAdminRoutes()
     configureOperationsAdminRoutes()
     configureIntegrationAdminRoutes()
     configurePaymentAdminRoutes()

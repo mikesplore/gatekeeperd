@@ -8,4 +8,4 @@ The worker obtains a GitHub App installation token, checks out the requested ref
 
 GitHub push deliveries are deduplicated using `X-GitHub-Delivery`. Configure repository/ref/image mapping on a project and set `autoDeploy=true` before enabling the webhook. Stale running jobs are returned to the queue on worker startup after `DEPLOYMENT_STALE_MINUTES`.
 
-The nginx step is intentionally separate: call the existing nginx enable endpoint after the container is healthy. This keeps deployment lifecycle and access/proxy configuration independently observable and reversible.
+The legacy container-first workflow can still enable nginx separately through the existing endpoint. The project-centered setup flow may save a gateway/site draft before the first deployment; in that path, the worker renders and validates the candidate upstream during cutover and activates the site only after readiness succeeds. Project setup, deployment, and payment access remain independently observable.

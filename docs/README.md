@@ -149,12 +149,22 @@ The admin dashboard should use a **wizard-like flow** for Docker container creat
 
 For private Docker Hub images, set `pullViaCli=true` (or `DOCKER_PULL_VIA_CLI=true`) so pulls use `docker pull` and can reuse the host's Docker auth.
 
-### Project creation wizard (container-first)
+### Project creation and setup
 
-Gatekeeper enforces a container-first flow: you should create/start the Docker container **before** creating the project record.
+The legacy container-first flow remains available for existing dashboard clients and scripts:
 
 1. **Container dropdown + slug hints**: `GET /api/admin/projects/wizard/context`
-2. **Create project**: `POST /api/admin/projects` (`containerName` must exist; format `name` or `name:port`)
+2. **Create project**: `POST /api/admin/projects` with an existing `containerName` (`name` or `name:port`)
+
+The new project-centered flow creates a durable project first and saves each setup step independently:
+
+1. **Create project without Docker**: `POST /api/admin/project-setup/projects`
+2. **Save source/runtime configuration**: `PUT /api/admin/project-setup/projects/{projectId}/source-runtime`
+3. **Save registry and project secret versions**: `PUT /api/admin/project-setup/projects/{projectId}/credentials`
+4. **Save desired domain/gateway state**: `PUT /api/admin/project-setup/projects/{projectId}/domain-gateway`
+5. **Deploy explicitly**: `POST /api/admin/project-setup/projects/{projectId}/deploy`
+
+The dashboard can resume setup using `GET /api/admin/project-setup/projects/{projectId}`. Secret values are write-only. A saved gateway draft is activated only after deployment readiness and nginx validation succeed.
 
 ### Nginx enable wizard
 
