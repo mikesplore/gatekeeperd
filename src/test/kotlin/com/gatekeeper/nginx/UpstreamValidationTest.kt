@@ -29,4 +29,11 @@ class UpstreamValidationTest {
         assertEquals(emptySet(), parsePublishedHostPorts(""))
         assertEquals(emptySet(), parsePublishedHostPorts("n/a"))
     }
+
+    @Test
+    fun `backfill docker target requires exactly one published host port`() {
+        assertEquals(BackfillDockerTarget("app", 9921), solePublishedDockerTarget("app", "9921->8080/tcp"))
+        assertEquals(null, solePublishedDockerTarget("app", "9921->8080/tcp, 8443->443/tcp"))
+        assertEquals(null, solePublishedDockerTarget("app", ""))
+    }
 }

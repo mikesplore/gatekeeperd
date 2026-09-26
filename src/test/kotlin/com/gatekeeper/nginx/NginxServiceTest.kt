@@ -335,14 +335,18 @@ class NginxServiceTest {
             "failed" to BackfillProject(java.util.UUID.randomUUID(), "failed", "failed-container")
         )
         val created = mutableListOf<String>()
+        val createdModels = mutableMapOf<String, NginxSiteRenderModel>()
         val deleted = mutableListOf<String>()
         val report = NginxSiteBackfill(
             sitesAvailable = fixture,
             findProject = { projects[it] },
-            expectedDockerPort = { project -> if (project.slug == "migrated") 3001 else 9999 },
+            expectedDockerTarget = { project ->
+                if (project.slug == "migrated") BackfillDockerTarget("migrated-container", 3001)
+                else BackfillDockerTarget("failed-container", 9999)
+            },
             autoCertificatePath = { null },
             render = { model -> if (model.slug == "migrated") fixture.resolve(model.slug).readText() else "different" },
-            createSite = { project, _ -> created += project.slug },
+            createSite = { project, model -> created += project.slug; createdModels[project.slug] = model },
             deleteSite = { project -> deleted += project.slug }
         ).run()
 
@@ -351,6 +355,108 @@ class NginxServiceTest {
         assertEquals(listOf("failed"), report.failedDiff.keys.toList())
         assertEquals(listOf("failed", "migrated"), created)
         assertEquals(listOf("failed"), deleted)
+        assertEquals(UpstreamMode.DOCKER_DISCOVERY, createdModels.getValue("migrated").upstreamMode)
+        assertEquals("migrated-container", createdModels.getValue("migrated").upstreamContainerName)
+        assertEquals(UpstreamMode.EXPLICIT_PORT, createdModels.getValue("failed").upstreamMode)
+        assertEquals(null, createdModels.getValue("failed").upstreamContainerName)
+    }
+
+    @Test
+    fun `backfill resolves marked files by project id and keeps legacy slug fallback`() {
+        val root = Files.createTempDirectory("gk-nginx-backfill-project-id").toFile()
+        val original = """
+            # gatekeeperd:project_id:11111111-1111-1111-1111-111111111111
+            server {
+                listen 80;
+                server_name canonical.example.com;
+                location / { proxy_pass http://127.0.0.1:3001; }
+            }
+        """.trimIndent() + "\n"
+        File(root, "old-slug").writeText(original)
+        val canonical = BackfillProject(java.util.UUID.fromString("11111111-1111-1111-1111-111111111111"), "canonical-slug", "canonical-container")
+        var createdModel: NginxSiteRenderModel? = null
+        var slugLookupCalled = false
+        val report = NginxSiteBackfill(
+            sitesAvailable = root,
+            findProject = { slugLookupCalled = true; null },
+            findProjectById = { id -> canonical.takeIf { it.id == id } },
+            expectedDockerTarget = { null },
+            autoCertificatePath = { null },
+            render = { model -> createdModel = model; original },
+            createSite = { _, _ -> },
+            deleteSite = {},
+            dryRun = true
+        ).run()
+
+        assertEquals(listOf("canonical-slug"), report.migrated)
+        assertEquals(canonical.id, createdModel?.projectId)
+        assertEquals(UpstreamMode.EXPLICIT_PORT, createdModel?.upstreamMode)
+        assertFalse(slugLookupCalled)
+    }
+
+    @Test
+    fun `backfill does not fall back to slug for an unresolved project id marker`() {
+        val root = Files.createTempDirectory("gk-nginx-backfill-unresolved-id").toFile()
+        File(root, "reused-slug").writeText("# gatekeeperd:project_id:${java.util.UUID.randomUUID()}\nserver {}\n")
+        var slugLookupCalled = false
+        var createCalls = 0
+        val report = NginxSiteBackfill(
+            sitesAvailable = root,
+            findProject = { slugLookupCalled = true; BackfillProject(java.util.UUID.randomUUID(), it, null) },
+            findProjectById = { null },
+            expectedDockerTarget = { null }, autoCertificatePath = { null }, render = { "unused" },
+            createSite = { _, _ -> createCalls++ }, deleteSite = {}, dryRun = true
+        ).run()
+
+        assertEquals(listOf("reused-slug"), report.skippedNoProject)
+        assertFalse(slugLookupCalled)
+        assertEquals(0, createCalls)
+    }
+
+    @Test
+    fun `backfill does not infer Docker mode from ambiguous published ports`() {
+        val root = Files.createTempDirectory("gk-nginx-backfill-ambiguous-ports").toFile()
+        val content = """
+            server {
+                listen 80;
+                server_name app.example.com;
+                location / { proxy_pass http://127.0.0.1:49152; }
+            }
+        """.trimIndent() + "\n"
+        File(root, "app").writeText(content)
+        val project = BackfillProject(java.util.UUID.randomUUID(), "app", "app-container")
+        var model: NginxSiteRenderModel? = null
+
+        val report = NginxSiteBackfill(
+            sitesAvailable = root,
+            findProject = { project },
+            expectedDockerTarget = { null }, // Runner uses singleOrNull when Docker reports multiple ports.
+            autoCertificatePath = { null }, render = { model = it; content }, createSite = { _, _ -> },
+            deleteSite = {}, dryRun = true
+        ).run()
+
+        assertEquals(listOf("app"), report.migrated)
+        assertEquals(UpstreamMode.EXPLICIT_PORT, model?.upstreamMode)
+        assertEquals(null, model?.upstreamContainerName)
+    }
+
+    @Test
+    fun `backfill skips sites already registered by project id`() {
+        val root = Files.createTempDirectory("gk-nginx-backfill-existing-site").toFile()
+        File(root, "app").writeText("server { listen 80; server_name app.example.com; location / { proxy_pass http://127.0.0.1:3001; } }\n")
+        val project = BackfillProject(java.util.UUID.randomUUID(), "app", "app-container")
+        var createCalls = 0
+        var deleteCalls = 0
+
+        val report = NginxSiteBackfill(
+            sitesAvailable = root, findProject = { project }, expectedDockerTarget = { BackfillDockerTarget("app-container", 3001) },
+            autoCertificatePath = { null }, render = { "unused" }, createSite = { _, _ -> createCalls++ },
+            deleteSite = { deleteCalls++ }, siteExists = { it == project.id }
+        ).run()
+
+        assertEquals(listOf("app"), report.skippedExistingSite)
+        assertEquals(0, createCalls)
+        assertEquals(0, deleteCalls)
     }
 
     @Test

@@ -128,17 +128,12 @@ class NginxReconciliationService(
         return NginxReconciliationResult(slug, ReconciliationStatus.HEALTHY, projectId = site.projectId)
     }
 
-    private data class ProjectIdMarker(val present: Boolean, val projectId: UUID?)
-
-    private fun projectIdMarker(fileName: String): ProjectIdMarker {
+    private fun projectIdMarker(fileName: String): SiteProjectIdentityMarker {
         val file = File(sitesAvailablePath, fileName).takeIf { it.isFile }
             ?: File(sitesEnabledPath, fileName).takeIf { it.exists() }
-            ?: return ProjectIdMarker(false, null)
-        val lines = runCatching { file.readLines() }.getOrDefault(emptyList())
-        val markerLine = lines.firstOrNull { it.startsWith("# gatekeeperd:project_id:") }
-            ?: return ProjectIdMarker(false, null)
-        val raw = markerLine.removePrefix("# gatekeeperd:project_id:").trim()
-        return ProjectIdMarker(true, runCatching { UUID.fromString(raw) }.getOrNull())
+            ?: return SiteProjectIdentityMarker(false, null)
+        val content = runCatching { file.readText() }.getOrDefault("")
+        return parseSiteProjectIdentityMarker(content)
     }
 
     private fun referencesSite(output: String, file: File): Boolean =

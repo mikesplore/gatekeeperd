@@ -5,6 +5,7 @@ import com.gatekeeper.db.repositories.ProjectRepository
 import com.gatekeeper.db.repositories.SiteRepository
 import com.gatekeeper.db.repositories.CertificateRepository
 import com.gatekeeper.docker.DockerService
+import com.gatekeeper.deployment.DeploymentApplicationService
 import java.io.File
 
 /** Manual production entry point. Call only after database and Docker are available. */
@@ -20,10 +21,18 @@ object NginxBackfillRunner {
                         BackfillProject(it.id, it.slug, it.containerName)
                     }
                 },
-                expectedDockerPort = { project ->
-                    val containerName = project.containerName?.let(::extractConfiguredContainerName)
-                    if (docker == null || containerName == null) null
-                    else parsePublishedHostPorts(docker.getContainer(containerName)?.ports.orEmpty()).singleOrNull()
+                findProjectById = { projectId ->
+                    ProjectRepository.findActiveById(projectId)?.let {
+                        BackfillProject(it.id, it.slug, it.containerName)
+                    }
+                },
+                siteExists = SiteRepository::existsForProject,
+                expectedDockerTarget = { project ->
+                    val activeRuntime = DeploymentApplicationService.activeDeploymentRuntime(project.id, "production")
+                    val containerName = if (activeRuntime != null) activeRuntime.containerName
+                    else project.containerName?.let(::extractConfiguredContainerName)
+                    if (docker == null || containerName.isNullOrBlank()) null
+                    else solePublishedDockerTarget(containerName, docker.getContainer(containerName)?.ports.orEmpty())
                 },
                 autoCertificatePath = { domain -> nginx.resolveCertificateForDomain(domain)?.certificatePath },
                 render = { model -> nginx.generateNginxConfig(model) },
