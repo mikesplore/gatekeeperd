@@ -32,7 +32,9 @@ data class DeploymentJobRecord(
     val readinessTarget: String? = null,
     val readinessTimeoutSeconds: Int = 60,
     val readinessIntervalSeconds: Int = 2,
-    val readinessProbeTimeoutMillis: Int = 1000
+    val readinessProbeTimeoutMillis: Int = 1000,
+    val secretSetId: UUID? = null,
+    val secretSetVersion: Int? = null
 )
 
 object DeploymentJobRepository {
@@ -151,7 +153,6 @@ object DeploymentJobRepository {
         }
         DeploymentExecutions.update({ DeploymentExecutions.id eq id }) {
             projectId?.let { value -> it[DeploymentExecutions.projectId] = value }
-            environment?.let { value -> it[DeploymentExecutions.environment] = value }
             readinessType?.let { value -> it[DeploymentExecutions.readinessType] = value }
             readinessTarget?.let { value -> it[DeploymentExecutions.readinessTarget] = value }
             request.readinessTimeoutSeconds?.let { value -> it[DeploymentExecutions.readinessTimeoutSeconds] = value }
@@ -490,6 +491,33 @@ object DeploymentJobRepository {
         DeploymentJobs.selectAll().where { DeploymentJobs.id eq id }.singleOrNull()?.toRecord()
     }
 
+    /** Called immediately before creating a runtime. New snapshots resolve by immutable reference; legacy rows fall back to encrypted execution/job columns. */
+    fun resolveSecretEnvForExecution(executionId: UUID): Map<String, String> = transaction {
+        resolveSecretEnvForExecutionInTransaction(executionId)
+    }
+
+    private fun resolveSecretEnvForExecutionInTransaction(executionId: UUID): Map<String, String> {
+        val execution = DeploymentExecutions.selectAll().where { DeploymentExecutions.id eq executionId }.singleOrNull()
+        val secretSetId = execution?.get(DeploymentExecutions.secretSetId)
+        if (secretSetId != null) {
+            val version = execution[DeploymentExecutions.secretSetVersion]
+                ?: error("Deployment secret-set version is missing for execution $executionId")
+            val setRow = ProjectSecretSetVersions.selectAll().where {
+                (ProjectSecretSetVersions.id eq secretSetId) and (ProjectSecretSetVersions.version eq version)
+            }.singleOrNull() ?: error("Deployment secret-set version $secretSetId/$version is unavailable")
+            check(setRow[ProjectSecretSetVersions.projectId] == execution[DeploymentExecutions.projectId]) {
+                "Deployment secret-set project does not match execution $executionId"
+            }
+            check(setRow[ProjectSecretSetVersions.environment] == (execution[DeploymentExecutions.environment] ?: "production")) {
+                "Deployment secret-set environment does not match execution $executionId"
+            }
+            return Json.decodeFromString(SecretValueCipher.decrypt(setRow[ProjectSecretSetVersions.encryptedPayload]))
+        }
+        val encrypted = execution?.get(DeploymentExecutions.secretEnvEncrypted)
+            ?: DeploymentJobs.selectAll().where { DeploymentJobs.id eq executionId }.singleOrNull()?.get(DeploymentJobs.secretEnvEncrypted)
+        return encrypted?.let { Json.decodeFromString<Map<String, String>>(SecretValueCipher.decrypt(it)) }.orEmpty()
+    }
+
     fun claimNext(): DeploymentJobRecord? = transaction {
         val row = DeploymentJobs.selectAll().where {
             (DeploymentJobs.status eq "queued") or
@@ -508,7 +536,8 @@ object DeploymentJobRepository {
             it[status] = "running"; it[currentStep] = if (isReadyForCutover) "cutover_in_progress" else "building"; it[startedAt] = now; it[updatedAt] = now
         }
         if (!isReadyForCutover) DeploymentApplicationService.transition(row[DeploymentJobs.id], DeploymentStatus.BUILDING)
-        find(row[DeploymentJobs.id])
+        DeploymentJobs.selectAll().where { DeploymentJobs.id eq row[DeploymentJobs.id] }
+            .singleOrNull()?.toRecord(includeSecretEnv = false)
     }
 
     fun recoverStale(maxAgeMinutes: Long): Int = transaction {
@@ -533,6 +562,7 @@ object DeploymentJobRepository {
     fun update(id: UUID, step: String? = null, log: String? = null, commitSha: String? = null, imageDigest: String? = null, status: String? = null, error: String? = null) = transaction {
         val existing = DeploymentJobs.selectAll().where { DeploymentJobs.id eq id }.singleOrNull() ?: return@transaction
         populateProjectId(id, existing[DeploymentJobs.projectSlug])
+        // Continue using the dual-written compatibility blob for log/error redaction during rollout.
         val deploymentSecrets = existing[DeploymentJobs.secretEnvEncrypted]?.let { encoded ->
             Json.decodeFromString<Map<String, String>>(SecretValueCipher.decrypt(encoded)).values
         }.orEmpty()
@@ -578,13 +608,18 @@ object DeploymentJobRepository {
         DeploymentExecutions.update({ DeploymentExecutions.id eq id }) { it[previousContainerName] = name; it[previousImage] = image; it[updatedAt] = LocalDateTime.now() }
     }
 
-    private fun ResultRow.toRecord() = DeploymentJobRecord(
+    private fun ResultRow.toRecord(includeSecretEnv: Boolean = true): DeploymentJobRecord {
+        val id = this[DeploymentJobs.id]
+        val execution = DeploymentExecutions.selectAll().where { DeploymentExecutions.id eq id }.singleOrNull()
+        return DeploymentJobRecord(
         this[DeploymentJobs.id], this[DeploymentJobs.repository], this[DeploymentJobs.gitRef], this[DeploymentJobs.registry],
-        this[DeploymentJobs.imageName], this[DeploymentJobs.imageTag], this[DeploymentJobs.containerName], this[DeploymentJobs.hostPort], this[DeploymentJobs.containerPort], this[DeploymentJobs.network], this[DeploymentJobs.restartPolicy], runCatching { Json.decodeFromString<Map<String, String>>(this[DeploymentJobs.envJson]) }.getOrDefault(emptyMap()), this[DeploymentJobs.secretEnvEncrypted]?.let { Json.decodeFromString<Map<String, String>>(SecretValueCipher.decrypt(it)) }.orEmpty(), runCatching { Json.decodeFromString<List<VolumeMount>>(this[DeploymentJobs.volumesJson]) }.getOrDefault(emptyList()), this[DeploymentJobs.createNetworkIfMissing], this[DeploymentJobs.status], this[DeploymentJobs.currentStep],
+        this[DeploymentJobs.imageName], this[DeploymentJobs.imageTag], this[DeploymentJobs.containerName], this[DeploymentJobs.hostPort], this[DeploymentJobs.containerPort], this[DeploymentJobs.network], this[DeploymentJobs.restartPolicy], runCatching { Json.decodeFromString<Map<String, String>>(this[DeploymentJobs.envJson]) }.getOrDefault(emptyMap()), if (includeSecretEnv) this[DeploymentJobs.secretEnvEncrypted]?.let { Json.decodeFromString<Map<String, String>>(SecretValueCipher.decrypt(it)) }.orEmpty() else emptyMap(), runCatching { Json.decodeFromString<List<VolumeMount>>(this[DeploymentJobs.volumesJson]) }.getOrDefault(emptyList()), this[DeploymentJobs.createNetworkIfMissing], this[DeploymentJobs.status], this[DeploymentJobs.currentStep],
         this[DeploymentJobs.logs], this[DeploymentJobs.commitSha], this[DeploymentJobs.imageDigest], this[DeploymentJobs.errorMessage],
         this[DeploymentJobs.createdAt], this[DeploymentJobs.startedAt], this[DeploymentJobs.completedAt], this[DeploymentJobs.updatedAt], this[DeploymentJobs.previousContainerName], this[DeploymentJobs.previousImage], this[DeploymentJobs.projectSlug], this[DeploymentJobs.projectId] ?: resolveProjectId(this[DeploymentJobs.projectSlug]), this[DeploymentJobs.triggerSource], this[DeploymentJobs.environment] ?: "production",
-        this[DeploymentJobs.readinessType], this[DeploymentJobs.readinessTarget], this[DeploymentJobs.readinessTimeoutSeconds], this[DeploymentJobs.readinessIntervalSeconds], this[DeploymentJobs.readinessProbeTimeoutMillis]
-    )
+        this[DeploymentJobs.readinessType], this[DeploymentJobs.readinessTarget], this[DeploymentJobs.readinessTimeoutSeconds], this[DeploymentJobs.readinessIntervalSeconds], this[DeploymentJobs.readinessProbeTimeoutMillis],
+        execution?.get(DeploymentExecutions.secretSetId), execution?.get(DeploymentExecutions.secretSetVersion)
+        )
+    }
 
     private fun resolveProjectId(slug: String?): UUID? = slug?.let { projectSlug ->
         Projects.selectAll().where { (Projects.slug eq projectSlug) and Projects.deletedAt.isNull() }

@@ -73,6 +73,19 @@ object DeploymentApplicationService {
         } == 1
     }
 
+    fun recordCredentialReference(id: UUID, credentialId: UUID, version: Int): Boolean = transaction {
+        require(version > 0) { "Credential version must be positive" }
+        Deployments.update({
+            (Deployments.id eq id) and (Deployments.status inList listOf(
+                DeploymentStatus.QUEUED, DeploymentStatus.BUILDING, DeploymentStatus.STARTING, DeploymentStatus.HEALTH_CHECKING
+            ))
+        }) {
+            it[Deployments.credentialSetId] = credentialId
+            it[Deployments.credentialSetVersion] = version
+            it[updatedAt] = LocalDateTime.now()
+        } == 1
+    }
+
     fun candidateContainerName(id: UUID): String? = transaction {
         Deployments.selectAll().where { Deployments.id eq id }.singleOrNull()?.get(Deployments.runtimeContainerName)
     }
@@ -104,7 +117,7 @@ object DeploymentApplicationService {
     }
 
     data class ActiveRuntime(
-        val id: UUID, val name: String?, val hostPort: Int?, val image: String?, val hostConfigPort: Int?,
+        val id: UUID, val executionId: UUID, val name: String?, val hostPort: Int?, val image: String?, val hostConfigPort: Int?,
         val containerPort: Int?, val network: String, val restartPolicy: String,
         val env: Map<String, String>, val secretEnv: Map<String, String>, val volumes: List<com.gatekeeper.docker.VolumeMount>
     )
@@ -118,17 +131,14 @@ object DeploymentApplicationService {
                 .where { com.gatekeeper.db.tables.DeploymentExecutions.id eq row[Deployments.executionId] }.singleOrNull()
             val image = execution?.let { "${it[com.gatekeeper.db.tables.DeploymentExecutions.imageName]}:${it[com.gatekeeper.db.tables.DeploymentExecutions.imageTag]}" }
             val env = execution?.let { kotlinx.serialization.json.Json.decodeFromString<Map<String, String>>(it[com.gatekeeper.db.tables.DeploymentExecutions.envJson]) }.orEmpty()
-            val secrets = execution?.get(com.gatekeeper.db.tables.DeploymentExecutions.secretEnvEncrypted)?.let { encoded ->
-                kotlinx.serialization.json.Json.decodeFromString<Map<String, String>>(com.gatekeeper.security.SecretValueCipher.decrypt(encoded))
-            }.orEmpty()
             val volumes = execution?.let { kotlinx.serialization.json.Json.decodeFromString<List<com.gatekeeper.docker.VolumeMount>>(it[com.gatekeeper.db.tables.DeploymentExecutions.volumesJson]) }.orEmpty()
             ActiveRuntime(
-                row[Deployments.id], row[Deployments.runtimeContainerName], row[Deployments.runtimeHostPort], image,
+                row[Deployments.id], row[Deployments.executionId], row[Deployments.runtimeContainerName], row[Deployments.runtimeHostPort], image,
                 execution?.get(com.gatekeeper.db.tables.DeploymentExecutions.hostPort),
                 execution?.get(com.gatekeeper.db.tables.DeploymentExecutions.containerPort),
                 execution?.get(com.gatekeeper.db.tables.DeploymentExecutions.network) ?: "bridge",
                 execution?.get(com.gatekeeper.db.tables.DeploymentExecutions.restartPolicy) ?: "unless-stopped",
-                env, secrets, volumes
+                env, emptyMap(), volumes
             )
         }
     }

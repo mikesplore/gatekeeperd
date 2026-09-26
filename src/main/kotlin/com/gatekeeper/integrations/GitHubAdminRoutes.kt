@@ -54,9 +54,12 @@ fun Application.configureGitHubAdminRoutes() {
                     call.respondError(HttpStatusCode.ServiceUnavailable, "secrets_unconfigured", "Secret encryption is not configured")
                     return@put
                 }
-                GitHubCredentialRepository.save(type!!, body.value)
-                AuditRepository.write(null, "github_credential_updated", "admin", "type=$type")
-                call.respond(mapOf("type" to type, "configured" to true, "writeOnly" to true))
+                val credential = GitHubCredentialRepository.save(type!!, body.value)
+                AuditRepository.write(null, "github_credential_updated", "admin", "type=$type version=${credential.version}")
+                call.respond(mapOf(
+                    "id" to credential.id.toString(), "type" to type, "configured" to true,
+                    "version" to credential.version, "writeOnly" to true
+                ))
             }
             get("/api/admin/github/status") {
                 val installation = GitHubAppInstallationRepository.find()

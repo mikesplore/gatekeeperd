@@ -14,6 +14,7 @@ import com.gatekeeper.docker.DockerCleanupService
 import com.gatekeeper.nginx.NginxService
 import com.gatekeeper.db.repositories.SiteRepository
 import com.gatekeeper.integrations.GitHubAppClient
+import com.gatekeeper.security.SecretValueCipher
 import kotlinx.coroutines.*
 import org.slf4j.LoggerFactory
 import java.nio.file.Files
@@ -100,6 +101,9 @@ object DeploymentWorker {
                 image = registryImage(job.registry, job.imageName, job.imageTag)
             }
             RegistryCredentialRepository.find(job.registry)?.let { credential ->
+                if (credential.credentialId != null && credential.version != null) {
+                    DeploymentApplicationService.recordCredentialReference(job.id, credential.credentialId, credential.version)
+                }
                 dockerLogin(job.id, job.registry, credential.username, credential.password)
             }
             if (rollbackArtifact == null) {
@@ -161,7 +165,7 @@ object DeploymentWorker {
                     randomHostPorts = dynamicContainerPorts,
                     network = job.network,
                     restartPolicy = job.restartPolicy,
-                    env = job.env + job.secretEnv,
+                    env = job.env + DeploymentJobRepository.resolveSecretEnvForExecution(job.id),
                     volumes = job.volumes,
                     pullImage = false
                 ))
@@ -266,7 +270,7 @@ object DeploymentWorker {
                     ports = if (previousDeployment.hostConfigPort != null && previousDeployment.containerPort != null) mapOf(previousDeployment.hostConfigPort to previousDeployment.containerPort) else emptyMap(),
                     network = previousDeployment.network,
                     restartPolicy = previousDeployment.restartPolicy,
-                    env = previousDeployment.env + previousDeployment.secretEnv,
+                    env = previousDeployment.env + DeploymentJobRepository.resolveSecretEnvForExecution(previousDeployment.executionId),
                     volumes = previousDeployment.volumes,
                     pullImage = true
                 ))
@@ -374,7 +378,11 @@ object DeploymentWorker {
             builder.environment()["GIT_CONFIG_VALUE_0"] = "AUTHORIZATION: bearer $githubToken"
         }
         val process = builder.start()
-        process.inputStream.bufferedReader().useLines { lines -> lines.forEach { DeploymentJobRepository.update(id, log = it) } }
+        process.inputStream.bufferedReader().useLines { lines ->
+            lines.forEach { line ->
+                DeploymentJobRepository.update(id, log = SecretValueCipher.redact(line, listOf(githubToken)))
+            }
+        }
         if (process.waitFor() != 0) error("Command failed: ${command.first()}")
     }
 
@@ -383,8 +391,8 @@ object DeploymentWorker {
         val process = ProcessBuilder("docker", "login", host, "--username", username, "--password-stdin")
             .redirectErrorStream(true).start()
         process.outputStream.bufferedWriter().use { it.write(password); it.newLine() }
-        val output = process.inputStream.bufferedReader().readText()
-        if (process.waitFor() != 0) error("Docker registry authentication failed for $registry: ${output.trim().take(300)}")
+        process.inputStream.bufferedReader().readText()
+        if (process.waitFor() != 0) error("Docker registry authentication failed for $registry")
         DeploymentJobRepository.update(id, "registry_authenticated", "Authenticated to registry $registry")
     }
 
