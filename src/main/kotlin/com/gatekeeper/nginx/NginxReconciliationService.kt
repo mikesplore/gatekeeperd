@@ -7,13 +7,14 @@ import com.gatekeeper.docker.DockerService
 import java.io.File
 import java.nio.file.Files
 import java.security.MessageDigest
-import java.time.LocalDateTime
+import java.util.UUID
 
 data class NginxReconciliationResult(
     val slug: String,
     val status: ReconciliationStatus,
     val nginxError: String? = null,
-    val dockerError: String? = null
+    val dockerError: String? = null,
+    val projectId: UUID? = null
 )
 
 data class NginxReconciliationReport(
@@ -71,13 +72,36 @@ class NginxReconciliationService(
 
     private fun evaluateAll(): NginxReconciliationReport {
         val sites = listSites()
-        val bySlug = sites.mapNotNull { it.projectSlug?.let { slug -> slug to it } }.toMap()
+        val sitesByProjectId = sites.associateBy { it.projectId }
+        val sitesBySlug = sites.mapNotNull { site -> site.projectSlug?.let { it to site } }.toMap()
         val fileNames = (siteFiles(sitesAvailablePath) + siteFiles(sitesEnabledPath)).toSet()
-        val orphaned = fileNames.filter { it !in bySlug }.sorted()
+        val resolvedFiles = fileNames.associateWith { fileName ->
+            val marker = projectIdMarker(fileName)
+            when {
+                marker.present -> marker.projectId?.let(sitesByProjectId::get)
+                else -> sitesBySlug[fileName]
+            }
+        }
+        val filesByProjectId = resolvedFiles.entries.mapNotNull { (fileName, site) ->
+            site?.let { it.projectId to fileName }
+        }.groupBy({ it.first }, { it.second })
+        val orphaned = resolvedFiles.filterValues { it == null }.keys.sorted()
         val nginxOutput = nginxTest()
         val results = sites.map { site ->
-            val slug = site.projectSlug ?: site.id.toString()
-            evaluate(site, slug, nginxOutput).also { persist(site, it) }
+            val ownedFiles = filesByProjectId[site.projectId].orEmpty().sorted()
+            val result = when {
+                ownedFiles.size > 1 -> NginxReconciliationResult(
+                    site.projectSlug ?: site.id.toString(), ReconciliationStatus.ERROR,
+                    "Multiple nginx files identify project ${site.projectId}: ${ownedFiles.joinToString()}",
+                    projectId = site.projectId
+                )
+                ownedFiles.isEmpty() && (site.projectSlug ?: site.id.toString()) in orphaned -> NginxReconciliationResult(
+                    site.projectSlug ?: site.id.toString(), ReconciliationStatus.DEAD_CONFIG,
+                    "Nginx file does not identify project ${site.projectId}", projectId = site.projectId
+                )
+                else -> evaluate(site, ownedFiles.singleOrNull() ?: site.projectSlug ?: site.id.toString(), nginxOutput)
+            }
+            result.also { persist(site, it) }
         }
         return NginxReconciliationReport(results, orphaned)
     }
@@ -85,23 +109,36 @@ class NginxReconciliationService(
     private fun evaluate(site: SiteRepository.SiteRecord, slug: String, nginxOutput: String?): NginxReconciliationResult {
         val available = File(sitesAvailablePath, slug)
         val enabled = File(sitesEnabledPath, slug)
-        if (!available.isFile) return NginxReconciliationResult(slug, ReconciliationStatus.DEAD_CONFIG, "sites-available file is missing")
-        if (!Files.isSymbolicLink(enabled.toPath())) return NginxReconciliationResult(slug, ReconciliationStatus.DISABLED)
+        if (!available.isFile) return NginxReconciliationResult(slug, ReconciliationStatus.DEAD_CONFIG, "sites-available file is missing", projectId = site.projectId)
+        if (!Files.isSymbolicLink(enabled.toPath())) return NginxReconciliationResult(slug, ReconciliationStatus.DISABLED, projectId = site.projectId)
 
         if (!nginxOutput.isNullOrBlank() && referencesSite(nginxOutput, available)) {
-            return NginxReconciliationResult(slug, ReconciliationStatus.ERROR, nginxOutput)
+            return NginxReconciliationResult(slug, ReconciliationStatus.ERROR, nginxOutput, projectId = site.projectId)
         }
 
         val expected = runCatching { renderExpected(site) }.getOrElse {
-            return NginxReconciliationResult(slug, ReconciliationStatus.ERROR, it.message ?: "Unable to render expected configuration")
+            return NginxReconciliationResult(slug, ReconciliationStatus.ERROR, it.message ?: "Unable to render expected configuration", projectId = site.projectId)
         }
         if (sha256(available.readText()) != sha256(expected)) {
-            return NginxReconciliationResult(slug, ReconciliationStatus.DRIFTED)
+            return NginxReconciliationResult(slug, ReconciliationStatus.DRIFTED, projectId = site.projectId)
         }
 
         val dockerError = dockerCheck(site)
-        if (dockerError != null) return NginxReconciliationResult(slug, ReconciliationStatus.DOCKER_DOWN, dockerError = dockerError)
-        return NginxReconciliationResult(slug, ReconciliationStatus.HEALTHY)
+        if (dockerError != null) return NginxReconciliationResult(slug, ReconciliationStatus.DOCKER_DOWN, dockerError = dockerError, projectId = site.projectId)
+        return NginxReconciliationResult(slug, ReconciliationStatus.HEALTHY, projectId = site.projectId)
+    }
+
+    private data class ProjectIdMarker(val present: Boolean, val projectId: UUID?)
+
+    private fun projectIdMarker(fileName: String): ProjectIdMarker {
+        val file = File(sitesAvailablePath, fileName).takeIf { it.isFile }
+            ?: File(sitesEnabledPath, fileName).takeIf { it.exists() }
+            ?: return ProjectIdMarker(false, null)
+        val lines = runCatching { file.readLines() }.getOrDefault(emptyList())
+        val markerLine = lines.firstOrNull { it.startsWith("# gatekeeperd:project_id:") }
+            ?: return ProjectIdMarker(false, null)
+        val raw = markerLine.removePrefix("# gatekeeperd:project_id:").trim()
+        return ProjectIdMarker(true, runCatching { UUID.fromString(raw) }.getOrNull())
     }
 
     private fun referencesSite(output: String, file: File): Boolean =

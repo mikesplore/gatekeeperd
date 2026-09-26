@@ -367,6 +367,17 @@ class NginxServiceTest {
     }
 
     @Test
+    fun `generated site config carries stable project ownership marker`() {
+        val projectId = java.util.UUID.randomUUID()
+        val rendered = service.generateNginxConfig(NginxSiteRenderModel(
+            slug = "current-slug", projectId = projectId, domain = "app.example.com", appPort = 3001,
+            upstreamScheme = "http", tlsMode = TlsRenderMode.HTTP_ONLY
+        ))
+
+        assertContains(rendered, "# gatekeeperd:project_id:$projectId")
+    }
+
+    @Test
     fun `reconciliation evaluates disabled drift docker error dead and orphaned states`() {
         val root = Files.createTempDirectory("gk-reconcile").toFile()
         val available = File(root, "sites-available").apply { mkdirs() }
@@ -407,6 +418,61 @@ class NginxServiceTest {
         assertEquals(ReconciliationStatus.ERROR, states["error"])
         assertEquals(ReconciliationStatus.DEAD_CONFIG, states["dead"])
         assertEquals(listOf("orphan"), report.orphanedFiles)
+    }
+
+    @Test
+    fun `reconciliation matches marked nginx file by project id across slug changes`() {
+        val root = Files.createTempDirectory("gk-reconcile-project-id").toFile()
+        val available = File(root, "available").apply { mkdirs() }
+        val enabled = File(root, "enabled").apply { mkdirs() }
+        val projectId = java.util.UUID.randomUUID()
+        val site = SiteRepository.SiteRecord(
+            id = java.util.UUID.randomUUID(), projectId = projectId, projectSlug = "current-slug",
+            domain = "app.example.com", upstreamHost = "127.0.0.1", upstreamMode = UpstreamMode.EXPLICIT_PORT,
+            upstreamContainerName = null, upstreamExplicitPort = 3001, tlsMode = TlsMode.HTTP_ONLY,
+            certMode = CertMode.AUTO_RESOLVE, certExplicitPath = null, gateEnabled = true, configVersion = 1,
+            createdAt = LocalDateTime.now(), updatedAt = LocalDateTime.now(), reconciliationStatus = ReconciliationStatus.HEALTHY,
+            lastNginxError = null, lastDockerError = null, lastReconciledAt = null
+        )
+        val oldSlugFile = File(available, "old-slug")
+        val config = "# gatekeeperd:project_id:$projectId\nserver {}\n"
+        oldSlugFile.writeText(config)
+        Files.createSymbolicLink(File(enabled, oldSlugFile.name).toPath(), oldSlugFile.toPath())
+
+        val report = NginxReconciliationService(
+            available, enabled, { listOf(site) }, { config }, { null }, { null }, persist = { _, _ -> }
+        ).reconcile()
+
+        assertEquals("old-slug", report.results.single().slug)
+        assertEquals(projectId, report.results.single().projectId)
+        assertEquals(ReconciliationStatus.HEALTHY, report.results.single().status)
+        assertEquals(emptyList(), report.orphanedFiles)
+    }
+
+    @Test
+    fun `unknown marked nginx file stays orphaned instead of falling back to a reused slug`() {
+        val root = Files.createTempDirectory("gk-reconcile-unknown-project-id").toFile()
+        val available = File(root, "available").apply { mkdirs() }
+        val enabled = File(root, "enabled").apply { mkdirs() }
+        val site = SiteRepository.SiteRecord(
+            id = java.util.UUID.randomUUID(), projectId = java.util.UUID.randomUUID(), projectSlug = "reused-slug",
+            domain = "app.example.com", upstreamHost = "127.0.0.1", upstreamMode = UpstreamMode.EXPLICIT_PORT,
+            upstreamContainerName = null, upstreamExplicitPort = 3001, tlsMode = TlsMode.HTTP_ONLY,
+            certMode = CertMode.AUTO_RESOLVE, certExplicitPath = null, gateEnabled = true, configVersion = 1,
+            createdAt = LocalDateTime.now(), updatedAt = LocalDateTime.now(), reconciliationStatus = ReconciliationStatus.HEALTHY,
+            lastNginxError = null, lastDockerError = null, lastReconciledAt = null
+        )
+        val markedFile = File(available, "reused-slug")
+        markedFile.writeText("# gatekeeperd:project_id:${java.util.UUID.randomUUID()}\nserver {}\n")
+        Files.createSymbolicLink(File(enabled, markedFile.name).toPath(), markedFile.toPath())
+
+        val report = NginxReconciliationService(
+            available, enabled, { listOf(site) }, { "unused" }, { null }, { null }, persist = { _, _ -> }
+        ).reconcile()
+
+        assertEquals(listOf("reused-slug"), report.orphanedFiles)
+        assertEquals(ReconciliationStatus.DEAD_CONFIG, report.results.single().status)
+        assertEquals("reused-slug", report.results.single().slug)
     }
 
     @Test

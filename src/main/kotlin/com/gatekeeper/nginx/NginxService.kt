@@ -254,7 +254,8 @@ class NginxService(
         upstreamHost = site.upstreamHost,
         http2 = site.tlsMode == TlsRenderMode.HTTPS_HTTP2,
         gateEnabled = site.gateEnabled,
-        bypassPaths = site.bypassPaths
+        bypassPaths = site.bypassPaths,
+        projectId = site.projectId
     )
 
     fun generateNginxConfig(
@@ -268,7 +269,8 @@ class NginxService(
         upstreamHost: String = "127.0.0.1",
         http2: Boolean = true,
         gateEnabled: Boolean = true,
-        bypassPaths: List<String> = DEFAULT_GATEKEEPER_BYPASS_PATHS
+        bypassPaths: List<String> = DEFAULT_GATEKEEPER_BYPASS_PATHS,
+        projectId: java.util.UUID? = null
     ): String {
         requireValidHostname(domain)
         val effectiveSslCert = sslCertificatePath?.let { requireCertificatePath(it, sslCertPath) }
@@ -278,6 +280,7 @@ class NginxService(
         val effectiveUpstreamScheme = normalizeUpstreamScheme(appPort, upstreamScheme)
 
         return buildString {
+            projectId?.let { appendLine("# gatekeeperd:project_id:$it") }
             appendLine("server {")
             appendLine("    # gatekeeperd:block:server")
             if (sslEnabled) {
@@ -504,6 +507,7 @@ class NginxService(
         }
         val model = NginxSiteRenderModel(
             slug = slug,
+            projectId = projectId,
             domain = site.domain,
             upstreamHost = host,
             appPort = hostPort,

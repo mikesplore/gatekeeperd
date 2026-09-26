@@ -131,6 +131,7 @@ private fun renderModelFromSite(
     }
     return NginxSiteRenderModel(
         slug = slug,
+        projectId = site.projectId,
         domain = site.domain,
         upstreamHost = upstreamHost,
         appPort = port,
@@ -630,6 +631,7 @@ fun Application.configureNginxAdminRoutes() {
                     responseCertificateDomain = plan.resolvedCertificate?.certificateDomain
                     siteToPersist = NginxSiteRenderModel(
                         slug = slug,
+                        projectId = project.id,
                         domain = plan.domain,
                         appPort = plan.appPort,
                         upstreamScheme = plan.upstreamScheme,
@@ -647,7 +649,8 @@ fun Application.configureNginxAdminRoutes() {
                         upstreamScheme = plan.upstreamScheme,
                         sslEnabled = responseSslEnabled,
                         sslCertificatePath = plan.resolvedCertificate?.certificatePath,
-                        sslCertificateKeyPath = plan.resolvedCertificate?.privateKeyPath
+                        sslCertificateKeyPath = plan.resolvedCertificate?.privateKeyPath,
+                        projectId = project.id
                     )
                 }
 

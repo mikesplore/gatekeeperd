@@ -2,6 +2,7 @@ package com.gatekeeper.nginx
 
 data class NginxSiteRenderModel(
     val slug: String,
+    val projectId: java.util.UUID? = null,
     val domain: String,
     val upstreamHost: String = "127.0.0.1",
     val appPort: Int,

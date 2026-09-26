@@ -238,7 +238,7 @@ fun Application.configureOperationsAdminRoutes() {
                 val port = updated.upstreamExplicitPort ?: run { call.respondError(HttpStatusCode.UnprocessableEntity, "site_configuration_invalid", "Docker discovery updates require a live container"); return@patch }
                 val cert = if (updated.certMode == com.gatekeeper.db.tables.CertMode.AUTO_RESOLVE) nginx.resolveCertificateForDomain(updated.domain) else null
                 val config = nginx.generateNginxConfig(NginxSiteRenderModel(
-                    slug = slug, domain = updated.domain, upstreamHost = updated.upstreamHost, appPort = port,
+                    slug = slug, projectId = updated.projectId, domain = updated.domain, upstreamHost = updated.upstreamHost, appPort = port,
                     upstreamScheme = if (updated.tlsMode == com.gatekeeper.db.tables.TlsMode.HTTP_ONLY) "http" else "https",
                     tlsMode = when (updated.tlsMode) {
                         com.gatekeeper.db.tables.TlsMode.HTTP_ONLY -> com.gatekeeper.nginx.TlsRenderMode.HTTP_ONLY
