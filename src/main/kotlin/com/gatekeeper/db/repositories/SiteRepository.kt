@@ -137,6 +137,19 @@ object SiteRepository {
         Sites.selectAll().where { Sites.id eq site[Sites.id] }.singleOrNull()?.toRecord()
     }
 
+    /** Refreshes the legacy Docker-name projection from the canonical active deployment runtime. */
+    fun refreshDockerUpstreamContainerCache(projectId: UUID, containerName: String) = transaction {
+        require(containerName.isNotBlank()) { "Docker upstream container name must not be blank" }
+        val current = Sites.selectAll().where { Sites.projectId eq projectId }.singleOrNull() ?: return@transaction false
+        if (current[Sites.upstreamMode] != UpstreamMode.DOCKER_DISCOVERY || current[Sites.upstreamContainerName] == containerName) {
+            return@transaction false
+        }
+        Sites.update({ Sites.projectId eq projectId }) {
+            it[Sites.upstreamContainerName] = containerName
+            it[Sites.updatedAt] = LocalDateTime.now()
+        } == 1
+    }
+
     fun restoreDeploymentUpstream(projectId: UUID, site: SiteRecord): SiteRecord? = transaction {
         val existing = Sites.selectAll().where { Sites.projectId eq projectId }.singleOrNull() ?: return@transaction null
         Sites.update({ Sites.id eq existing[Sites.id] }) {

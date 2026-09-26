@@ -15,6 +15,7 @@ import com.gatekeeper.nginx.NginxConfigInspection
 import com.gatekeeper.nginx.NginxTestResult
 import com.gatekeeper.nginx.NginxBlockUpdateRequest
 import com.gatekeeper.nginx.NginxSiteRenderModel
+import com.gatekeeper.nginx.DeploymentUpstreamResolver
 import com.gatekeeper.nginx.TlsRenderMode
 import com.gatekeeper.nginx.ResolvedCertificate
 import com.gatekeeper.nginx.extractConfiguredContainerName
@@ -100,16 +101,21 @@ private sealed interface NginxPlanResult {
 private fun renderModelFromSite(
     slug: String,
     site: SiteRepository.SiteRecord,
-    nginxService: NginxService,
-    dockerService: DockerService?
+    nginxService: NginxService
 ): NginxSiteRenderModel {
-    val port = when (site.upstreamMode) {
-        UpstreamMode.EXPLICIT_PORT -> site.upstreamExplicitPort
-            ?: error("Site $slug has no explicit upstream port")
+    val (upstreamHost, port, upstreamContainerName) = when (site.upstreamMode) {
+        UpstreamMode.EXPLICIT_PORT -> Triple(
+            site.upstreamHost,
+            site.upstreamExplicitPort ?: error("Site $slug has no explicit upstream port"),
+            site.upstreamContainerName
+        )
         UpstreamMode.DOCKER_DISCOVERY -> {
-            val container = site.upstreamContainerName?.let { dockerService?.getContainer(it) }
-            parsePublishedHostPorts(container?.ports.orEmpty()).singleOrNull()
-                ?: error("Could not resolve one Docker upstream port for site $slug")
+            val target = DeploymentUpstreamResolver.resolve(site.projectId, "production")
+                ?: error("Could not resolve the active deployment upstream for Docker site $slug")
+            val containerName = target.containerName
+                ?: error("Active deployment runtime has no container name for Docker site $slug")
+            SiteRepository.refreshDockerUpstreamContainerCache(site.projectId, containerName)
+            Triple(target.host, target.port, containerName)
         }
     }
     val certificate = when (site.certMode) {
@@ -126,14 +132,14 @@ private fun renderModelFromSite(
     return NginxSiteRenderModel(
         slug = slug,
         domain = site.domain,
-        upstreamHost = site.upstreamHost,
+        upstreamHost = upstreamHost,
         appPort = port,
         upstreamScheme = if (tls == TlsRenderMode.HTTP_ONLY) "http" else "https",
         tlsMode = tls,
         certificatePath = certificate?.certificatePath,
         certificateKeyPath = certificate?.privateKeyPath,
         upstreamMode = site.upstreamMode,
-        upstreamContainerName = site.upstreamContainerName,
+        upstreamContainerName = upstreamContainerName,
         certMode = site.certMode,
         gateEnabled = site.gateEnabled,
         bypassPaths = site.bypassPaths
@@ -589,7 +595,7 @@ fun Application.configureNginxAdminRoutes() {
                 val responseCertificateDomain: String?
                 var siteToPersist: NginxSiteRenderModel? = null
                 val config = if (site != null) {
-                    runCatching { renderModelFromSite(slug, site, nginxService, dockerService) }
+                    runCatching { renderModelFromSite(slug, site, nginxService) }
                         .getOrElse {
                             call.respondError(HttpStatusCode.UnprocessableEntity, "site_configuration_invalid", it.message ?: "Stored Site configuration is invalid")
                             return@post
