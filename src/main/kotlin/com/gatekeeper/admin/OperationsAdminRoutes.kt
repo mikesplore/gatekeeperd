@@ -86,7 +86,8 @@ data class BulkProjectResult(val slug: String, val status: String, val message: 
 
 @Serializable data class DashboardCustomerResponse(
     val id: String, val name: String, val contactEmail: String? = null, val contactPhone: String? = null,
-    val billingStatus: String, val siteCount: Int, val health: Map<String, Int>,
+    val billingStatus: String, val projectCount: Int, val siteCount: Int = projectCount,
+    val health: Map<String, Int> = emptyMap(),
     val totalBilled: Double = 0.0, val totalPaid: Double = 0.0, val balance: Double = 0.0,
     val projects: List<DashboardCustomerProjectResponse> = emptyList()
 )
@@ -282,7 +283,7 @@ fun Application.configureOperationsAdminRoutes() {
                 val body = runCatching { call.receive<DashboardCustomerCreateRequest>() }.getOrElse { call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid customer body"); return@post }
                 if (body.name.isBlank()) { call.respondError(HttpStatusCode.BadRequest, "invalid_customer", "Customer name is required"); return@post }
                 val customer = CustomerRepository.create(body.name.trim(), body.contactEmail?.trim(), body.contactPhone?.trim(), body.billingStatus)
-                call.respond(HttpStatusCode.Created, DashboardCustomerResponse(customer.id.toString(), customer.name, customer.contactEmail, customer.contactPhone, customer.billingStatus, 0, emptyMap()))
+                call.respond(HttpStatusCode.Created, DashboardCustomerResponse(customer.id.toString(), customer.name, customer.contactEmail, customer.contactPhone, customer.billingStatus, 0))
             }
             patch("/api/admin/dashboard/projects/{id}") {
                 val id = runCatching { UUID.fromString(call.parameters["id"]) }.getOrNull() ?: run { call.respondError(HttpStatusCode.BadRequest, "invalid_project_id", "Invalid project ID"); return@patch }
@@ -300,12 +301,11 @@ fun Application.configureOperationsAdminRoutes() {
                 val (customers, total) = CustomerRepository.findPage(query, limit, offset)
                 val responses = customers.map { customer ->
                     val owned = CustomerRepository.findSites(customer.id)
-                    val sites = owned.mapNotNull { it.site }
                     val financials = owned.map { dashboardProjectFinancials(it.project) }
                     val billed = financials.sumOf { it.billed }
                     val paid = financials.sumOf { it.paid }
                     val balance = financials.sumOf { it.balance }
-                    DashboardCustomerResponse(customer.id.toString(), customer.name, customer.contactEmail, customer.contactPhone, derivedBillingStatus(financials), owned.size, sites.groupingBy { it.reconciliationStatus.value }.eachCount(), billed.toDouble(), paid.toDouble(), balance.toDouble())
+                    DashboardCustomerResponse(customer.id.toString(), customer.name, customer.contactEmail, customer.contactPhone, derivedBillingStatus(financials), owned.size, owned.size, emptyMap(), billed.toDouble(), paid.toDouble(), balance.toDouble())
                 }
                 call.respond(DashboardCustomersPageResponse(responses, total, limit, offset, offset + responses.size < total))
             }
@@ -314,8 +314,6 @@ fun Application.configureOperationsAdminRoutes() {
                 val customer = CustomerRepository.findById(id) ?: run { call.respondError(HttpStatusCode.NotFound, "customer_not_found", "Customer not found"); return@get }
                 val owned = CustomerRepository.findSites(id)
                 val financials = owned.map { dashboardProjectFinancials(it.project) }
-                val siteRecords = owned.mapNotNull { it.site }
-                val sites = withDashboardDocker(siteRecords) { docker -> siteRecords.map { dashboardSite(it, docker) } }
                 val projects = owned.map { ownedProject ->
                     val project = ownedProject.project
                     val projectFinancials = dashboardProjectFinancials(project)
@@ -328,7 +326,7 @@ fun Application.configureOperationsAdminRoutes() {
                 }
                 call.respond(DashboardCustomerResponse(
                     customer.id.toString(), customer.name, customer.contactEmail, customer.contactPhone, derivedBillingStatus(financials),
-                    projects.size, sites.groupingBy { it.status }.eachCount(),
+                    projects.size, projects.size, emptyMap(),
                     totalBilled = projects.sumOf { it.amountDue ?: 0.0 }, totalPaid = projects.sumOf { it.totalPaid },
                     balance = projects.sumOf { it.balance }, projects = projects
                 ))

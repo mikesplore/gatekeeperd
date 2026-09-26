@@ -1276,3 +1276,5 @@ Dashboard write operations are also available to authenticated administrators:
 - `DELETE /api/admin/dashboard/dead-configs/{filename}` requires `{"confirm":true}` and moves the orphaned file to a timestamped backup.
 - `POST /api/admin/dashboard/customers` creates a customer.
 - `PATCH /api/admin/dashboard/projects/{id}` assigns or clears `customerId`.
+
+Customer list/detail responses are commercial views: billing totals, `projectCount`, linked project summaries, and payment transactions. During additive rollout, legacy `siteCount` mirrors `projectCount` and legacy `health` is always empty; neither field contains site reconciliation or Docker runtime state.
