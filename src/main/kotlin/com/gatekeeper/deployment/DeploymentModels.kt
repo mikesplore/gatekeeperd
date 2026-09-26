@@ -5,7 +5,7 @@ import com.gatekeeper.docker.VolumeMount
 
 @Serializable
 data class CreateDeploymentRequest(
-    val repository: String,
+    val repository: String? = null,
     val gitRef: String = "main",
     val registry: String = "docker.io",
     val imageName: String,

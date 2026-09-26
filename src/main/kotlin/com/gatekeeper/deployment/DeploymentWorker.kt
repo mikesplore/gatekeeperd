@@ -75,24 +75,29 @@ object DeploymentWorker {
             }
             ensureNotCancelled(job.id)
             val rollbackArtifact = DeploymentApplicationService.rollbackArtifact(job.id)
-            val commit: String
+            val commit: String?
             val image: String
             if (rollbackArtifact != null) {
-                commit = rollbackArtifact.commitSha.orEmpty()
+                commit = rollbackArtifact.commitSha
                 image = rollbackArtifact.image
                 DeploymentJobRepository.update(job.id, "pulling", "Pulling rollback artifact $image", commitSha = commit)
+            } else if (job.repository.isNullOrBlank()) {
+                commit = null
+                image = registryImage(job.registry, job.imageName, job.imageTag)
+                DeploymentJobRepository.update(job.id, "pulling", "Using prebuilt registry image $image")
             } else {
-                DeploymentJobRepository.update(job.id, "cloning", "Cloning ${job.repository}@${job.gitRef}")
+                val repository = job.repository
+                DeploymentJobRepository.update(job.id, "cloning", "Cloning $repository@${job.gitRef}")
                 val githubToken = runCatching { GitHubAppClient.installationToken() }.getOrElse {
-                    logger.info("GitHub App is not connected; attempting public repository clone for {}", job.repository)
+                    logger.info("GitHub App is not connected; attempting public repository clone for {}", repository)
                     ""
                 }
-                val cloneCommand = listOf("git", "clone", "--depth", "1", "--branch", job.gitRef, "https://github.com/${job.repository}.git", workspace.toString())
+                val cloneCommand = listOf("git", "clone", "--depth", "1", "--branch", job.gitRef, "https://github.com/$repository.git", workspace.toString())
                 try {
                     runCommand(job.id, workspace, cloneCommand, githubToken)
                 } catch (error: Exception) {
                     if (githubToken.isBlank()) throw error
-                    logger.info("Authenticated clone unavailable for {}; retrying as public repository", job.repository)
+                    logger.info("Authenticated clone unavailable for {}; retrying as public repository", repository)
                     workspace.toFile().deleteRecursively()
                     withContext(Dispatchers.IO) {
                         Files.createDirectories(workspace)
@@ -109,7 +114,7 @@ object DeploymentWorker {
                 }
                 dockerLogin(job.id, job.registry, credential.username, credential.password)
             }
-            if (rollbackArtifact == null) {
+            if (rollbackArtifact == null && !job.repository.isNullOrBlank()) {
                 DeploymentJobRepository.update(job.id, "building", "Building $image")
                 runCommand(job.id, workspace, listOf("docker", "build", "--tag", image, workspace.toString()))
                 DeploymentJobRepository.update(job.id, "pushing", "Pushing $image")
@@ -159,7 +164,7 @@ object DeploymentWorker {
                     "Unable to persist candidate runtime for deployment ${job.id}"
                 }
                 DeploymentJobRepository.update(job.id, step = "readiness_succeeded", log = "Candidate passed readiness checks ($selectedProbe); deployment remains health-checking until cutover")
-                AuditRepository.write(null, "deployment_readiness_succeeded", "deployment-worker", "job=${job.id} repository=${job.repository} commit=$commit")
+                AuditRepository.write(null, "deployment_readiness_succeeded", "deployment-worker", "job=${job.id} repository=${job.repository ?: "prebuilt-image"} commit=${commit ?: "not-applicable"}")
                 cutover(job, docker) { rollback -> routeRollback = rollback }
                 candidateName = null
             } finally { docker.close() }

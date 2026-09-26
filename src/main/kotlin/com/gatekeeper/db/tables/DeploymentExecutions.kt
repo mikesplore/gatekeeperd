@@ -9,7 +9,7 @@ import org.jetbrains.exposed.sql.javatime.datetime
 object DeploymentExecutions : Table("deployment_executions") {
     val id = uuid("id")
     val configurationId = uuid("configuration_id").references(DeploymentConfigurations.id, onDelete = ReferenceOption.RESTRICT)
-    val repository = text("repository")
+    val repository = text("repository").nullable()
     val gitRef = text("git_ref")
     val registry = text("registry")
     val imageName = text("image_name")

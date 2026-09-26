@@ -19,7 +19,7 @@ import com.gatekeeper.db.tables.ProjectSecretSetVersions
 private data class SecretSetReference(val id: UUID, val version: Int)
 
 data class DeploymentJobRecord(
-    val id: UUID, val repository: String, val gitRef: String, val registry: String,
+    val id: UUID, val repository: String?, val gitRef: String, val registry: String,
     val imageName: String, val imageTag: String, val hostPort: Int?, val containerPort: Int?, val network: String, val restartPolicy: String, val env: Map<String, String>, val secretEnv: Map<String, String>, val volumes: List<VolumeMount>, val createNetworkIfMissing: Boolean,
     val status: String, val currentStep: String,
     val logs: String, val commitSha: String?, val imageDigest: String?, val errorMessage: String?,
@@ -49,8 +49,9 @@ object DeploymentJobRepository {
         }.mapNotNull { row ->
             val projectId = row[DeploymentConfigurations.projectId]
             if (Projects.selectAll().where { (Projects.id eq projectId) and Projects.deletedAt.isNull() }.count() == 0L) return@mapNotNull null
+            val savedRepository = row[DeploymentConfigurations.repository] ?: return@mapNotNull null
             AutoDeployTarget(
-                projectId, row[DeploymentConfigurations.repository], row[DeploymentConfigurations.gitRef],
+                projectId, savedRepository, row[DeploymentConfigurations.gitRef],
                 row[DeploymentConfigurations.registry], row[DeploymentConfigurations.imageName],
                 row[DeploymentConfigurations.imageTag], row[DeploymentConfigurations.environment] ?: "production"
             )
@@ -59,7 +60,7 @@ object DeploymentJobRepository {
 
     data class ConfigurationSummary(
         val id: UUID,
-        val repository: String,
+        val repository: String?,
         val gitRef: String,
         val registry: String,
         val imageName: String,
@@ -109,7 +110,7 @@ object DeploymentJobRepository {
             readinessTimeoutSeconds = request.readinessTimeoutSeconds,
             readinessIntervalSeconds = request.readinessIntervalSeconds,
             readinessProbeTimeoutMillis = request.readinessProbeTimeoutMillis
-        ))
+        ), replaceRepository = true)
         check(updated) { "Deployment configuration disappeared while saving" }
         return currentId
     }
@@ -194,7 +195,7 @@ object DeploymentJobRepository {
         id
     }
 
-    fun updateConfiguration(id: UUID, request: UpdateDeploymentConfigurationRequest): Boolean = transaction {
+    fun updateConfiguration(id: UUID, request: UpdateDeploymentConfigurationRequest, replaceRepository: Boolean = false): Boolean = transaction {
         val row = DeploymentConfigurations.selectAll().where { DeploymentConfigurations.id eq id }.singleOrNull() ?: return@transaction false
         val projectId = row[DeploymentConfigurations.projectId] ?: error("Deployment configuration has no project_id")
         val newSecrets = request.secretEnv?.let { values ->
@@ -224,7 +225,8 @@ object DeploymentJobRepository {
         request.readinessIntervalSeconds?.let { require(it in 1..30) { "Readiness interval must be between 1 and 30 seconds" } }
         request.readinessProbeTimeoutMillis?.let { require(it in 100..30000) { "Readiness probe timeout must be between 100 and 30000 milliseconds" } }
         DeploymentConfigurations.update({ DeploymentConfigurations.id eq id }) {
-            request.repository?.let { value -> it[repository] = value }; request.gitRef?.let { value -> it[gitRef] = value }
+            if (replaceRepository) it[repository] = request.repository else request.repository?.let { value -> it[repository] = value }
+            request.gitRef?.let { value -> it[gitRef] = value }
             request.registry?.let { value -> it[registry] = value }; request.imageName?.let { value -> it[imageName] = value }
             request.imageTag?.let { value -> it[imageTag] = value }
             request.hostPort?.let { value -> it[hostPort] = value }; request.containerPort?.let { value -> it[containerPort] = value }
@@ -248,7 +250,8 @@ object DeploymentJobRepository {
         }
         // Keep the private worker queue snapshot aligned with the saved configuration.
         DeploymentJobs.update({ DeploymentJobs.id eq id }) {
-            request.repository?.let { value -> it[repository] = value }; request.gitRef?.let { value -> it[gitRef] = value }
+            if (replaceRepository) it[repository] = request.repository else request.repository?.let { value -> it[repository] = value }
+            request.gitRef?.let { value -> it[gitRef] = value }
             request.registry?.let { value -> it[registry] = value }; request.imageName?.let { value -> it[imageName] = value }
             request.imageTag?.let { value -> it[imageTag] = value }
             request.hostPort?.let { value -> it[hostPort] = value }; request.containerPort?.let { value -> it[containerPort] = value }

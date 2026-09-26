@@ -232,7 +232,7 @@ Read setup progress for continuing optional project configuration. Returns the p
 
 #### PUT /api/admin/project-setup/projects/{projectId}/source-runtime
 
-Create or update the desired configuration for the project/environment. Accepts the deployment request fields for repository/ref, registry/image, required `containerPort`, optional `hostPort`, network/restart policy, non-secret `env`, `environment`, and readiness settings. The host port may be omitted so Docker can allocate an ephemeral port for candidate coexistence. `environment` defaults to `production`. This saves desired state only and is safe to repeat; it does not queue a deployment. Send application secrets through the credentials step.
+Create or update the desired configuration for the project/environment. Accepts optional `repository` and `gitRef`, registry/image, required `containerPort`, optional `hostPort`, network/restart policy, non-secret `env`, `environment`, and readiness settings. Provide a GitHub repository to build from source; omit it to pull and run the configured prebuilt registry image directly. GitHub auto-deploy is only available when a repository is configured. The host port may be omitted so Docker can allocate an ephemeral port for candidate coexistence. `environment` defaults to `production`. This saves desired state only and is safe to repeat; it does not queue a deployment. Send application secrets through the credentials step.
 
 Returns `{ "configurationId": "<uuid>", "environment": "production", "status": "configured" }`.
 

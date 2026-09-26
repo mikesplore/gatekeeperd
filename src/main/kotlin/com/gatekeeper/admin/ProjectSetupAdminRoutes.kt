@@ -92,7 +92,7 @@ data class ProjectSetupGatewayResponse(
 @Serializable
 data class ProjectSetupConfigurationResponse(
     val id: String,
-    val repository: String,
+    val repository: String?,
     val gitRef: String,
     val registry: String,
     val imageName: String,
@@ -375,14 +375,15 @@ fun Application.configureProjectSetupAdminRoutes() {
                     ?: return@put call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
                 val body = runCatching { call.receive<CreateDeploymentRequest>() }.getOrNull()
                     ?: return@put call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid source/runtime configuration")
-                if (!validSetupDeployment(body)) {
-                    return@put call.respondError(HttpStatusCode.BadRequest, "invalid_deployment_configuration", "Repository, ref, registry, image, tag, environment, or port is invalid")
+                val normalizedRepository = body.repository?.trim()?.takeIf { it.isNotEmpty() }
+                if (!validSetupDeployment(body, normalizedRepository)) {
+                    return@put call.respondError(HttpStatusCode.BadRequest, "invalid_deployment_configuration", "GitHub repository, ref, registry, image, tag, environment, or port is invalid")
                 }
                 if (body.secretEnv.isNotEmpty()) {
                     return@put call.respondError(HttpStatusCode.BadRequest, "secrets_use_credentials_step", "Send application secrets through the credentials step")
                 }
                 val configurationId = runCatching {
-                    DeploymentJobRepository.upsertProjectConfiguration(projectId, body.copy(projectId = projectId.toString(), triggerSource = "project_setup"))
+                    DeploymentJobRepository.upsertProjectConfiguration(projectId, body.copy(repository = normalizedRepository, projectId = projectId.toString(), triggerSource = "project_setup"))
                 }.getOrElse { error ->
                     return@put call.respondError(HttpStatusCode.BadRequest, "invalid_deployment_configuration", error.message ?: "Configuration could not be saved")
                 }
@@ -583,9 +584,10 @@ private suspend fun io.ktor.server.application.ApplicationCall.setupProjectId():
     return id
 }
 
-private fun validSetupDeployment(body: CreateDeploymentRequest): Boolean =
-    body.repository.matches(Regex("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")) &&
-        body.gitRef.matches(Regex("^[A-Za-z0-9._/-]+$")) &&
+private fun validSetupDeployment(body: CreateDeploymentRequest, repository: String?): Boolean =
+    (repository == null || repository.matches(Regex("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"))) &&
+        (repository != null || !body.autoDeploy) &&
+        (repository == null || body.gitRef.matches(Regex("^[A-Za-z0-9._/-]+$"))) &&
         body.imageName.matches(Regex("^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*$")) &&
         body.registry.matches(Regex("^(docker\\.io|[A-Za-z0-9.-]+(:[0-9]{1,5})?)$")) &&
         body.imageTag.matches(Regex("^[A-Za-z0-9_.-]+$")) && body.environment.isNotBlank() && body.containerPort != null && body.containerPort in 1..65535 &&

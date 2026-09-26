@@ -8,7 +8,7 @@ import org.jetbrains.exposed.sql.javatime.datetime
 /** Durable deployment intent. Secret values are encrypted and are never serialized by API responses. */
 object DeploymentConfigurations : Table("deployment_configurations") {
     val id = uuid("id")
-    val repository = text("repository")
+    val repository = text("repository").nullable()
     val gitRef = text("git_ref")
     val registry = text("registry")
     val imageName = text("image_name")

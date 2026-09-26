@@ -6,7 +6,7 @@ import org.jetbrains.exposed.sql.javatime.CurrentDateTime
 
 object DeploymentJobs : Table("deployment_jobs") {
     val id = uuid("id")
-    val repository = text("repository")
+    val repository = text("repository").nullable()
     val gitRef = text("git_ref")
     val registry = text("registry")
     val imageName = text("image_name")
