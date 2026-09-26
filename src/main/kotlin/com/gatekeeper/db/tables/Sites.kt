@@ -7,7 +7,7 @@ import org.jetbrains.exposed.sql.javatime.datetime
 /** Desired nginx render configuration for a project. Deployed files remain filesystem state. */
 object Sites : Table("sites") {
     val id = uuid("id").autoGenerate()
-    val projectId = reference("project_id", Projects.id).uniqueIndex()
+    val projectId = reference("project_id", Projects.id).index()
     val certificateId = reference("certificate_id", Certificates.id).nullable().index()
     val domain = text("domain")
     val upstreamHost = text("upstream_host").default("127.0.0.1")
