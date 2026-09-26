@@ -222,7 +222,7 @@ Create projects with the re-enterable setup API. `POST /api/admin/projects` was 
 
 #### POST /api/admin/project-setup/projects
 
-Create a project without a Docker container. Accepts `slug`, `name`, `domain`, `type`, and optional `customerId`, `amountDue`, `currency`, `dueDate`, and `gracePeriodDays`.
+Create a project without a Docker container. Accepts `name`, `domain`, `type`, and optional `customerId`, `amountDue`, `currency`, `dueDate`, and `gracePeriodDays`. The server generates the project slug from the name. If that slug is already in use, including by an archived project, it appends a random suffix; callers do not choose or edit the slug.
 
 Returns `201 Created` with `{ "projectId": "<uuid>", "slug": "<slug>", "status": "created" }`.
 

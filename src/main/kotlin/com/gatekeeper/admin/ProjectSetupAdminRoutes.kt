@@ -20,11 +20,29 @@ import io.ktor.server.response.respond
 import io.ktor.server.routing.*
 import kotlinx.serialization.Serializable
 import java.math.BigDecimal
+import java.text.Normalizer
 import java.util.UUID
+
+private fun generatedProjectSlug(name: String): String {
+    val base = Normalizer.normalize(name.trim().lowercase(), Normalizer.Form.NFD)
+        .replace(Regex("\\p{M}+"), "")
+        .replace(Regex("[^a-z0-9]+"), "-")
+        .trim('-')
+        .ifBlank { "project" }
+        .take(54)
+        .trimEnd('-')
+
+    if (ProjectRepository.findBySlug(base, includeArchived = true) == null) return base
+
+    while (true) {
+        val salt = UUID.randomUUID().toString().replace("-", "").take(8)
+        val candidate = "${base.take(64 - salt.length - 1).trimEnd('-')}-$salt"
+        if (ProjectRepository.findBySlug(candidate, includeArchived = true) == null) return candidate
+    }
+}
 
 @Serializable
 data class CreateProjectSetupRequest(
-    val slug: String,
     val name: String,
     val domain: String,
     val type: String = "frontend",
@@ -300,17 +318,13 @@ fun Application.configureProjectSetupAdminRoutes() {
             post("/api/admin/project-setup/projects") {
                 val body = runCatching { call.receive<CreateProjectSetupRequest>() }.getOrNull()
                     ?: return@post call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid project setup request")
-                val slug = InputValidators.normalizeSlug(body.slug)
-                    ?: return@post call.respondError(HttpStatusCode.BadRequest, "invalid_slug", "Slug must be 2-64 lowercase letters, numbers, or hyphens")
                 if (body.name.isBlank() || body.type.lowercase() !in setOf("frontend", "backend")) {
                     return@post call.respondError(HttpStatusCode.BadRequest, "invalid_project", "Name and a valid project type are required")
                 }
                 val domain = runCatching { requireValidHostname(body.domain) }.getOrElse {
                     return@post call.respondError(HttpStatusCode.BadRequest, "invalid_domain", it.message ?: "Domain is invalid")
                 }
-                if (ProjectRepository.findBySlug(slug, includeArchived = true) != null) {
-                    return@post call.respondError(HttpStatusCode.Conflict, "project_exists", "A project with this slug already exists")
-                }
+                val slug = generatedProjectSlug(body.name)
                 val customerId = body.customerId?.let {
                     runCatching { UUID.fromString(it) }.getOrNull()
                         ?: return@post call.respondError(HttpStatusCode.BadRequest, "invalid_customer", "customerId must be a valid UUID")
