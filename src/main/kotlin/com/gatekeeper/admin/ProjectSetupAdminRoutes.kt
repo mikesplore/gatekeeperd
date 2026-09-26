@@ -225,6 +225,36 @@ data class ProjectDeploymentHistoryItem(
 data class ProjectDeploymentHistoryResponse(val projectId: String, val environment: String, val items: List<ProjectDeploymentHistoryItem>)
 
 @Serializable
+data class AdminDeploymentHistoryItem(
+    val id: String,
+    val projectId: String,
+    val projectSlug: String,
+    val environment: String,
+    val sourceCommit: String?,
+    val imageName: String,
+    val imageTag: String,
+    val imageDigest: String?,
+    val trigger: String,
+    val status: String,
+    val createdAt: String,
+    val activeAt: String?,
+    val healthCheckResult: String,
+    val failureReason: String?,
+    val credentialSetId: String?,
+    val credentialSetVersion: Int?,
+    val secretSetId: String?,
+    val secretSetVersion: Int?
+)
+
+@Serializable
+data class AdminDeploymentHistoryResponse(
+    val items: List<AdminDeploymentHistoryItem>,
+    val total: Long,
+    val limit: Int,
+    val offset: Int
+)
+
+@Serializable
 data class ProjectSecretRotationRequest(val secretEnv: Map<String, String>)
 
 @Serializable
@@ -248,17 +278,24 @@ fun Application.configureProjectSetupAdminRoutes() {
                 val limit = call.request.queryParameters["limit"]?.toIntOrNull()?.coerceIn(1, 100) ?: 50
                 val offset = call.request.queryParameters["offset"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0
                 val (page, total) = DeploymentApplicationService.deploymentHistoryPage(limit, offset)
-                call.respond(mapOf("items" to page.map { (slug, item) ->
-                    mapOf(
-                        "id" to item.id.toString(), "projectId" to item.projectId.toString(), "projectSlug" to slug,
-                        "environment" to item.environment, "sourceCommit" to item.sourceCommit, "imageName" to item.imageName,
-                        "imageTag" to item.imageTag, "imageDigest" to item.imageDigest, "trigger" to item.triggerSource,
-                        "status" to item.status, "createdAt" to item.createdAt.toString(), "activeAt" to item.activeAt?.toString(),
-                        "healthCheckResult" to item.healthCheckResult, "failureReason" to item.failureReason,
-                        "credentialSetId" to item.credentialSetId?.toString(), "credentialSetVersion" to item.credentialSetVersion,
-                        "secretSetId" to item.secretSetId?.toString(), "secretSetVersion" to item.secretSetVersion
+                call.respond(
+                    AdminDeploymentHistoryResponse(
+                        items = page.map { (slug, item) ->
+                            AdminDeploymentHistoryItem(
+                                id = item.id.toString(), projectId = item.projectId.toString(), projectSlug = slug,
+                                environment = item.environment, sourceCommit = item.sourceCommit, imageName = item.imageName,
+                                imageTag = item.imageTag, imageDigest = item.imageDigest, trigger = item.triggerSource,
+                                status = item.status, createdAt = item.createdAt.toString(), activeAt = item.activeAt?.toString(),
+                                healthCheckResult = item.healthCheckResult, failureReason = item.failureReason,
+                                credentialSetId = item.credentialSetId?.toString(), credentialSetVersion = item.credentialSetVersion,
+                                secretSetId = item.secretSetId?.toString(), secretSetVersion = item.secretSetVersion
+                            )
+                        },
+                        total = total,
+                        limit = limit,
+                        offset = offset
                     )
-                }, "total" to total, "limit" to limit, "offset" to offset))
+                )
             }
             post("/api/admin/project-setup/projects") {
                 val body = runCatching { call.receive<CreateProjectSetupRequest>() }.getOrNull()
