@@ -9,6 +9,7 @@ import com.gatekeeper.db.tables.TlsMode
 import com.gatekeeper.deployment.*
 import com.gatekeeper.docker.DockerService
 import com.gatekeeper.nginx.DeploymentUpstreamResolver
+import com.gatekeeper.nginx.NginxService
 import com.gatekeeper.nginx.requireValidHostname
 import com.gatekeeper.security.SecretValueCipher
 import io.ktor.http.HttpStatusCode
@@ -19,6 +20,8 @@ import io.ktor.server.request.receive
 import io.ktor.server.response.respond
 import io.ktor.server.routing.*
 import kotlinx.serialization.Serializable
+import java.net.InetSocketAddress
+import java.net.Socket
 import java.math.BigDecimal
 import java.text.Normalizer
 import java.util.UUID
@@ -281,9 +284,49 @@ data class ProviderCredentialMetadataView(
     val version: Int, val current: Boolean, val rotatedAt: String?, val rotatedBy: String?, val createdAt: String
 )
 
+@Serializable
+data class AdoptableContainerPort(val containerPort: Int, val hostPort: Int)
+
+@Serializable
+data class AdoptableContainerView(
+    val id: String, val name: String, val image: String, val state: String,
+    val networks: List<String>, val ports: List<AdoptableContainerPort>, val environmentVariableCount: Int
+)
+
+@Serializable
+data class AdoptContainerRequest(val containerId: String, val containerPort: Int)
+
+@Serializable
+data class AdoptContainerResponse(
+    val deploymentId: String, val containerName: String, val status: String = "active",
+    val environmentVariableCount: Int, val message: String
+)
+
 fun Application.configureProjectSetupAdminRoutes() {
     routing {
         authenticate("auth-jwt") {
+            get("/api/admin/project-setup/containers") {
+                val docker = runCatching { DockerService(AppConfig.dockerSocket) }.getOrElse {
+                    return@get call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is unavailable")
+                }
+                val containers = try {
+                    docker.listContainers(all = false).mapNotNull { listed ->
+                        val details = docker.adoptionDetails(listed.id) ?: return@mapNotNull null
+                        if (!details.state.equals("running", ignoreCase = true)) return@mapNotNull null
+                        AdoptableContainerView(
+                            details.id.take(12), details.name, details.image, details.state, details.networks,
+                            details.ports.map { (containerPort, hostPort) -> AdoptableContainerPort(containerPort, hostPort) }.sortedBy { it.containerPort },
+                            details.environment.size
+                        )
+                    }
+                } catch (error: Exception) {
+                    return@get call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Unable to list running Docker containers")
+                } finally {
+                    docker.close()
+                }
+                call.respond(containers)
+            }
+
             get("/api/admin/project-setup/provider-credentials") {
                 val provider = call.request.queryParameters["provider"]?.trim()?.lowercase()
                 val type = call.request.queryParameters["type"]?.trim()?.lowercase()
@@ -366,6 +409,68 @@ fun Application.configureProjectSetupAdminRoutes() {
                     config?.toSetupResponse(), credential != null, credential?.version,
                     site?.let { ProjectSetupGatewayResponse(it.domain, it.tlsMode.value, it.gateEnabled, it.reconciliationStatus.value) },
                     active?.id?.toString(), active?.status, latest?.first?.toString(), latest?.second
+                ))
+            }
+
+            post("/api/admin/project-setup/projects/{projectId}/adopt-container") {
+                val projectId = call.setupProjectId() ?: return@post
+                val project = ProjectRepository.findActiveById(projectId)
+                    ?: return@post call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
+                val request = runCatching { call.receive<AdoptContainerRequest>() }.getOrNull()
+                    ?: return@post call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Container ID and container port are required")
+                if (request.containerId.isBlank() || request.containerPort !in 1..65535) {
+                    return@post call.respondError(HttpStatusCode.BadRequest, "invalid_container", "Container and a valid published port are required")
+                }
+                val docker = runCatching { DockerService(AppConfig.dockerSocket) }.getOrElse {
+                    return@post call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is unavailable")
+                }
+                val details = try { docker.adoptionDetails(request.containerId) } finally { docker.close() }
+                    ?: return@post call.respondError(HttpStatusCode.NotFound, "container_not_found", "Running container was not found")
+                if (!details.state.equals("running", ignoreCase = true)) {
+                    return@post call.respondError(HttpStatusCode.Conflict, "container_not_running", "Only running containers can be adopted")
+                }
+                val hostPort = details.ports[request.containerPort]
+                    ?: return@post call.respondError(HttpStatusCode.BadRequest, "container_port_not_published", "Selected container port has no published TCP host port")
+                val reachable = runCatching {
+                    Socket().use { socket -> socket.connect(InetSocketAddress("127.0.0.1", hostPort), 1500) }
+                    true
+                }.getOrDefault(false)
+                if (!reachable) {
+                    return@post call.respondError(HttpStatusCode.Conflict, "container_port_unreachable", "The container's published port is not reachable from this server")
+                }
+                val previous = DeploymentApplicationService.activeDeploymentSummary(projectId, "production")
+                val actor = call.principal<io.ktor.server.auth.jwt.JWTPrincipal>()?.payload?.subject ?: "admin"
+                val adopted = runCatching { DeploymentJobRepository.createAdoptedRuntime(projectId, details, request.containerPort, actor) }
+                    .getOrElse { error ->
+                        return@post call.respondError(HttpStatusCode.Conflict, "container_adoption_failed", error.message ?: "Container could not be adopted")
+                    }
+                val site = SiteRepository.findByProjectId(projectId)
+                val nginx = if (site != null) NginxService() else null
+                val previousConfig = if (site != null) runCatching { nginx?.inspectSite(project.slug)?.content }.getOrNull() else null
+                val routed = site == null || runCatching {
+                    nginx?.switchDeploymentUpstream(projectId, project.slug, "127.0.0.1", request.containerPort, hostPort) == true
+                }.getOrDefault(false)
+                if (!routed) {
+                    DeploymentApplicationService.transition(adopted.deploymentId, com.gatekeeper.db.tables.DeploymentStatus.FAILED, "Gateway validation failed while adopting the running container")
+                    return@post call.respondError(HttpStatusCode.BadGateway, "container_adoption_gateway_failed", "Gateway validation failed. The container remains running and the previous runtime stays active.")
+                }
+                val activated = runCatching { DeploymentApplicationService.activateAfterCutover(adopted.deploymentId, previous?.id) }.getOrDefault(false)
+                if (!activated) {
+                    if (site != null && previousConfig != null) {
+                        runCatching { nginx?.restoreSiteConfiguration(project.slug, previousConfig) }
+                        runCatching { SiteRepository.restoreDeploymentUpstream(projectId, site) }
+                    }
+                    DeploymentApplicationService.transition(adopted.deploymentId, com.gatekeeper.db.tables.DeploymentStatus.FAILED, "Active deployment changed during container adoption")
+                    return@post call.respondError(HttpStatusCode.Conflict, "container_adoption_conflict", "Project runtime changed while the container was being attached; its gateway route was restored")
+                }
+                AuditRepository.write(projectId, "container_adopted", actor, "deployment=${adopted.deploymentId} container=${details.name}")
+                call.respond(HttpStatusCode.Created, AdoptContainerResponse(
+                    adopted.deploymentId.toString(), details.name, environmentVariableCount = details.environment.size,
+                    message = if (details.environment.isNotEmpty()) {
+                        "Running container attached without restarting it. Its environment was saved as encrypted project secrets, and the previous runtime was left running."
+                    } else {
+                        "Running container attached without restarting it. The previous runtime was left running."
+                    }
                 ))
             }
 

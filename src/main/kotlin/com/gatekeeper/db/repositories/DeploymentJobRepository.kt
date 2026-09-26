@@ -195,6 +195,117 @@ object DeploymentJobRepository {
         id
     }
 
+    data class AdoptedRuntimeRecord(val deploymentId: UUID, val configurationId: UUID)
+
+    /** Records an existing running container as an immutable deployment snapshot; its environment is encrypted at rest. */
+    fun createAdoptedRuntime(
+        projectId: UUID,
+        container: com.gatekeeper.docker.DockerService.AdoptionDetails,
+        containerPort: Int,
+        actor: String
+    ): AdoptedRuntimeRecord = transaction {
+        require(container.environment.keys.all { it.matches(Regex("[A-Za-z_][A-Za-z0-9_]*")) }) { "Container has invalid environment variable names" }
+        if (container.environment.isNotEmpty()) check(SecretValueCipher.isConfigured()) { "Secret encryption must be configured to adopt a container with environment variables" }
+        val environment = "production"
+        val (registry, imageName, imageTag) = splitImageReference(container.image)
+        val configurationId = configurationIdForProject(projectId, environment) ?: createConfiguration(
+            projectId,
+            com.gatekeeper.deployment.CreateDeploymentRequest(
+                registry = registry, imageName = imageName, imageTag = imageTag,
+                containerPort = containerPort, network = container.networks.firstOrNull() ?: "bridge",
+                restartPolicy = container.restartPolicy, projectId = projectId.toString(), environment = environment,
+                triggerSource = "container_adoption", volumes = container.volumes
+            )
+        )
+        val secretSet = container.environment.takeIf { it.isNotEmpty() }?.let { createSecretSetVersion(projectId, environment, it, actor) }
+        val id = UUID.randomUUID()
+        val encryptedEnvironment = container.environment.takeIf { it.isNotEmpty() }
+            ?.let { SecretValueCipher.encrypt(Json.encodeToString(it)) }
+        DeploymentConfigurations.update({ DeploymentConfigurations.id eq configurationId }) {
+            it[DeploymentConfigurations.repository] = null
+            it[DeploymentConfigurations.gitRef] = ""
+            it[DeploymentConfigurations.registry] = registry
+            it[DeploymentConfigurations.imageName] = imageName
+            it[DeploymentConfigurations.imageTag] = imageTag
+            it[DeploymentConfigurations.hostPort] = null
+            it[DeploymentConfigurations.containerPort] = containerPort
+            it[DeploymentConfigurations.network] = container.networks.firstOrNull() ?: "bridge"
+            it[DeploymentConfigurations.restartPolicy] = container.restartPolicy
+            it[DeploymentConfigurations.envJson] = "{}"
+            it[DeploymentConfigurations.secretEnvEncrypted] = encryptedEnvironment
+            it[DeploymentConfigurations.secretSetId] = secretSet?.id
+            it[DeploymentConfigurations.secretSetVersion] = secretSet?.version
+            it[DeploymentConfigurations.volumesJson] = Json.encodeToString(container.volumes)
+            it[DeploymentConfigurations.autoDeploy] = false
+            it[DeploymentConfigurations.readinessType] = "tcp"
+            it[DeploymentConfigurations.readinessTarget] = containerPort.toString()
+            it[DeploymentConfigurations.readinessTimeoutSeconds] = 60
+            it[DeploymentConfigurations.readinessIntervalSeconds] = 2
+            it[DeploymentConfigurations.readinessProbeTimeoutMillis] = 1000
+            it[DeploymentConfigurations.updatedAt] = LocalDateTime.now()
+        }
+        val execution = DeploymentExecutions.insert {
+            it[DeploymentExecutions.id] = id
+            it[DeploymentExecutions.configurationId] = configurationId
+            it[DeploymentExecutions.repository] = null
+            it[DeploymentExecutions.gitRef] = ""
+            it[DeploymentExecutions.registry] = registry
+            it[DeploymentExecutions.imageName] = imageName
+            it[DeploymentExecutions.imageTag] = imageTag
+            it[DeploymentExecutions.hostPort] = null
+            it[DeploymentExecutions.containerPort] = containerPort
+            it[DeploymentExecutions.network] = container.networks.firstOrNull() ?: "bridge"
+            it[DeploymentExecutions.restartPolicy] = container.restartPolicy
+            it[DeploymentExecutions.envJson] = "{}"
+            it[DeploymentExecutions.secretEnvEncrypted] = encryptedEnvironment
+            it[DeploymentExecutions.secretSetId] = secretSet?.id
+            it[DeploymentExecutions.secretSetVersion] = secretSet?.version
+            it[DeploymentExecutions.volumesJson] = Json.encodeToString(container.volumes)
+            it[DeploymentExecutions.createNetworkIfMissing] = false
+            it[DeploymentExecutions.projectId] = projectId
+            it[DeploymentExecutions.environment] = environment
+            it[DeploymentExecutions.readinessType] = "tcp"
+            it[DeploymentExecutions.readinessTarget] = containerPort.toString()
+            it[DeploymentExecutions.readinessTimeoutSeconds] = 1
+            it[DeploymentExecutions.readinessIntervalSeconds] = 1
+            it[DeploymentExecutions.readinessProbeTimeoutMillis] = 1000
+            it[DeploymentExecutions.triggerSource] = "container_adoption"
+            it[DeploymentExecutions.status] = "succeeded"
+            it[DeploymentExecutions.currentStep] = "readiness_succeeded"
+            it[DeploymentExecutions.logs] = "Existing running container adopted; environment captured as encrypted secret-set version."
+            it[DeploymentExecutions.imageDigest] = container.imageDigest
+            it[DeploymentExecutions.completedAt] = LocalDateTime.now()
+        }
+        val mappedHostPort = container.ports[containerPort] ?: error("Selected container port is not published")
+        check(DeploymentApplicationService.recordAdoptedRuntime(
+            id = id, projectId = projectId, configurationId = configurationId, executionId = execution[DeploymentExecutions.id],
+            environment = environment, triggerSource = "container_adoption", containerName = container.name,
+            hostPort = mappedHostPort, containerPort = containerPort, portMappings = container.ports,
+            imageDigest = container.imageDigest, secretSetId = secretSet?.id, secretSetVersion = secretSet?.version
+        )) { "Unable to record adopted runtime" }
+        AdoptedRuntimeRecord(id, configurationId)
+    }
+
+    private fun splitImageReference(reference: String): Triple<String, String, String> {
+        val digestIndex = reference.indexOf('@')
+        val withoutDigest = if (digestIndex >= 0) reference.substring(0, digestIndex) else reference
+        val slash = withoutDigest.lastIndexOf('/')
+        val colon = withoutDigest.lastIndexOf(':')
+        val hasTag = colon > slash
+        val taggedName = if (hasTag) withoutDigest.substring(0, colon) else withoutDigest
+        val tag = if (hasTag) withoutDigest.substring(colon + 1) else "latest"
+        val firstSlash = taggedName.indexOf('/')
+        val firstPart = if (firstSlash >= 0) taggedName.substring(0, firstSlash) else ""
+        val hasRegistry = firstPart.contains('.') || firstPart.contains(':') || firstPart == "localhost"
+        val registry = if (hasRegistry) firstPart else "docker.io"
+        val name = when {
+            hasRegistry -> taggedName.substring(firstSlash + 1)
+            taggedName.isNotBlank() -> taggedName
+            else -> error("Container image reference is invalid")
+        }
+        return Triple(registry, name, tag)
+    }
+
     fun updateConfiguration(id: UUID, request: UpdateDeploymentConfigurationRequest, replaceRepository: Boolean = false): Boolean = transaction {
         val row = DeploymentConfigurations.selectAll().where { DeploymentConfigurations.id eq id }.singleOrNull() ?: return@transaction false
         val projectId = row[DeploymentConfigurations.projectId] ?: error("Deployment configuration has no project_id")

@@ -61,6 +61,50 @@ object DeploymentApplicationService {
         }
     }
 
+    /** Persist an already-running Docker runtime as an active deployment without asking the worker to recreate it. */
+    fun recordAdoptedRuntime(
+        id: UUID,
+        projectId: UUID,
+        configurationId: UUID,
+        executionId: UUID,
+        environment: String,
+        triggerSource: String,
+        containerName: String,
+        hostPort: Int,
+        containerPort: Int,
+        portMappings: Map<Int, Int>,
+        imageDigest: String?,
+        secretSetId: UUID?,
+        secretSetVersion: Int?
+    ): Boolean = transaction {
+        val now = LocalDateTime.now()
+        Deployments.insert {
+            it[Deployments.id] = id
+            it[Deployments.projectId] = projectId
+            it[Deployments.environment] = environment
+            it[Deployments.configurationId] = configurationId
+            it[Deployments.executionId] = executionId
+            it[Deployments.secretSetId] = secretSetId
+            it[Deployments.secretSetVersion] = secretSetVersion
+            it[status] = DeploymentStatus.HEALTH_CHECKING
+            it[Deployments.runtimeContainerName] = containerName
+            it[Deployments.runtimeHostPort] = hostPort
+            it[Deployments.runtimePortsJson] = kotlinx.serialization.json.Json.encodeToString(portMappings.mapKeys { entry -> entry.key.toString() })
+            it[Deployments.triggerSource] = triggerSource
+            it[healthCheckingAt] = now
+            it[createdAt] = now
+            it[updatedAt] = now
+        }
+        com.gatekeeper.db.tables.DeploymentExecutions.update({ com.gatekeeper.db.tables.DeploymentExecutions.id eq executionId }) {
+            it[com.gatekeeper.db.tables.DeploymentExecutions.imageDigest] = imageDigest
+            it[com.gatekeeper.db.tables.DeploymentExecutions.status] = "succeeded"
+            it[com.gatekeeper.db.tables.DeploymentExecutions.currentStep] = "readiness_succeeded"
+            it[com.gatekeeper.db.tables.DeploymentExecutions.completedAt] = now
+            it[com.gatekeeper.db.tables.DeploymentExecutions.updatedAt] = now
+        }
+        true
+    }
+
     fun recordCandidateRuntime(id: UUID, containerName: String, hostPort: Int?, portMappings: Map<Int, Int> = emptyMap()): Boolean = transaction {
         require(containerName.isNotBlank()) { "Candidate container name must not be blank" }
         require(hostPort == null || hostPort in 1..65535) { "Candidate host port must be between 1 and 65535" }

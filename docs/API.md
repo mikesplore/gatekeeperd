@@ -230,6 +230,14 @@ Returns `201 Created` with `{ "projectId": "<uuid>", "slug": "<slug>", "status":
 
 Read setup progress for continuing optional project configuration. Returns the project identity, saved source/runtime configuration (non-secret environment values only), whether registry credentials are configured and their version, desired gateway/site state, and both the active deployment pointer and latest deployment attempt status. It never returns registry passwords or application secret values.
 
+#### GET /api/admin/project-setup/containers
+
+List running Docker containers that can be considered for project adoption. The response includes container identity, image, network, published TCP port mappings, and only the number of environment variables; it never returns environment values.
+
+#### POST /api/admin/project-setup/projects/{projectId}/adopt-container
+
+Attach an already-running container as a canonical active deployment without restarting it. Accepts `{ "containerId": "<docker-id-or-name>", "containerPort": 8080 }`; the selected TCP container port must be published and reachable on the host. The project's desired source/runtime configuration is updated to match the adopted container. Existing container environment values are captured into an encrypted project secret-set version and are never returned. If the project has a managed nginx site, its config is validated and switched before the deployment becomes active. Any previous runtime is left running. Returns `201 Created` with deployment ID, container name, and environment variable count.
+
 #### PUT /api/admin/project-setup/projects/{projectId}/source-runtime
 
 Create or update the desired configuration for the project/environment. Accepts optional `repository` and `gitRef`, registry/image, required `containerPort`, optional `hostPort`, network/restart policy, non-secret `env`, `environment`, and readiness settings. Provide a GitHub repository to build from source; omit it to pull and run the configured prebuilt registry image directly. GitHub auto-deploy is only available when a repository is configured. The host port may be omitted so Docker can allocate an ephemeral port for candidate coexistence. `environment` defaults to `production`. This saves desired state only and is safe to repeat; it does not queue a deployment. Send application secrets through the credentials step.

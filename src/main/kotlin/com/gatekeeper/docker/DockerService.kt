@@ -88,6 +88,56 @@ class DockerService(dockerSocketPath: String) {
         }
     }
 
+    /** Runtime details for explicit project adoption. Environment values stay inside the service. */
+    data class AdoptionDetails(
+        val id: String,
+        val name: String,
+        val image: String,
+        val imageDigest: String?,
+        val state: String,
+        val ports: Map<Int, Int>,
+        val networks: List<String>,
+        val restartPolicy: String,
+        val volumes: List<VolumeMount>,
+        val environment: Map<String, String>
+    )
+
+    fun adoptionDetails(containerIdOrName: String): AdoptionDetails? = try {
+        val listed = client.listContainersCmd().withShowAll(true).exec().firstOrNull { container ->
+            container.id.startsWith(containerIdOrName) || container.names.orEmpty().any { it.removePrefix("/") == containerIdOrName }
+        } ?: return null
+        val inspected = client.inspectContainerCmd(listed.id).exec()
+        val image = inspected.config?.image ?: listed.image ?: return null
+        val mappings = listed.ports.orEmpty().mapNotNull { port ->
+            val containerPort = port.privatePort?.takeIf { it in 1..65535 } ?: return@mapNotNull null
+            val hostPort = port.publicPort?.takeIf { it in 1..65535 } ?: return@mapNotNull null
+            if ((port.type ?: "tcp") != "tcp") null else containerPort to hostPort
+        }.toMap()
+        val environment = inspected.config?.env.orEmpty().mapNotNull { value ->
+            val index = value.indexOf('=')
+            if (index <= 0) null else value.substring(0, index) to value.substring(index + 1)
+        }.toMap()
+        AdoptionDetails(
+            id = listed.id,
+            name = listed.names?.firstOrNull()?.removePrefix("/") ?: listed.id.take(12),
+            image = image,
+            imageDigest = imageDigest(image),
+            state = inspected.state?.status ?: listed.state ?: "unknown",
+            ports = mappings,
+            networks = inspected.networkSettings?.networks?.keys?.sorted().orEmpty(),
+            restartPolicy = inspected.hostConfig?.restartPolicy?.name ?: "unless-stopped",
+            volumes = inspected.mounts.orEmpty().mapNotNull { mount ->
+                val source = mount.source ?: return@mapNotNull null
+                val destination = mount.destination?.path ?: return@mapNotNull null
+                VolumeMount(source, destination, mount.mode?.contains("ro") == true, mount.getName())
+            },
+            environment = environment
+        )
+    } catch (e: Exception) {
+        logger.warn("Unable to inspect container for adoption", e)
+        null
+    }
+
     /** Finds the running deployment currently serving an image when older records lack a container name. */
     fun findContainerByImage(image: String): ContainerInfo? =
         listContainers(all = true).firstOrNull { it.image == image || it.image.substringBefore('@') == image }
