@@ -44,7 +44,7 @@ private fun generatedProjectSlug(name: String): String {
 @Serializable
 data class CreateProjectSetupRequest(
     val name: String,
-    val domain: String,
+    val domain: String = "",
     val type: String = "frontend",
     val customerId: String? = null,
     val amountDue: Double? = null,
@@ -321,15 +321,15 @@ fun Application.configureProjectSetupAdminRoutes() {
                 if (body.name.isBlank() || body.type.lowercase() !in setOf("frontend", "backend")) {
                     return@post call.respondError(HttpStatusCode.BadRequest, "invalid_project", "Name and a valid project type are required")
                 }
-                val domain = runCatching { requireValidHostname(body.domain) }.getOrElse {
+                val domain = if (body.domain.isBlank()) "" else runCatching { requireValidHostname(body.domain) }.getOrElse {
                     return@post call.respondError(HttpStatusCode.BadRequest, "invalid_domain", it.message ?: "Domain is invalid")
                 }
                 val slug = generatedProjectSlug(body.name)
                 val customerId = body.customerId?.let {
                     runCatching { UUID.fromString(it) }.getOrNull()
                         ?: return@post call.respondError(HttpStatusCode.BadRequest, "invalid_customer", "customerId must be a valid UUID")
-                }
-                if (customerId != null && CustomerRepository.findById(customerId) == null) {
+                } ?: return@post call.respondError(HttpStatusCode.BadRequest, "customer_required", "A customer must be associated with the project")
+                if (CustomerRepository.findById(customerId) == null) {
                     return@post call.respondError(HttpStatusCode.NotFound, "customer_not_found", "Customer not found")
                 }
                 val dueDate = InputValidators.parseDueDate(body.dueDate)

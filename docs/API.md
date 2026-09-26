@@ -218,17 +218,17 @@ Project responses include independent `deploymentMode`, `serviceMode`, `lifecycl
 
 ### Project setup flow
 
-Create projects with the re-enterable setup API. `POST /api/admin/projects` was removed. Projects remain valid if source/runtime, credentials, gateway, or deployment are not configured yet.
+Create projects with the setup API. `POST /api/admin/projects` was removed. Project creation only requires a name and an associated customer; domain, source/runtime, credentials, gateway, and deployment can be added later from the project overview.
 
 #### POST /api/admin/project-setup/projects
 
-Create a project without a Docker container. Accepts `name`, `domain`, `type`, and optional `customerId`, `amountDue`, `currency`, `dueDate`, and `gracePeriodDays`. The server generates the project slug from the name. If that slug is already in use, including by an archived project, it appends a random suffix; callers do not choose or edit the slug.
+Create a project without a Docker container or domain. Requires `name` and `customerId`; accepts optional `domain`, `type`, `amountDue`, `currency`, `dueDate`, and `gracePeriodDays`. Omit `domain` until the gateway is configured. The server generates the project slug from the name. If that slug is already in use, including by an archived project, it appends a random suffix; callers do not choose or edit the slug.
 
 Returns `201 Created` with `{ "projectId": "<uuid>", "slug": "<slug>", "status": "created" }`.
 
 #### GET /api/admin/project-setup/projects/{projectId}
 
-Read setup progress for resuming the wizard. Returns the project identity, saved source/runtime configuration (non-secret environment values only), whether registry credentials are configured and their version, desired gateway/site state, and both the active deployment pointer and latest deployment attempt status. It never returns registry passwords or application secret values.
+Read setup progress for continuing optional project configuration. Returns the project identity, saved source/runtime configuration (non-secret environment values only), whether registry credentials are configured and their version, desired gateway/site state, and both the active deployment pointer and latest deployment attempt status. It never returns registry passwords or application secret values.
 
 #### PUT /api/admin/project-setup/projects/{projectId}/source-runtime
 

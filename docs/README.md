@@ -151,7 +151,7 @@ For private Docker Hub images, set `pullViaCli=true` (or `DOCKER_PULL_VIA_CLI=tr
 
 ### Project creation and setup
 
-The project setup flow creates a durable project first and saves each setup step independently. Container-first project creation has been removed; Docker container creation remains available as a runtime setup operation.
+The project setup flow creates a durable project using only its name and required customer association. Source/runtime, credentials, domain/gateway, and deployment are optional follow-up tasks available from the project overview. Container-first project creation has been removed; Docker container creation remains available as a runtime setup operation.
 
 1. **Create project without Docker**: `POST /api/admin/project-setup/projects` (slug is generated from the name, with a random suffix added on collision)
 2. **Save source/runtime configuration**: `PUT /api/admin/project-setup/projects/{projectId}/source-runtime`
