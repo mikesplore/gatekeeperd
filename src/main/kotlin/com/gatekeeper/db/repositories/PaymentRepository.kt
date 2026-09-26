@@ -186,17 +186,15 @@ object PaymentRepository {
 
     fun revenueByMonth(months: Int): List<RevenueMonth> {
         return transaction {
+            val monthCount = months.coerceIn(1, 24)
             val sql = """
-                WITH months AS (
-                    SELECT generate_series(
-                        date_trunc('month', CURRENT_DATE) - ($months - 1) * INTERVAL '1 month',
-                        date_trunc('month', CURRENT_DATE),
-                        INTERVAL '1 month'
-                    ) AS month_start
-                )
                 SELECT to_char(months.month_start, 'YYYY-MM') AS month,
                        COALESCE(SUM(payments.amount), 0) AS total
-                FROM months
+                FROM generate_series(
+                    date_trunc('month', CURRENT_DATE) - ($monthCount - 1) * INTERVAL '1 month',
+                    date_trunc('month', CURRENT_DATE),
+                    INTERVAL '1 month'
+                ) AS months(month_start)
                 LEFT JOIN payments
                   ON payments.gateway_status = 'success'
                  AND payments.paid_at >= months.month_start
