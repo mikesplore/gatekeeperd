@@ -11,6 +11,7 @@ Admin dashboard (`gatekeeperd-frontend`) manages projects, blocking, payments, a
 | Doc | Description |
 |-----|-------------|
 | [docs/README.md](docs/README.md) | Project index — architecture, source layout, env vars |
+| [docs/core-remodeling-plan.md](docs/core-remodeling-plan.md) | Project-centered domain and deployment remodeling plan |
 | [docs/API.md](docs/API.md) | REST API reference |
 | [docs/nginx-client-gating.md](docs/nginx-client-gating.md) | Gate client sites with nginx |
 | [docs/staging-deployment.md](docs/staging-deployment.md) | Build, push, and deploy to VPS |
