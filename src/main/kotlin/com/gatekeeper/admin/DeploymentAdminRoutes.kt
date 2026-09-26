@@ -130,7 +130,7 @@ private suspend fun updateConfiguration(call: ApplicationCall) {
     if (id == null) { call.respondError(HttpStatusCode.BadRequest, "invalid_deployment_configuration_id", "Invalid deployment configuration ID"); return }
     val request = runCatching { call.receive<UpdateDeploymentConfigurationRequest>() }.getOrNull()
     if (request == null) { call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid deployment configuration request"); return }
-    if (request.secretEnv?.isNotEmpty() == true && !SecretValueCipher.isConfigured()) { call.respondError(HttpStatusCode.ServiceUnavailable, "deployment_secrets_unconfigured", "Deployment secret encryption is not configured"); return }
+    if (request.secretEnv != null && !SecretValueCipher.isConfigured()) { call.respondError(HttpStatusCode.ServiceUnavailable, "deployment_secrets_unconfigured", "Deployment secret encryption is not configured"); return }
     runCatching { DeploymentJobRepository.updateConfiguration(id, request) }.onFailure { call.respondError(HttpStatusCode.BadRequest, "invalid_deployment_configuration", it.message ?: "Invalid deployment configuration"); return }.getOrThrow()
     call.respond(mapOf("id" to id.toString(), "status" to "updated", "secretEnv" to "write-only"))
 }

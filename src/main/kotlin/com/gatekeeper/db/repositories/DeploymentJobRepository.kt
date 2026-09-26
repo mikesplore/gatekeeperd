@@ -16,6 +16,9 @@ import com.gatekeeper.security.SecretValueCipher
 import com.gatekeeper.deployment.UpdateDeploymentConfigurationRequest
 import com.gatekeeper.deployment.DeploymentApplicationService
 import com.gatekeeper.db.tables.DeploymentStatus
+import com.gatekeeper.db.tables.ProjectSecretSetVersions
+
+private data class SecretSetReference(val id: UUID, val version: Int)
 
 data class DeploymentJobRecord(
     val id: UUID, val repository: String, val gitRef: String, val registry: String,
@@ -50,6 +53,9 @@ object DeploymentJobRepository {
             check(SecretValueCipher.isConfigured()) { "Deployment secret encryption is not configured" }
             SecretValueCipher.encrypt(Json.encodeToString(values))
         }
+        val secretSet = request.secretEnv.takeIf { it.isNotEmpty() }?.let { values ->
+            createSecretSetVersion(projectId, environment, values, "admin")
+        }
         DeploymentConfigurations.insert {
             it[DeploymentConfigurations.id] = id
             it[repository] = request.repository; it[gitRef] = request.gitRef; it[registry] = request.registry
@@ -57,6 +63,8 @@ object DeploymentJobRepository {
             it[hostPort] = request.hostPort; it[containerPort] = request.containerPort; it[network] = request.network
             it[restartPolicy] = request.restartPolicy; it[DeploymentConfigurations.envJson] = envJson
             it[DeploymentConfigurations.secretEnvEncrypted] = secretCiphertext
+            it[DeploymentConfigurations.secretSetId] = secretSet?.id
+            it[DeploymentConfigurations.secretSetVersion] = secretSet?.version
             it[DeploymentConfigurations.volumesJson] = Json.encodeToString(request.volumes)
             it[createNetworkIfMissing] = request.createNetworkIfMissing
             it[projectSlug] = project[Projects.slug]
@@ -74,15 +82,27 @@ object DeploymentJobRepository {
     fun updateConfiguration(id: UUID, request: UpdateDeploymentConfigurationRequest): Boolean = transaction {
         val row = DeploymentConfigurations.selectAll().where { DeploymentConfigurations.id eq id }.singleOrNull() ?: return@transaction false
         val projectId = row[DeploymentConfigurations.projectId] ?: resolveProjectId(row[DeploymentConfigurations.projectSlug])
-        val newSecrets = request.secretEnv?.takeIf { it.isNotEmpty() }?.let { values ->
-            run {
-                check(SecretValueCipher.isConfigured()) { "Deployment secret encryption is not configured" }
-                SecretValueCipher.encrypt(Json.encodeToString(values))
-            }
+        val newSecrets = request.secretEnv?.let { values ->
+            check(SecretValueCipher.isConfigured()) { "Deployment secret encryption is not configured" }
+            SecretValueCipher.encrypt(Json.encodeToString(values))
         }
         val envJson = request.env?.let(Json::encodeToString)
         val volumesJson = request.volumes?.let(Json::encodeToString)
         val environment = request.environment?.let(::requireEnvironment)
+        val currentEnvironment = row[DeploymentConfigurations.environment] ?: "production"
+        val targetEnvironment = environment ?: currentEnvironment
+        val environmentChanged = targetEnvironment != currentEnvironment
+        val secretsForNewVersion = request.secretEnv ?: if (environmentChanged) {
+            row[DeploymentConfigurations.secretEnvEncrypted]?.let { encrypted ->
+                Json.decodeFromString<Map<String, String>>(SecretValueCipher.decrypt(encrypted))
+            }.orEmpty()
+        } else null
+        val hasExistingSecretSnapshot = row[DeploymentConfigurations.secretSetId] != null ||
+            row[DeploymentConfigurations.secretEnvEncrypted] != null
+        val shouldCreateSecretVersion = request.secretEnv != null || (environmentChanged && hasExistingSecretSnapshot)
+        val newSecretSet = if (shouldCreateSecretVersion) {
+            projectId?.let { createSecretSetVersion(it, targetEnvironment, secretsForNewVersion.orEmpty(), "admin") }
+        } else null
         val readinessType = request.readinessType?.let { it.trim().lowercase().also { type -> require(type in supportedReadinessTypes) { "Readiness type must be docker, http, tcp, or process" } } }
         val readinessTarget = request.readinessTarget?.also { require(it.isNotBlank()) { "Readiness target must not be blank" } }
         request.readinessTimeoutSeconds?.let { require(it in 1..600) { "Readiness timeout must be between 1 and 600 seconds" } }
@@ -97,6 +117,10 @@ object DeploymentJobRepository {
             envJson?.let { value -> it[DeploymentConfigurations.envJson] = value }; volumesJson?.let { value -> it[DeploymentConfigurations.volumesJson] = value }
             request.createNetworkIfMissing?.let { value -> it[createNetworkIfMissing] = value }
             newSecrets?.let { value -> it[secretEnvEncrypted] = value }
+            if (shouldCreateSecretVersion) {
+                it[DeploymentConfigurations.secretSetId] = newSecretSet?.id
+                it[DeploymentConfigurations.secretSetVersion] = newSecretSet?.version
+            }
             environment?.let { value -> it[DeploymentConfigurations.environment] = value }
             readinessType?.let { value -> it[DeploymentConfigurations.readinessType] = value }
             readinessTarget?.let { value -> it[DeploymentConfigurations.readinessTarget] = value }
@@ -140,13 +164,13 @@ object DeploymentJobRepository {
     fun configurationExists(id: UUID): Boolean = transaction { DeploymentConfigurations.selectAll().where { DeploymentConfigurations.id eq id }.count() > 0 }
 
     fun redeployConfiguration(id: UUID): UUID? {
-        val request = transaction {
+        val prepared = transaction {
             val row = DeploymentConfigurations.selectAll().where { DeploymentConfigurations.id eq id }.singleOrNull() ?: return@transaction null
             val projectId = row[DeploymentConfigurations.projectId] ?: resolveProjectId(row[DeploymentConfigurations.projectSlug])
             val projectSlug = projectId?.let { project ->
                 Projects.selectAll().where { (Projects.id eq project) and Projects.deletedAt.isNull() }.singleOrNull()?.get(Projects.slug)
             } ?: row[DeploymentConfigurations.projectSlug]
-            com.gatekeeper.deployment.CreateDeploymentRequest(
+            val request = com.gatekeeper.deployment.CreateDeploymentRequest(
                 repository = row[DeploymentConfigurations.repository],
                 gitRef = row[DeploymentConfigurations.gitRef],
                 registry = row[DeploymentConfigurations.registry],
@@ -172,8 +196,20 @@ object DeploymentJobRepository {
                 readinessIntervalSeconds = row[DeploymentConfigurations.readinessIntervalSeconds],
                 readinessProbeTimeoutMillis = row[DeploymentConfigurations.readinessProbeTimeoutMillis]
             )
+            var secretSet = row[DeploymentConfigurations.secretSetId]?.let { secretId ->
+                row[DeploymentConfigurations.secretSetVersion]?.let { version -> SecretSetReference(secretId, version) }
+            }
+            if (secretSet == null && projectId != null && request.secretEnv.isNotEmpty()) {
+                val createdSecretSet = createSecretSetVersion(projectId, request.environment, request.secretEnv, "manual_redeploy")
+                secretSet = createdSecretSet
+                DeploymentConfigurations.update({ DeploymentConfigurations.id eq id }) {
+                    it[DeploymentConfigurations.secretSetId] = createdSecretSet.id
+                    it[DeploymentConfigurations.secretSetVersion] = createdSecretSet.version
+                }
+            }
+            request to secretSet
         } ?: return null
-        return create(request)
+        return create(prepared.first, prepared.second)
     }
 
     fun latestForProject(projectId: UUID, slug: String): DeploymentJobRecord? = transaction {
@@ -209,7 +245,9 @@ object DeploymentJobRepository {
         }
         changed
     }
-    fun create(request: com.gatekeeper.deployment.CreateDeploymentRequest): UUID = transaction {
+    fun create(request: com.gatekeeper.deployment.CreateDeploymentRequest): UUID = create(request, null)
+
+    private fun create(request: com.gatekeeper.deployment.CreateDeploymentRequest, existingSecretSet: SecretSetReference?): UUID = transaction {
         val id = UUID.randomUUID()
         val projectId = resolveProjectId(request.projectSlug)
         val environment = requireEnvironment(request.environment)
@@ -218,6 +256,9 @@ object DeploymentJobRepository {
         val secretCiphertext = request.secretEnv.takeIf { it.isNotEmpty() }?.let { values ->
             check(SecretValueCipher.isConfigured()) { "Deployment secret encryption is not configured" }
             SecretValueCipher.encrypt(Json.encodeToString(values))
+        }
+        val secretSet = existingSecretSet ?: request.secretEnv.takeIf { it.isNotEmpty() }?.let { values ->
+            projectId?.let { createSecretSetVersion(it, environment, values, request.triggerSource) }
         }
         val volumesJson = Json.encodeToString(request.volumes)
         // Keep the legacy row during rollout for worker compatibility. The new rows are the
@@ -229,6 +270,8 @@ object DeploymentJobRepository {
             it[hostPort] = request.hostPort; it[containerPort] = request.containerPort; it[network] = request.network
             it[restartPolicy] = request.restartPolicy; it[DeploymentConfigurations.envJson] = envJson
             it[DeploymentConfigurations.secretEnvEncrypted] = secretCiphertext; it[DeploymentConfigurations.volumesJson] = volumesJson
+            it[DeploymentConfigurations.secretSetId] = secretSet?.id
+            it[DeploymentConfigurations.secretSetVersion] = secretSet?.version
             it[createNetworkIfMissing] = request.createNetworkIfMissing; it[projectSlug] = request.projectSlug
             it[DeploymentConfigurations.projectId] = projectId
             it[DeploymentConfigurations.environment] = environment
@@ -245,6 +288,8 @@ object DeploymentJobRepository {
             it[hostPort] = request.hostPort; it[containerPort] = request.containerPort; it[network] = request.network
             it[restartPolicy] = request.restartPolicy; it[DeploymentExecutions.envJson] = envJson
             it[DeploymentExecutions.secretEnvEncrypted] = secretCiphertext; it[DeploymentExecutions.volumesJson] = volumesJson
+            it[DeploymentExecutions.secretSetId] = secretSet?.id
+            it[DeploymentExecutions.secretSetVersion] = secretSet?.version
             it[createNetworkIfMissing] = request.createNetworkIfMissing; it[projectSlug] = request.projectSlug
             it[DeploymentExecutions.projectId] = projectId
             it[DeploymentExecutions.environment] = environment
@@ -289,7 +334,9 @@ object DeploymentJobRepository {
             configurationId = id,
             executionId = id,
             triggerSource = request.triggerSource,
-            environment = environment
+            environment = environment,
+            secretSetId = secretSet?.id,
+            secretSetVersion = secretSet?.version
         )
         id
     }
@@ -314,6 +361,11 @@ object DeploymentJobRepository {
         val secrets = execution[DeploymentExecutions.secretEnvEncrypted]?.let {
             Json.decodeFromString<Map<String, String>>(SecretValueCipher.decrypt(it))
         }.orEmpty()
+        val secretSet = execution[DeploymentExecutions.secretSetId]?.let { secretId ->
+            execution[DeploymentExecutions.secretSetVersion]?.let { version -> SecretSetReference(secretId, version) }
+        } ?: secrets.takeIf { it.isNotEmpty() }?.let {
+            createSecretSetVersion(ownerId, environmentKey, it, "rollback")
+        }
         val request = com.gatekeeper.deployment.CreateDeploymentRequest(
             repository = execution[DeploymentExecutions.repository],
             gitRef = execution[DeploymentExecutions.gitRef],
@@ -354,6 +406,8 @@ object DeploymentJobRepository {
             it[hostPort] = request.hostPort; it[containerPort] = request.containerPort
             it[network] = request.network; it[restartPolicy] = request.restartPolicy
             it[DeploymentConfigurations.envJson] = envJson; it[DeploymentConfigurations.secretEnvEncrypted] = secretCiphertext
+            it[DeploymentConfigurations.secretSetId] = secretSet?.id
+            it[DeploymentConfigurations.secretSetVersion] = secretSet?.version
             it[DeploymentConfigurations.volumesJson] = volumesJson; it[createNetworkIfMissing] = request.createNetworkIfMissing
             it[projectSlug] = request.projectSlug; it[DeploymentConfigurations.projectId] = projectId
             it[DeploymentConfigurations.environment] = environment
@@ -370,6 +424,8 @@ object DeploymentJobRepository {
             it[hostPort] = request.hostPort; it[containerPort] = request.containerPort
             it[network] = request.network; it[restartPolicy] = request.restartPolicy
             it[DeploymentExecutions.envJson] = envJson; it[DeploymentExecutions.secretEnvEncrypted] = secretCiphertext
+            it[DeploymentExecutions.secretSetId] = secretSet?.id
+            it[DeploymentExecutions.secretSetVersion] = secretSet?.version
             it[DeploymentExecutions.volumesJson] = volumesJson; it[createNetworkIfMissing] = request.createNetworkIfMissing
             it[projectSlug] = request.projectSlug; it[DeploymentExecutions.projectId] = projectId
             it[DeploymentExecutions.environment] = environment
@@ -399,9 +455,35 @@ object DeploymentJobRepository {
         DeploymentApplicationService.createQueued(
             id = id, projectId = projectId, configurationId = id, executionId = id,
             triggerSource = "rollback", environment = environment,
-            rolledBackToDeploymentId = targetDeploymentId
+            rolledBackToDeploymentId = targetDeploymentId,
+            secretSetId = secretSet?.id,
+            secretSetVersion = secretSet?.version
         )
         id
+    }
+
+    private fun createSecretSetVersion(
+        projectId: UUID,
+        environment: String,
+        values: Map<String, String>,
+        createdBy: String
+    ): SecretSetReference {
+        check(SecretValueCipher.isConfigured()) { "Deployment secret encryption is not configured" }
+        val nextVersion = (ProjectSecretSetVersions.selectAll().where {
+            (ProjectSecretSetVersions.projectId eq projectId) and
+                (ProjectSecretSetVersions.environment eq environment)
+        }.map { it[ProjectSecretSetVersions.version] }.maxOrNull() ?: 0) + 1
+        val id = UUID.randomUUID()
+        ProjectSecretSetVersions.insert {
+            it[ProjectSecretSetVersions.id] = id
+            it[ProjectSecretSetVersions.projectId] = projectId
+            it[ProjectSecretSetVersions.environment] = environment
+            it[ProjectSecretSetVersions.version] = nextVersion
+            it[ProjectSecretSetVersions.encryptedPayload] = SecretValueCipher.encrypt(Json.encodeToString(values))
+            it[ProjectSecretSetVersions.createdAt] = LocalDateTime.now()
+            it[ProjectSecretSetVersions.createdBy] = createdBy
+        }
+        return SecretSetReference(id, nextVersion)
     }
 
     fun find(id: UUID): DeploymentJobRecord? = transaction {

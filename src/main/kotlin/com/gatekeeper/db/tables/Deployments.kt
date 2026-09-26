@@ -12,6 +12,10 @@ object Deployments : Table("deployments") {
     val environment = text("environment").default("production")
     val configurationId = uuid("configuration_id").references(DeploymentConfigurations.id, onDelete = ReferenceOption.RESTRICT)
     val executionId = uuid("execution_id").uniqueIndex().references(DeploymentExecutions.id, onDelete = ReferenceOption.RESTRICT)
+    val credentialSetId = uuid("credential_set_id").nullable()
+    val credentialSetVersion = integer("credential_set_version").nullable()
+    val secretSetId = uuid("secret_set_id").nullable()
+    val secretSetVersion = integer("secret_set_version").nullable()
     val status = customEnumeration(
         "status", "TEXT",
         { value -> DeploymentStatus.entries.first { it.value == value as String } },

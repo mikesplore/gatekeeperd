@@ -20,6 +20,8 @@ object DeploymentConfigurations : Table("deployment_configurations") {
     val restartPolicy = text("restart_policy")
     val envJson = text("env_json")
     val secretEnvEncrypted = text("secret_env_encrypted").nullable()
+    val secretSetId = uuid("secret_set_id").nullable()
+    val secretSetVersion = integer("secret_set_version").nullable()
     val volumesJson = text("volumes_json")
     val createNetworkIfMissing = bool("create_network_if_missing")
     val projectSlug = text("project_slug").nullable()

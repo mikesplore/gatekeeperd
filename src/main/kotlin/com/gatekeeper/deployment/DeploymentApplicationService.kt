@@ -35,7 +35,11 @@ object DeploymentApplicationService {
         executionId: UUID,
         triggerSource: String,
         environment: String = "production",
-        rolledBackToDeploymentId: UUID? = null
+        rolledBackToDeploymentId: UUID? = null,
+        credentialSetId: UUID? = null,
+        credentialSetVersion: Int? = null,
+        secretSetId: UUID? = null,
+        secretSetVersion: Int? = null
     ) = transaction {
         val now = LocalDateTime.now()
         Deployments.insert {
@@ -44,6 +48,10 @@ object DeploymentApplicationService {
             it[Deployments.environment] = environment
             it[Deployments.configurationId] = configurationId
             it[Deployments.executionId] = executionId
+            it[Deployments.credentialSetId] = credentialSetId
+            it[Deployments.credentialSetVersion] = credentialSetVersion
+            it[Deployments.secretSetId] = secretSetId
+            it[Deployments.secretSetVersion] = secretSetVersion
             it[status] = DeploymentStatus.QUEUED
             it[Deployments.triggerSource] = triggerSource
             it[Deployments.rolledBackToDeploymentId] = rolledBackToDeploymentId
