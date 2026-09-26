@@ -98,6 +98,43 @@ object DeploymentJobRepository {
         return currentId
     }
 
+    /** Atomically versions supplied secrets and queues a deployment from the saved configuration. */
+    fun rotateProjectSecretsAndDeploy(projectId: UUID, secretEnv: Map<String, String>, actor: String): UUID? = transaction {
+        val configurationId = configurationIdForProject(projectId) ?: return@transaction null
+        val row = DeploymentConfigurations.selectAll().where { DeploymentConfigurations.id eq configurationId }.singleOrNull()
+            ?: return@transaction null
+        val environment = row[DeploymentConfigurations.environment] ?: "production"
+        val secretSet = createSecretSetVersion(projectId, environment, secretEnv, actor)
+        DeploymentConfigurations.update({ DeploymentConfigurations.id eq configurationId }) {
+            it[DeploymentConfigurations.secretSetId] = secretSet.id
+            it[DeploymentConfigurations.secretSetVersion] = secretSet.version
+            it[DeploymentConfigurations.secretEnvEncrypted] = SecretValueCipher.encrypt(Json.encodeToString(secretEnv))
+            it[DeploymentConfigurations.updatedAt] = LocalDateTime.now()
+        }
+        DeploymentJobs.update({ DeploymentJobs.id eq configurationId }) {
+            it[DeploymentJobs.secretEnvEncrypted] = SecretValueCipher.encrypt(Json.encodeToString(secretEnv))
+            it[DeploymentJobs.updatedAt] = LocalDateTime.now()
+        }
+        val saved = DeploymentConfigurations.selectAll().where { DeploymentConfigurations.id eq configurationId }.singleOrNull()
+            ?: error("Deployment configuration disappeared during secret rotation")
+        val request = com.gatekeeper.deployment.CreateDeploymentRequest(
+                repository = saved[DeploymentConfigurations.repository], gitRef = saved[DeploymentConfigurations.gitRef],
+                registry = saved[DeploymentConfigurations.registry], imageName = saved[DeploymentConfigurations.imageName],
+                imageTag = saved[DeploymentConfigurations.imageTag], containerName = saved[DeploymentConfigurations.containerName],
+                hostPort = saved[DeploymentConfigurations.hostPort], containerPort = saved[DeploymentConfigurations.containerPort],
+                network = saved[DeploymentConfigurations.network], restartPolicy = saved[DeploymentConfigurations.restartPolicy],
+                projectSlug = saved[DeploymentConfigurations.projectSlug], triggerSource = "secret_rotation",
+                env = Json.decodeFromString(saved[DeploymentConfigurations.envJson]), secretEnv = secretEnv,
+                volumes = Json.decodeFromString(saved[DeploymentConfigurations.volumesJson]),
+                createNetworkIfMissing = saved[DeploymentConfigurations.createNetworkIfMissing], environment = environment,
+                readinessType = saved[DeploymentConfigurations.readinessType], readinessTarget = saved[DeploymentConfigurations.readinessTarget],
+                readinessTimeoutSeconds = saved[DeploymentConfigurations.readinessTimeoutSeconds],
+                readinessIntervalSeconds = saved[DeploymentConfigurations.readinessIntervalSeconds],
+                readinessProbeTimeoutMillis = saved[DeploymentConfigurations.readinessProbeTimeoutMillis]
+            )
+        create(request, SecretSetReference(secretSet.id, secretSet.version))
+    }
+
     fun createConfiguration(projectId: UUID, request: com.gatekeeper.deployment.CreateDeploymentRequest): UUID = transaction {
         val project = Projects.selectAll().where { (Projects.id eq projectId) and Projects.deletedAt.isNull() }.singleOrNull()
             ?: error("Project not found")

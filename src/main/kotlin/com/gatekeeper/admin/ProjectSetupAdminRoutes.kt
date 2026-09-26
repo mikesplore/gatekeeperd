@@ -14,6 +14,7 @@ import com.gatekeeper.security.SecretValueCipher
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.Application
 import io.ktor.server.auth.authenticate
+import io.ktor.server.auth.principal
 import io.ktor.server.request.receive
 import io.ktor.server.response.respond
 import io.ktor.server.routing.*
@@ -197,9 +198,52 @@ data class ProjectOverviewResponse(
     val customerBilling: ProjectOverviewCustomerBilling
 )
 
+@Serializable
+data class ProjectDeploymentHistoryItem(
+    val id: String,
+    val environment: String,
+    val sourceCommit: String?,
+    val imageName: String,
+    val imageTag: String,
+    val imageDigest: String?,
+    val trigger: String,
+    val actor: String?,
+    val status: String,
+    val createdAt: String,
+    val activeAt: String?,
+    val healthCheckResult: String,
+    val failureReason: String?,
+    val credentialSetId: String?,
+    val credentialSetVersion: Int?,
+    val secretSetId: String?,
+    val secretSetVersion: Int?,
+    val configurationId: String,
+    val actions: List<String>
+)
+
+@Serializable
+data class ProjectDeploymentHistoryResponse(val projectId: String, val environment: String, val items: List<ProjectDeploymentHistoryItem>)
+
+@Serializable
+data class ProjectSecretRotationRequest(val secretEnv: Map<String, String>)
+
+@Serializable
+data class ProviderCredentialMetadataView(
+    val id: String, val provider: String, val type: String, val displayName: String, val scope: String,
+    val version: Int, val current: Boolean, val rotatedAt: String?, val rotatedBy: String?, val createdAt: String
+)
+
 fun Application.configureProjectSetupAdminRoutes() {
     routing {
         authenticate("auth-jwt") {
+            get("/api/admin/project-setup/provider-credentials") {
+                val provider = call.request.queryParameters["provider"]?.trim()?.lowercase()
+                val type = call.request.queryParameters["type"]?.trim()?.lowercase()
+                call.respond(ProviderCredentialRepository.listMetadata(provider, type).map {
+                    ProviderCredentialMetadataView(it.id.toString(), it.provider, it.credentialType, it.displayName, it.scope,
+                        it.version, it.current, it.rotatedAt?.toString(), it.rotatedBy, it.createdAt.toString())
+                })
+            }
             post("/api/admin/project-setup/projects") {
                 val body = runCatching { call.receive<CreateProjectSetupRequest>() }.getOrNull()
                     ?: return@post call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid project setup request")
@@ -353,6 +397,28 @@ fun Application.configureProjectSetupAdminRoutes() {
                 call.respond(HttpStatusCode.Accepted, ProjectSetupDeployResponse(deploymentId.toString()))
             }
 
+            post("/api/admin/projects/{projectId}/secret-sets/rotate-and-deploy") {
+                val projectId = call.setupProjectId() ?: return@post
+                if (ProjectRepository.findActiveById(projectId) == null) {
+                    return@post call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
+                }
+                val request = runCatching { call.receive<ProjectSecretRotationRequest>() }.getOrNull()
+                    ?: return@post call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid secret rotation request")
+                if (request.secretEnv.keys.any { !it.matches(Regex("[A-Za-z_][A-Za-z0-9_]*")) }) {
+                    return@post call.respondError(HttpStatusCode.BadRequest, "invalid_secret_keys", "Secret environment variable names are invalid")
+                }
+                if (!SecretValueCipher.isConfigured()) {
+                    return@post call.respondError(HttpStatusCode.ServiceUnavailable, "secrets_unconfigured", "Secret encryption is not configured")
+                }
+                val actor = call.principal<io.ktor.server.auth.jwt.JWTPrincipal>()?.payload?.subject ?: "admin"
+                val deploymentId = runCatching {
+                    DeploymentJobRepository.rotateProjectSecretsAndDeploy(projectId, request.secretEnv, actor)
+                }.getOrElse { error ->
+                    return@post call.respondError(HttpStatusCode.Conflict, "secret_rotation_failed", error.message ?: "Secrets could not be rotated")
+                } ?: return@post call.respondError(HttpStatusCode.Conflict, "deployment_configuration_missing", "Project has no deployment configuration")
+                call.respond(HttpStatusCode.Accepted, ProjectSetupDeployResponse(deploymentId.toString()))
+            }
+
             get("/api/admin/projects/{slug}/overview") {
                 val slug = call.parameters["slug"] ?: return@get call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing project slug")
                 val project = ProjectRepository.findBySlug(slug)
@@ -394,6 +460,52 @@ fun Application.configureProjectSetupAdminRoutes() {
                         financials.first.toDouble(), financials.second.toDouble(), financials.third.toDouble(), project.dueDate?.toString()
                     )
                 ))
+            }
+
+            get("/api/admin/projects/{slug}/deployments/history") {
+                val slug = call.parameters["slug"] ?: return@get call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing project slug")
+                val project = ProjectRepository.findBySlug(slug)
+                    ?: return@get call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
+                val environment = call.request.queryParameters["environment"]?.trim()?.takeIf(String::isNotEmpty) ?: "production"
+                val items = DeploymentApplicationService.deploymentHistory(project.id, environment).map { item ->
+                    ProjectDeploymentHistoryItem(
+                        item.id.toString(), item.environment, item.sourceCommit, item.imageName, item.imageTag,
+                        item.imageDigest, item.triggerSource, item.actor, item.status, item.createdAt.toString(),
+                        item.activeAt?.toString(), item.healthCheckResult, item.failureReason,
+                        item.credentialSetId?.toString(), item.credentialSetVersion,
+                        item.secretSetId?.toString(), item.secretSetVersion, item.configurationId.toString(),
+                        buildList { if (item.canRollback) add("rollback"); if (item.canRedeploy) add("redeploy") }
+                    )
+                }
+                call.respond(ProjectDeploymentHistoryResponse(project.id.toString(), environment, items))
+            }
+
+            post("/api/admin/projects/{slug}/deployments/{id}/redeploy") {
+                val slug = call.parameters["slug"] ?: return@post call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing project slug")
+                val project = ProjectRepository.findBySlug(slug)
+                    ?: return@post call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
+                val id = call.parameters["id"]?.let { runCatching { UUID.fromString(it) }.getOrNull() }
+                    ?: return@post call.respondError(HttpStatusCode.BadRequest, "invalid_deployment_id", "Invalid deployment ID")
+                val item = DeploymentApplicationService.deploymentHistory(project.id, "production").firstOrNull { it.id == id }
+                    ?: return@post call.respondError(HttpStatusCode.NotFound, "deployment_not_found", "Deployment not found for project")
+                if (!item.canRedeploy) return@post call.respondError(HttpStatusCode.Conflict, "redeploy_unavailable", "Only the active deployment can be redeployed from project history")
+                val deploymentId = DeploymentJobRepository.redeployConfiguration(item.configurationId)
+                    ?: return@post call.respondError(HttpStatusCode.Conflict, "redeploy_unavailable", "Deployment configuration could not be queued")
+                call.respond(HttpStatusCode.Accepted, ProjectSetupDeployResponse(deploymentId.toString()))
+            }
+
+            post("/api/admin/projects/{slug}/deployments/{id}/rollback") {
+                val slug = call.parameters["slug"] ?: return@post call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing project slug")
+                val project = ProjectRepository.findBySlug(slug)
+                    ?: return@post call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
+                val id = call.parameters["id"]?.let { runCatching { UUID.fromString(it) }.getOrNull() }
+                    ?: return@post call.respondError(HttpStatusCode.BadRequest, "invalid_deployment_id", "Invalid deployment ID")
+                val item = DeploymentApplicationService.deploymentHistory(project.id, "production").firstOrNull { it.id == id }
+                    ?: return@post call.respondError(HttpStatusCode.NotFound, "deployment_not_found", "Deployment not found for project")
+                if (!item.canRollback) return@post call.respondError(HttpStatusCode.Conflict, "rollback_unavailable", "Deployment cannot be used as a rollback target")
+                val rollbackId = DeploymentWorker.rollback(id)
+                    ?: return@post call.respondError(HttpStatusCode.Conflict, "rollback_unavailable", "Deployment cannot be used as a rollback target")
+                call.respond(HttpStatusCode.Accepted, ProjectSetupDeployResponse(rollbackId.toString()))
             }
         }
     }

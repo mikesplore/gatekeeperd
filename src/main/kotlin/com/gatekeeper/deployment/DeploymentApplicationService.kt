@@ -174,6 +174,69 @@ object DeploymentApplicationService {
         val secretSetVersion: Int?
     )
 
+    data class DeploymentHistoryEntry(
+        val id: UUID,
+        val projectId: UUID?,
+        val environment: String,
+        val status: String,
+        val sourceCommit: String?,
+        val imageName: String,
+        val imageTag: String,
+        val imageDigest: String?,
+        val triggerSource: String,
+        val actor: String?,
+        val createdAt: LocalDateTime,
+        val activeAt: LocalDateTime?,
+        val failureReason: String?,
+        val healthCheckResult: String,
+        val credentialSetId: UUID?,
+        val credentialSetVersion: Int?,
+        val secretSetId: UUID?,
+        val secretSetVersion: Int?,
+        val canRollback: Boolean,
+        val canRedeploy: Boolean,
+        val configurationId: UUID
+    )
+
+    /** History metadata only: never reads encrypted environment or credential payloads. */
+    fun deploymentHistory(projectId: UUID, environment: String): List<DeploymentHistoryEntry> = transaction {
+        val deployments = Deployments.selectAll().where {
+            (Deployments.projectId eq projectId) and (Deployments.environment eq environment)
+        }.toList().sortedByDescending { it[Deployments.createdAt] }
+        deployments.mapNotNull { deployment ->
+            val execution = com.gatekeeper.db.tables.DeploymentExecutions.selectAll()
+                .where { com.gatekeeper.db.tables.DeploymentExecutions.id eq deployment[Deployments.executionId] }
+                .singleOrNull() ?: return@mapNotNull null
+            val status = deployment[Deployments.status]
+            val currentStep = execution[com.gatekeeper.db.tables.DeploymentExecutions.currentStep]
+            val healthResult = when {
+                currentStep == "readiness_succeeded" || currentStep == "cutover_in_progress" ||
+                    status == DeploymentStatus.ACTIVE || status == DeploymentStatus.SUPERSEDED || status == DeploymentStatus.ROLLED_BACK -> "passed"
+                status == DeploymentStatus.FAILED && currentStep == "health_checking" -> "failed"
+                status == DeploymentStatus.HEALTH_CHECKING -> "running"
+                status == DeploymentStatus.FAILED -> "not_passed"
+                else -> "not_run"
+            }
+            val targetId = deployment[Deployments.id]
+            val canRollback = status == DeploymentStatus.SUPERSEDED && deployments.any {
+                it[Deployments.status] == DeploymentStatus.ACTIVE && it[Deployments.environment] == environment
+            }
+            DeploymentHistoryEntry(
+                targetId, deployment[Deployments.projectId], deployment[Deployments.environment], status.value,
+                execution[com.gatekeeper.db.tables.DeploymentExecutions.commitSha],
+                execution[com.gatekeeper.db.tables.DeploymentExecutions.imageName],
+                execution[com.gatekeeper.db.tables.DeploymentExecutions.imageTag],
+                execution[com.gatekeeper.db.tables.DeploymentExecutions.imageDigest],
+                deployment[Deployments.triggerSource], null,
+                deployment[Deployments.createdAt], deployment[Deployments.activeAt], deployment[Deployments.failureReason], healthResult,
+                deployment[Deployments.credentialSetId], deployment[Deployments.credentialSetVersion],
+                deployment[Deployments.secretSetId] ?: execution[com.gatekeeper.db.tables.DeploymentExecutions.secretSetId],
+                deployment[Deployments.secretSetVersion] ?: execution[com.gatekeeper.db.tables.DeploymentExecutions.secretSetVersion],
+                canRollback, status == DeploymentStatus.ACTIVE, deployment[Deployments.configurationId]
+            )
+        }
+    }
+
     /** Metadata for the active pointer only. Never selects or decrypts environment values. */
     fun activeDeploymentSummary(projectId: UUID, environment: String): ActiveDeploymentSummary? = transaction {
         val deployment = Deployments.selectAll().where {

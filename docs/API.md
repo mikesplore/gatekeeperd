@@ -281,6 +281,20 @@ Queue a deployment from the saved desired configuration. Returns `202 Accepted` 
 
 Returns sectioned project state: `accessLifecycle`, `desiredConfiguration`, `currentDeployment`, `domainsGateway`, and `customerBilling`. The current runtime and upstream come from the canonical active deployment and Phase 3 resolver, not `projects.container_name`. `runtimeHealth` is inspected from the active deployment's persisted runtime container. Secret and credential values are never included; only version references are returned.
 
+### GET /api/admin/projects/{slug}/deployments/history
+
+Returns canonical deployment history for a project (optional `environment`, default `production`). Each item includes source commit, image digest, trigger metadata, status, readiness result, failure reason, credential and secret-set ID/version references, and available `rollback`/`redeploy` actions. It never returns encrypted payloads or plaintext values. Actor is `null` until deployments store a separate authenticated actor field.
+
+### POST /api/admin/projects/{projectId}/secret-sets/rotate-and-deploy
+
+Creates an immutable secret-set version, updates the desired configuration reference, and queues a deployment in one database transaction. Request is `{ "secretEnv": { "KEY": "value" } }`. Returns `202 Accepted` with the queued deployment ID. Values are write-only and are not echoed in the response.
+
+### GET /api/admin/project-setup/provider-credentials
+
+Lists provider credential metadata only. Optional `provider` (`docker`, `github`) and `type` (`registry`, `app_private_key`, `webhook_secret`) filters. Payloads are never selected for this response.
+
+Registry credentials rotate through `PUT /api/admin/registries/{registry}`. GitHub webhook secrets and App private keys rotate through `PUT /api/admin/github/credentials/{webhook_secret|app_private_key}`. These routes accept a value once and return only write-only/version metadata; later list/detail requests never return plaintext.
+
 ### POST /api/admin/projects/{projectId}/deployment-configuration
 Create the initial desired deployment configuration for an existing project that does not have one. This operation does not queue or run a deployment; call the existing deployment operation when ready to deploy.
 
