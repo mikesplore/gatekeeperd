@@ -510,3 +510,394 @@ CREATE INDEX IF NOT EXISTS idx_payment_events_project_id ON payment_events(proje
 CREATE INDEX IF NOT EXISTS idx_support_requests_project_id ON support_requests(project_id);
 CREATE INDEX IF NOT EXISTS idx_notifications_project_id ON notifications(project_id);
 CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_user_id ON password_reset_tokens(user_id);
+
+
+-- Consolidated current schema: final additive and retirement changes.
+-- Consolidated from V31__deployment_project_ownership.sql
+-- Add stable project ownership and environment metadata without changing
+-- existing deployment rows or constraining legacy data.
+ALTER TABLE deployment_configurations
+    ADD COLUMN IF NOT EXISTS project_id UUID,
+    ADD COLUMN IF NOT EXISTS environment TEXT;
+
+ALTER TABLE deployment_executions
+    ADD COLUMN IF NOT EXISTS project_id UUID,
+    ADD COLUMN IF NOT EXISTS environment TEXT;
+
+ALTER TABLE deployment_jobs
+    ADD COLUMN IF NOT EXISTS project_id UUID,
+    ADD COLUMN IF NOT EXISTS environment TEXT;
+
+CREATE INDEX IF NOT EXISTS idx_deployment_configurations_project_id
+    ON deployment_configurations(project_id);
+
+CREATE INDEX IF NOT EXISTS idx_deployment_executions_project_id
+    ON deployment_executions(project_id);
+
+CREATE INDEX IF NOT EXISTS idx_deployment_jobs_project_id
+    ON deployment_jobs(project_id);
+
+-- Consolidated from V32__projects_container_optional.sql
+-- Projects may be created before a runtime container exists.
+ALTER TABLE projects ALTER COLUMN container_name DROP NOT NULL;
+
+-- Consolidated from V33__canonical_deployments_state_machine.sql
+CREATE TABLE deployments (
+    id UUID PRIMARY KEY,
+    project_id UUID REFERENCES projects(id) ON DELETE RESTRICT,
+    environment TEXT NOT NULL DEFAULT 'production',
+    configuration_id UUID NOT NULL REFERENCES deployment_configurations(id) ON DELETE RESTRICT,
+    execution_id UUID NOT NULL UNIQUE REFERENCES deployment_executions(id) ON DELETE RESTRICT,
+    status TEXT NOT NULL CHECK (status IN (
+        'queued', 'building', 'starting', 'health-checking', 'active',
+        'superseded', 'failed', 'cancelled', 'rolled-back'
+    )),
+    trigger_source TEXT NOT NULL,
+    replaces_deployment_id UUID REFERENCES deployments(id) ON DELETE RESTRICT,
+    rolled_back_to_deployment_id UUID REFERENCES deployments(id) ON DELETE RESTRICT,
+    failure_reason TEXT,
+    queued_at TIMESTAMP,
+    building_at TIMESTAMP,
+    starting_at TIMESTAMP,
+    health_checking_at TIMESTAMP,
+    active_at TIMESTAMP,
+    superseded_at TIMESTAMP,
+    failed_at TIMESTAMP,
+    cancelled_at TIMESTAMP,
+    rolled_back_at TIMESTAMP,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT deployments_environment_nonblank CHECK (length(trim(environment)) > 0),
+    CONSTRAINT deployments_not_self_referential CHECK (
+        (replaces_deployment_id IS NULL OR replaces_deployment_id <> id)
+        AND (rolled_back_to_deployment_id IS NULL OR rolled_back_to_deployment_id <> id)
+    )
+);
+
+CREATE INDEX idx_deployments_project_environment_created
+    ON deployments(project_id, environment, created_at DESC);
+CREATE INDEX idx_deployments_status_created
+    ON deployments(status, created_at);
+
+-- Consolidated from V34__one_active_deployment_per_environment.sql
+-- Environment is a real ownership dimension. Legacy rows stay nullable in the
+-- synchronized compatibility tables; canonical deployments always have it.
+CREATE UNIQUE INDEX uq_deployments_one_active_per_project_environment
+    ON deployments(project_id, environment)
+    WHERE status = 'active' AND project_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_deployment_configurations_project_environment
+    ON deployment_configurations(project_id, environment);
+CREATE INDEX IF NOT EXISTS idx_deployment_executions_project_environment
+    ON deployment_executions(project_id, environment);
+CREATE INDEX IF NOT EXISTS idx_deployment_jobs_project_environment
+    ON deployment_jobs(project_id, environment);
+
+-- Consolidated from V35__deployment_candidate_runtime.sql
+ALTER TABLE deployments
+    ADD COLUMN runtime_container_name TEXT,
+    ADD COLUMN runtime_host_port INTEGER;
+
+ALTER TABLE deployments
+    ADD CONSTRAINT deployments_runtime_host_port_valid
+    CHECK (runtime_host_port IS NULL OR runtime_host_port BETWEEN 1 AND 65535);
+
+-- Consolidated from V36__deployment_readiness_contract.sql
+ALTER TABLE deployment_configurations
+    ADD COLUMN readiness_type TEXT,
+    ADD COLUMN readiness_target TEXT,
+    ADD COLUMN readiness_timeout_seconds INTEGER NOT NULL DEFAULT 60,
+    ADD COLUMN readiness_interval_seconds INTEGER NOT NULL DEFAULT 2,
+    ADD COLUMN readiness_probe_timeout_millis INTEGER NOT NULL DEFAULT 1000;
+
+ALTER TABLE deployment_executions
+    ADD COLUMN readiness_type TEXT,
+    ADD COLUMN readiness_target TEXT,
+    ADD COLUMN readiness_timeout_seconds INTEGER NOT NULL DEFAULT 60,
+    ADD COLUMN readiness_interval_seconds INTEGER NOT NULL DEFAULT 2,
+    ADD COLUMN readiness_probe_timeout_millis INTEGER NOT NULL DEFAULT 1000;
+
+ALTER TABLE deployment_jobs
+    ADD COLUMN readiness_type TEXT,
+    ADD COLUMN readiness_target TEXT,
+    ADD COLUMN readiness_timeout_seconds INTEGER NOT NULL DEFAULT 60,
+    ADD COLUMN readiness_interval_seconds INTEGER NOT NULL DEFAULT 2,
+    ADD COLUMN readiness_probe_timeout_millis INTEGER NOT NULL DEFAULT 1000;
+
+
+ALTER TABLE deployment_configurations
+    ADD CONSTRAINT deployment_configurations_readiness_type_valid
+        CHECK (readiness_type IS NULL OR readiness_type IN ('docker', 'http', 'tcp', 'process')),
+    ADD CONSTRAINT deployment_configurations_readiness_timeout_valid
+        CHECK (readiness_timeout_seconds BETWEEN 1 AND 600),
+    ADD CONSTRAINT deployment_configurations_readiness_interval_valid
+        CHECK (readiness_interval_seconds BETWEEN 1 AND 30),
+    ADD CONSTRAINT deployment_configurations_readiness_probe_timeout_valid
+        CHECK (readiness_probe_timeout_millis BETWEEN 100 AND 30000);
+
+ALTER TABLE deployment_executions
+    ADD CONSTRAINT deployment_executions_readiness_type_valid
+        CHECK (readiness_type IS NULL OR readiness_type IN ('docker', 'http', 'tcp', 'process')),
+    ADD CONSTRAINT deployment_executions_readiness_timeout_valid
+        CHECK (readiness_timeout_seconds BETWEEN 1 AND 600),
+    ADD CONSTRAINT deployment_executions_readiness_interval_valid
+        CHECK (readiness_interval_seconds BETWEEN 1 AND 30),
+    ADD CONSTRAINT deployment_executions_readiness_probe_timeout_valid
+        CHECK (readiness_probe_timeout_millis BETWEEN 100 AND 30000);
+
+ALTER TABLE deployment_jobs
+    ADD CONSTRAINT deployment_jobs_readiness_type_valid
+        CHECK (readiness_type IS NULL OR readiness_type IN ('docker', 'http', 'tcp', 'process')),
+    ADD CONSTRAINT deployment_jobs_readiness_timeout_valid
+        CHECK (readiness_timeout_seconds BETWEEN 1 AND 600),
+    ADD CONSTRAINT deployment_jobs_readiness_interval_valid
+        CHECK (readiness_interval_seconds BETWEEN 1 AND 30),
+    ADD CONSTRAINT deployment_jobs_readiness_probe_timeout_valid
+        CHECK (readiness_probe_timeout_millis BETWEEN 100 AND 30000);
+
+-- Consolidated from V37__deployment_runtime_port_mappings.sql
+ALTER TABLE deployments
+    ADD COLUMN runtime_ports_json TEXT NOT NULL DEFAULT '{}';
+
+-- Consolidated from V38__allow_multiple_sites_per_project.sql
+-- Keep the project lookup index while preparing the schema for multiple domains.
+-- API and UI creation flows continue to enforce one site per project for now.
+ALTER TABLE sites DROP CONSTRAINT IF EXISTS sites_project_id_key;
+
+CREATE INDEX IF NOT EXISTS idx_sites_project_id ON sites(project_id);
+
+-- Consolidated from V39__provider_credentials.sql
+-- Provider-scoped infrastructure credentials. Existing registry credentials
+-- remain available while application code dual-writes through the new model.
+CREATE TABLE IF NOT EXISTS provider_credentials (
+    id UUID PRIMARY KEY,
+    provider TEXT NOT NULL,
+    credential_type TEXT NOT NULL,
+    display_name TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    encrypted_payload TEXT NOT NULL,
+    rotated_at TIMESTAMP NULL,
+    rotated_by TEXT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_by TEXT NULL,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_by TEXT NULL,
+    CONSTRAINT uq_provider_credentials_identity UNIQUE (provider, credential_type, scope)
+);
+
+CREATE INDEX IF NOT EXISTS idx_provider_credentials_provider_type
+    ON provider_credentials(provider, credential_type);
+
+-- Consolidated from V40__project_secret_set_versions.sql
+-- Store each project's complete encrypted environment map as an immutable version.
+-- Deployment references are added later, after the version rows are established.
+CREATE TABLE IF NOT EXISTS project_secret_set_versions (
+    id UUID PRIMARY KEY,
+    project_id UUID NOT NULL REFERENCES projects(id) ON DELETE RESTRICT,
+    environment TEXT NOT NULL,
+    version INTEGER NOT NULL CHECK (version > 0),
+    encrypted_payload TEXT NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_by TEXT NULL,
+    CONSTRAINT uq_project_secret_set_version UNIQUE (project_id, environment, version)
+);
+
+CREATE INDEX IF NOT EXISTS idx_project_secret_set_versions_owner
+    ON project_secret_set_versions(project_id, environment);
+
+-- Consolidated from V41__deployment_credential_and_secret_references.sql
+-- New deployments/configurations can point at immutable secret versions while
+-- retaining encrypted compatibility snapshots for existing readers.
+ALTER TABLE deployment_configurations
+    ADD COLUMN IF NOT EXISTS secret_set_id UUID,
+    ADD COLUMN IF NOT EXISTS secret_set_version INTEGER;
+
+ALTER TABLE deployment_executions
+    ADD COLUMN IF NOT EXISTS secret_set_id UUID,
+    ADD COLUMN IF NOT EXISTS secret_set_version INTEGER;
+
+ALTER TABLE deployments
+    ADD COLUMN IF NOT EXISTS credential_set_id UUID,
+    ADD COLUMN IF NOT EXISTS credential_set_version INTEGER,
+    ADD COLUMN IF NOT EXISTS secret_set_id UUID,
+    ADD COLUMN IF NOT EXISTS secret_set_version INTEGER;
+
+CREATE INDEX IF NOT EXISTS idx_deployment_configurations_secret_set
+    ON deployment_configurations(secret_set_id);
+CREATE INDEX IF NOT EXISTS idx_deployment_executions_secret_set
+    ON deployment_executions(secret_set_id);
+CREATE INDEX IF NOT EXISTS idx_deployments_credential_set
+    ON deployments(credential_set_id);
+CREATE INDEX IF NOT EXISTS idx_deployments_secret_set
+    ON deployments(secret_set_id);
+
+-- Consolidated from V42__version_provider_credentials.sql
+-- Preserve the original credential row on rotation and retain every encrypted version.
+ALTER TABLE provider_credentials
+    DROP CONSTRAINT IF EXISTS uq_provider_credentials_identity;
+
+DROP INDEX IF EXISTS uq_provider_credentials_identity;
+
+ALTER TABLE provider_credentials
+    ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1,
+    ADD COLUMN IF NOT EXISTS superseded_at TIMESTAMP NULL,
+    ADD COLUMN IF NOT EXISTS superseded_by_id UUID NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_provider_credentials_version
+    ON provider_credentials(provider, credential_type, scope, version);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_provider_credentials_current
+    ON provider_credentials(provider, credential_type, scope)
+    WHERE superseded_at IS NULL;
+
+-- Consolidated from V43__allow_containerless_site_drafts.sql
+-- A Docker-discovery site can be saved before the project has a runtime.
+-- Its upstream is resolved from the active deployment at render/cutover time.
+ALTER TABLE sites
+    DROP CONSTRAINT sites_upstream_configuration_check,
+    ADD CONSTRAINT sites_upstream_configuration_check CHECK (
+        (upstream_mode = 'docker_discovery' AND upstream_explicit_port IS NULL)
+        OR
+        (upstream_mode = 'explicit_port' AND upstream_container_name IS NULL AND upstream_explicit_port IS NOT NULL AND upstream_explicit_port BETWEEN 1 AND 65535)
+    );
+
+-- Consolidated from V44__retire_project_runtime_compatibility_columns.sql
+-- Project identity and GitHub deployment settings now belong to the project FK
+-- and its deployment configuration. Import a legacy active container only when
+-- an existing completed execution provides an unambiguous matching config.
+-- Never synthesize a deployment from project.container_name alone.
+DO $$
+DECLARE
+    legacy RECORD;
+    deployment_id UUID;
+BEGIN
+    FOR legacy IN
+        SELECT p.id AS project_id, p.container_name, c.id AS configuration_id,
+               c.environment, e.id AS execution_id
+        FROM projects p
+        JOIN deployment_configurations c ON c.project_id = p.id
+        JOIN LATERAL (
+            SELECT x.id
+            FROM deployment_executions x
+            WHERE x.configuration_id = c.id
+              AND x.project_id = p.id
+              AND x.status = 'succeeded'
+              AND x.container_name = p.container_name
+            ORDER BY COALESCE(x.completed_at, x.updated_at) DESC, x.created_at DESC
+            LIMIT 1
+        ) e ON TRUE
+        WHERE p.container_name IS NOT NULL
+          AND c.environment = 'production'
+          AND NOT EXISTS (
+              SELECT 1 FROM deployments d
+              WHERE d.project_id = p.id
+                AND d.environment = 'production'
+                AND d.status = 'active'
+          )
+    LOOP
+        deployment_id := gen_random_uuid();
+        INSERT INTO deployments (
+            id, project_id, environment, configuration_id, execution_id, status,
+            trigger_source, runtime_container_name, runtime_host_port, runtime_ports_json,
+            queued_at, building_at, starting_at, health_checking_at, active_at, created_at, updated_at
+        )
+        SELECT deployment_id, legacy.project_id, legacy.environment, legacy.configuration_id, legacy.execution_id,
+               'active', COALESCE(x.trigger_source, 'legacy-import'), legacy.container_name, x.host_port,
+               CASE
+                   WHEN x.host_port IS NOT NULL AND x.container_port IS NOT NULL
+                   THEN jsonb_build_object(x.container_port::text, x.host_port)::text
+                   ELSE '{}' 
+               END,
+               x.created_at, x.started_at, x.started_at, x.started_at,
+               COALESCE(x.completed_at, x.updated_at, CURRENT_TIMESTAMP),
+               COALESCE(x.completed_at, x.updated_at, x.created_at, CURRENT_TIMESTAMP), CURRENT_TIMESTAMP
+        FROM deployment_executions x
+        WHERE x.id = legacy.execution_id;
+    END LOOP;
+
+    IF EXISTS (
+        SELECT 1 FROM projects p
+        WHERE p.container_name IS NOT NULL
+          AND NOT EXISTS (
+              SELECT 1 FROM deployments d
+              WHERE d.project_id = p.id
+                AND d.environment = 'production'
+                AND d.status = 'active'
+                AND d.runtime_container_name = p.container_name
+          )
+    ) THEN
+        RAISE EXCEPTION 'V44 blocked: project container references without an active canonical deployment require operator import';
+    END IF;
+
+    IF EXISTS (SELECT 1 FROM deployment_configurations WHERE project_id IS NULL)
+       OR EXISTS (SELECT 1 FROM deployment_executions WHERE project_id IS NULL)
+       OR EXISTS (SELECT 1 FROM deployment_jobs WHERE project_id IS NULL)
+       OR EXISTS (SELECT 1 FROM deployments WHERE project_id IS NULL) THEN
+        RAISE EXCEPTION 'V44 blocked: deployment rows without project_id must be repaired before removing slug ownership';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1 FROM projects p
+        WHERE (p.github_repository IS NOT NULL
+               OR p.github_ref <> 'main'
+               OR p.deploy_image_name IS NOT NULL
+               OR p.deploy_image_tag <> 'latest'
+               OR p.auto_deploy)
+          AND NOT EXISTS (
+              SELECT 1 FROM deployment_configurations c
+              WHERE c.project_id = p.id
+          )
+    ) THEN
+        RAISE EXCEPTION 'V44 blocked: project-level deployment settings require a configuration before retirement';
+    END IF;
+END $$;
+
+ALTER TABLE deployments ALTER COLUMN project_id SET NOT NULL;
+
+UPDATE deployment_configurations c
+SET repository = COALESCE(NULLIF(p.github_repository, ''), c.repository),
+    git_ref = COALESCE(NULLIF(p.github_ref, ''), c.git_ref),
+    image_name = COALESCE(NULLIF(p.deploy_image_name, ''), c.image_name),
+    image_tag = COALESCE(NULLIF(p.deploy_image_tag, ''), c.image_tag),
+    auto_deploy = p.auto_deploy
+FROM projects p
+WHERE c.project_id = p.id;
+
+ALTER TABLE deployment_configurations ALTER COLUMN project_id SET NOT NULL;
+ALTER TABLE deployment_executions ALTER COLUMN project_id SET NOT NULL;
+ALTER TABLE deployment_jobs ALTER COLUMN project_id SET NOT NULL;
+
+ALTER TABLE deployment_configurations ALTER COLUMN environment SET NOT NULL;
+ALTER TABLE deployment_executions ALTER COLUMN environment SET NOT NULL;
+ALTER TABLE deployment_jobs ALTER COLUMN environment SET NOT NULL;
+
+ALTER TABLE deployment_configurations DROP COLUMN container_name;
+ALTER TABLE deployment_executions DROP COLUMN container_name;
+ALTER TABLE deployment_jobs DROP COLUMN container_name;
+ALTER TABLE deployment_executions DROP COLUMN previous_container_name;
+ALTER TABLE deployment_executions DROP COLUMN previous_image;
+ALTER TABLE deployment_jobs DROP COLUMN previous_container_name;
+ALTER TABLE deployment_jobs DROP COLUMN previous_image;
+
+ALTER TABLE deployment_configurations DROP COLUMN project_slug;
+ALTER TABLE deployment_executions DROP COLUMN project_slug;
+ALTER TABLE deployment_jobs DROP COLUMN project_slug;
+
+DROP INDEX IF EXISTS idx_projects_github_deploy;
+
+ALTER TABLE projects
+    DROP COLUMN container_name,
+    DROP COLUMN github_repository,
+    DROP COLUMN github_ref,
+    DROP COLUMN deploy_image_name,
+    DROP COLUMN deploy_image_tag,
+    DROP COLUMN auto_deploy;
+
+ALTER TABLE sites DROP CONSTRAINT IF EXISTS sites_upstream_configuration_check;
+ALTER TABLE sites
+    ADD CONSTRAINT sites_upstream_configuration_check CHECK (
+        (upstream_mode = 'docker_discovery' AND upstream_explicit_port IS NULL)
+        OR
+        (upstream_mode = 'explicit_port' AND upstream_explicit_port IS NOT NULL AND upstream_explicit_port BETWEEN 1 AND 65535)
+    ),
+    DROP COLUMN upstream_container_name;
