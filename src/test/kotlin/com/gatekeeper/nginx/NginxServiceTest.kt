@@ -185,6 +185,38 @@ class NginxServiceTest {
     }
 
     @Test
+    fun `failed global validation does not reload candidate site or replace current runtime route`() {
+        val root = Files.createTempDirectory("gk-nginx-cutover-validation").toFile()
+        val available = File(root, "sites-available").apply { mkdirs() }
+        val enabled = File(root, "sites-enabled").apply { mkdirs() }
+        val slug = "acw"
+        val existing = File(available, slug).apply { writeText("old-runtime-upstream") }
+        val enabledLink = File(enabled, slug)
+        Files.createSymbolicLink(enabledLink.toPath(), existing.toPath())
+        var validationCalls = 0
+        var reloadCalls = 0
+        val service = NginxService(
+            sitesAvailablePath = available.absolutePath,
+            sitesEnabledPath = enabled.absolutePath,
+            sslCertPath = File(root, "certificates").absolutePath,
+            nginxTestRunner = {
+                validationCalls++
+                NginxTestResult(false, 1, "candidate config invalid", "now")
+            },
+            nginxReloadRunner = { reloadCalls++; true }
+        )
+
+        assertFalse(service.enableProject(slug, "candidate-runtime-upstream"))
+
+        assertEquals(1, validationCalls)
+        assertEquals(0, reloadCalls)
+        assertEquals("old-runtime-upstream", existing.readText())
+        assertTrue(Files.isSymbolicLink(enabledLink.toPath()))
+        assertEquals(existing.toPath(), Files.readSymbolicLink(enabledLink.toPath()))
+        assertFalse(File(available, ".$slug.staged").exists())
+    }
+
+    @Test
     fun `rejects dangerous nginx inputs before filesystem or command use`() {
         assertFailsWith<IllegalArgumentException> { requireValidHostname("example.com; touch /tmp/pwned") }
         assertFailsWith<IllegalArgumentException> {
