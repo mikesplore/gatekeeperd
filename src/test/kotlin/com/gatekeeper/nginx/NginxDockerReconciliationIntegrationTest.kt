@@ -29,13 +29,14 @@ class NginxDockerReconciliationIntegrationTest {
             val available = File(root, "sites-available").apply { mkdirs() }
             val enabled = File(root, "sites-enabled").apply { mkdirs() }
             val slug = "docker-integration"
-            val config = "# fixture"
-            File(available, slug).writeText(config)
-            Files.createSymbolicLink(File(enabled, slug).toPath(), File(available, slug).toPath())
+            val projectId = UUID.randomUUID()
+            val config = "# gatekeeperd:project_id:$projectId\n# fixture"
+            val availableFile = File(available, slug).apply { writeText(config) }
+            Files.createSymbolicLink(File(enabled, slug).toPath(), availableFile.toPath())
             val site = SiteRepository.SiteRecord(
-                id = UUID.randomUUID(), projectId = UUID.randomUUID(), projectSlug = slug,
+                id = UUID.randomUUID(), projectId = projectId, projectSlug = slug,
                 domain = "docker-integration.example.com", upstreamHost = "127.0.0.1",
-                upstreamMode = UpstreamMode.DOCKER_DISCOVERY, upstreamContainerName = containerName,
+                upstreamMode = UpstreamMode.DOCKER_DISCOVERY,
                 upstreamExplicitPort = null, tlsMode = TlsMode.HTTP_ONLY, certMode = CertMode.AUTO_RESOLVE,
                 certExplicitPath = null, gateEnabled = true, configVersion = 1,
                 createdAt = LocalDateTime.now(), updatedAt = LocalDateTime.now(),
@@ -44,7 +45,7 @@ class NginxDockerReconciliationIntegrationTest {
             )
             val reconciliation = NginxReconciliationService(
                 available, enabled, { listOf(site) }, { config },
-                NginxReconciliationService.dockerCheck(docker), { null }, persist = { _, _ -> }
+                NginxReconciliationService.dockerCheck(docker) { _, _ -> containerName }, { null }, persist = { _, _ -> }
             )
 
             docker.stopContainer(containerName)

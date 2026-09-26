@@ -356,9 +356,9 @@ class NginxServiceTest {
         assertEquals(listOf("failed", "migrated"), created)
         assertEquals(listOf("failed"), deleted)
         assertEquals(UpstreamMode.DOCKER_DISCOVERY, createdModels.getValue("migrated").upstreamMode)
-        assertEquals("migrated-container", createdModels.getValue("migrated").upstreamContainerName)
+        assertEquals(3001, createdModels.getValue("migrated").appPort)
         assertEquals(UpstreamMode.EXPLICIT_PORT, createdModels.getValue("failed").upstreamMode)
-        assertEquals(null, createdModels.getValue("failed").upstreamContainerName)
+        assertEquals(3002, createdModels.getValue("failed").appPort)
     }
 
     @Test
@@ -437,7 +437,7 @@ class NginxServiceTest {
 
         assertEquals(listOf("app"), report.migrated)
         assertEquals(UpstreamMode.EXPLICIT_PORT, model?.upstreamMode)
-        assertEquals(null, model?.upstreamContainerName)
+        assertEquals(49152, model?.appPort)
     }
 
     @Test
@@ -493,17 +493,21 @@ class NginxServiceTest {
             SiteRepository.SiteRecord(
                 id = java.util.UUID.randomUUID(), projectId = java.util.UUID.randomUUID(), projectSlug = slug,
                 domain = "$slug.example.com", upstreamHost = "127.0.0.1", upstreamMode = UpstreamMode.EXPLICIT_PORT,
-                upstreamContainerName = null, upstreamExplicitPort = 3001, tlsMode = TlsMode.HTTP_ONLY,
+                upstreamExplicitPort = 3001, tlsMode = TlsMode.HTTP_ONLY,
                 certMode = CertMode.AUTO_RESOLVE, certExplicitPath = null, gateEnabled = true, configVersion = 1,
                 createdAt = LocalDateTime.now(), updatedAt = LocalDateTime.now(), reconciliationStatus = ReconciliationStatus.HEALTHY,
                 lastNginxError = null, lastDockerError = null, lastReconciledAt = null
             )
         }
-        File(available, "healthy").writeText("healthy")
-        File(available, "disabled").writeText("disabled")
-        File(available, "drifted").writeText("on-disk")
-        File(available, "docker").writeText("docker")
-        File(available, "error").writeText("error")
+        val sitesBySlug = sites.associateBy { it.projectSlug }
+        fun writeSite(slug: String, content: String) {
+            File(available, slug).writeText("# gatekeeperd:project_id:${sitesBySlug.getValue(slug).projectId}\n$content")
+        }
+        writeSite("healthy", "healthy")
+        writeSite("disabled", "disabled")
+        writeSite("drifted", "on-disk")
+        writeSite("docker", "docker")
+        writeSite("error", "error")
         File(available, "orphan").writeText("orphan")
         listOf("healthy", "drifted", "docker", "error").forEach {
             Files.createSymbolicLink(File(enabled, it).toPath(), File(available, it).toPath())
@@ -522,7 +526,7 @@ class NginxServiceTest {
         assertEquals(ReconciliationStatus.DRIFTED, states["drifted"])
         assertEquals(ReconciliationStatus.DOCKER_DOWN, states["docker"])
         assertEquals(ReconciliationStatus.ERROR, states["error"])
-        assertEquals(ReconciliationStatus.DEAD_CONFIG, states["dead"])
+        assertEquals(ReconciliationStatus.DEAD_CONFIG, states[sitesBySlug.getValue("dead").id.toString()])
         assertEquals(listOf("orphan"), report.orphanedFiles)
     }
 
@@ -535,7 +539,7 @@ class NginxServiceTest {
         val site = SiteRepository.SiteRecord(
             id = java.util.UUID.randomUUID(), projectId = projectId, projectSlug = "current-slug",
             domain = "app.example.com", upstreamHost = "127.0.0.1", upstreamMode = UpstreamMode.EXPLICIT_PORT,
-            upstreamContainerName = null, upstreamExplicitPort = 3001, tlsMode = TlsMode.HTTP_ONLY,
+            upstreamExplicitPort = 3001, tlsMode = TlsMode.HTTP_ONLY,
             certMode = CertMode.AUTO_RESOLVE, certExplicitPath = null, gateEnabled = true, configVersion = 1,
             createdAt = LocalDateTime.now(), updatedAt = LocalDateTime.now(), reconciliationStatus = ReconciliationStatus.HEALTHY,
             lastNginxError = null, lastDockerError = null, lastReconciledAt = null
@@ -563,7 +567,7 @@ class NginxServiceTest {
         val site = SiteRepository.SiteRecord(
             id = java.util.UUID.randomUUID(), projectId = java.util.UUID.randomUUID(), projectSlug = "reused-slug",
             domain = "app.example.com", upstreamHost = "127.0.0.1", upstreamMode = UpstreamMode.EXPLICIT_PORT,
-            upstreamContainerName = null, upstreamExplicitPort = 3001, tlsMode = TlsMode.HTTP_ONLY,
+            upstreamExplicitPort = 3001, tlsMode = TlsMode.HTTP_ONLY,
             certMode = CertMode.AUTO_RESOLVE, certExplicitPath = null, gateEnabled = true, configVersion = 1,
             createdAt = LocalDateTime.now(), updatedAt = LocalDateTime.now(), reconciliationStatus = ReconciliationStatus.HEALTHY,
             lastNginxError = null, lastDockerError = null, lastReconciledAt = null
@@ -578,7 +582,7 @@ class NginxServiceTest {
 
         assertEquals(listOf("reused-slug"), report.orphanedFiles)
         assertEquals(ReconciliationStatus.DEAD_CONFIG, report.results.single().status)
-        assertEquals("reused-slug", report.results.single().slug)
+        assertEquals(site.id.toString(), report.results.single().slug)
     }
 
     @Test
@@ -589,18 +593,19 @@ class NginxServiceTest {
         val site = SiteRepository.SiteRecord(
             id = java.util.UUID.randomUUID(), projectId = java.util.UUID.randomUUID(), projectSlug = "faulty",
             domain = "faulty.example.com", upstreamHost = "127.0.0.1", upstreamMode = UpstreamMode.EXPLICIT_PORT,
-            upstreamContainerName = null, upstreamExplicitPort = 3001, tlsMode = TlsMode.HTTP_ONLY,
+            upstreamExplicitPort = 3001, tlsMode = TlsMode.HTTP_ONLY,
             certMode = CertMode.AUTO_RESOLVE, certExplicitPath = null, gateEnabled = true, configVersion = 1,
             createdAt = LocalDateTime.now(), updatedAt = LocalDateTime.now(), reconciliationStatus = ReconciliationStatus.HEALTHY,
             lastNginxError = null, lastDockerError = null, lastReconciledAt = null
         )
-        File(available, "faulty").writeText("config")
+        val config = "# gatekeeperd:project_id:${site.projectId}\nconfig"
+        File(available, "faulty").writeText(config)
         Files.createSymbolicLink(File(enabled, "faulty").toPath(), File(available, "faulty").toPath())
         var nginxChecks = 0
         var dockerChecks = 0
         val persisted = mutableListOf<NginxReconciliationResult>()
         val service = NginxReconciliationService(
-            available, enabled, { listOf(site) }, { "config" },
+            available, enabled, { listOf(site) }, { config },
             { dockerChecks++; "container stopped" },
             { nginxChecks++; if (nginxChecks == 1) "/etc/nginx/sites-available/faulty: syntax error" else null },
             persist = { _, result -> persisted += result }

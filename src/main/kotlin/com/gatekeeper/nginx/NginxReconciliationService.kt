@@ -35,11 +35,16 @@ class NginxReconciliationService(
 ) {
     companion object {
         /** Docker-backed check used by production reconciliation wiring and integration tests. */
-        fun dockerCheck(docker: DockerService): (SiteRepository.SiteRecord) -> String? = { site ->
+        fun dockerCheck(
+            docker: DockerService,
+            resolveContainer: (projectId: UUID, environment: String) -> String? = { projectId, environment ->
+                DeploymentUpstreamResolver.resolve(projectId, environment)?.containerName
+            }
+        ): (SiteRepository.SiteRecord) -> String? = { site ->
             if (site.upstreamMode != UpstreamMode.DOCKER_DISCOVERY) {
                 null
             } else {
-                val container = DeploymentUpstreamResolver.resolve(site.projectId, "production")?.containerName
+                val container = resolveContainer(site.projectId, "production")
                 when {
                     container.isNullOrBlank() -> "Docker discovery site has no container name"
                     docker.containerHealth(container) != "running" ->
