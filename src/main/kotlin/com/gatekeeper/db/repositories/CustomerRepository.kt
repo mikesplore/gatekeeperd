@@ -35,6 +35,13 @@ object CustomerRepository {
         Customers.selectAll().where { Customers.id eq id }.singleOrNull()?.toRecord()
     }
 
+    fun existsByContactEmail(email: String): Boolean = transaction {
+        val normalized = email.trim().lowercase()
+        normalized.isNotBlank() && Customers.selectAll().where {
+            Customers.contactEmail.lowerCase() eq normalized
+        }.singleOrNull() != null
+    }
+
     fun create(name: String, contactEmail: String?, contactPhone: String?, billingStatus: String = "unknown"): CustomerRecord = transaction {
         val id = UUID.randomUUID()
         Customers.insert {

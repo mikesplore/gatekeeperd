@@ -10,6 +10,9 @@ CREATE TABLE IF NOT EXISTS users (
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE UNIQUE INDEX IF NOT EXISTS uq_users_email_normalized
+    ON users (lower(btrim(email)));
+
 CREATE TABLE IF NOT EXISTS projects (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     slug TEXT NOT NULL UNIQUE,
@@ -462,6 +465,10 @@ CREATE TABLE IF NOT EXISTS customers (
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_customers_contact_email_normalized
+    ON customers (lower(btrim(contact_email)))
+    WHERE contact_email IS NOT NULL AND btrim(contact_email) <> '';
 
 ALTER TABLE projects
     ADD COLUMN IF NOT EXISTS customer_id UUID REFERENCES customers(id);

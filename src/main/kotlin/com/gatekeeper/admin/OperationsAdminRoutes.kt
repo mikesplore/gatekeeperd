@@ -40,6 +40,7 @@ import kotlin.time.Duration.Companion.milliseconds
 import java.io.File
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.sql.SQLException
 
 @Serializable
 data class ProjectHealthResponse(
@@ -144,6 +145,10 @@ private fun dashboardUpstreamState(site: SiteRepository.SiteRecord, dockerServic
     }.getOrDefault(false)
     return if (reachable) "running" else "down"
 }
+
+private fun Throwable.isUniqueConstraintViolation(): Boolean = generateSequence(this) { it.cause }
+    .filterIsInstance<SQLException>()
+    .any { it.sqlState == "23505" }
 
 private fun dashboardSite(site: SiteRepository.SiteRecord, dockerService: DockerService? = null): DashboardSiteResponse {
     val project = ProjectRepository.findById(site.projectId)
@@ -292,7 +297,18 @@ fun Application.configureOperationsAdminRoutes() {
             post("/api/admin/dashboard/customers") {
                 val body = runCatching { call.receive<DashboardCustomerCreateRequest>() }.getOrElse { call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid customer body"); return@post }
                 if (body.name.isBlank()) { call.respondError(HttpStatusCode.BadRequest, "invalid_customer", "Customer name is required"); return@post }
-                val customer = CustomerRepository.create(body.name.trim(), body.contactEmail?.trim(), body.contactPhone?.trim(), body.billingStatus)
+                val email = body.contactEmail?.trim()?.takeIf { it.isNotBlank() }?.lowercase()
+                if (email != null && !com.gatekeeper.api.InputValidators.isValidEmail(email)) { call.respondError(HttpStatusCode.BadRequest, "invalid_customer_email", "Enter a valid customer email address"); return@post }
+                if (email != null && CustomerRepository.existsByContactEmail(email)) { call.respondError(HttpStatusCode.Conflict, "customer_exists", "A customer with that email already exists"); return@post }
+                val customer = try {
+                    CustomerRepository.create(body.name.trim(), email, body.contactPhone?.trim()?.takeIf { it.isNotBlank() }, body.billingStatus)
+                } catch (error: Exception) {
+                    if (error.isUniqueConstraintViolation()) {
+                        call.respondError(HttpStatusCode.Conflict, "customer_exists", "A customer with that email already exists")
+                        return@post
+                    }
+                    throw error
+                }
                 call.respond(HttpStatusCode.Created, DashboardCustomerResponse(customer.id.toString(), customer.name, customer.contactEmail, customer.contactPhone, customer.billingStatus, 0))
             }
             patch("/api/admin/dashboard/projects/{id}") {

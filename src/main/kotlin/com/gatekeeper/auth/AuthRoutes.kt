@@ -27,11 +27,13 @@ import org.jetbrains.exposed.sql.insert
 import org.jetbrains.exposed.sql.selectAll
 import org.jetbrains.exposed.sql.update
 import org.jetbrains.exposed.sql.andWhere
+import org.jetbrains.exposed.sql.lowerCase
 import org.jetbrains.exposed.sql.transactions.transaction
 import org.mindrot.jbcrypt.BCrypt
 import org.slf4j.LoggerFactory
 import java.security.MessageDigest
 import java.security.SecureRandom
+import java.sql.SQLException
 import java.time.LocalDateTime
 import java.util.Base64
 import java.util.UUID
@@ -86,6 +88,10 @@ private fun recoveryCode(): String = Base64.getUrlEncoder().withoutPadding().enc
 private fun auditContext(call: ApplicationCall): String = "ip=${call.request.local.remoteHost} requestId=${call.request.headers["X-Request-ID"] ?: "unknown"}"
 private const val TWO_FACTOR_FAILURE_LIMIT = 5
 private const val TWO_FACTOR_LOCK_SECONDS = 15 * 60
+
+private fun Throwable.isUniqueConstraintViolation(): Boolean = generateSequence(this) { it.cause }
+    .filterIsInstance<SQLException>()
+    .any { it.sqlState == "23505" }
 
 fun Application.configureAuthRoutes() {
     routing {
@@ -448,7 +454,7 @@ fun Application.configureAuthRoutes() {
                 val newRole = requireNotNull(role)
                 val created = runCatching {
                     transaction {
-                        if (Users.selectAll().where { Users.email eq newEmail }.singleOrNull() != null) throw IllegalArgumentException("duplicate")
+                        if (Users.selectAll().where { Users.email.lowerCase() eq newEmail }.singleOrNull() != null) throw IllegalArgumentException("duplicate")
                         val id = UUID.randomUUID()
                         Users.insert {
                             it[Users.id] = id
@@ -461,7 +467,7 @@ fun Application.configureAuthRoutes() {
                         id
                     }
                 }.getOrElse {
-                    if (it.message == "duplicate") {
+                    if (it.message == "duplicate" || it.isUniqueConstraintViolation()) {
                         call.respondError(HttpStatusCode.Conflict, "user_exists", "A user with that email already exists")
                     } else {
                         logger.error("Failed to create admin user", it)
@@ -484,7 +490,15 @@ fun Application.configureAuthRoutes() {
                 if ((email != null && !InputValidators.isValidEmail(email)) || (role != null && role !in setOf("admin", "operator", "viewer"))) { call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Email or role is invalid"); return@patch }
                 val actor = principal.payload.subject.lowercase().trim()
                 if (body.active == false && transaction { Users.selectAll().where { Users.id eq id }.singleOrNull()?.get(Users.email) } == actor) { call.respondError(HttpStatusCode.Conflict, "cannot_suspend_self", "You cannot suspend your own account"); return@patch }
-                val updated = runCatching { transaction { Users.update({ Users.id eq id }) { statement -> email?.let { statement[Users.email] = it }; role?.let { statement[Users.role] = it }; body.active?.let { statement[Users.active] = it } } } }.getOrDefault(0)
+                val updated = try {
+                    transaction { Users.update({ Users.id eq id }) { statement -> email?.let { statement[Users.email] = it }; role?.let { statement[Users.role] = it }; body.active?.let { statement[Users.active] = it } } }
+                } catch (error: Exception) {
+                    if (email != null && error.isUniqueConstraintViolation()) {
+                        call.respondError(HttpStatusCode.Conflict, "user_exists", "A user with that email already exists")
+                        return@patch
+                    }
+                    throw error
+                }
                 if (updated == 0) { call.respondError(HttpStatusCode.NotFound, "user_not_found", "User not found"); return@patch }
                 AuditRepository.write(null, "Admin User Updated", actor, "user_id=$id email=${email ?: "unchanged"} role=${role ?: "unchanged"} active=${body.active ?: "unchanged"}")
                 call.respond(mapOf("status" to "user_updated"))
