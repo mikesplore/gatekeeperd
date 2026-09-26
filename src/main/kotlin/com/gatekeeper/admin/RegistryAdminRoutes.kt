@@ -17,6 +17,14 @@ import kotlinx.serialization.Serializable
 import java.util.UUID
 
 @Serializable private data class RegistryCredentialRequest(val username: String, val password: String)
+@Serializable private data class RegistryMetadataResponse(val registry: String, val username: String, val configured: Boolean)
+@Serializable private data class RegistryCredentialResponse(
+    val registry: String,
+    val username: String,
+    val configured: Boolean,
+    val credentialId: String,
+    val version: Int
+)
 fun Application.configureRegistryAdminRoutes() {
     routing { authenticate("auth-jwt") {
         get("/api/admin/provider-credentials") {
@@ -42,7 +50,7 @@ fun Application.configureRegistryAdminRoutes() {
             }
             call.respond(metadata.toMetadataResponse())
         }
-        get("/api/admin/registries") { call.respond(RegistryCredentialRepository.list().map { mapOf("registry" to it.first, "username" to it.second, "configured" to true) }) }
+        get("/api/admin/registries") { call.respond(RegistryCredentialRepository.list().map { RegistryMetadataResponse(it.first, it.second, true) }) }
         put("/api/admin/registries/{registry}") {
             val registry = call.parameters["registry"]?.trim()?.lowercase()
             val body = runCatching { call.receive<RegistryCredentialRequest>() }.getOrNull()
@@ -50,7 +58,7 @@ fun Application.configureRegistryAdminRoutes() {
             if (!SecretValueCipher.isConfigured()) { call.respondError(HttpStatusCode.ServiceUnavailable, "secrets_unconfigured", "Secret encryption is not configured"); return@put }
             val credential = RegistryCredentialRepository.save(registry, body.username, body.password)
             AuditRepository.write(null, "registry_credentials_updated", "admin", "registry=$registry username=${body.username} version=${credential.version}")
-            call.respond(mapOf("registry" to registry, "username" to body.username, "configured" to true, "credentialId" to credential.id.toString(), "version" to credential.version))
+            call.respond(RegistryCredentialResponse(registry, body.username, true, credential.id.toString(), credential.version))
         }
         delete("/api/admin/registries/{registry}") {
             val registry = call.parameters["registry"]?.trim()?.lowercase() ?: ""
@@ -61,20 +69,27 @@ fun Application.configureRegistryAdminRoutes() {
     } }
 }
 
-private fun ProviderCredentialMetadata.toMetadataResponse() = mapOf(
-    "id" to id.toString(),
-    "provider" to provider,
-    "type" to credentialType,
-    "displayName" to displayName,
-    "scope" to scope,
-    "version" to version,
-    "current" to current,
-    "rotatedAt" to rotatedAt?.toString(),
-    "rotatedBy" to rotatedBy,
-    "supersededAt" to supersededAt?.toString(),
-    "supersededById" to supersededById?.toString(),
-    "createdAt" to createdAt.toString(),
-    "createdBy" to createdBy,
-    "updatedAt" to updatedAt.toString(),
-    "updatedBy" to updatedBy
+@Serializable
+private data class ProviderCredentialMetadataResponse(
+    val id: String,
+    val provider: String,
+    val type: String,
+    val displayName: String,
+    val scope: String,
+    val version: Int,
+    val current: Boolean,
+    val rotatedAt: String?,
+    val rotatedBy: String?,
+    val supersededAt: String?,
+    val supersededById: String?,
+    val createdAt: String,
+    val createdBy: String?,
+    val updatedAt: String,
+    val updatedBy: String?
+)
+
+private fun ProviderCredentialMetadata.toMetadataResponse() = ProviderCredentialMetadataResponse(
+    id.toString(), provider, credentialType, displayName, scope, version, current,
+    rotatedAt?.toString(), rotatedBy, supersededAt?.toString(), supersededById?.toString(),
+    createdAt.toString(), createdBy, updatedAt.toString(), updatedBy
 )

@@ -17,6 +17,7 @@ import io.ktor.server.routing.*
 import java.util.UUID
 import com.gatekeeper.db.repositories.AuditRepository
 import com.gatekeeper.security.SecretValueCipher
+import com.gatekeeper.api.dto.toResponse
 
 fun Application.configureDeploymentAdminRoutes() {
     routing {
@@ -110,7 +111,7 @@ fun Application.configureDeploymentAdminRoutes() {
                 val id = call.parameters["id"]?.let { runCatching { UUID.fromString(it) }.getOrNull() }
                 if (id == null) { call.respondError(HttpStatusCode.BadRequest, "invalid_deployment_id", "Invalid deployment ID"); return@get }
                 if (DeploymentJobRepository.find(id) == null) { call.respondError(HttpStatusCode.NotFound, "deployment_not_found", "Deployment not found"); return@get }
-                call.respond(AuditRepository.findByJobId(id))
+                call.respond(AuditRepository.findByJobId(id).map { it.toResponse() })
             }
             post("/api/admin/deployments/{id}/cancel") { changeDeployment(call, "cancel") }
             post("/api/admin/deployments/{id}/retry") { changeDeployment(call, "retry") }
