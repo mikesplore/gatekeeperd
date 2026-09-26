@@ -77,11 +77,6 @@ object AuditRepository {
         }
     }
 
-    fun findByJobId(jobId: UUID, limit: Int = 100): List<AuditRecord> =
-        findFiltered(null, "deployment-worker", limit * 4)
-            .filter { it.reason?.contains("job=$jobId") == true }
-            .take(limit)
-
     private fun ResultRow.toAuditRecord() = AuditRecord(
         id = this[AuditLog.id],
         projectId = this[AuditLog.projectId],
