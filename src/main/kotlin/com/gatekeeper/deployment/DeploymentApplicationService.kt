@@ -125,6 +125,35 @@ object DeploymentApplicationService {
         }
     }
 
+    data class ActiveDeploymentRuntime(
+        val id: UUID,
+        val projectId: UUID?,
+        val environment: String,
+        val status: DeploymentStatus,
+        val containerName: String?,
+        val containerPort: Int?,
+        val publishedPorts: Map<Int, Int>
+    )
+
+    /** Lightweight active-pointer lookup for gateway resolution; never loads secret environment values. */
+    fun activeDeploymentRuntime(projectId: UUID, environment: String): ActiveDeploymentRuntime? = transaction {
+        val row = Deployments.selectAll().where {
+            (Deployments.projectId eq projectId) and (Deployments.environment eq environment) and
+                (Deployments.status eq DeploymentStatus.ACTIVE)
+        }.singleOrNull() ?: return@transaction null
+        val containerPort = com.gatekeeper.db.tables.DeploymentExecutions.selectAll()
+            .where { com.gatekeeper.db.tables.DeploymentExecutions.id eq row[Deployments.executionId] }
+            .singleOrNull()?.get(com.gatekeeper.db.tables.DeploymentExecutions.containerPort)
+        val publishedPorts = runCatching {
+            kotlinx.serialization.json.Json.decodeFromString<Map<String, Int>>(row[Deployments.runtimePortsJson])
+                .mapKeys { it.key.toInt() }
+        }.getOrDefault(emptyMap())
+        ActiveDeploymentRuntime(
+            row[Deployments.id], row[Deployments.projectId], row[Deployments.environment], row[Deployments.status],
+            row[Deployments.runtimeContainerName], containerPort, publishedPorts
+        )
+    }
+
     data class RollbackArtifact(val image: String, val commitSha: String?)
 
     fun rollbackTargetId(id: UUID): UUID? = transaction {
