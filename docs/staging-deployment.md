@@ -104,7 +104,7 @@ for `gatekeeperd.service`:
 ubuntu ALL=(root) NOPASSWD: /usr/local/sbin/gatekeeperd-certbot *
 ```
 
-The helper is root-owned and only accepts validated certificate install and remove
+The helper is root-owned and only accepts validated certificate install, renewal, and remove
 requests. Validate the rule with `sudo visudo -cf /etc/sudoers.d/gatekeeperd-certbot`.
 Gatekeeperd invokes it with `sudo -n`, so missing permission is reported immediately
 instead of hanging for a password.

@@ -45,6 +45,26 @@ object CertificateRepository {
         }
         findByDomain(domain)!!
     }
+    fun recordRenewalResult(domain: String, expiresAt: LocalDateTime?, renewalStatus: String, error: String? = null): CertificateRecord = transaction {
+        val existing = Certificates.selectAll().where { Certificates.domain eq domain }.singleOrNull()
+        if (existing == null) {
+            Certificates.insert {
+                it[Certificates.domain] = domain
+                it[Certificates.expiresAt] = expiresAt
+                it[Certificates.renewalStatus] = renewalStatus
+                it[Certificates.lastRenewalAttempt] = LocalDateTime.now()
+                it[Certificates.lastRenewalError] = error
+            }
+        } else {
+            Certificates.update({ Certificates.domain eq domain }) {
+                it[Certificates.expiresAt] = expiresAt
+                it[Certificates.renewalStatus] = renewalStatus
+                it[Certificates.lastRenewalAttempt] = LocalDateTime.now()
+                it[Certificates.lastRenewalError] = error
+            }
+        }
+        findByDomain(domain)!!
+    }
     fun activeSiteCount(domain: String): Long = transaction {
         (Sites innerJoin Certificates innerJoin Projects).selectAll().where { (Certificates.domain eq domain) and Projects.deletedAt.isNull() }.count()
     }

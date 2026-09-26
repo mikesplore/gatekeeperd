@@ -646,6 +646,33 @@ class NginxService(
         }
     }
 
+    fun renewCertificate(domain: String): Boolean {
+        requireValidHostname(domain)
+        if (!isCertificateInstalled(domain) || !isCertbotAvailable()) return false
+
+        return try {
+            val process = ProcessBuilder(
+                "sudo", "-n", "/usr/local/sbin/gatekeeperd-certbot",
+                "renew", domain
+            ).redirectErrorStream(true).start()
+            val output = process.inputStream.bufferedReader().use { it.readText() }
+            val exitCode = process.waitFor()
+            if (exitCode != 0) {
+                logger.error("Certbot renewal failed for domain $domain (exit=$exitCode): $output")
+                return false
+            }
+            if (!nginxReloadRunner()) {
+                logger.error("Nginx reload failed after Certbot renewal for domain $domain")
+                return false
+            }
+            logger.info("Certbot renewal check completed for domain: $domain")
+            true
+        } catch (e: Exception) {
+            logger.error("Failed to renew certificate for $domain", e)
+            false
+        }
+    }
+
     fun removeCertificate(domain: String): Boolean {
         requireValidHostname(domain)
         if (!isCertbotAvailable()) {

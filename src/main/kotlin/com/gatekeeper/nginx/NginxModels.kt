@@ -80,6 +80,15 @@ data class CertificateResponse(
 )
 
 @Serializable
+data class CertificateRenewalResponse(
+    val domain: String,
+    val renewed: Boolean,
+    val certificateExpiresAt: String? = null,
+    val certificateDaysRemaining: Long? = null,
+    val message: String
+)
+
+@Serializable
 data class InstalledCertificateInfo(
     val certificateDomain: String,
     val certificatePath: String,

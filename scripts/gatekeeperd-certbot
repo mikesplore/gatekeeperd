@@ -47,6 +47,12 @@ case "$mode" in
         valid_email "$email" || { echo "Invalid email" >&2; exit 2; }
         exec "$certbot" certonly --nginx --non-interactive --agree-tos -d "$domain" -m "$email"
         ;;
+    renew)
+        [ "$#" -eq 2 ] || { echo "Usage: gatekeeperd-certbot renew DOMAIN" >&2; exit 2; }
+        domain=$2
+        valid_domain "$domain" || { echo "Invalid domain" >&2; exit 2; }
+        exec "$certbot" renew --cert-name "$domain" --non-interactive
+        ;;
     remove)
         [ "$#" -eq 2 ] || { echo "Usage: gatekeeperd-certbot remove DOMAIN" >&2; exit 2; }
         domain=$2
@@ -54,7 +60,7 @@ case "$mode" in
         exec "$certbot" delete --cert-name "$domain" -n
         ;;
     *)
-        echo "Usage: gatekeeperd-certbot {install DOMAIN EMAIL|remove DOMAIN}" >&2
+        echo "Usage: gatekeeperd-certbot {install DOMAIN EMAIL|renew DOMAIN|remove DOMAIN}" >&2
         exit 2
         ;;
 esac

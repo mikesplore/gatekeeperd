@@ -728,6 +728,11 @@ Remove an SSL certificate for a domain.
 }
 ```
 
+### POST /api/admin/nginx/certificate/renew/{domain}
+Check and renew an installed certificate with Certbot. Certbot renews only when the certificate enters its renewal window; this does not force a new issuance. Nginx is reloaded after a successful Certbot check.
+
+Returns `{ "domain": "example.com", "renewed": true, "certificateExpiresAt": "2026-10-22T00:00:00Z", "certificateDaysRemaining": 29, "message": "Certificate renewed successfully" }`. `renewed` is false when Certbot succeeds but the certificate is not due yet.
+
 ### GET /api/admin/nginx/certificate/status/{domain}
 Check whether an SSL certificate is installed for a domain.
 

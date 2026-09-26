@@ -7,6 +7,7 @@ import com.gatekeeper.docker.DockerService
 import com.gatekeeper.nginx.CertificateInstallRequest
 import com.gatekeeper.nginx.CertificateListResponse
 import com.gatekeeper.nginx.CertificateResponse
+import com.gatekeeper.nginx.CertificateRenewalResponse
 import com.gatekeeper.nginx.InstalledCertificateInfo
 import com.gatekeeper.nginx.NginxEnableRequest
 import com.gatekeeper.nginx.NginxStatusResponse
@@ -863,6 +864,62 @@ fun Application.configureNginxAdminRoutes() {
                         installed = false,
                         certificatePath = null,
                         privateKeyPath = null
+                    )
+                )
+            }
+
+            post("/api/admin/nginx/certificate/renew/{domain}") {
+                val domain = call.parameters["domain"]
+                if (domain == null) {
+                    call.respondError(HttpStatusCode.BadRequest, "missing_domain", "Missing domain path parameter")
+                    return@post
+                }
+                val validatedDomain = runCatching { requireValidHostname(domain) }.getOrElse {
+                    call.respondError(HttpStatusCode.BadRequest, "invalid_domain", it.message ?: "Invalid domain")
+                    return@post
+                }
+                if (!nginxService.isCertificateInstalled(validatedDomain)) {
+                    call.respondError(HttpStatusCode.NotFound, "certificate_not_found", "No installed certificate found for '$validatedDomain'")
+                    return@post
+                }
+                if (!nginxService.isCertbotAvailable()) {
+                    call.respondError(HttpStatusCode.BadRequest, "certbot_unavailable", "Certbot is not installed on this system")
+                    return@post
+                }
+
+                val beforeExpiry = nginxService.certificateExpiry(validatedDomain)
+                if (!nginxService.renewCertificate(validatedDomain)) {
+                    val expiresAt = beforeExpiry?.first?.let { java.time.OffsetDateTime.parse(it).toLocalDateTime() }
+                    val status = when {
+                        beforeExpiry == null -> "unknown"
+                        beforeExpiry.second < 0 -> "expired"
+                        else -> "active"
+                    }
+                    CertificateRepository.recordRenewalResult(validatedDomain, expiresAt, status, "Certbot renewal failed")
+                    call.respondError(HttpStatusCode.InternalServerError, "certificate_renewal_failed", "Certificate renewal failed. Check Certbot and nginx service logs.")
+                    return@post
+                }
+
+                val afterExpiry = nginxService.certificateExpiry(validatedDomain)
+                val expiryInstant = afterExpiry?.first?.let(java.time.OffsetDateTime::parse)
+                val renewalStatus = when {
+                    expiryInstant == null -> "unknown"
+                    expiryInstant.toInstant().isBefore(java.time.Instant.now()) -> "expired"
+                    else -> "active"
+                }
+                CertificateRepository.recordRenewalResult(
+                    validatedDomain,
+                    expiryInstant?.toLocalDateTime(),
+                    renewalStatus
+                )
+                val renewed = beforeExpiry?.first != afterExpiry?.first
+                call.respond(
+                    CertificateRenewalResponse(
+                        domain = validatedDomain,
+                        renewed = renewed,
+                        certificateExpiresAt = afterExpiry?.first,
+                        certificateDaysRemaining = afterExpiry?.second,
+                        message = if (renewed) "Certificate renewed successfully" else "Certificate is not due for renewal yet"
                     )
                 )
             }
