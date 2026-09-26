@@ -96,6 +96,7 @@ data class CreateContainerRequest(
     val projectSlug: String? = null,
     val image: String,
     val ports: Map<Int, Int> = emptyMap(),
+    val randomHostPorts: Set<Int> = emptySet(),
     val env: Map<String, String> = emptyMap(),
     val network: String = "bridge",
     val volumes: List<VolumeMount> = emptyList(),

@@ -308,6 +308,14 @@ class DockerService(dockerSocketPath: String) {
         }
     }
 
+    fun dockerHealthStatus(containerNameOrId: String): String? = try {
+        val inspect: InspectContainerResponse = client.inspectContainerCmd(containerNameOrId).exec()
+        inspect.state?.health?.status
+    } catch (e: Exception) {
+        logger.debug("Docker health status unavailable for {}", containerNameOrId, e)
+        null
+    }
+
     fun createContainer(request: CreateContainerRequest): ContainerInfo {
         enforceSecurityPolicy(request)
         if (request.pullImage && !imageExists(request.image)) {
@@ -324,13 +332,19 @@ class DockerService(dockerSocketPath: String) {
             exposedPorts.add(exposed)
             portBindings.bind(exposed, Ports.Binding.bindPort(hostPort))
         }
+        request.randomHostPorts.forEach { containerPort ->
+            require(containerPort in 1..65535) { "Container port must be between 1 and 65535" }
+            val exposed = ExposedPort.tcp(containerPort)
+            exposedPorts.add(exposed)
+            portBindings.bind(exposed, Ports.Binding.bindIpAndPort("127.0.0.1", 0))
+        }
 
         val envVars = request.env.map { "${it.key}=${it.value}" }
 
         val hostConfig = HostConfig()
             .withNetworkMode(request.network)
 
-        if (request.ports.isNotEmpty()) {
+        if (request.ports.isNotEmpty() || request.randomHostPorts.isNotEmpty()) {
             hostConfig.withPortBindings(portBindings)
         }
 

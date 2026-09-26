@@ -21,7 +21,7 @@ object NginxBackfillRunner {
                     }
                 },
                 expectedDockerPort = { project ->
-                    val containerName = extractConfiguredContainerName(project.containerName)
+                    val containerName = project.containerName?.let(::extractConfiguredContainerName)
                     if (docker == null || containerName == null) null
                     else parsePublishedHostPorts(docker.getContainer(containerName)?.ports.orEmpty()).singleOrNull()
                 },

@@ -14,6 +14,10 @@ import java.time.ZoneOffset
 import java.time.OffsetDateTime
 import java.security.MessageDigest
 import com.gatekeeper.plugins.DistributedLock
+import com.gatekeeper.db.repositories.SiteRepository
+import com.gatekeeper.db.tables.CertMode
+import com.gatekeeper.db.tables.TlsMode
+import com.gatekeeper.db.tables.UpstreamMode
 
 private val logger = LoggerFactory.getLogger("com.gatekeeper.nginx.NginxService")
 
@@ -80,6 +84,8 @@ class NginxService(
             managedSha256 = managedHash
         )
     }
+
+    fun restoreSiteConfiguration(slug: String, previousConfig: String): Boolean = enableProject(slug, previousConfig)
 
     private fun sha256(value: String): String = MessageDigest.getInstance("SHA-256")
         .digest(value.toByteArray()).joinToString("") { "%02x".format(it) }
@@ -468,6 +474,54 @@ class NginxService(
             false
           }
         }
+    }
+
+    /** Route a managed project site to a ready candidate and reload nginx before reporting success. */
+    fun switchDeploymentUpstream(projectId: java.util.UUID, slug: String, host: String, port: Int): Boolean {
+        val site = SiteRepository.findByProjectId(projectId) ?: return true
+        val previousContent = inspectSite(slug).content
+        val previousPort = site.upstreamExplicitPort
+        val containerPort = site.upstreamExplicitPort ?: port
+        return switchDeploymentUpstream(projectId, slug, host, containerPort, port)
+    }
+
+    fun switchDeploymentUpstream(projectId: java.util.UUID, slug: String, host: String, containerPort: Int, hostPort: Int): Boolean {
+        require(host == "127.0.0.1") { "Deployment upstream must use loopback" }
+        require(containerPort in 1..65535 && hostPort in 1..65535) { "Deployment upstream ports must be between 1 and 65535" }
+        val site = SiteRepository.findByProjectId(projectId) ?: return true
+        val previousContent = inspectSite(slug).content
+        val previousPort = site.upstreamExplicitPort
+        val certificate = when (site.certMode) {
+            CertMode.AUTO_RESOLVE -> resolveCertificateForDomain(site.domain)
+            CertMode.EXPLICIT_PATH -> site.certExplicitPath?.let {
+                ResolvedCertificate("explicit", it, it.replace("fullchain.pem", "privkey.pem"))
+            } ?: return false
+        }
+        val tls = when (site.tlsMode) {
+            TlsMode.HTTP_ONLY -> TlsRenderMode.HTTP_ONLY
+            TlsMode.HTTPS -> TlsRenderMode.HTTPS
+            TlsMode.HTTPS_HTTP2 -> TlsRenderMode.HTTPS_HTTP2
+        }
+        val model = NginxSiteRenderModel(
+            slug = slug,
+            domain = site.domain,
+            upstreamHost = host,
+            appPort = hostPort,
+            upstreamScheme = if (containerPort == 443) "https" else "http",
+            tlsMode = tls,
+            certificatePath = certificate?.certificatePath,
+            certificateKeyPath = certificate?.privateKeyPath,
+            upstreamMode = UpstreamMode.EXPLICIT_PORT,
+            certMode = site.certMode,
+            gateEnabled = site.gateEnabled,
+            bypassPaths = site.bypassPaths
+        )
+        val config = generateNginxConfig(model)
+        if (!enableProject(slug, config)) return false
+        if (SiteRepository.updateDeploymentUpstream(projectId, host, hostPort) != null) return true
+        previousContent?.let { restoreSiteConfiguration(slug, it) }
+        previousPort?.let { SiteRepository.updateDeploymentUpstream(projectId, site.upstreamHost, it) }
+        return false
     }
 
     private fun replaceEnabledSymlink(availableFile: File, enabledFile: File) {

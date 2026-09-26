@@ -1,37 +1,27 @@
 package com.gatekeeper
 
+import com.gatekeeper.admin.*
 import com.gatekeeper.api.InputValidators
-import com.gatekeeper.admin.configureNginxAdminRoutes
-import com.gatekeeper.admin.configureDeploymentAdminRoutes
-import com.gatekeeper.admin.configureSystemAdminRoutes
-import com.gatekeeper.admin.configureRegistryAdminRoutes
-import com.gatekeeper.admin.configurePaymentAdminRoutes
-import com.gatekeeper.admin.configureProjectAdminRoutes
-import com.gatekeeper.admin.configureOperationsAdminRoutes
-import com.gatekeeper.admin.configureIntegrationAdminRoutes
 import com.gatekeeper.auth.configureAuthRoutes
-import com.gatekeeper.customer.configureCustomerRoutes
 import com.gatekeeper.config.AppConfig
+import com.gatekeeper.customer.configureCustomerRoutes
+import com.gatekeeper.db.repositories.DeploymentOwnershipReport
 import com.gatekeeper.db.tables.Users
+import com.gatekeeper.deployment.DeploymentWorker
 import com.gatekeeper.gate.configureGateRoutes
+import com.gatekeeper.integrations.configureGitHubAdminRoutes
+import com.gatekeeper.integrations.configureGitHubWebhookRoutes
+import com.gatekeeper.mpesa.MpesaClient
+import com.gatekeeper.mpesa.configureMpesaRoutes
+import com.gatekeeper.nginx.NginxBackfillRunner
+import com.gatekeeper.payments.PaymentReconciliationService
 import com.gatekeeper.paystack.PaystackClient
 import com.gatekeeper.paystack.PaystackProviderClient
 import com.gatekeeper.paystack.configurePaystackWebhookRoutes
-import com.gatekeeper.payments.PaymentReconciliationService
-import com.gatekeeper.mpesa.MpesaClient
-import com.gatekeeper.mpesa.configureMpesaRoutes
-import com.gatekeeper.integrations.configureGitHubWebhookRoutes
-import com.gatekeeper.integrations.configureGitHubAdminRoutes
-import com.gatekeeper.plugins.configureDatabase
-import com.gatekeeper.plugins.configureMonitoring
-import com.gatekeeper.plugins.configureRedis
-import com.gatekeeper.plugins.configureRouting
-import com.gatekeeper.plugins.configureSecurity
-import com.gatekeeper.plugins.configureSerialization
+import com.gatekeeper.plugins.*
 import com.gatekeeper.scheduler.AutoBlockerJob
-import com.gatekeeper.scheduler.ReconciliationJob
 import com.gatekeeper.scheduler.IntegrationOutboxJob
-import com.gatekeeper.deployment.DeploymentWorker
+import com.gatekeeper.scheduler.ReconciliationJob
 import io.ktor.server.application.*
 import io.ktor.server.engine.*
 import io.ktor.server.netty.*
@@ -42,11 +32,6 @@ import org.jetbrains.exposed.sql.selectAll
 import org.jetbrains.exposed.sql.transactions.transaction
 import org.mindrot.jbcrypt.BCrypt
 import org.slf4j.LoggerFactory
-import com.gatekeeper.nginx.NginxBackfillRunner
-import com.gatekeeper.plugins.DatabaseFactory
-import com.gatekeeper.plugins.DatabaseMigrations
-import com.gatekeeper.plugins.RedisService
-import com.gatekeeper.plugins.Telemetry
 import kotlin.system.exitProcess
 
 fun main(args: Array<String>) {
@@ -64,13 +49,54 @@ fun main(args: Array<String>) {
 private fun operationalCommand(command: String, args: Array<String>) {
     when (command) {
         "migrate" -> if (args.firstOrNull() == "baseline") {
-            DatabaseMigrations.baseline(com.gatekeeper.config.AppConfig.dbUrl, com.gatekeeper.config.AppConfig.dbUser, com.gatekeeper.config.AppConfig.dbPassword, com.gatekeeper.config.AppConfig.dbMigrationBaselineVersion)
+            DatabaseMigrations.baseline(
+                AppConfig.dbUrl,
+                AppConfig.dbUser,
+                AppConfig.dbPassword,
+                AppConfig.dbMigrationBaselineVersion
+            )
         } else {
-            DatabaseMigrations.migrate(com.gatekeeper.config.AppConfig.dbUrl, com.gatekeeper.config.AppConfig.dbUser, com.gatekeeper.config.AppConfig.dbPassword, com.gatekeeper.config.AppConfig.dbMigrationBaselineVersion)
+            DatabaseMigrations.migrate(
+                AppConfig.dbUrl,
+                AppConfig.dbUser,
+                AppConfig.dbPassword,
+                AppConfig.dbMigrationBaselineVersion
+            )
         }
-        "backfill" -> { DatabaseFactory.init(com.gatekeeper.config.AppConfig.dbUrl, com.gatekeeper.config.AppConfig.dbUser, com.gatekeeper.config.AppConfig.dbPassword); try { NginxBackfillRunner.run(args.firstOrNull { !it.startsWith("--") } ?: com.gatekeeper.config.AppConfig.nginxSitesAvailablePath, args.contains("--dry-run")) } finally { DatabaseFactory.close() } }
-        "health-check" -> { DatabaseFactory.init(com.gatekeeper.config.AppConfig.dbUrl, com.gatekeeper.config.AppConfig.dbUser, com.gatekeeper.config.AppConfig.dbPassword); RedisService.init(com.gatekeeper.config.AppConfig.redisHost, com.gatekeeper.config.AppConfig.redisPort); val ready = DatabaseFactory.isHealthy() && RedisService.isHealthy() && DatabaseFactory.migrationsHealthy(); RedisService.close(); DatabaseFactory.close(); if (!ready) exitProcess(1); println("ready") }
-        else -> error("Unknown command '$command'. Use serve, migrate, backfill, or health-check.")
+
+        "backfill" -> {
+            DatabaseFactory.init(
+                AppConfig.dbUrl,
+                AppConfig.dbUser,
+                AppConfig.dbPassword
+            ); try {
+                NginxBackfillRunner.run(args.firstOrNull { !it.startsWith("--") }
+                    ?: AppConfig.nginxSitesAvailablePath, args.contains("--dry-run"))
+            } finally {
+                DatabaseFactory.close()
+            }
+        }
+
+        "deployment-ownership-report" -> DeploymentOwnershipReport.run(
+            AppConfig.dbUrl,
+            AppConfig.dbUser,
+            AppConfig.dbPassword,
+            applyBackfill = args.contains("--apply")
+        )
+
+        "health-check" -> {
+            DatabaseFactory.init(
+                AppConfig.dbUrl,
+                AppConfig.dbUser,
+                AppConfig.dbPassword
+            ); RedisService.init(AppConfig.redisHost, AppConfig.redisPort)
+            val ready =
+                DatabaseFactory.isHealthy() && RedisService.isHealthy() && DatabaseFactory.migrationsHealthy(); RedisService.close(); DatabaseFactory.close(); if (!ready) exitProcess(
+                1
+            ); println("ready")
+        }
+
+        else -> error("Unknown command '$command'. Use serve, migrate, backfill, deployment-ownership-report, or health-check.")
     }
 }
 
@@ -135,7 +161,7 @@ private fun seedInitialAdmin() {
         if (email.isBlank() || password.isBlank()) {
             logger.error(
                 "No admin users in database and ADMIN_EMAIL/ADMIN_PASSWORD are not set. " +
-                    "Set both in .env and restart, or insert a user manually."
+                        "Set both in .env and restart, or insert a user manually."
             )
             return
         }

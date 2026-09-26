@@ -24,6 +24,10 @@ import kotlinx.serialization.encodeToString
 import com.gatekeeper.nginx.DEFAULT_GATEKEEPER_BYPASS_PATHS
 
 object SiteRepository {
+    fun existsForProject(projectId: UUID): Boolean = transaction {
+        Sites.selectAll().where { Sites.projectId eq projectId }.count() > 0
+    }
+
     data class SiteRecord(
         val id: UUID, val projectId: UUID, val domain: String, val upstreamHost: String,
         val upstreamMode: UpstreamMode, val upstreamContainerName: String?, val upstreamExplicitPort: Int?,
@@ -113,6 +117,37 @@ object SiteRepository {
             it[Sites.updatedAt] = LocalDateTime.now()
         }
         Sites.selectAll().where { Sites.id eq id }.singleOrNull()?.toRecord()
+    }
+
+    fun updateDeploymentUpstream(projectId: UUID, host: String, port: Int): SiteRecord? = transaction {
+        require(host == "127.0.0.1") { "Deployment upstream host must be loopback" }
+        require(port in 1..65535) { "Deployment upstream port must be between 1 and 65535" }
+        val site = Sites.selectAll().where { Sites.projectId eq projectId }.singleOrNull() ?: return@transaction null
+        Sites.update({ Sites.id eq site[Sites.id] }) {
+            it[Sites.upstreamHost] = host
+            it[Sites.upstreamMode] = UpstreamMode.EXPLICIT_PORT
+            it[Sites.upstreamExplicitPort] = port
+            it[Sites.upstreamContainerName] = null
+            it[Sites.configVersion] = site[Sites.configVersion] + 1
+            it[Sites.reconciliationStatus] = ReconciliationStatus.HEALTHY
+            it[Sites.lastNginxError] = null
+            it[Sites.lastDockerError] = null
+            it[updatedAt] = LocalDateTime.now()
+        }
+        Sites.selectAll().where { Sites.id eq site[Sites.id] }.singleOrNull()?.toRecord()
+    }
+
+    fun restoreDeploymentUpstream(projectId: UUID, site: SiteRecord): SiteRecord? = transaction {
+        val existing = Sites.selectAll().where { Sites.projectId eq projectId }.singleOrNull() ?: return@transaction null
+        Sites.update({ Sites.id eq existing[Sites.id] }) {
+            it[Sites.upstreamHost] = site.upstreamHost
+            it[Sites.upstreamMode] = site.upstreamMode
+            it[Sites.upstreamContainerName] = site.upstreamContainerName
+            it[Sites.upstreamExplicitPort] = site.upstreamExplicitPort
+            it[Sites.configVersion] = existing[Sites.configVersion] + 1
+            it[Sites.updatedAt] = LocalDateTime.now()
+        }
+        Sites.selectAll().where { Sites.id eq existing[Sites.id] }.singleOrNull()?.toRecord()
     }
 
     data class SiteDashboardUpdate(

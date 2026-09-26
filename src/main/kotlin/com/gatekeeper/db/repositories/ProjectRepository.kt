@@ -15,18 +15,22 @@ import java.time.LocalDateTime
 import java.util.*
 
 object ProjectRepository {
-    data class AutoDeployTarget(val slug: String, val repository: String, val gitRef: String, val imageName: String, val imageTag: String, val containerName: String)
+    data class AutoDeployTarget(val id: UUID, val slug: String, val repository: String, val gitRef: String, val imageName: String, val imageTag: String, val containerName: String?)
 
     fun findAutoDeployTargets(repository: String, gitRef: String): List<AutoDeployTarget> = transaction {
         Projects.selectAll().where { (Projects.githubRepository eq repository) and (Projects.githubRef eq gitRef) and (Projects.autoDeploy eq true) and Projects.deletedAt.isNull() }
-            .mapNotNull { row -> row[Projects.deployImageName]?.let { AutoDeployTarget(row[Projects.slug], repository, gitRef, it, row[Projects.deployImageTag], row[Projects.containerName]) } }
+            .mapNotNull { row -> row[Projects.deployImageName]?.let { AutoDeployTarget(row[Projects.id], row[Projects.slug], repository, gitRef, it, row[Projects.deployImageTag], row[Projects.containerName]) } }
     }
 
-    fun syncDeployment(slug: String, containerName: String, commit: String?) {
+    fun syncDeployment(projectId: UUID?, slug: String?, containerName: String, commit: String?) {
         transaction {
-            val row = Projects.selectAll().where { (Projects.slug eq slug) and Projects.deletedAt.isNull() }.singleOrNull() ?: return@transaction
-            Projects.update({ Projects.id eq row[Projects.id] }) { it[Projects.containerName] = containerName; it[Projects.updatedAt] = LocalDateTime.now() }
-            AuditLog.insert { it[projectId] = row[Projects.id]; it[action] = "deployment_synchronized"; it[actor] = "deployment-worker"; it[reason] = "container=$containerName commit=${commit ?: "unknown"}" }
+            val row = if (projectId != null) {
+                Projects.selectAll().where { (Projects.id eq projectId) and Projects.deletedAt.isNull() }.singleOrNull()
+            } else {
+                slug?.let { Projects.selectAll().where { (Projects.slug eq it) and Projects.deletedAt.isNull() }.singleOrNull() }
+            } ?: return@transaction
+            Projects.update({ Projects.id eq row[Projects.id] }) { it[Projects.containerName] = containerName as String?; it[Projects.updatedAt] = LocalDateTime.now() }
+            AuditLog.insert { it[AuditLog.projectId] = row[Projects.id]; it[AuditLog.action] = "deployment_synchronized"; it[AuditLog.actor] = "deployment-worker"; it[AuditLog.reason] = "container=$containerName commit=${commit ?: "unknown"}" }
         }
     }
 
@@ -50,7 +54,7 @@ object ProjectRepository {
         val slug: String,
         val name: String,
         val domain: String,
-        val containerName: String,
+        val containerName: String?,
         val type: String,
         val status: String,
         val blockReason: String?,
@@ -92,6 +96,11 @@ object ProjectRepository {
         }
     }
 
+    fun findActiveById(id: UUID): ProjectRecord? = transaction {
+        Projects.selectAll().where { (Projects.id eq id) and Projects.deletedAt.isNull() }
+            .singleOrNull()?.toProjectRecord()
+    }
+
     fun assignCustomer(id: UUID, customerId: UUID?): ProjectRecord? = transaction {
         val updated = Projects.update({ Projects.id eq id }) {
             it[Projects.customerId] = customerId
@@ -121,7 +130,7 @@ object ProjectRepository {
         slug: String,
         name: String,
         domain: String,
-        containerName: String,
+        containerName: String?,
         type: String,
         billingName: String?, billingEmail: String?, billingAddress: String?,
         amountDue: BigDecimal?,

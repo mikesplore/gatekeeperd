@@ -2,7 +2,7 @@ package com.gatekeeper.nginx
 
 import java.io.File
 
-data class BackfillProject(val id: java.util.UUID, val slug: String, val containerName: String)
+data class BackfillProject(val id: java.util.UUID, val slug: String, val containerName: String?)
 
 data class NginxBackfillReport(
     val migrated: List<String>,

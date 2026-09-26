@@ -15,6 +15,8 @@ The repository already separates customers from projects and has durable deploym
 
 The broad Phase 0 consumer inventory is in the matrices below. What cannot be established from source alone is the deployed database's actual rows, orphan counts, active runtime mapping, client/API usage beyond checked-in frontend code, and current production migration history. Those require read-only production queries and operational evidence before a data migration is designed.
 
+The deployment ownership report is available as the operational command `deployment-ownership-report`. Run it against a sanitized production copy after applying the additive ownership migration. By default it uses a read-only connection and prints counts by table for uniquely resolved, null slug, missing project slug, archived project, and ambiguous slug; it performs no writes and omits slug values from output. After reviewing the dry-run counts, `deployment-ownership-report --apply` backfills only uniquely resolved, non-archived rows with null `project_id`, in committed batches of 500. The command prints the counts again afterward and logs unresolved deployment row IDs, categories, and slugs for manual repair. It never infers ownership from runtime or customer fields.
+
 ## Consumer and compatibility matrix
 
 | Concern | Current representation / behavior | Read and write consumers | Phase 1 compatibility implication |

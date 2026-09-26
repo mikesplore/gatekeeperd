@@ -11,7 +11,7 @@ object Projects : Table("projects") {
     val slug = text("slug").uniqueIndex()
     val name = text("name")
     val domain = text("domain")
-    val containerName = text("container_name")
+    val containerName = text("container_name").nullable()
     val type = customEnumeration(
         "type",
         "TEXT",

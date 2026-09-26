@@ -61,7 +61,7 @@ import java.util.UUID
 import java.math.BigDecimal
 
 private val logger = LoggerFactory.getLogger("com.gatekeeper.admin.ProjectAdminRoutes")
-private val json = Json.Default
+private val json = Json { ignoreUnknownKeys = true; coerceInputValues = true }
 
 private class DockerServiceWizardInspect(private val dockerService: DockerService) : DockerWizardInspect {
     override fun imageExists(imageRef: String): Boolean = dockerService.imageExists(imageRef)
@@ -75,7 +75,7 @@ data class CreateProjectRequest(
     val slug: String,
     val name: String,
     val domain: String,
-    val containerName: String,
+    val containerName: String? = null,
     val type: String,
     val billingName: String? = null,
     val billingEmail: String? = null,
@@ -424,11 +424,11 @@ fun Application.configureProjectAdminRoutes() {
                     return@post
                 }
 
-                if (body.slug.isBlank() || body.name.isBlank() || body.domain.isBlank() || body.containerName.isBlank()) {
+                if (body.slug.isBlank() || body.name.isBlank() || body.domain.isBlank()) {
                     call.respondError(
                         HttpStatusCode.BadRequest,
                         "invalid_request",
-                        "slug, name, domain, and containerName are required"
+                        "slug, name, and domain are required"
                     )
                     return@post
                 }
@@ -443,7 +443,8 @@ fun Application.configureProjectAdminRoutes() {
                     return@post
                 }
 
-                if (!InputValidators.isValidContainerRef(body.containerName)) {
+                val containerRef = body.containerName?.trim()
+                if (containerRef != null && (containerRef.isBlank() || !InputValidators.isValidContainerRef(containerRef))) {
                     call.respondError(HttpStatusCode.BadRequest, "invalid_request", "containerName must be 'name' or 'name:port'")
                     return@post
                 }
@@ -496,34 +497,34 @@ fun Application.configureProjectAdminRoutes() {
                     CustomerRepository.create(customer.name.trim(), customer.contactEmail?.trim(), customer.contactPhone?.trim())
                 }
 
-                // Enforce container-first flow: the referenced Docker container must exist.
-                val dockerService = try {
-                    DockerService(AppConfig.dockerSocket)
-                } catch (e: Exception) {
-                    logger.warn("Docker not available for project create validation (non-fatal): ${e.message}")
-                    call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available")
-                    return@post
-                }
-
-                val containerRef = body.containerName.trim()
-                val containerName = extractConfiguredContainerName(containerRef)
-                if (containerName == null) {
-                    dockerService.close()
-                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "containerName is invalid")
-                    return@post
-                }
-
-                try {
-                    if (dockerService.getContainer(containerName) == null) {
-                        call.respondError(
-                            HttpStatusCode.BadRequest,
-                            "container_not_found",
-                            "Docker container '$containerName' was not found. Create/start the container first, then create the project."
-                        )
+                if (containerRef != null) {
+                    val dockerService = try {
+                        DockerService(AppConfig.dockerSocket)
+                    } catch (e: Exception) {
+                        logger.warn("Docker not available for project create validation (non-fatal): ${e.message}")
+                        call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available")
                         return@post
                     }
-                } finally {
-                    dockerService.close()
+
+                    val containerName = extractConfiguredContainerName(containerRef)
+                    if (containerName == null) {
+                        dockerService.close()
+                        call.respondError(HttpStatusCode.BadRequest, "invalid_request", "containerName is invalid")
+                        return@post
+                    }
+
+                    try {
+                        if (dockerService.getContainer(containerName) == null) {
+                            call.respondError(
+                                HttpStatusCode.BadRequest,
+                                "container_not_found",
+                                "Docker container '$containerName' was not found. Create/start the container first, then create the project."
+                            )
+                            return@post
+                        }
+                    } finally {
+                        dockerService.close()
+                    }
                 }
 
                 val project = ProjectRepository.create(

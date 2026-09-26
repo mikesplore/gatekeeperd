@@ -414,15 +414,16 @@ fun Application.configureOperationsAdminRoutes() {
                     return@get
                 }
                 val docker = runCatching { DockerService(AppConfig.dockerSocket) }.getOrNull()
-                val containerName = project.containerName.substringBefore(":")
-                val containerHealth = docker?.let { service ->
-                    try { service.containerHealth(containerName) } finally { service.close() }
+                val containerName = project.containerName?.substringBefore(":")
+                val containerHealth = containerName?.let { name -> docker?.let { service ->
+                    try { service.containerHealth(name) } finally { service.close() }
+                }
                 }
                 val nginx = NginxService()
                 val nginxEnabled = java.io.File("${AppConfig.nginxSitesAvailablePath}/$slug").exists() &&
                     java.io.File("${AppConfig.nginxSitesEnabledPath}/$slug").exists()
                 val certificateInstalled = nginx.isCertificateInstalled(project.domain)
-                val ready = project.status == "active" && (containerHealth == null || containerHealth == "running")
+                val ready = project.status == "active" && containerName != null && (containerHealth == null || containerHealth == "running")
                 call.respond(
                     ProjectHealthResponse(
                         project = project.toResponse(),

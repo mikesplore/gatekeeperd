@@ -242,9 +242,17 @@ Create a new project registration.
 **Notes:**
 - `slug` must be unique and lowercase; it is used in Traefik labels and gate checks.
 - `type` must be `"frontend"` or `"backend"`.
-- `containerName` must be either `name` or `name:port`. If a port is provided, nginx wizard can use it as the upstream host port.
-- Gatekeeper enforces a **container-first** flow: the referenced Docker container must already exist (otherwise `400 container_not_found`).
-- Creating a project does NOT deploy the container — that is a manual DevOps step. This just registers it in Gatekeeper.
+- `containerName` is optional. When supplied, it must be either `name` or `name:port`, and the referenced Docker container must already exist (`400 container_not_found` otherwise). This preserves the existing container-first flow for current clients.
+- When omitted, the project is created without a runtime container and Docker availability is not required. A later deployment can attach its runtime.
+
+### POST /api/admin/projects/{projectId}/deployment-configuration
+Create the initial desired deployment configuration for an existing project that does not have one. This operation does not queue or run a deployment; call the existing deployment operation when ready to deploy.
+
+**Request:** Same shape as `POST /api/admin/deployments` (`repository`, `gitRef`, `registry`, `imageName`, `imageTag`, optional runtime settings, `environment`, `readinessType`, `readinessTarget`, `readinessTimeoutSeconds`, `readinessIntervalSeconds`, `readinessProbeTimeoutMillis`, `env`, write-only `secretEnv`, and `volumes`). `environment` defaults to `production`. `readinessType` may be `docker`, `http`, `tcp`, or `process`; HTTP/TCP require `readinessTarget` (path for HTTP, port for TCP). Omitted readiness type preserves compatibility behavior: TCP when a candidate host port is available, otherwise process-running. Defaults are 60 seconds overall, 2 seconds between probes, and a 1 second probe timeout. `projectId` is the UUID returned in the project object; ownership is assigned by this path and any `projectSlug` in the body is ignored.
+
+**Response:** `201 Created` with `{ "id": "<configuration UUID>", "projectId": "<project UUID>", "environment": "production", "status": "configured", "secretEnv": "write-only" }`.
+
+Returns `404` if the project does not exist or is archived, and `409` if it already has a deployment configuration. Configuration is attached through nullable `project_id`; legacy slug fields remain populated for compatibility. Secret values are encrypted at rest and never returned.
 
 ### GET /api/admin/projects/wizard/context
 Wizard helper: list Docker containers (for a dropdown) and currently-used project slugs (to avoid collisions).
@@ -534,14 +542,15 @@ Registry credentials are managed through `GET /api/admin/registries`, `PUT /api/
 
 Deployment administration is JWT-protected:
 
-- `POST /api/admin/deployments` queues a GitHub-to-container deployment. The request accepts `repository`, `gitRef`, `registry` (`docker.io` or a registry host), `imageName`, `imageTag`, optional `containerName`, published `hostPort`/`containerPort`, `network`, `restartPolicy`, and optional `projectSlug`.
-- `GET /api/admin/deployments` and `GET /api/admin/deployments/{id}` expose lifecycle state, logs, commit SHA, image digest, and failure details.
+- `POST /api/admin/deployments` queues a GitHub-to-container deployment. The request accepts `repository`, `gitRef`, `registry` (`docker.io` or a registry host), `imageName`, `imageTag`, optional `containerName`, published `hostPort`/`containerPort`, `network`, `restartPolicy`, optional `projectSlug`, `environment` (defaults to `production`), and readiness settings: `readinessType` (`docker`, `http`, `tcp`, or `process`), optional `readinessTarget` (HTTP path or TCP port), `readinessTimeoutSeconds` (default 60), `readinessIntervalSeconds` (default 2), and `readinessProbeTimeoutMillis` (default 1000). If `readinessType` is omitted, compatibility behavior checks TCP when a candidate host port is available, then process-running otherwise. Environment is a real deployment ownership dimension; at most one canonical deployment can be active per project/environment.
+- `GET /api/admin/deployments` and `GET /api/admin/deployments/{id}` expose lifecycle state, environment, logs, commit SHA, image digest, failure details, `projectId` when the deployment resolves to an active project, and `rolledBackToDeploymentId` for rollback attempts. Repository reads use `project_id` first and fall back to `project_slug` only for rows whose `project_id` is null.
+- `GET /api/admin/deployments/reconciliation` compares persisted active deployments against their recorded Docker runtime and managed nginx target. It reports drift and inspection errors only, with an empty `actionsTaken` list; it does not alter deployment, project, Docker, or gateway state. Docker containers are inspected only by the container name already stored on the deployment. Discovered containers are never assigned to a project or deployment.
 - `GET /api/admin/deployments/{id}/audit` exposes deployment-worker audit records.
-- `POST /api/admin/deployments/{id}/cancel`, `/retry`, and `/rollback` control the job lifecycle. Rollback uses the persisted previous container image and performs the same health and published-port checks before replacing the active container.
+- `POST /api/admin/deployments/{id}/cancel`, `/retry`, and `/rollback` control the job lifecycle. Rollback returns `202 Accepted` with a new deployment ID and `rolledBackToDeploymentId`; it creates a deployment from the target deployment's configuration and immutable image digest when available, then runs through the regular candidate readiness and cutover flow. After success, the new rollback attempt becomes `active`; the target remains historical, and the relation is recorded in the canonical row and audit log.
 - `POST /api/admin/system/prune?dryRun=true&imagePrefix=owner/image` performs reference-aware Docker image cleanup. It never runs `docker system prune`; active container images and the current/previous deployment images are preserved. The response reports candidate image sizes and reclaimed bytes, and every cleanup is written to the audit trail. Omit `dryRun` or set it to `false` to remove candidates.
 - `POST /api/integrations/github/webhook` accepts signed GitHub events. `X-GitHub-Delivery` is required and is persisted for idempotency; duplicate deliveries are acknowledged without queueing another deployment.
 
-After a successful deployment, the linked project container name is synchronized. Nginx handoff remains explicit through `POST /api/admin/nginx/enable/{slug}`; it validates the running container and published port before writing and reloading the site configuration.
+After candidate readiness, the worker switches a managed nginx site's upstream to the candidate's loopback-assigned host port and validates/reloads nginx before retiring the previous canonical runtime. Only after cutover does the canonical record move from `health-checking` to `active` and the former active record become `superseded`. Failed nginx validation/reload keeps the old route and runtime; a ready candidate is retained for cutover retry after worker restart. If old-runtime retirement fails, the worker restores the old site config and retries cutover. A post-activation Docker cleanup error is logged while the candidate remains active.
 
 These endpoints manage nginx site configurations for client projects. They require `nginx` CLI and `systemctl` access on the host.
 

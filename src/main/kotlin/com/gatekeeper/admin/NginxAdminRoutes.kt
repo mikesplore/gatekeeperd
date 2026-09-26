@@ -67,7 +67,7 @@ data class NginxDisableResponse(
 data class NginxWizardContextResponse(
     val slug: String,
     val domain: String,
-    val containerName: String,
+    val containerName: String?,
     val nginxEnabled: Boolean,
     val configuredContainerName: String? = null,
     val configuredPort: Int? = null,
@@ -148,7 +148,7 @@ internal fun hasRenderAffectingNginxParameters(body: NginxEnableRequest): Boolea
 private fun computeNginxEnablePlan(
     slug: String,
     projectDomain: String,
-    projectContainerName: String,
+    projectContainerName: String?,
     request: NginxEnableRequest,
     nginxService: NginxService,
     dockerService: DockerService?
@@ -158,7 +158,7 @@ private fun computeNginxEnablePlan(
         return NginxPlanResult.Err(HttpStatusCode.BadRequest, "invalid_request", "port must be between 1 and 65535")
     }
 
-    val configuredContainerName = extractConfiguredContainerName(projectContainerName)
+    val configuredContainerName = projectContainerName?.let(::extractConfiguredContainerName)
     val dockerPublishedHostPorts = run {
         if (dockerService == null || configuredContainerName == null) return@run null
         val health = dockerService.containerHealth(configuredContainerName)
@@ -174,7 +174,7 @@ private fun computeNginxEnablePlan(
     }
 
     val appPort = explicitPort
-        ?: extractConfiguredPort(projectContainerName)
+        ?: projectContainerName?.let(::extractConfiguredPort)
         ?: dockerPublishedHostPorts?.singleOrNull()
 
     if (appPort == null) {
@@ -189,7 +189,7 @@ private fun computeNginxEnablePlan(
                         "Multiple published host ports detected. Provide 'port' in the request body or encode containerName as name:port."
                 },
                 buildJsonObject {
-                    put("containerName", JsonPrimitive(configuredContainerName ?: projectContainerName))
+                    put("containerName", JsonPrimitive(configuredContainerName ?: projectContainerName.orEmpty()))
                     putJsonArray("publishedHostPorts") { dockerPublishedHostPorts.sorted().forEach { add(JsonPrimitive(it)) } }
                 }
             )
@@ -353,8 +353,8 @@ fun Application.configureNginxAdminRoutes() {
                     available && enabledLink
                 }
 
-                val configuredContainerName = extractConfiguredContainerName(project.containerName)
-                val configuredPort = extractConfiguredPort(project.containerName)
+                val configuredContainerName = project.containerName?.let(::extractConfiguredContainerName)
+                val configuredPort = project.containerName?.let(::extractConfiguredPort)
 
                 val dockerHealth = runCatching {
                     if (dockerService == null || configuredContainerName == null) null
@@ -477,7 +477,7 @@ fun Application.configureNginxAdminRoutes() {
                         enabled = enabled,
                         configPath = "$sitesAvailablePath/$slug",
                         enabledPath = "$sitesEnabledPath/$slug",
-                        port = extractConfiguredPort(project.containerName),
+                        port = project.containerName?.let(::extractConfiguredPort),
                         sslEnabled = resolvedCert != null,
                         certificateDomain = resolvedCert?.certificateDomain,
                         domain = project.domain,

@@ -25,7 +25,7 @@ data class ProjectResponse(
     val slug: String,
     val name: String,
     val domain: String,
-    val containerName: String,
+    val containerName: String?,
     val type: String,
     val status: String,
     val blockReason: String? = null,
