@@ -758,8 +758,16 @@ Revenue summary from successful payments (JWT required).
   "currency": "KES",
   "byMonth": [
     { "month": "2026-02", "amount": 3000.00 },
+    { "month": "2026-03", "amount": 0.00 },
+    { "month": "2026-04", "amount": 0.00 },
+    { "month": "2026-05", "amount": 0.00 },
+    { "month": "2026-06", "amount": 0.00 },
     { "month": "2026-07", "amount": 15000.00 }
-  ]
+  ],
+  "totalPayments": 42,
+  "successfulPayments": 30,
+  "pendingPayments": 5,
+  "failedPayments": 7
 }
 ```
 
@@ -1094,7 +1102,8 @@ Paystack webhook handler. Verifies HMAC-SHA512 signature via `x-paystack-signatu
 - Handles `charge.success`, `charge.failed`, `charge.reversed`, and `transfer.reversed`.
 - Every webhook is logged to `payment_events` before business logic runs.
 - Webhook events track `received`, `processed`, or `failed` processing status, attempt count, error text, and processing timestamps.
-- Administrators can inspect recent events with `GET /api/admin/payment-events?status=failed`.
+- Administrators can inspect recent events with `GET /api/admin/payment-events?status=failed`; optional `provider=paystack|mpesa` filters the history by provider.
+- M-Pesa STK callbacks are stored in the same event history with `provider=mpesa`. Event responses expose only callback metadata and processing outcomes, never the raw callback payload.
 - On `charge.success`: marks payment success, clears the project's `due_date`, activates project, writes audit log, invalidates Redis cache.
 - On `charge.failed`: records failure; does **not** change project status.
 - On reversal: re-blocks the project if the reversed payment had been successful and restores `due_date` to the reversal day.

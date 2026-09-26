@@ -41,6 +41,31 @@ object PaymentRepository {
         val amount: BigDecimal
     )
 
+    data class PaymentCounts(
+        val total: Long,
+        val successful: Long,
+        val pending: Long,
+        val failed: Long
+    )
+
+    fun paymentCounts(): PaymentCounts = transaction {
+        val sql = """
+            SELECT COUNT(*) AS total,
+                   COUNT(*) FILTER (WHERE gateway_status = 'success') AS successful,
+                   COUNT(*) FILTER (WHERE gateway_status = 'pending') AS pending,
+                   COUNT(*) FILTER (WHERE gateway_status = 'failed') AS failed
+            FROM payments
+        """.trimIndent()
+        exec(sql) { rs ->
+            if (rs.next()) PaymentCounts(
+                total = rs.getLong("total"),
+                successful = rs.getLong("successful"),
+                pending = rs.getLong("pending"),
+                failed = rs.getLong("failed")
+            ) else PaymentCounts(0, 0, 0, 0)
+        } ?: PaymentCounts(0, 0, 0, 0)
+    }
+
     fun findByReference(reference: String): PaymentRecord? {
         return transaction {
             Payments.selectAll().where { Payments.paystackReference eq reference }
@@ -162,13 +187,22 @@ object PaymentRepository {
     fun revenueByMonth(months: Int): List<RevenueMonth> {
         return transaction {
             val sql = """
-                SELECT to_char(date_trunc('month', paid_at), 'YYYY-MM') AS month,
-                       COALESCE(SUM(amount), 0) AS total
-                FROM payments
-                WHERE gateway_status = 'success' AND paid_at IS NOT NULL
-                  AND paid_at >= date_trunc('month', CURRENT_DATE) - ($months - 1) * INTERVAL '1 month'
-                GROUP BY 1
-                ORDER BY 1
+                WITH months AS (
+                    SELECT generate_series(
+                        date_trunc('month', CURRENT_DATE) - ($months - 1) * INTERVAL '1 month',
+                        date_trunc('month', CURRENT_DATE),
+                        INTERVAL '1 month'
+                    ) AS month_start
+                )
+                SELECT to_char(months.month_start, 'YYYY-MM') AS month,
+                       COALESCE(SUM(payments.amount), 0) AS total
+                FROM months
+                LEFT JOIN payments
+                  ON payments.gateway_status = 'success'
+                 AND payments.paid_at >= months.month_start
+                 AND payments.paid_at < months.month_start + INTERVAL '1 month'
+                GROUP BY months.month_start
+                ORDER BY months.month_start
             """.trimIndent()
             exec(sql) { rs ->
                 buildList {

@@ -143,7 +143,11 @@ data class RevenueReportResponse(
     val totalThisMonth: Double,
     val totalLastMonth: Double,
     val currency: String,
-    val byMonth: List<RevenueMonthResponse>
+    val byMonth: List<RevenueMonthResponse>,
+    val totalPayments: Long,
+    val successfulPayments: Long,
+    val pendingPayments: Long,
+    val failedPayments: Long
 )
 
 @Serializable
@@ -151,6 +155,7 @@ data class PaymentEventAdminResponse(
     val id: String,
     val dedupeKey: String? = null,
     val eventType: String,
+    val provider: String = "paystack",
     val paystackReference: String? = null,
     val processingStatus: String,
     val processingAttempts: Int,

@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS payment_events (
     payment_id UUID REFERENCES payments(id),
     project_id UUID REFERENCES projects(id),
     event_type TEXT NOT NULL,
+    provider TEXT NOT NULL DEFAULT 'paystack',
     paystack_reference TEXT,
     raw_payload TEXT NOT NULL,
     processing_status TEXT NOT NULL DEFAULT 'received',
@@ -74,7 +75,9 @@ CREATE TABLE IF NOT EXISTS audit_log (
 );
 
 CREATE INDEX IF NOT EXISTS idx_payments_project_id ON payments(project_id);
+ALTER TABLE payment_events ADD COLUMN IF NOT EXISTS provider TEXT NOT NULL DEFAULT 'paystack';
 CREATE INDEX IF NOT EXISTS idx_payment_events_reference ON payment_events(paystack_reference);
+CREATE INDEX IF NOT EXISTS idx_payment_events_provider_status_received ON payment_events(provider, processing_status, received_at DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_log_project_id ON audit_log(project_id);
 CREATE INDEX IF NOT EXISTS idx_projects_due_date ON projects(due_date);
 

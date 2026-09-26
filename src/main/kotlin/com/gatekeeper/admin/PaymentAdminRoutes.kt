@@ -104,11 +104,16 @@ fun Application.configurePaymentAdminRoutes() {
                 val status = call.request.queryParameters["status"]
                 val limit = call.request.queryParameters["limit"]?.toIntOrNull()?.coerceIn(1, 500) ?: 100
                 val offset = call.request.queryParameters["offset"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0
-                val events = PaymentEventRepository.findByStatus(status, limit, offset).map { event ->
+                val provider = call.request.queryParameters["provider"]?.lowercase()?.takeIf { it.isNotBlank() && it != "all" }
+                if (provider != null && provider !in setOf("paystack", "mpesa")) {
+                    return@get call.respondError(HttpStatusCode.BadRequest, "invalid_payment_provider", "Provider must be paystack or mpesa")
+                }
+                val events = PaymentEventRepository.findByStatus(status, limit, offset, provider).map { event ->
                         PaymentEventAdminResponse(
                             id = event.id.toString(),
                             dedupeKey = event.dedupeKey,
                             eventType = event.eventType,
+                            provider = event.provider,
                             paystackReference = event.reference,
                             processingStatus = event.processingStatus,
                             processingAttempts = event.processingAttempts,
@@ -117,7 +122,7 @@ fun Application.configurePaymentAdminRoutes() {
                             processedAt = event.processedAt?.toString()
                         )
                     }
-                val total = PaymentEventRepository.countByStatus(status)
+                val total = PaymentEventRepository.countByStatus(status, provider)
                 call.respond(PaginatedResponse(events, total, limit, offset, offset + events.size < total))
             }
 
@@ -131,12 +136,17 @@ fun Application.configurePaymentAdminRoutes() {
                 val (thisMonth, lastMonth) = PaymentRepository.revenueTotals()
                 val byMonth = PaymentRepository.revenueByMonth(months)
                 val currency = ProjectRepository.findAll().firstOrNull()?.currency ?: "KES"
+                val counts = PaymentRepository.paymentCounts()
                 call.respond(
                     RevenueReportResponse(
                         totalThisMonth = thisMonth.toDouble(),
                         totalLastMonth = lastMonth.toDouble(),
                         currency = currency,
-                        byMonth = byMonth.map { RevenueMonthResponse(it.month, it.amount.toDouble()) }
+                        byMonth = byMonth.map { RevenueMonthResponse(it.month, it.amount.toDouble()) },
+                        totalPayments = counts.total,
+                        successfulPayments = counts.successful,
+                        pendingPayments = counts.pending,
+                        failedPayments = counts.failed
                     )
                 )
             }

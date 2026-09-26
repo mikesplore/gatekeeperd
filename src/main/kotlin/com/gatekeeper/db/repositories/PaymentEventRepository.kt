@@ -19,6 +19,7 @@ object PaymentEventRepository {
         val id: UUID,
         val dedupeKey: String?,
         val eventType: String,
+        val provider: String,
         val reference: String?,
         val processingStatus: String,
         val processingAttempts: Int,
@@ -27,11 +28,14 @@ object PaymentEventRepository {
         val processedAt: LocalDateTime?
     )
 
-    fun findByStatus(status: String?, limit: Int, offset: Int = 0): List<PaymentEventRecord> {
+    fun findByStatus(status: String?, limit: Int, offset: Int = 0, provider: String? = null): List<PaymentEventRecord> {
         return transaction {
             val query = PaymentEvents.selectAll()
             status?.takeIf { it.isNotBlank() }?.let { value ->
                 query.andWhere { PaymentEvents.processingStatus eq value }
+            }
+            provider?.takeIf { it.isNotBlank() }?.let { value ->
+                query.andWhere { PaymentEvents.provider eq value }
             }
             query.orderBy(PaymentEvents.receivedAt, SortOrder.DESC)
                 .limit(limit.coerceIn(1, 500), offset.coerceAtLeast(0).toLong())
@@ -40,6 +44,7 @@ object PaymentEventRepository {
                         id = row[PaymentEvents.id],
                         dedupeKey = row[PaymentEvents.dedupeKey],
                         eventType = row[PaymentEvents.eventType],
+                        provider = row[PaymentEvents.provider],
                         reference = row[PaymentEvents.paystackReference],
                         processingStatus = row[PaymentEvents.processingStatus],
                         processingAttempts = row[PaymentEvents.processingAttempts],
@@ -51,7 +56,12 @@ object PaymentEventRepository {
         }
     }
 
-    fun countByStatus(status: String?): Long = transaction { val query = PaymentEvents.selectAll(); status?.takeIf { it.isNotBlank() }?.let { query.andWhere { PaymentEvents.processingStatus eq it } }; query.count() }
+    fun countByStatus(status: String?, provider: String? = null): Long = transaction {
+        val query = PaymentEvents.selectAll()
+        status?.takeIf { it.isNotBlank() }?.let { value -> query.andWhere { PaymentEvents.processingStatus eq value } }
+        provider?.takeIf { it.isNotBlank() }?.let { value -> query.andWhere { PaymentEvents.provider eq value } }
+        query.count()
+    }
 
     fun alreadyRecorded(dedupeKey: String): Boolean {
         return transaction {
@@ -68,7 +78,8 @@ object PaymentEventRepository {
         rawPayload: String,
         projectId: UUID?,
         paymentId: UUID?,
-        paystackReference: String?
+        paystackReference: String?,
+        provider: String = "paystack"
     ): UUID? {
         val id = UUID.randomUUID()
         return try {
@@ -77,6 +88,7 @@ object PaymentEventRepository {
                     it[PaymentEvents.id] = id
                     it[PaymentEvents.dedupeKey] = dedupeKey
                     it[PaymentEvents.eventType] = eventType
+                    it[PaymentEvents.provider] = provider
                     it[PaymentEvents.rawPayload] = rawPayload
                     it[PaymentEvents.projectId] = projectId
                     it[PaymentEvents.paymentId] = paymentId

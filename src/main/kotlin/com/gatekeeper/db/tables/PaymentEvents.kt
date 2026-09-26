@@ -10,6 +10,7 @@ object PaymentEvents : Table("payment_events") {
     val paymentId = uuid("payment_id").references(Payments.id).nullable()
     val projectId = uuid("project_id").references(Projects.id).nullable()
     val eventType = text("event_type")
+    val provider = text("provider").default("paystack")
     val paystackReference = text("paystack_reference").nullable()
     val rawPayload = text("raw_payload")
     val processingStatus = text("processing_status").default("received")
