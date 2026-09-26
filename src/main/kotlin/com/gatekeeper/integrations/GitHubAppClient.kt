@@ -2,6 +2,7 @@ package com.gatekeeper.integrations
 
 import com.gatekeeper.config.AppConfig
 import com.gatekeeper.db.repositories.GitHubAppInstallationRepository
+import com.gatekeeper.db.repositories.GitHubCredentialRepository
 import io.ktor.client.*
 import io.ktor.client.call.*
 import io.ktor.client.request.*
@@ -28,9 +29,17 @@ import java.util.Base64
 object GitHubAppClient {
     private val http = HttpClient { install(ContentNegotiation) { json(Json { ignoreUnknownKeys = true }) } }
 
-    fun isConfigured(): Boolean = AppConfig.githubAppId != null &&
-        (AppConfig.githubAppInstallationId != null || runCatching { GitHubAppInstallationRepository.find() }.getOrNull() != null) &&
-        AppConfig.githubAppPrivateKeyPath.isNotBlank()
+    fun isConfigured(): Boolean {
+        val hasInstallation = AppConfig.githubAppInstallationId != null ||
+            runCatching { GitHubAppInstallationRepository.find() }.getOrNull() != null
+        val hasPrivateKey = runCatching { GitHubCredentialRepository.privateKeyPem() != null }.getOrDefault(false) ||
+            AppConfig.githubAppPrivateKeyPath.isNotBlank()
+        return AppConfig.githubAppId != null && hasInstallation && hasPrivateKey
+    }
+
+    fun hasPrivateKeyConfigured(): Boolean =
+        runCatching { GitHubCredentialRepository.privateKeyPem() != null }.getOrDefault(false) ||
+            AppConfig.githubAppPrivateKeyPath.isNotBlank()
 
     suspend fun installationToken(): String {
         val appId = AppConfig.githubAppId ?: error("GITHUB_APP_ID is not configured")
@@ -93,14 +102,15 @@ object GitHubAppClient {
     }
 
     private fun loadPrivateKey(): PrivateKey {
-        val pem = Files.readString(java.nio.file.Path.of(AppConfig.githubAppPrivateKeyPath))
-            .replace("-----BEGIN PRIVATE KEY-----", "")
+        val pem = GitHubCredentialRepository.privateKeyPem()
+            ?: Files.readString(java.nio.file.Path.of(AppConfig.githubAppPrivateKeyPath))
+        val normalized = pem.replace("-----BEGIN PRIVATE KEY-----", "")
             .replace("-----END PRIVATE KEY-----", "")
             .replace("-----BEGIN RSA PRIVATE KEY-----", "")
             .replace("-----END RSA PRIVATE KEY-----", "")
             .replace(Regex("\\s"), "")
-        val raw = Base64.getDecoder().decode(pem)
-        val pkcs8 = if (Files.readString(java.nio.file.Path.of(AppConfig.githubAppPrivateKeyPath)).contains("BEGIN RSA PRIVATE KEY")) wrapPkcs1(raw) else raw
+        val raw = Base64.getDecoder().decode(normalized)
+        val pkcs8 = if (pem.contains("BEGIN RSA PRIVATE KEY")) wrapPkcs1(raw) else raw
         return KeyFactory.getInstance("RSA").generatePrivate(PKCS8EncodedKeySpec(pkcs8))
     }
 

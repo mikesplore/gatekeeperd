@@ -3,14 +3,21 @@ package com.gatekeeper.integrations
 import com.gatekeeper.api.respondError
 import com.gatekeeper.config.AppConfig
 import com.gatekeeper.db.repositories.GitHubAppInstallationRepository
+import com.gatekeeper.db.repositories.GitHubCredentialRepository
+import com.gatekeeper.db.repositories.AuditRepository
+import com.gatekeeper.security.SecretValueCipher
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.*
 import io.ktor.server.auth.authenticate
 import io.ktor.server.response.respond
 import io.ktor.server.response.respondRedirect
+import io.ktor.server.request.receive
 import io.ktor.server.routing.*
 import java.util.UUID
 import kotlinx.serialization.Serializable
+
+@Serializable
+private data class GitHubCredentialRequest(val value: String)
 
 @Serializable
 private data class GitHubStatusResponse(
@@ -29,6 +36,28 @@ private data class GitHubInstallUrlResponse(val url: String, val callbackUrl: St
 fun Application.configureGitHubAdminRoutes() {
     routing {
         authenticate("auth-jwt") {
+            put("/api/admin/github/credentials/{type}") {
+                val type = call.parameters["type"]
+                val body = runCatching { call.receive<GitHubCredentialRequest>() }.getOrNull()
+                val validValue = when (type) {
+                    GitHubCredentialRepository.WEBHOOK_SECRET -> body?.value?.isNotBlank() == true && body.value.length <= 4096
+                    GitHubCredentialRepository.APP_PRIVATE_KEY -> body?.value?.let {
+                        (it.contains("BEGIN PRIVATE KEY") || it.contains("BEGIN RSA PRIVATE KEY")) && it.length <= 65536
+                    } == true
+                    else -> false
+                }
+                if (!validValue || body == null) {
+                    call.respondError(HttpStatusCode.BadRequest, "invalid_github_credential", "Provide a valid GitHub webhook secret or App private key")
+                    return@put
+                }
+                if (!SecretValueCipher.isConfigured()) {
+                    call.respondError(HttpStatusCode.ServiceUnavailable, "secrets_unconfigured", "Secret encryption is not configured")
+                    return@put
+                }
+                GitHubCredentialRepository.save(type!!, body.value)
+                AuditRepository.write(null, "github_credential_updated", "admin", "type=$type")
+                call.respond(mapOf("type" to type, "configured" to true, "writeOnly" to true))
+            }
             get("/api/admin/github/status") {
                 val installation = GitHubAppInstallationRepository.find()
                 call.respond(
@@ -94,7 +123,7 @@ private suspend fun handleGitHubCallback(call: ApplicationCall) {
                 call.respondRedirect("$redirect?github=cancelled")
                 return
             }
-            if (AppConfig.githubAppId == null || AppConfig.githubAppPrivateKeyPath.isBlank()) {
+            if (AppConfig.githubAppId == null || !GitHubAppClient.hasPrivateKeyConfigured()) {
                 call.respondRedirect("$redirect?github=unconfigured")
                 return
             }

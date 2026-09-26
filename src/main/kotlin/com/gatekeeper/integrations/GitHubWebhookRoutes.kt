@@ -6,6 +6,7 @@ import com.gatekeeper.db.repositories.DeploymentJobRepository
 import com.gatekeeper.db.repositories.ProjectRepository
 import com.gatekeeper.db.repositories.GitHubWebhookRepository
 import com.gatekeeper.db.repositories.AuditRepository
+import com.gatekeeper.db.repositories.GitHubCredentialRepository
 import com.gatekeeper.deployment.CreateDeploymentRequest
 import io.ktor.http.*
 import io.ktor.server.application.*
@@ -27,7 +28,8 @@ private data class GitHubWebhookResponse(val status: String, val event: String, 
 fun Application.configureGitHubWebhookRoutes() {
     routing {
         post("/api/integrations/github/webhook") {
-            val secret = AppConfig.githubWebhookSecret
+            val secret = runCatching { GitHubCredentialRepository.webhookSecret() }.getOrNull()
+                ?: AppConfig.githubWebhookSecret
             if (secret.isBlank()) {
                 call.respondError(HttpStatusCode.ServiceUnavailable, "github_webhook_unconfigured", "GitHub webhook secret is not configured")
                 return@post
