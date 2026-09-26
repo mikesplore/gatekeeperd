@@ -325,6 +325,7 @@ CREATE TABLE IF NOT EXISTS deployment_configurations (
     secret_env_encrypted TEXT,
     volumes_json TEXT NOT NULL DEFAULT '[]',
     create_network_if_missing BOOLEAN NOT NULL DEFAULT FALSE,
+    auto_deploy BOOLEAN NOT NULL DEFAULT FALSE,
     project_slug TEXT,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
