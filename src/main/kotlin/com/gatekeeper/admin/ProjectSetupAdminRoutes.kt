@@ -319,7 +319,7 @@ fun Application.configureProjectSetupAdminRoutes() {
                             details.environment.size
                         )
                     }
-                } catch (error: Exception) {
+                } catch (_: Exception) {
                     return@get call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Unable to list running Docker containers")
                 } finally {
                     docker.close()
