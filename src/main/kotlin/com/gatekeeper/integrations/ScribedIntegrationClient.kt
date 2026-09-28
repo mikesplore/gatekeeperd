@@ -21,6 +21,7 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.decodeFromJsonElement
 import com.gatekeeper.db.repositories.IntegrationOutboxRepository
 import com.gatekeeper.db.repositories.ProjectAdjustmentRepository
@@ -45,6 +46,19 @@ import io.ktor.client.statement.bodyAsText
     val original_amount: String,
     val amount_paid: String
 )
+@Serializable data class ScribedServiceInvoiceCreatePayload(
+    val client_name: String,
+    val client_email: String?,
+    val project_name: String,
+    val description: String,
+    val amount: String,
+    val currency: String,
+    val due_date: String?,
+    val gatekeeper_project_id: String,
+    val gatekeeper_service_id: String,
+    val original_amount: String,
+    val amount_paid: String = "0"
+)
 
 object ScribedIntegrationClient {
     private val logger = LoggerFactory.getLogger("com.gatekeeper.integrations.ScribedIntegrationClient")
@@ -53,7 +67,7 @@ object ScribedIntegrationClient {
 
     data class InvoiceLookupResult(val status: HttpStatusCode?, val body: JsonObject? = null, val error: String? = null)
 
-    data class InvoiceCreateResult(val status: HttpStatusCode?, val error: String? = null)
+    data class InvoiceCreateResult(val status: HttpStatusCode?, val error: String? = null, val created: Boolean? = null)
 
     suspend fun createInvoice(project: ProjectRepository.ProjectRecord, description: String, amount: String, balances: ProjectBalanceAdapter): InvoiceCreateResult {
         val base = AppConfig.scribedCallbackUrl.trim().trimEnd('/')
@@ -85,6 +99,49 @@ object ScribedIntegrationClient {
             }
             if (response.status.isSuccess()) InvoiceCreateResult(response.status)
             else InvoiceCreateResult(response.status, response.bodyAsText().take(500))
+        }.getOrElse { InvoiceCreateResult(null, it.message ?: it::class.simpleName) }
+    }
+
+    suspend fun createServiceInvoice(
+        project: ProjectRepository.ProjectRecord,
+        serviceId: String,
+        serviceName: String,
+        description: String,
+        amount: String
+    ): InvoiceCreateResult {
+        val base = AppConfig.scribedCallbackUrl.trim().trimEnd('/')
+        val secret = AppConfig.scribedIntegrationSecret.trim()
+        val apiToken = AppConfig.scribedApiToken.trim()
+        if (base.isBlank() || secret.isBlank() || apiToken.isBlank()) {
+            return InvoiceCreateResult(null, "Scribed integration is not configured")
+        }
+        val payload = ScribedServiceInvoiceCreatePayload(
+            client_name = project.billingName?.takeIf { it.isNotBlank() }
+                ?: project.customerName?.takeIf { it.isNotBlank() } ?: project.name,
+            client_email = project.billingEmail ?: project.customerEmail,
+            project_name = "${project.name} — $serviceName",
+            description = description,
+            amount = amount,
+            currency = project.currency,
+            due_date = project.dueDate?.toString(),
+            gatekeeper_project_id = project.id.toString(),
+            gatekeeper_service_id = serviceId,
+            original_amount = amount
+        )
+        return runCatching {
+            val response = http.post("$base/integrations/gatekeeper/services/$serviceId/invoices/ensure") {
+                contentType(ContentType.Application.Json)
+                header(HttpHeaders.Authorization, "Bearer $apiToken")
+                header("X-Gatekeeper-Secret", secret)
+                header("Idempotency-Key", "gatekeeper-service-invoice:$serviceId")
+                setBody(payload)
+            }
+            val responseBody = response.bodyAsText()
+            val created = runCatching {
+                Json.decodeFromString<JsonObject>(responseBody)["created"]?.jsonPrimitive?.booleanOrNull
+            }.getOrNull()
+            if (response.status.isSuccess()) InvoiceCreateResult(response.status, created = created)
+            else InvoiceCreateResult(response.status, responseBody.take(500), created)
         }.getOrElse { InvoiceCreateResult(null, it.message ?: it::class.simpleName) }
     }
 

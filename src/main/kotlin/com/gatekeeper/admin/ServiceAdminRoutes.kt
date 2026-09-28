@@ -11,6 +11,7 @@ import com.gatekeeper.db.tables.AdjustmentType
 import com.gatekeeper.db.tables.AccessBlockReason
 import com.gatekeeper.integrations.ScribedIntegrationClient
 import io.ktor.http.HttpStatusCode
+import io.ktor.http.isSuccess
 import io.ktor.server.auth.authenticate
 import io.ktor.server.auth.principal
 import io.ktor.server.application.Application
@@ -34,6 +35,9 @@ data class CreateServiceRequest(val name: String)
 
 @Serializable
 data class CreateServiceAdjustmentRequest(val type: String, val amount: Double, val reason: String)
+
+@Serializable
+data class CreateServiceInvoiceRequest(val description: String, val amount: Double)
 
 @Serializable
 data class ServiceAdjustmentView(val id: String, val projectId: String, val serviceId: String, val type: String, val amount: Double, val reason: String, val actor: String, val createdAt: String)
@@ -121,6 +125,41 @@ fun Application.configureServiceAdminRoutes() {
                 val service = ServiceRepository.findByProjectAndId(projectId, serviceId)
                     ?: return@get call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
                 call.respond(service.toView())
+            }
+
+            post("/api/admin/projects/{projectId}/services/{serviceId}/invoice") {
+                val (projectId, serviceId) = call.serviceCoordinates() ?: return@post
+                val project = ProjectRepository.findActiveById(projectId)
+                    ?: return@post call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
+                val service = ServiceRepository.findByProjectAndId(projectId, serviceId)
+                    ?: return@post call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
+                val body = runCatching { call.receive<CreateServiceInvoiceRequest>() }.getOrNull()
+                    ?: return@post call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid service invoice request")
+                val description = body.description.trim()
+                if (description.isBlank() || description.length > 500) {
+                    return@post call.respondError(HttpStatusCode.BadRequest, "invalid_invoice_description", "Invoice description is required and must be at most 500 characters")
+                }
+                val amount = runCatching { BigDecimal.valueOf(body.amount) }.getOrNull()
+                if (amount == null || amount <= BigDecimal.ZERO) {
+                    return@post call.respondError(HttpStatusCode.BadRequest, "invalid_invoice_amount", "Enter a service invoice amount greater than zero")
+                }
+                val actor = call.principal<JWTPrincipal>()?.payload?.subject ?: "unknown"
+                val result = ScribedIntegrationClient.createServiceInvoice(project, serviceId.toString(), service.name, description, amount.toPlainString())
+                if (result.status == HttpStatusCode.Conflict) {
+                    return@post call.respondError(HttpStatusCode.Conflict, "service_invoice_already_exists", "Scribed already has an invoice for this service")
+                }
+                if (result.status == null || !result.status.isSuccess()) {
+                    return@post call.respondError(HttpStatusCode.BadGateway, "service_invoice_creation_failed", "Scribed could not create the service invoice")
+                }
+                val confirmed = ScribedIntegrationClient.serviceInvoiceStatus(serviceId.toString())
+                if (confirmed.body == null) {
+                    return@post call.respondError(HttpStatusCode.BadGateway, "service_invoice_creation_failed", "The created service invoice could not be confirmed")
+                }
+                if (result.created == false) {
+                    return@post call.respond(HttpStatusCode.OK, mapOf("status" to "already_exists", "serviceId" to serviceId.toString(), "invoice" to confirmed.body))
+                }
+                AuditRepository.write(projectId, "service_invoice_created", actor, "service=${service.name} amount=$amount ${project.currency}")
+                call.respond(HttpStatusCode.Created, mapOf("status" to "created", "serviceId" to serviceId.toString(), "invoice" to confirmed.body))
             }
 
             post("/api/admin/projects/{projectId}/services/{serviceId}/adjustments") {
@@ -235,7 +274,7 @@ fun Application.configureServiceAdminRoutes() {
                 if (!validEnvironmentValues(body.values)) {
                     return@put call.respondError(HttpStatusCode.BadRequest, "invalid_environment_values", "Environment variable names or values are invalid")
                 }
-                val actor = call.principal<io.ktor.server.auth.jwt.JWTPrincipal>()?.payload?.subject ?: "admin"
+                val actor = call.principal<JWTPrincipal>()?.payload?.subject ?: "admin"
                 val result = runCatching {
                     val sharedId = body.sharedEnvironmentSetId?.let { runCatching { UUID.fromString(it) }.getOrNull() }
                     if (body.sharedEnvironmentSetId != null && sharedId == null) {

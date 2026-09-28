@@ -9,7 +9,6 @@ import com.gatekeeper.docker.ContainerLogsResponse
 import com.gatekeeper.docker.CreateNetworkRequest
 import com.gatekeeper.docker.NetworkPage
 import com.gatekeeper.docker.VolumePage
-import com.gatekeeper.api.dto.*
 import com.gatekeeper.api.InputValidators
 import io.ktor.http.*
 import io.ktor.server.application.*
@@ -94,8 +93,7 @@ fun Application.configureRouting() {
         // Admin routes (JWT-protected)
         authenticate("auth-jwt") {
             get("/api/admin/containers") {
-                val svc = dockerService
-                if (svc == null) {
+                if (dockerService == null) {
                     call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available")
                     return@get
                 }
@@ -103,7 +101,7 @@ fun Application.configureRouting() {
                 val state = call.request.queryParameters["state"]
                 val offset = call.request.queryParameters["offset"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0
                 val limit = call.request.queryParameters["limit"]?.toIntOrNull()?.coerceIn(1, 500) ?: 500
-                val filteredContainers = svc.listContainers(all = true).asSequence()
+                val filteredContainers = dockerService.listContainers(all = true).asSequence()
                     .filter { search.isNullOrBlank() || it.name.lowercase().contains(search) || it.image.lowercase().contains(search) }
                     .filter { state.isNullOrBlank() || it.state.equals(state, ignoreCase = true) }
                     .toList()
@@ -118,13 +116,12 @@ fun Application.configureRouting() {
             }
 
             get("/api/admin/containers/{name}") {
-                val svc = dockerService
-                if (svc == null) {
+                if (dockerService == null) {
                     call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available")
                     return@get
                 }
                 val name = call.requireContainerName() ?: return@get
-                val container = svc.getContainer(name)
+                val container = dockerService.getContainer(name)
                 if (container != null) {
                     call.respond(container)
                 } else {
@@ -133,27 +130,25 @@ fun Application.configureRouting() {
             }
 
             get("/api/admin/containers/{name}/logs") {
-                val svc = dockerService
-                if (svc == null) {
+                if (dockerService == null) {
                     call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available")
                     return@get
                 }
                 val name = call.requireContainerName() ?: return@get
                 val tail = call.request.queryParameters["tail"]?.toIntOrNull()?.coerceIn(1, 500) ?: 100
-                runCatching { svc.containerLogs(name, tail) }
+                runCatching { dockerService.containerLogs(name, tail) }
                     .onSuccess { call.respond(ContainerLogsResponse(name, tail, it)) }
                     .onFailure { call.respondError(HttpStatusCode.Conflict, "container_logs_failed", it.message ?: "Unable to read container logs") }
             }
 
             post("/api/admin/containers/{name}/start") {
-                val svc = dockerService
-                if (svc == null) {
+                if (dockerService == null) {
                     call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available")
                     return@post
                 }
                 val name = call.requireContainerName() ?: return@post
                 try {
-                    svc.startContainer(name)
+                    dockerService.startContainer(name)
                     call.respond(mapOf("status" to "started", "container" to name))
                 } catch (e: Exception) {
                     call.respondError(
@@ -165,14 +160,13 @@ fun Application.configureRouting() {
             }
 
             post("/api/admin/containers/{name}/stop") {
-                val svc = dockerService
-                if (svc == null) {
+                if (dockerService == null) {
                     call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available")
                     return@post
                 }
                 val name = call.requireContainerName() ?: return@post
                 try {
-                    svc.stopContainer(name)
+                    dockerService.stopContainer(name)
                     call.respond(mapOf("status" to "stopped", "container" to name))
                 } catch (e: Exception) {
                     call.respondError(
@@ -184,14 +178,13 @@ fun Application.configureRouting() {
             }
 
             post("/api/admin/containers/{name}/restart") {
-                val svc = dockerService
-                if (svc == null) {
+                if (dockerService == null) {
                     call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available")
                     return@post
                 }
                 val name = call.requireContainerName() ?: return@post
                 try {
-                    svc.restartContainer(name)
+                    dockerService.restartContainer(name)
                     call.respond(mapOf("status" to "restarted", "container" to name))
                 } catch (e: Exception) {
                     call.respondError(
@@ -203,26 +196,24 @@ fun Application.configureRouting() {
             }
 
             get("/api/admin/containers/{name}/health") {
-                val svc = dockerService
-                if (svc == null) {
+                if (dockerService == null) {
                     call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available")
                     return@get
                 }
                 val name = call.requireContainerName() ?: return@get
-                val health = svc.containerHealth(name)
+                val health = dockerService.containerHealth(name)
                 call.respond(mapOf("container" to name, "health" to health))
             }
 
             get("/api/admin/networks") {
-                val svc = dockerService
-                if (svc == null) {
+                if (dockerService == null) {
                     call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available")
                     return@get
                 }
                 val search = call.request.queryParameters["q"]?.trim()?.lowercase()
                 val offset = call.request.queryParameters["offset"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0
                 val limit = call.request.queryParameters["limit"]?.toIntOrNull()?.coerceIn(1, 500) ?: 100
-                val all = svc.listNetworks().filter { search.isNullOrBlank() || it.name.lowercase().contains(search) }
+                val all = dockerService.listNetworks().filter { search.isNullOrBlank() || it.name.lowercase().contains(search) }
                 val rows = all.drop(offset).take(limit)
                 call.respond(NetworkPage(rows, all.size, limit, offset, offset + rows.size < all.size))
             }
@@ -260,14 +251,13 @@ fun Application.configureRouting() {
             }
 
             post("/api/admin/images/pull") {
-                val svc = dockerService
-                if (svc == null) {
+                if (dockerService == null) {
                     call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available")
                     return@post
                 }
                 val body = try {
                     call.receive<PullImageRequest>()
-                } catch (e: Exception) {
+                } catch (_: Exception) {
                     call.respondError(HttpStatusCode.BadRequest, "invalid_request", "The request body could not be parsed")
                     return@post
                 }
@@ -280,9 +270,9 @@ fun Application.configureRouting() {
                 try {
                     val fullRef = "$image:$tag"
                     if (body.pullViaCli || AppConfig.dockerPullViaCli) {
-                        svc.pullImageViaCli(fullRef, AppConfig.dockerSocket)
+                        dockerService.pullImageViaCli(fullRef, AppConfig.dockerSocket)
                     } else {
-                        svc.pullImage(image, tag)
+                        dockerService.pullImage(image, tag)
                     }
                     call.respond(mapOf("status" to "pulled", "image" to "$image:$tag"))
                 } catch (e: Exception) {

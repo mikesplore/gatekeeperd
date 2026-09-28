@@ -6,7 +6,6 @@ import com.zaxxer.hikari.HikariDataSource
 import io.ktor.server.application.*
 import org.jetbrains.exposed.sql.Database
 import org.slf4j.LoggerFactory
-import java.sql.Connection
 
 private val logger = LoggerFactory.getLogger("com.gatekeeper.plugins.Database")
 

@@ -274,6 +274,10 @@ Read, update, or delete a service. PATCH accepts `name`, `accessStatus` (`active
 
 Add a service-scoped charge or discount with `{ "type": "ADDITIONAL_CHARGE", "amount": 500.00, "reason": "Added reporting feature" }`. The service must already have a Scribed service invoice; otherwise the API returns `409 service_invoice_required`. The adjustment is stored against that service and synchronized to its invoice, leaving sibling service and project-level balances unchanged. The operation writes a `service_adjustment` audit entry.
 
+#### POST /api/admin/projects/{projectId}/services/{serviceId}/invoice
+
+Create a Scribed invoice for a service that does not already have one. Accepts `{ "description": "Hosting and maintenance", "amount": 2500.00 }`; the amount is entered for that service and does not use the project amount. The project billing contact and currency are applied, while invoice identity is linked to both the project and service. Returns `409 service_invoice_already_exists` if the service already has an invoice.
+
 #### GET, PUT /api/admin/projects/{projectId}/services/{serviceId}/environment?environment={name}
 
 GET returns version metadata and the desired configuration's service and shared set references, with key names only. PUT accepts `{ "environment": "production", "values": { "KEY": "value" }, "sharedEnvironmentSetId": "<uuid>", "sharedEnvironmentSetVersion": 2 }`; both shared-reference fields may be null to unpin shared variables. It writes an encrypted immutable service version, saves the selected shared-set pin, and queues that service's deployment in one transaction. Values are write-only; the response contains the service set/version and deployment IDs.

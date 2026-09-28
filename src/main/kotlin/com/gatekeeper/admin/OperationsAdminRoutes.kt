@@ -12,7 +12,6 @@ import com.gatekeeper.db.repositories.CertificateRepository
 import com.gatekeeper.docker.DockerService
 import com.gatekeeper.nginx.NginxService
 import com.gatekeeper.nginx.NginxSiteRenderModel
-import com.gatekeeper.nginx.parsePublishedHostPorts
 import com.gatekeeper.nginx.requireCertificatePath
 import com.gatekeeper.nginx.requireValidHostname
 import com.gatekeeper.db.tables.ReconciliationStatus

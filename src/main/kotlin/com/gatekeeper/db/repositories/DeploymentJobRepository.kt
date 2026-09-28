@@ -109,17 +109,16 @@ object DeploymentJobRepository {
         val defaultServiceId = defaultServiceId(projectId)
         DeploymentConfigurations.selectAll().where {
             (DeploymentConfigurations.projectId eq projectId) and
-                ((DeploymentConfigurations.serviceId eq defaultServiceId) or DeploymentConfigurations.serviceId.isNull())
+                    ((DeploymentConfigurations.serviceId eq defaultServiceId) or DeploymentConfigurations.serviceId.isNull())
         }.toList()
             .filter { (it[DeploymentConfigurations.environment] ?: "production") == environment }
-            .sortedByDescending { it[DeploymentConfigurations.serviceId] == defaultServiceId }
-            .firstOrNull()?.get(DeploymentConfigurations.id)
+            .maxByOrNull { it[DeploymentConfigurations.serviceId] == defaultServiceId }?.get(DeploymentConfigurations.id)
     }
 
     fun configurationIdForService(projectId: UUID, serviceId: UUID, environment: String = "production"): UUID? = transaction {
         DeploymentConfigurations.selectAll().where {
             (DeploymentConfigurations.projectId eq projectId) and (DeploymentConfigurations.serviceId eq serviceId)
-        }.toList().firstOrNull { (it[DeploymentConfigurations.environment] ?: "production") == environment }
+        }.toList().firstOrNull { it[DeploymentConfigurations.environment] == environment }
             ?.get(DeploymentConfigurations.id)
     }
 
@@ -190,7 +189,7 @@ object DeploymentJobRepository {
                 (DeploymentConfigurations.projectId eq projectId) and
                     (DeploymentConfigurations.sharedEnvironmentSetId eq previousId)
             }.toList().filter {
-                (it[DeploymentConfigurations.environment] ?: "production") == environment &&
+                it[DeploymentConfigurations.environment] == environment &&
                     it[DeploymentConfigurations.sharedEnvironmentSetVersion] == previousVersion
             }
         }
@@ -247,8 +246,8 @@ object DeploymentJobRepository {
         check(SecretValueCipher.isConfigured()) { "Deployment secret encryption is not configured" }
         val nextVersion = (ProjectSharedEnvironmentVersions.selectAll().where {
             (ProjectSharedEnvironmentVersions.projectId eq projectId) and
-                (ProjectSharedEnvironmentVersions.environment eq environment)
-        }.map { it[ProjectSharedEnvironmentVersions.version] }.maxOrNull() ?: 0) + 1
+                    (ProjectSharedEnvironmentVersions.environment eq environment)
+        }.maxOfOrNull { it[ProjectSharedEnvironmentVersions.version] } ?: 0) + 1
         val id = UUID.randomUUID()
         ProjectSharedEnvironmentVersions.insert {
             it[ProjectSharedEnvironmentVersions.id] = id
@@ -321,7 +320,7 @@ object DeploymentJobRepository {
             id, row[DeploymentConfigurations.repository], row[DeploymentConfigurations.gitRef], row[DeploymentConfigurations.registry],
             row[DeploymentConfigurations.imageName], row[DeploymentConfigurations.imageTag], row[DeploymentConfigurations.autoDeploy], row[DeploymentConfigurations.containerPort],
             row[DeploymentConfigurations.hostPort], row[DeploymentConfigurations.network], row[DeploymentConfigurations.restartPolicy],
-            row[DeploymentConfigurations.environment] ?: "production", emptyMap(), envKeys,
+            row[DeploymentConfigurations.environment], emptyMap(), envKeys,
             row[DeploymentConfigurations.secretSetId], row[DeploymentConfigurations.secretSetVersion],
             row[DeploymentConfigurations.registryCredentialId]
         )
@@ -330,8 +329,8 @@ object DeploymentJobRepository {
     fun upsertProjectConfiguration(projectId: UUID, request: com.gatekeeper.deployment.CreateDeploymentRequest): UUID {
         val serviceId = request.serviceId?.let(UUID::fromString) ?: defaultServiceIdForProject(projectId)
         val currentId = configurationIdForService(projectId, serviceId, request.environment)
-        if (currentId == null) return createConfiguration(projectId, request)
-        val updated = updateConfiguration(currentId, com.gatekeeper.deployment.UpdateDeploymentConfigurationRequest(
+            ?: return createConfiguration(projectId, request)
+        val updated = updateConfiguration(currentId, UpdateDeploymentConfigurationRequest(
             repository = request.repository, gitRef = request.gitRef, registry = request.registry,
             registryCredentialId = request.registryCredentialId,
             imageName = request.imageName, imageTag = request.imageTag,
@@ -570,7 +569,7 @@ object DeploymentJobRepository {
 
     fun updateConfiguration(id: UUID, request: UpdateDeploymentConfigurationRequest, replaceRepository: Boolean = false): Boolean = transaction {
         val row = DeploymentConfigurations.selectAll().where { DeploymentConfigurations.id eq id }.singleOrNull() ?: return@transaction false
-        val projectId = row[DeploymentConfigurations.projectId] ?: error("Deployment configuration has no project_id")
+        val projectId = row[DeploymentConfigurations.projectId]
         val volumesJson = request.volumes?.let(Json::encodeToString)
         val environment = request.environment?.let(::requireEnvironment)
         val currentEnvironment = row[DeploymentConfigurations.environment] ?: "production"
@@ -726,7 +725,7 @@ object DeploymentJobRepository {
             (DeploymentJobs.projectId eq projectId) and
                 ((DeploymentJobs.serviceId eq serviceId) or DeploymentJobs.serviceId.isNull())
         }.toList()
-            .sortedWith(compareByDescending<org.jetbrains.exposed.sql.ResultRow> {
+            .sortedWith(compareByDescending<ResultRow> {
                 it[DeploymentJobs.serviceId] == serviceId
             }.thenByDescending { it[DeploymentJobs.createdAt] })
             .firstOrNull()?.toRecord()
@@ -885,7 +884,7 @@ object DeploymentJobRepository {
         val secretSet = execution[DeploymentExecutions.secretSetId]?.let { secretId ->
             execution[DeploymentExecutions.secretSetVersion]?.let { version -> SecretSetReference(secretId, version) }
         } ?: (legacyEnv + legacySecrets).takeIf { it.isNotEmpty() }?.let { values ->
-            createSecretSetVersion(ownerId ?: error("Deployment has no project_id"), environmentKey, values, "rollback")
+            createSecretSetVersion(ownerId, environmentKey, values, "rollback")
         }
         val sharedSet = execution[DeploymentExecutions.sharedEnvironmentSetId]?.let { sharedId ->
             SharedEnvironmentSetReference(
@@ -1132,23 +1131,27 @@ object DeploymentJobRepository {
         val redactedError = error?.let { SecretValueCipher.redact(it, deploymentSecrets) }
         DeploymentJobs.update({ DeploymentJobs.id eq id }) {
             step?.let { value -> it[currentStep] = value }
-            val secrets = deploymentSecrets
-            log?.let { value -> it[logs] = existing[DeploymentJobs.logs] + SecretValueCipher.redact(value, secrets) + "\n" }
+            log?.let { value -> it[logs] = existing[DeploymentJobs.logs] + SecretValueCipher.redact(value,
+                deploymentSecrets
+            ) + "\n" }
             commitSha?.let { value -> it[DeploymentJobs.commitSha] = value }
             imageDigest?.let { value -> it[DeploymentJobs.imageDigest] = value }
             status?.let { value -> it[DeploymentJobs.status] = value }
-            error?.let { value -> it[errorMessage] = SecretValueCipher.redact(value, secrets) }
+            error?.let { value -> it[errorMessage] = SecretValueCipher.redact(value, deploymentSecrets) }
             if (status == "succeeded" || status == "failed") it[completedAt] = LocalDateTime.now()
             it[updatedAt] = LocalDateTime.now()
         }
         DeploymentExecutions.update({ DeploymentExecutions.id eq id }) {
             step?.let { value -> it[currentStep] = value }
-            val secrets = deploymentSecrets
-            log?.let { value -> it[logs] = (DeploymentExecutions.selectAll().where { DeploymentExecutions.id eq id }.singleOrNull()?.get(DeploymentExecutions.logs).orEmpty()) + SecretValueCipher.redact(value, secrets) + "\n" }
+            log?.let { value -> it[logs] = (DeploymentExecutions.selectAll().where { DeploymentExecutions.id eq id }.singleOrNull()?.get(DeploymentExecutions.logs).orEmpty()) + SecretValueCipher.redact(value,
+                deploymentSecrets
+            ) + "\n" }
             commitSha?.let { value -> it[DeploymentExecutions.commitSha] = value }
             imageDigest?.let { value -> it[DeploymentExecutions.imageDigest] = value }
             status?.let { value -> it[DeploymentExecutions.status] = value }
-            error?.let { value -> it[DeploymentExecutions.errorMessage] = SecretValueCipher.redact(value, secrets) }
+            error?.let { value -> it[DeploymentExecutions.errorMessage] = SecretValueCipher.redact(value,
+                deploymentSecrets
+            ) }
             if (status == "succeeded" || status == "failed") it[completedAt] = LocalDateTime.now()
             it[updatedAt] = LocalDateTime.now()
         }

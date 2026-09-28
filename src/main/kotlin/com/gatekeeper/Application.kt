@@ -90,9 +90,7 @@ private fun operationalCommand(command: String, args: Array<String>) {
                 AppConfig.dbUser,
                 AppConfig.dbPassword
             )
-            println("Service identity backfill dry-run")
             println("projects_without_default_service=${report.projectsWithoutDefaultService}")
-            println("projects_already_with_default_service=${report.projectsWithDefaultService}")
             println("planned_default_services=${report.projectsWithoutDefaultService}")
         }
 

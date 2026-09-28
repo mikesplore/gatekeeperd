@@ -34,11 +34,11 @@ data class StoredProviderCredential(val metadata: ProviderCredentialMetadata, va
 
 object ProviderCredentialRepository {
     fun listMetadata(provider: String? = null, credentialType: String? = null): List<ProviderCredentialMetadata> = transaction {
-        ProviderCredentials.selectAll().toList()
+        ProviderCredentials.selectAll().asSequence().toList()
             .filter { provider == null || it[ProviderCredentials.provider] == provider }
             .filter { credentialType == null || it[ProviderCredentials.credentialType] == credentialType }
             .map(::metadata)
-            .sortedWith(compareBy<ProviderCredentialMetadata>({ it.provider }, { it.credentialType }, { it.scope }, { it.version }))
+            .sortedWith(compareBy({ it.provider }, { it.credentialType }, { it.scope }, { it.version })).toList()
     }
 
     fun findMetadata(id: UUID): ProviderCredentialMetadata? = transaction {
