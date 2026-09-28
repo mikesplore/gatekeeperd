@@ -20,6 +20,8 @@ import com.gatekeeper.feature.payment.domain.usecase.PaymentBalancePort
 import com.gatekeeper.feature.payment.domain.usecase.PaymentProject
 import com.gatekeeper.feature.payment.domain.usecase.PaymentProjectPort
 import com.gatekeeper.feature.payment.domain.usecase.ProcessPaymentEvent
+import com.gatekeeper.feature.payment.domain.usecase.GetPaymentMethodAvailability
+import com.gatekeeper.feature.payment.domain.usecase.PaymentProviderReadiness
 import java.math.BigDecimal
 import java.time.LocalDateTime
 import java.time.LocalDate
@@ -106,6 +108,17 @@ class PaymentUseCasesTest {
         assertEquals(ProcessPaymentEvent.Outcome.DUPLICATE, useCase(command))
         assertEquals("success", repository.payment?.status)
         assertEquals("processed", events.status)
+    }
+
+    @Test
+    fun `payment method availability limits mpesa to KES`() {
+        val useCase = GetPaymentMethodAvailability(object : PaymentProviderReadiness {
+            override fun isConfigured(provider: String) = true
+        })
+
+        assertTrue(useCase("KES").mpesa)
+        assertFalse(useCase("USD").mpesa)
+        assertTrue(useCase("USD").paystack)
     }
 
     private fun command(amount: BigDecimal = BigDecimal("20.00")) = ApplyWebhookEvent.Command(

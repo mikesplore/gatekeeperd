@@ -3,8 +3,7 @@ package com.gatekeeper.gate
 import com.gatekeeper.api.PaymentRequiredResponse
 import com.gatekeeper.api.paymentRequiredResponse
 import com.gatekeeper.config.AppConfig
-import com.gatekeeper.paystack.ProjectPaymentService
-import com.gatekeeper.mpesa.MpesaClient
+import com.gatekeeper.feature.payment.domain.model.PaymentMethodAvailability
 import java.math.BigDecimal
 import java.util.Base64
 import java.time.format.DateTimeFormatter
@@ -14,14 +13,14 @@ object PaywallTemplates {
     private val dateFormatter = DateTimeFormatter.ofPattern("MMMM d, yyyy")
     private val illustrationDataUri: String = loadIllustrationDataUri()
 
-    fun htmlPaywall(info: PaywallInfo, payEnabled: Boolean): String {
+    fun htmlPaywall(info: PaywallInfo, payEnabled: Boolean, paymentMethods: PaymentMethodAvailability): String {
         val amountLabel = formatAmount(info.amountDue, info.currency)
         val amountValue = info.amountDue?.stripTrailingZeros()?.toPlainString().orEmpty()
         val dueLabel = info.dueDate?.format(dateFormatter)
         val payUrl = "/api/gate/pay?project=${encode(info.slug)}"
         val mpesaUrl = "/api/mpesa/pay?project=${encode(info.slug)}"
-        val mpesaAvailable = MpesaClient.isConfigured() && info.currency.equals("KES", ignoreCase = true)
-        val paystackAvailable = ProjectPaymentService.isPaystackConfigured()
+        val mpesaAvailable = paymentMethods.mpesa
+        val paystackAvailable = paymentMethods.paystack
         val defaultPaymentMethod = if (paystackAvailable) "paystack" else "mpesa"
         val illustrationBlock = if (illustrationDataUri.isNotBlank()) {
             """<img src="$illustrationDataUri" alt="Payment illustration" class="illustration">"""

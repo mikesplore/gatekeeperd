@@ -6,6 +6,7 @@ import com.gatekeeper.db.repositories.ProjectRepository
 import com.gatekeeper.gate.GateApplicationService
 import com.gatekeeper.feature.payment.domain.usecase.InitiatePayment
 import com.gatekeeper.feature.payment.domain.usecase.VerifyPayment
+import com.gatekeeper.feature.payment.domain.usecase.GetPaymentMethodAvailability
 import io.ktor.http.*
 import io.ktor.server.application.*
 import io.ktor.server.response.*
@@ -51,7 +52,7 @@ private suspend fun ApplicationCall.respondBlocked(result: GateResult.Blocked) {
     val paywall = result.paywall
     if (prefersHtml() && paywall != null) {
         response.header(HttpHeaders.ContentType, ContentType.Text.Html.withCharset(Charsets.UTF_8).toString())
-        respond(HttpStatusCode.PaymentRequired, PaywallTemplates.htmlPaywall(paywall, payEnabled = true))
+        respond(HttpStatusCode.PaymentRequired, PaywallTemplates.htmlPaywall(paywall, payEnabled = true, paymentMethods = application.get<GetPaymentMethodAvailability>()(paywall.currency)))
         return
     }
 
@@ -59,7 +60,7 @@ private suspend fun ApplicationCall.respondBlocked(result: GateResult.Blocked) {
         "frontend" -> {
             if (paywall != null) {
                 response.header(HttpHeaders.ContentType, ContentType.Text.Html.withCharset(Charsets.UTF_8).toString())
-                respond(HttpStatusCode.PaymentRequired, PaywallTemplates.htmlPaywall(paywall, payEnabled = true))
+                respond(HttpStatusCode.PaymentRequired, PaywallTemplates.htmlPaywall(paywall, payEnabled = true, paymentMethods = application.get<GetPaymentMethodAvailability>()(paywall.currency)))
             } else {
                 respond(HttpStatusCode.PaymentRequired, PaywallTemplates.jsonBlocked(null))
             }
@@ -105,7 +106,10 @@ fun Application.configureGateRoutes() {
             call.response.header(HttpHeaders.ContentType, ContentType.Text.Html.withCharset(Charsets.UTF_8).toString())
             call.respond(
                 HttpStatusCode.PaymentRequired,
-                PaywallTemplates.htmlPaywall(PaywallInfo.from(project), payEnabled = true)
+                PaywallTemplates.htmlPaywall(
+                    PaywallInfo.from(project), payEnabled = true,
+                    paymentMethods = call.application.get<GetPaymentMethodAvailability>()(project.currency)
+                )
             )
         }
 
