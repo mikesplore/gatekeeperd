@@ -44,6 +44,10 @@ object ServiceRepository {
             .orderBy(Services.name).map(::toRecord)
     }
 
+    fun listAll(): List<ServiceRecord> = transaction {
+        Services.selectAll().orderBy(Services.projectId to org.jetbrains.exposed.sql.SortOrder.ASC, Services.name to org.jetbrains.exposed.sql.SortOrder.ASC).map(::toRecord)
+    }
+
     fun findByProjectAndId(projectId: UUID, id: UUID): ServiceRecord? = transaction {
         Services.selectAll().where { (Services.projectId eq projectId) and (Services.id eq id) }
             .singleOrNull()?.let(::toRecord)
@@ -143,6 +147,22 @@ object ServiceRepository {
         if (updated > 0) {
             SiteRepository.findGateSlugsByServiceId(id).forEach(::invalidateGateCache)
         }
+        return updated > 0
+    }
+
+    /** Auto-block only an active service so manual or existing payment blocks are never overwritten. */
+    fun autoBlockForPayment(projectId: UUID, id: UUID): Boolean {
+        val updated = transaction {
+            Services.update({
+                (Services.projectId eq projectId) and (Services.id eq id) and (Services.accessStatus eq "active")
+            }) {
+                it[Services.accessStatus] = "blocked"
+                it[Services.blockReason] = "overdue"
+                it[Services.blockReasonCode] = AccessBlockReason.PAYMENT
+                it[Services.blockReasonNote] = null
+            }
+        }
+        if (updated > 0) SiteRepository.findGateSlugsByServiceId(id).forEach(::invalidateGateCache)
         return updated > 0
     }
 

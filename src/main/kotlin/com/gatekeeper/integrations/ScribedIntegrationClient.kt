@@ -108,6 +108,27 @@ object ScribedIntegrationClient {
         }.getOrElse { InvoiceLookupResult(null, error = it.message ?: it::class.simpleName) }
     }
 
+    suspend fun serviceInvoiceStatus(serviceId: String): InvoiceLookupResult {
+        val base = AppConfig.scribedCallbackUrl.trim().trimEnd('/')
+        val secret = AppConfig.scribedIntegrationSecret.trim()
+        val apiToken = AppConfig.scribedApiToken.trim()
+        if (base.isBlank() || secret.isBlank() || apiToken.isBlank()) {
+            return InvoiceLookupResult(null, error = "Scribed integration is not configured")
+        }
+        return runCatching {
+            val response = http.get("$base/integrations/gatekeeper/services/$serviceId/invoice") {
+                header(HttpHeaders.Authorization, "Bearer $apiToken")
+                header("X-Gatekeeper-Secret", secret)
+            }
+            val responseBody = response.bodyAsText()
+            if (!response.status.isSuccess()) {
+                InvoiceLookupResult(response.status, error = responseBody.take(500))
+            } else {
+                InvoiceLookupResult(response.status, Json.decodeFromString<JsonObject>(responseBody))
+            }
+        }.getOrElse { InvoiceLookupResult(null, error = it.message ?: it::class.simpleName) }
+    }
+
     suspend fun invoicePdf(invoiceId: Long): Pair<HttpStatusCode, ByteArray?> {
         val base = AppConfig.scribedCallbackUrl.trim().trimEnd('/')
         val secret = AppConfig.scribedIntegrationSecret.trim()
