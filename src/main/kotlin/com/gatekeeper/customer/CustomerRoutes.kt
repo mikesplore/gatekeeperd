@@ -6,7 +6,6 @@ import com.gatekeeper.config.AppConfig
 import com.gatekeeper.db.repositories.PaymentRepository
 import com.gatekeeper.db.repositories.ProjectRepository
 import com.gatekeeper.db.tables.SupportRequests
-import com.gatekeeper.paystack.ProjectPaymentService
 import io.ktor.http.*
 import io.ktor.server.application.*
 import io.ktor.server.request.*

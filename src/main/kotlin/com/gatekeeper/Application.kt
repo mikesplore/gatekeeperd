@@ -13,11 +13,11 @@ import com.gatekeeper.integrations.configureGitHubWebhookRoutes
 import com.gatekeeper.mpesa.MpesaClient
 import com.gatekeeper.mpesa.configureMpesaRoutes
 import com.gatekeeper.nginx.NginxBackfillRunner
-import com.gatekeeper.payments.PaymentReconciliationService
 import com.gatekeeper.paystack.PaystackClient
-import com.gatekeeper.paystack.PaystackProviderClient
 import com.gatekeeper.paystack.configurePaystackWebhookRoutes
 import com.gatekeeper.plugins.*
+import com.gatekeeper.feature.payment.domain.usecase.ReconcilePayments
+import org.koin.ktor.ext.get
 import com.gatekeeper.scheduler.AutoBlockerJob
 import com.gatekeeper.scheduler.IntegrationOutboxJob
 import com.gatekeeper.scheduler.ReconciliationJob
@@ -102,6 +102,7 @@ fun Application.module() {
     configureMonitoring()
     configureDatabase()
     configureRedis()
+    configureDependencyInjection()
     configureSecurity()
     configureRouting()
     configureGateRoutes()
@@ -120,20 +121,19 @@ fun Application.module() {
     configureMpesaRoutes()
     configureGitHubWebhookRoutes()
     configureGitHubAdminRoutes()
-    PaymentReconciliationService.register(PaystackProviderClient())
-    PaymentReconciliationService.register(MpesaClient)
 
     seedInitialAdmin()
 
     val appScope = CoroutineScope(SupervisorJob())
     AutoBlockerJob.start(appScope)
-    ReconciliationJob.start(appScope)
+    ReconciliationJob.start(appScope, get<ReconcilePayments>())
     IntegrationOutboxJob.start(appScope)
     DeploymentWorker.start(appScope)
 
     monitor.subscribe(ApplicationStopping) {
         runCatching { PaystackClient.close() }
         runCatching { MpesaClient.close() }
+        runCatching { org.koin.core.context.stopKoin() }
         runCatching { Telemetry.close() }
     }
 }

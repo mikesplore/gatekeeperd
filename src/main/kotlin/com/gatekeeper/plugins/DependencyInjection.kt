@@ -1,0 +1,48 @@
+package com.gatekeeper.plugins
+
+import com.gatekeeper.customer.CustomerApplicationService
+import com.gatekeeper.db.repositories.*
+import com.gatekeeper.gate.GateApplicationService
+import com.gatekeeper.nginx.NginxAdminService
+import com.gatekeeper.nginx.NginxService
+import com.gatekeeper.feature.payment.data.persistence.ExposedPaymentRepository
+import com.gatekeeper.feature.payment.data.persistence.LegacyPaymentEffects
+import com.gatekeeper.feature.payment.data.persistence.LegacyPaymentProjectAdapter
+import com.gatekeeper.feature.payment.data.persistence.LegacyPaymentBalanceAdapter
+import com.gatekeeper.feature.payment.data.provider.LegacyPaymentGatewayAdapter
+import com.gatekeeper.feature.payment.domain.repository.PaymentRepository as PaymentDomainRepository
+import com.gatekeeper.feature.payment.domain.usecase.ApplyWebhookEvent
+import com.gatekeeper.feature.payment.domain.usecase.PaymentEffects
+import com.gatekeeper.feature.payment.domain.usecase.ReconcilePayments
+import com.gatekeeper.feature.payment.domain.usecase.InitiatePayment
+import com.gatekeeper.paystack.PaystackProviderClient
+import com.gatekeeper.mpesa.MpesaClient
+import org.koin.dsl.module
+import org.koin.core.qualifier.named
+import org.koin.ktor.plugin.Koin
+import io.ktor.server.application.Application
+import io.ktor.server.application.install
+
+private val applicationModule = module {
+    single<ProjectQueryRepository> { ExposedProjectQueryRepository() }
+    single<PaymentQueryRepository> { ExposedPaymentQueryRepository() }
+    single<SupportRequestRepository> { ExposedSupportRequestRepository() }
+    single { CustomerApplicationService(get(), get(), get()) }
+    single { NginxService() }
+    single { NginxAdminService(get()) }
+    single<PaymentDomainRepository> { ExposedPaymentRepository() }
+    single { LegacyPaymentProjectAdapter() }
+    single { LegacyPaymentBalanceAdapter() }
+    single<PaymentEffects> { LegacyPaymentEffects() }
+    single { ApplyWebhookEvent(get(), get()) }
+    single(named("paystackGateway")) { LegacyPaymentGatewayAdapter(PaystackProviderClient()) }
+    single(named("mpesaGateway")) { LegacyPaymentGatewayAdapter(MpesaClient) }
+    single { InitiatePayment(get(), get<LegacyPaymentProjectAdapter>(), get<LegacyPaymentBalanceAdapter>(), mapOf("paystack" to get(named("paystackGateway")), "mpesa" to get(named("mpesaGateway")))) }
+    single { ReconcilePayments(get(), mapOf("paystack" to get(named("paystackGateway"))), get()) }
+}
+
+fun Application.configureDependencyInjection() {
+    install(Koin) {
+        modules(applicationModule)
+    }
+}

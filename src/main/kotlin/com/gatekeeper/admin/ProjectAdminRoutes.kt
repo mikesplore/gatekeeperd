@@ -33,7 +33,7 @@ import com.gatekeeper.docker.PortsAvailabilityRequest
 import com.gatekeeper.docker.PortsAvailabilityResponse
 import com.gatekeeper.docker.parseImageRef
 import com.gatekeeper.nginx.NginxService
-import com.gatekeeper.paystack.ProjectPaymentService
+import com.gatekeeper.feature.payment.domain.usecase.InitiatePayment
 import com.gatekeeper.payments.ProjectBalanceService
 import io.ktor.http.*
 import io.ktor.server.application.*
@@ -51,6 +51,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 import org.slf4j.LoggerFactory
+import org.koin.ktor.ext.get
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import java.util.UUID
@@ -675,29 +676,22 @@ fun Application.configureProjectAdminRoutes() {
                     }
                     BigDecimal.valueOf(it)
                 }
-                if (requestedAmount != null && runCatching {
-                        ProjectBalanceService.requireAvailableForNewPaymentWithReconciliation(project, requestedAmount)
-                    }.isFailure
-                ) {
-                    call.respondError(HttpStatusCode.BadRequest, "invalid_payment_amount", "Payment amount exceeds the available outstanding balance")
-                    return@post
-                }
-
-                val result = ProjectPaymentService.initializeForProject(
-                    project = project,
-                    emailOverride = emailOverride,
-                    requestedAmount = requestedAmount
+                val result = call.application.get<InitiatePayment>()(
+                    InitiatePayment.Command(
+                        provider = "paystack", projectSlug = project.slug, requestedAmount = requestedAmount,
+                        email = emailOverride, currency = project.currency
+                    )
                 )
 
                 result.fold(
-                    onSuccess = { link ->
-                        call.respond(InitializePaymentResponse(payment_link = link))
+                    onSuccess = { initiated ->
+                        call.respond(InitializePaymentResponse(payment_link = initiated.authorizationUrl.orEmpty()))
                     },
                     onFailure = { err ->
                         logger.error("Failed to initialize payment for $slug", err)
                         call.respondError(
-                            HttpStatusCode.BadGateway,
-                            "paystack_error",
+                            if (err is IllegalArgumentException || err.message?.contains("balance", ignoreCase = true) == true) HttpStatusCode.BadRequest else HttpStatusCode.BadGateway,
+                            if (err is IllegalArgumentException || err.message?.contains("balance", ignoreCase = true) == true) "invalid_payment_amount" else "paystack_error",
                             err.message ?: "Failed to initialize payment with Paystack"
                         )
                     }

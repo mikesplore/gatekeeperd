@@ -72,6 +72,10 @@ No admin action required to generate payment links for blocked clients.
 
 ## Source layout
 
+### Application layering
+
+New request flows should keep Ktor route handlers focused on HTTP parsing, response codes, and serialization. Put use-case coordination in an application service, depend on repository interfaces, and bind those interfaces to persistence implementations in `plugins/DependencyInjection.kt` using Koin. Exposed/database access belongs in repository implementations. The gate and customer public routes use this pattern as the initial migration; remaining route groups are being migrated incrementally.
+
 ```
 src/main/kotlin/com/gatekeeper/
 ├── Application.kt              # Entry point, plugin wiring, initial admin seed

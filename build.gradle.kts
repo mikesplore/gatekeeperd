@@ -55,6 +55,7 @@ dependencies {
     implementation(ktorLibs.server.autoHeadResponse)
     implementation(ktorLibs.server.requestValidation)
     implementation(ktorLibs.server.di)
+    implementation("io.insert-koin:koin-ktor:4.1.1")
 
     // Ktor Client (for Paystack API calls)
     implementation(ktorLibs.client.cio)

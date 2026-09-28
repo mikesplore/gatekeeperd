@@ -5,6 +5,8 @@ import com.gatekeeper.config.AppConfig
 import com.gatekeeper.db.repositories.PaymentEventRepository
 import com.gatekeeper.db.repositories.PaymentRepository
 import com.gatekeeper.db.repositories.ProjectRepository
+import com.gatekeeper.feature.payment.domain.usecase.ApplyWebhookEvent
+import org.koin.ktor.ext.get
 import io.ktor.http.*
 import io.ktor.server.application.*
 import io.ktor.server.request.*
@@ -51,6 +53,7 @@ suspend fun replayPaystackWebhook(rawBody: String): Boolean {
 }
 
 fun Application.configurePaystackWebhookRoutes() {
+    val applyWebhookEvent = get<ApplyWebhookEvent>()
     routing {
         post("/api/paystack/webhook") {
             Metrics.increment("webhook.received")
@@ -126,13 +129,17 @@ fun Application.configurePaystackWebhookRoutes() {
                         } else if (projectSlug.isNullOrBlank()) {
                             logger.warn("charge.success missing project_slug, ref=$reference")
                         } else {
-                            val applied = PaymentService.applySuccessfulPayment(
-                                reference = reference,
-                                projectSlug = projectSlug,
-                                amountNaira = koboToNaira(data.amount),
-                                currency = data.currency,
-                                verifiedVia = "webhook",
-                                rawPayload = rawBody
+                            val applied = applyWebhookEvent(
+                                ApplyWebhookEvent.Command(
+                                    provider = "paystack",
+                                    reference = reference,
+                                    status = "success",
+                                    verifiedVia = "webhook",
+                                    amount = koboToNaira(data.amount),
+                                    currency = data.currency,
+                                    projectId = ProjectRepository.findBySlug(projectSlug)?.id,
+                                    rawPayload = rawBody
+                                )
                             )
                             if (!applied) {
                                 PaymentEventRepository.markFailed(eventId, "Payment integrity checks failed")
@@ -142,10 +149,14 @@ fun Application.configurePaystackWebhookRoutes() {
                         }
                     }
                     "charge.failed" -> {
-                        PaymentService.handleChargeFailed(reference, projectSlug, rawBody)
+                        applyWebhookEvent(ApplyWebhookEvent.Command(
+                            "paystack", reference, "failed", "webhook",
+                            projectId = projectSlug?.let { ProjectRepository.findBySlug(it)?.id },
+                            rawPayload = rawBody
+                        ))
                     }
                     "transfer.reversed", "charge.reversed" -> {
-                        PaymentService.handleReversal(reference)
+                        applyWebhookEvent(ApplyWebhookEvent.Command("paystack", reference, "reversed", "webhook"))
                     }
                     else -> {
                         logger.info("Webhook event recorded, no handler: ${event.event}, ref=$reference")

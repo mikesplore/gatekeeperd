@@ -1,9 +1,9 @@
 package com.gatekeeper.mpesa
 
 import com.gatekeeper.config.AppConfig
-import com.gatekeeper.db.repositories.PaymentRepository
-import com.gatekeeper.db.repositories.ProjectRepository
 import com.gatekeeper.payments.*
+import com.gatekeeper.feature.payment.domain.gateway.InitiatePaymentCommand
+import com.gatekeeper.feature.payment.domain.gateway.InitiatedPayment
 import io.ktor.client.*
 import io.ktor.client.call.*
 import io.ktor.client.plugins.contentnegotiation.*
@@ -34,6 +34,27 @@ object MpesaClient : PaymentProviderClient {
         AppConfig.mpesaCallbackUrl
     ).all { it.isNotBlank() }
 
+    suspend fun initiate(command: InitiatePaymentCommand): Result<InitiatedPayment> = runCatching {
+        require(isConfigured()) { "M-Pesa is not configured" }
+        require(command.currency.equals("KES", ignoreCase = true)) { "M-Pesa payments are only supported in KES" }
+        val phone = command.phone?.takeIf { it.isNotBlank() } ?: error("A phone number is required for M-Pesa payments")
+        require(command.amount.stripTrailingZeros().scale() <= 0) { "M-Pesa payment amount must be a whole KES amount" }
+        val timestamp = LocalDateTime.now(ZoneId.of("Africa/Nairobi")).format(DateTimeFormatter.ofPattern("yyyyMMddHHmmss"))
+        val password = Base64.getEncoder().encodeToString("${AppConfig.mpesaShortCode}${AppConfig.mpesaPasskey}$timestamp".toByteArray())
+        val response = http.post("$baseUrl/mpesa/stkpush/v1/processrequest") {
+            bearerAuth(token()); contentType(ContentType.Application.Json)
+            setBody(MpesaStkRequest(AppConfig.mpesaShortCode, password, timestamp, TransactionType = "CustomerPayBillOnline", Amount = command.amount.longValueExact(), PartyA = phone, PartyB = AppConfig.mpesaShortCode, PhoneNumber = phone, CallBackURL = AppConfig.mpesaCallbackUrl, AccountReference = command.projectSlug, TransactionDesc = "Gatekeeper payment"))
+        }
+        val responseBody = response.bodyAsText()
+        if (!response.status.isSuccess()) error("Daraja STK Push returned HTTP ${response.status.value}: ${responseBody.take(500)}")
+        val responseData = Json.decodeFromString<MpesaStkResponse>(responseBody)
+        if (responseData.ResponseCode != null && responseData.ResponseCode != "0") error("Daraja STK Push rejected the request (code=${responseData.ResponseCode}): ${responseData.ResponseDescription ?: responseData.CustomerMessage ?: "no description"}")
+        InitiatedPayment(responseData.CheckoutRequestID ?: error(responseData.ResponseDescription ?: responseData.CustomerMessage ?: "Daraja returned no CheckoutRequestID"))
+    }.onFailure { error ->
+        val callbackHost = runCatching { java.net.URI(AppConfig.mpesaCallbackUrl).host }.getOrNull() ?: "invalid"
+        logger.error("M-Pesa STK initiation failed for project={} environment={} callbackHost={}: {}", command.projectSlug, AppConfig.mpesaEnvironment, callbackHost, error.message)
+    }
+
     private suspend fun token(): String {
         val credentials = Base64.getEncoder().encodeToString("${AppConfig.mpesaConsumerKey}:${AppConfig.mpesaConsumerSecret}".toByteArray())
         val response = http.get("$baseUrl/oauth/v1/generate?grant_type=client_credentials") {
@@ -44,34 +65,6 @@ object MpesaClient : PaymentProviderClient {
             error("Daraja OAuth returned HTTP ${response.status.value}: ${responseBody.take(500)}")
         }
         return Json.decodeFromString<MpesaTokenResponse>(responseBody).access_token
-    }
-
-    suspend fun initiate(project: ProjectRepository.ProjectRecord, phone: String, requestedAmount: BigDecimal? = null): Result<String> = runCatching {
-        require(isConfigured()) { "M-Pesa is not configured" }
-        require(AppConfig.mpesaCallbackUrl.isNotBlank()) { "MPESA_CALLBACK_URL is not configured" }
-        require(project.currency.equals("KES", ignoreCase = true)) { "M-Pesa payments are only supported in KES" }
-        val amount = ProjectBalanceService.requireAvailableForNewPaymentWithReconciliation(project, requestedAmount)
-        require(amount.stripTrailingZeros().scale() <= 0) { "M-Pesa payment amount must be a whole KES amount" }
-        val timestamp = LocalDateTime.now(ZoneId.of("Africa/Nairobi")).format(DateTimeFormatter.ofPattern("yyyyMMddHHmmss"))
-        val password = Base64.getEncoder().encodeToString("${AppConfig.mpesaShortCode}${AppConfig.mpesaPasskey}$timestamp".toByteArray())
-        val response = http.post("$baseUrl/mpesa/stkpush/v1/processrequest") {
-            bearerAuth(token()); contentType(ContentType.Application.Json)
-            setBody(MpesaStkRequest(AppConfig.mpesaShortCode, password, timestamp, TransactionType = "CustomerPayBillOnline", Amount = amount.longValueExact(), PartyA = phone, PartyB = AppConfig.mpesaShortCode, PhoneNumber = phone, CallBackURL = AppConfig.mpesaCallbackUrl, AccountReference = project.slug, TransactionDesc = "Gatekeeper payment"))
-        }
-        val responseBody = response.bodyAsText()
-        if (!response.status.isSuccess()) {
-            error("Daraja STK Push returned HTTP ${response.status.value}: ${responseBody.take(500)}")
-        }
-        val responseData = Json.decodeFromString<MpesaStkResponse>(responseBody)
-        if (responseData.ResponseCode != null && responseData.ResponseCode != "0") {
-            error("Daraja STK Push rejected the request (code=${responseData.ResponseCode}): ${responseData.ResponseDescription ?: responseData.CustomerMessage ?: "no description"}")
-        }
-        val reference = responseData.CheckoutRequestID ?: error(responseData.ResponseDescription ?: responseData.CustomerMessage ?: "Daraja returned no CheckoutRequestID")
-        PaymentRepository.create(project.id, PaymentProvider.MPESA, reference, null, amount, "pending")
-        reference
-    }.onFailure { error ->
-        val callbackHost = runCatching { java.net.URI(AppConfig.mpesaCallbackUrl).host }.getOrNull() ?: "invalid"
-        logger.error("M-Pesa STK initiation failed for project={} environment={} callbackHost={}: {}", project.slug, AppConfig.mpesaEnvironment, callbackHost, error.message)
     }
 
     override suspend fun verify(reference: String): Result<VerifiedPayment> = runCatching {

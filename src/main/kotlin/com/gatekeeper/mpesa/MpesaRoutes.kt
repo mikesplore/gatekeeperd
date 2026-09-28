@@ -5,6 +5,8 @@ import com.gatekeeper.db.repositories.ProjectRepository
 import com.gatekeeper.db.repositories.PaymentEventRepository
 import com.gatekeeper.payments.ProjectBalanceService
 import com.gatekeeper.payments.PaymentApplicationService
+import com.gatekeeper.feature.payment.domain.usecase.InitiatePayment
+import org.koin.ktor.ext.get
 import io.ktor.http.*
 import io.ktor.server.application.*
 import io.ktor.server.request.*
@@ -36,26 +38,22 @@ fun Application.configureMpesaRoutes() {
                 call.respondError(HttpStatusCode.BadRequest, "invalid_payment_amount", "Payment amount must be greater than zero and have at most two decimal places")
                 return@post
             }
-            val project = ProjectRepository.findBySlug(slug)
-            if (project == null) {
-                call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
-                return@post
-            }
-            if (!project.currency.equals("KES", ignoreCase = true)) {
-                call.respondError(HttpStatusCode.BadRequest, "unsupported_payment_currency", "M-Pesa payments are only supported in KES")
-                return@post
-            }
             if (amount != null && amount.stripTrailingZeros().scale() > 0) {
                 call.respondError(HttpStatusCode.BadRequest, "invalid_payment_amount", "M-Pesa payment amount must be a whole KES amount")
                 return@post
             }
-            if (runCatching { ProjectBalanceService.requireAvailableForNewPaymentWithReconciliation(project, amount) }.isFailure) {
-                call.respondError(HttpStatusCode.BadRequest, "invalid_payment_amount", "Payment amount exceeds the available outstanding balance")
-                return@post
-            }
-            MpesaClient.initiate(project, normalizedPhone, amount).fold(
-                onSuccess = { reference -> call.respond(HttpStatusCode.Accepted, mapOf("provider" to "mpesa", "reference" to reference, "status" to "pending")) },
-                onFailure = { call.respondError(HttpStatusCode.BadGateway, "mpesa_unavailable", it.message ?: "Unable to initiate M-Pesa payment") }
+            val initiated = call.application.get<InitiatePayment>()(
+                InitiatePayment.Command("mpesa", slug, amount, phone = normalizedPhone, currency = "KES")
+            )
+            initiated.fold(
+                onSuccess = { result -> call.respond(HttpStatusCode.Accepted, mapOf("provider" to "mpesa", "reference" to result.reference, "status" to "pending")) },
+                onFailure = { error ->
+                    val missing = error.message == "Project not found"
+                    val invalid = error is IllegalArgumentException || error is IllegalStateException
+                    val status = when { missing -> HttpStatusCode.NotFound; invalid -> HttpStatusCode.BadRequest; else -> HttpStatusCode.BadGateway }
+                    val code = when { missing -> "project_not_found"; invalid -> "invalid_payment_amount"; else -> "mpesa_unavailable" }
+                    call.respondError(status, code, error.message ?: "Unable to initiate M-Pesa payment")
+                }
             )
         }
 

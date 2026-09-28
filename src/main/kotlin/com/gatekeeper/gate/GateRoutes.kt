@@ -5,12 +5,13 @@ import com.gatekeeper.api.respondError
 import com.gatekeeper.db.repositories.ProjectRepository
 import com.gatekeeper.paystack.PaystackClient
 import com.gatekeeper.paystack.PaymentService
-import com.gatekeeper.paystack.ProjectPaymentService
+import com.gatekeeper.feature.payment.domain.usecase.InitiatePayment
 import io.ktor.http.*
 import io.ktor.server.application.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import org.slf4j.LoggerFactory
+import org.koin.ktor.ext.get
 import java.math.BigDecimal
 
 private val logger = LoggerFactory.getLogger("com.gatekeeper.gate.GateRoutes")
@@ -126,20 +127,14 @@ fun Application.configureGateRoutes() {
                 return@get
             }
 
-            if (requestedAmount != null && runCatching {
-                    com.gatekeeper.payments.ProjectBalanceService.requireAvailableForNewPaymentWithReconciliation(project, requestedAmount)
-                }.isFailure
-            ) {
-                call.respondError(HttpStatusCode.BadRequest, "invalid_payment_amount", "Payment amount exceeds the available outstanding balance")
-                return@get
-            }
-
-            ProjectPaymentService.initializeForProject(project, requestedAmount = requestedAmount).fold(
-                onSuccess = { url -> call.respondRedirect(url, permanent = false) },
+            call.application.get<InitiatePayment>()(
+                InitiatePayment.Command("paystack", project.slug, requestedAmount, currency = project.currency)
+            ).fold(
+                onSuccess = { result -> call.respondRedirect(result.authorizationUrl ?: "/api/gate/payment/callback?project=${project.slug}&reference=${result.reference}", permanent = false) },
                 onFailure = { err ->
                     call.respondError(
-                        HttpStatusCode.BadGateway,
-                        "payment_unavailable",
+                        if (err.message?.contains("balance", ignoreCase = true) == true || err is IllegalArgumentException) HttpStatusCode.BadRequest else HttpStatusCode.BadGateway,
+                        if (err.message?.contains("balance", ignoreCase = true) == true || err is IllegalArgumentException) "invalid_payment_amount" else "payment_unavailable",
                         err.message ?: "Unable to start payment"
                     )
                 }
