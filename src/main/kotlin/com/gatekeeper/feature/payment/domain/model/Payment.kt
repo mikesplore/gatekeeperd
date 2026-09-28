@@ -22,7 +22,6 @@ data class Payment(
     val createdAt: LocalDateTime? = null
 ) {
     val gatewayStatus: String get() = status
-    val paystackReference: String get() = providerReference
 }
 
 data class PaymentWithProject(val payment: Payment, val projectName: String, val projectSlug: String)

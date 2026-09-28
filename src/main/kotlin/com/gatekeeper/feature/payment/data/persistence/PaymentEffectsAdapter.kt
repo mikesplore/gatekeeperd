@@ -9,8 +9,8 @@ import java.math.BigDecimal
 import java.time.LocalDate
 import java.time.LocalDateTime
 
-/** Transitional adapter for project state and integration effects owned by legacy features. */
-class LegacyPaymentEffects : PaymentEffects {
+/** Adapter for project state and integration effects owned by other features. */
+class PaymentEffectsAdapter : PaymentEffects {
     override fun acceptSuccessfulPayment(payment: Payment?, projectId: java.util.UUID, amount: BigDecimal, currency: String?): Boolean {
         val project = ProjectRepository.findById(projectId) ?: return false
         if (!currency.isNullOrBlank() && !project.currency.equals(currency, ignoreCase = true)) return false

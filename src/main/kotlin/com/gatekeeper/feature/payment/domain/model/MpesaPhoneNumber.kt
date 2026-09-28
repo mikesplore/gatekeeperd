@@ -1,4 +1,4 @@
-package com.gatekeeper.mpesa
+package com.gatekeeper.feature.payment.domain.model
 
 object MpesaPhoneNumber {
     private val kenyanMsisdn = Regex("254[17]\\d{8}")

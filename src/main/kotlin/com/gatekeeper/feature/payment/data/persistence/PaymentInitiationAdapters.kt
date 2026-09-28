@@ -9,13 +9,13 @@ import com.gatekeeper.feature.payment.domain.usecase.ReconcilePayments
 import java.math.BigDecimal
 import java.util.UUID
 
-class LegacyPaymentProjectAdapter : PaymentProjectPort {
+class PaymentProjectAdapter : PaymentProjectPort {
     override fun find(slug: String): PaymentProject? = ProjectRepository.findBySlug(slug)?.let {
         PaymentProject(it.id, it.slug, it.currency, it.customerEmail)
     }
 }
 
-class LegacyPaymentBalanceAdapter(private val payments: PaymentRepository, private val reconciliation: ReconcilePayments) : PaymentBalancePort {
+class PaymentBalanceAdapter(private val payments: PaymentRepository, private val reconciliation: ReconcilePayments) : PaymentBalancePort {
     override suspend fun availableAmount(projectId: UUID, requestedAmount: BigDecimal?): BigDecimal {
         var project = ProjectRepository.findById(projectId) ?: error("Project not found")
         val initialOutstanding = ProjectBalanceAdapter.outstandingBalance(project)

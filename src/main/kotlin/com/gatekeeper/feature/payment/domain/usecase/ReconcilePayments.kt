@@ -3,7 +3,7 @@ package com.gatekeeper.feature.payment.domain.usecase
 import com.gatekeeper.feature.payment.domain.gateway.PaymentGateway
 import com.gatekeeper.feature.payment.domain.model.Payment
 import com.gatekeeper.feature.payment.domain.repository.PaymentRepository
-import java.util.UUID
+
 
 class ReconcilePayments(
     private val payments: PaymentRepository,
@@ -20,8 +20,7 @@ class ReconcilePayments(
     suspend fun reconcile(payment: Payment): Boolean {
         val gateway = gateways[payment.provider.lowercase()] ?: return false
         val verified = gateway.verify(payment.providerReference).getOrNull() ?: return false
-        if (verified.status == payment.status) return false
-        return applyWebhookEvent(
+        return verified.status != payment.status && applyWebhookEvent(
             ApplyWebhookEvent.Command(
                 provider = payment.provider,
                 reference = payment.providerReference,

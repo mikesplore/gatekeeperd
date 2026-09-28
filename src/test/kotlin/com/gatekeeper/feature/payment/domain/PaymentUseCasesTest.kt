@@ -91,6 +91,31 @@ class PaymentUseCasesTest {
     }
 
     @Test
+    fun `mpesa initiation rejects fractional KES amounts before calling provider`() = kotlinx.coroutines.runBlocking {
+        val projectId = UUID.randomUUID()
+        var gatewayCalled = false
+        val gateway = object : PaymentGateway {
+            override val provider = "mpesa"
+            override suspend fun initiate(command: InitiatePaymentCommand): Result<InitiatedPayment> {
+                gatewayCalled = true
+                return Result.success(InitiatedPayment("checkout-1"))
+            }
+            override suspend fun verify(reference: String) = Result.failure<VerifiedPayment>(UnsupportedOperationException())
+        }
+        val useCase = InitiatePayment(
+            FakePaymentRepository(null),
+            object : PaymentProjectPort { override fun find(slug: String) = PaymentProject(projectId, slug, "KES", null) },
+            object : PaymentBalancePort { override suspend fun availableAmount(projectId: UUID, requestedAmount: BigDecimal?) = requestedAmount ?: BigDecimal("50.00") },
+            mapOf("mpesa" to gateway)
+        )
+
+        val result = useCase(InitiatePayment.Command("mpesa", "demo", BigDecimal("25.50"), phone = "0712345678", currency = "KES"))
+
+        assertTrue(result.isFailure)
+        assertFalse(gatewayCalled)
+    }
+
+    @Test
     fun `provider event is applied once and recorded as processed`() {
         val repository = FakePaymentRepository(payment())
         val events = FakePaymentEventRepository()

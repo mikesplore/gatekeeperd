@@ -1,21 +1,33 @@
 package com.gatekeeper.paystack
 
-import com.gatekeeper.payments.PaymentProvider
-import com.gatekeeper.payments.PaymentProviderClient
-import com.gatekeeper.payments.VerifiedPayment
-import com.gatekeeper.payments.VerifiedPaymentStatus
+import com.gatekeeper.config.AppConfig
+import com.gatekeeper.feature.payment.domain.gateway.InitiatePaymentCommand
+import com.gatekeeper.feature.payment.domain.gateway.InitiatedPayment
+import com.gatekeeper.feature.payment.domain.gateway.PaymentGateway
+import com.gatekeeper.feature.payment.domain.gateway.VerifiedPayment
 import java.math.BigDecimal
 
-class PaystackProviderClient : PaymentProviderClient {
-    override val provider = PaymentProvider.PAYSTACK
+class PaystackProviderClient : PaymentGateway {
+    override val provider = "paystack"
+
+    override suspend fun initiate(command: InitiatePaymentCommand): Result<InitiatedPayment> {
+        val email = command.email?.takeIf { it.isNotBlank() }
+            ?: return Result.failure(IllegalStateException("No client email configured for this project"))
+        if (AppConfig.paystackSecretKey.isBlank()) return Result.failure(IllegalStateException("Paystack is not configured on this server"))
+        val base = AppConfig.publicBaseUrl.trim().trimEnd('/')
+        if (base.isBlank()) return Result.failure(IllegalStateException("GATEKEEPER_PUBLIC_URL is not configured"))
+        return PaystackClient.initializePaymentWithReference(
+            email, command.amount, command.projectSlug, command.currency,
+            command.callbackUrl ?: "$base/api/gate/payment/callback?project=${command.projectSlug}"
+        ).map { (reference, url) -> InitiatedPayment(reference, url) }
+    }
+
     override suspend fun verify(reference: String): Result<VerifiedPayment> =
         PaystackClient.verifyTransaction(reference).map { data ->
-            VerifiedPayment(provider, data.reference, when (data.status.lowercase()) {
-                "success" -> VerifiedPaymentStatus.SUCCESS
-                "failed" -> VerifiedPaymentStatus.FAILED
-                "abandoned" -> VerifiedPaymentStatus.ABANDONED
-                "reversed" -> VerifiedPaymentStatus.REVERSED
-                else -> VerifiedPaymentStatus.PENDING
-            }, data.amount?.let { BigDecimal.valueOf(it).movePointLeft(2) }, data.currency)
+            VerifiedPayment(
+                status = data.status.lowercase(),
+                amount = data.amount?.let { BigDecimal.valueOf(it).movePointLeft(2) },
+                currency = data.currency
+            )
         }
 }

@@ -37,7 +37,7 @@ class ApplyWebhookEvent(
         val reference: String,
         val status: String,
         val verifiedVia: String,
-        val amount: java.math.BigDecimal? = null,
+        val amount: BigDecimal? = null,
         val currency: String? = null,
         val paidAt: LocalDateTime? = null,
         val projectId: UUID? = null,
