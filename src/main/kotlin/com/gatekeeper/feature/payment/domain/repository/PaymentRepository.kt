@@ -13,7 +13,7 @@ interface PaymentRepository {
     fun findById(id: UUID): Payment?
     fun findByReference(reference: String): Payment?
     fun save(payment: Payment): Payment
-    fun create(projectId: UUID, provider: String, reference: String, amount: java.math.BigDecimal, status: String, rawPayload: String? = null, authorizationUrl: String? = null): Payment
+    fun create(projectId: UUID, provider: String, reference: String, amount: java.math.BigDecimal, status: String, rawPayload: String? = null, authorizationUrl: String? = null, serviceId: UUID? = null): Payment
     fun updateStatus(provider: String, reference: String, status: String, verifiedVia: String, paidAt: java.time.LocalDateTime? = null, amount: java.math.BigDecimal? = null)
     fun pendingPayments(olderThanMinutes: Long): List<Payment>
     fun findPendingByProjectId(projectId: UUID): List<Payment>

@@ -38,12 +38,14 @@ class ExposedPaymentRepository : PaymentRepository {
         amount: BigDecimal,
         status: String,
         rawPayload: String?,
-        authorizationUrl: String?
+        authorizationUrl: String?,
+        serviceId: UUID?
     ): Payment = transaction {
         val id = UUID.randomUUID()
         Payments.insert {
             it[Payments.id] = id
             it[Payments.projectId] = projectId
+            it[Payments.serviceId] = serviceId
             it[Payments.provider] = provider.lowercase()
             it[Payments.providerReference] = reference
             it[Payments.paystackReference] = reference
@@ -60,7 +62,7 @@ class ExposedPaymentRepository : PaymentRepository {
         val existing = findByProviderReference(payment.provider, payment.providerReference)
         if (existing == null) return create(
             payment.projectId, payment.provider, payment.providerReference, payment.amount,
-            payment.status, payment.rawPayload, payment.authorizationUrl
+            payment.status, payment.rawPayload, payment.authorizationUrl, payment.serviceId
         )
         updateStatus(payment.provider, payment.providerReference, payment.status, "payment_use_case", payment.paidAt, payment.amount)
         return findById(payment.id) ?: findByProviderReference(payment.provider, payment.providerReference)!!
@@ -188,6 +190,7 @@ class ExposedPaymentRepository : PaymentRepository {
 
     private fun ResultRow.toDomain() = Payment(
         id = this[Payments.id], projectId = this[Payments.projectId],
+        serviceId = this[Payments.serviceId],
         provider = this[Payments.provider], providerReference = this[Payments.providerReference] ?: this[Payments.paystackReference],
         reference = this[Payments.providerReference] ?: this[Payments.paystackReference],
         amount = this[Payments.amount], status = this[Payments.gatewayStatus], recordStatus = this[Payments.status],

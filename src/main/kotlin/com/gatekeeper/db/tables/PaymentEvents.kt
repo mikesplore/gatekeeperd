@@ -9,6 +9,7 @@ object PaymentEvents : Table("payment_events") {
     val dedupeKey = text("dedupe_key").nullable().uniqueIndex()
     val paymentId = uuid("payment_id").references(Payments.id).nullable()
     val projectId = uuid("project_id").references(Projects.id).nullable()
+    val serviceId = uuid("service_id").references(Services.id, onDelete = org.jetbrains.exposed.sql.ReferenceOption.SET_NULL).nullable().index()
     val eventType = text("event_type")
     val provider = text("provider").default("paystack")
     val paystackReference = text("paystack_reference").nullable()

@@ -52,7 +52,12 @@ data class ProjectHealthResponse(
 )
 
 @Serializable
-data class BulkProjectRequest(val slugs: List<String>, val reason: String)
+data class BulkProjectRequest(
+    val slugs: List<String>,
+    val reason: String,
+    val blockReasonCode: String? = null,
+    val blockReasonNote: String? = null
+)
 
 @Serializable
 data class BulkProjectResult(val slug: String, val status: String, val message: String? = null)
@@ -474,12 +479,30 @@ fun Application.configureOperationsAdminRoutes() {
                     call.respondError(HttpStatusCode.BadRequest, "invalid_request", "slugs and reason are required")
                     return@post
                 }
+                if (body.reason.isBlank()) {
+                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "A non-empty reason is required")
+                    return@post
+                }
+                if ((body.blockReasonNote?.length ?: body.reason.length) > 500) {
+                    call.respondError(HttpStatusCode.BadRequest, "invalid_block_reason_note", "blockReasonNote must be at most 500 characters")
+                    return@post
+                }
+                val blockReasonCode = body.blockReasonCode?.let { code ->
+                    com.gatekeeper.db.tables.AccessBlockReason.entries.firstOrNull { it.value == code }
+                        ?: run {
+                            call.respondError(HttpStatusCode.BadRequest, "invalid_block_reason_code", "Unsupported blockReasonCode")
+                            return@post
+                        }
+                } ?: com.gatekeeper.db.tables.AccessBlockReason.MANUAL_HOLD
                 val actor = call.principal<JWTPrincipal>()?.payload?.subject ?: "unknown"
                 call.respond(body.slugs.distinct().map { slug ->
                     val project = ProjectRepository.findBySlug(slug)
                     if (project == null) BulkProjectResult(slug, "failed", "Project not found")
                     else {
-                        ProjectRepository.updateStatus(project.id, "manual_block", actor, body.reason, "manual")
+                        ProjectRepository.updateStatus(
+                            project.id, "manual_block", actor, body.reason, blockReasonCode.value,
+                            blockReasonCode, body.blockReasonNote?.takeIf { it.isNotBlank() } ?: body.reason
+                        )
                         BulkProjectResult(slug, "blocked")
                     }
                 })

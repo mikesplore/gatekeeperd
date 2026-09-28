@@ -19,7 +19,8 @@ data class Payment(
     val recordStatus: String = status,
     val authorizationUrl: String? = null,
     val verifiedVia: String? = null,
-    val createdAt: LocalDateTime? = null
+    val createdAt: LocalDateTime? = null,
+    val serviceId: UUID? = null
 ) {
     val gatewayStatus: String get() = status
 }
