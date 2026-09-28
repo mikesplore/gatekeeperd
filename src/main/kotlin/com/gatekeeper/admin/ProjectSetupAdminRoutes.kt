@@ -64,8 +64,10 @@ data class ProjectSetupCreatedResponse(val projectId: String, val slug: String, 
 @Serializable
 data class ProjectSetupCredentialsRequest(
     val registry: String? = null,
+    val registryCredentialId: String? = null,
     val username: String? = null,
     val password: String? = null,
+    @Deprecated("Application environment values belong on the service environment endpoint")
     val secretEnv: Map<String, String>? = null,
     val serviceId: String? = null,
     val environment: String = "production"
@@ -128,7 +130,8 @@ data class ProjectSetupConfigurationResponse(
     val env: Map<String, String>,
     val envKeys: List<String>,
     val secretSetId: String?,
-    val secretSetVersion: Int?
+    val secretSetVersion: Int?,
+    val registryCredentialId: String? = null
 )
 
 @Serializable
@@ -423,10 +426,7 @@ fun Application.configureProjectSetupAdminRoutes() {
                     return@get call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
                 }
                 val config = DeploymentJobRepository.configurationSummaryForService(projectId, serviceId)
-                val credential = config?.let { c ->
-                    ProviderCredentialRepository.listMetadata("docker", "registry")
-                        .firstOrNull { it.scope == c.registry && it.current }
-                }
+                val credential = config?.registryCredentialId?.let(ProviderCredentialRepository::findMetadata)
                 val site = SiteRepository.findByProjectIdAndServiceId(projectId, serviceId)
                 val active = DeploymentApplicationService.activeDeploymentSummaryForService(serviceId, "production")
                 val latest = DeploymentApplicationService.latestDeploymentStateForService(serviceId, "production")
@@ -514,8 +514,18 @@ fun Application.configureProjectSetupAdminRoutes() {
                 if (body.secretEnv.isNotEmpty()) {
                     return@put call.respondError(HttpStatusCode.BadRequest, "secrets_use_credentials_step", "Send application secrets through the credentials step")
                 }
+                val registryCredentialId = body.registryCredentialId?.takeIf(String::isNotBlank)?.let { raw ->
+                    val id = runCatching { UUID.fromString(raw) }.getOrNull()
+                        ?: return@put call.respondError(HttpStatusCode.BadRequest, "invalid_registry_credential", "Registry credential ID is invalid")
+                    val metadata = ProviderCredentialRepository.findMetadata(id)
+                        ?: return@put call.respondError(HttpStatusCode.BadRequest, "invalid_registry_credential", "Registry credential was not found")
+                    if (metadata.provider != "docker" || metadata.credentialType != "registry" || metadata.scope != body.registry || !metadata.current) {
+                        return@put call.respondError(HttpStatusCode.BadRequest, "invalid_registry_credential", "Select a current credential for this registry")
+                    }
+                    id
+                }
                 val configurationId = runCatching {
-                    DeploymentJobRepository.upsertProjectConfiguration(projectId, body.copy(repository = normalizedRepository, projectId = projectId.toString(), triggerSource = "project_setup"))
+                    DeploymentJobRepository.upsertProjectConfiguration(projectId, body.copy(repository = normalizedRepository, registryCredentialId = registryCredentialId?.toString(), projectId = projectId.toString(), triggerSource = "project_setup"))
                 }.getOrElse { error ->
                     return@put call.respondError(HttpStatusCode.BadRequest, "invalid_deployment_configuration", error.message ?: "Configuration could not be saved")
                 }
@@ -539,6 +549,7 @@ fun Application.configureProjectSetupAdminRoutes() {
                 val configId = DeploymentJobRepository.configurationIdForService(projectId, targetServiceId, environment)
                 val config = configId?.let(DeploymentJobRepository::configurationSummaryById)
                     ?: return@put call.respondError(HttpStatusCode.Conflict, "source_runtime_required", "Save source/runtime configuration before credentials")
+                if (body.secretEnv != null) return@put call.respondError(HttpStatusCode.BadRequest, "environment_use_environment_endpoint", "Application environment values must use the service environment endpoint")
                 val registry = (body.registry ?: config.registry).trim().lowercase()
                 if (!registry.matches(Regex("^(docker\\.io|[A-Za-z0-9.-]+(:[0-9]{1,5})?)$"))) {
                     return@put call.respondError(HttpStatusCode.BadRequest, "invalid_registry", "Registry is invalid")
@@ -548,36 +559,27 @@ fun Application.configureProjectSetupAdminRoutes() {
                 if ((username.isBlank()) != password.isBlank()) {
                     return@put call.respondError(HttpStatusCode.BadRequest, "invalid_registry_credentials", "Provide both username and password to save registry credentials")
                 }
-                val serviceEnvKeys = body.secretEnv?.keys ?: emptySet()
-                if (serviceEnvKeys.any { !it.matches(Regex("[A-Za-z_][A-Za-z0-9_]*")) } ||
-                    body.secretEnv.orEmpty().any { (key, value) -> key.contains('=') || value.contains('\u0000') }) {
-                    return@put call.respondError(HttpStatusCode.BadRequest, "invalid_secret_keys", "Environment variable names or values are invalid")
-                }
-                if ((username.isNotBlank() || body.secretEnv != null) && !SecretValueCipher.isConfigured()) {
+                if (username.isNotBlank() && !SecretValueCipher.isConfigured()) {
                     return@put call.respondError(HttpStatusCode.ServiceUnavailable, "secrets_unconfigured", "Secret encryption is not configured")
                 }
                 val providerCredential = if (username.isNotBlank()) RegistryCredentialRepository.save(registry, username, password) else null
-                var deploymentId: UUID? = null
-                if (body.secretEnv != null) {
-                    val result = runCatching {
-                        DeploymentJobRepository.updateServiceEnvironmentAndDeploy(
-                            projectId, targetServiceId, environment, body.secretEnv, actor = call.principal<io.ktor.server.auth.jwt.JWTPrincipal>()?.payload?.subject ?: "admin",
-                            registry = registry
-                        )
-                    }.getOrElse { error ->
-                        return@put call.respondError(HttpStatusCode.Conflict, "environment_update_failed", error.message ?: "Environment could not be saved")
-                    } ?: return@put call.respondError(HttpStatusCode.Conflict, "source_runtime_required", "Save service source/runtime configuration before credentials")
-                    deploymentId = result.deploymentIds.singleOrNull()
-                } else if (registry != config.registry) {
+                if (registry != config.registry) {
                     DeploymentJobRepository.updateConfiguration(config.id, UpdateDeploymentConfigurationRequest(registry = registry))
                 }
-                val updated = configId?.let(DeploymentJobRepository::configurationSummaryById)
-                val currentCredential = ProviderCredentialRepository.listMetadata("docker", "registry")
-                    .firstOrNull { it.scope == registry && it.current }
+                val currentCredential = body.registryCredentialId?.takeIf(String::isNotBlank)?.let { raw ->
+                    val credentialId = runCatching { UUID.fromString(raw) }.getOrNull()
+                        ?: return@put call.respondError(HttpStatusCode.BadRequest, "invalid_registry_credential", "Registry credential ID is invalid")
+                    val credential = ProviderCredentialRepository.findMetadata(credentialId)
+                        ?: return@put call.respondError(HttpStatusCode.BadRequest, "invalid_registry_credential", "Registry credential was not found")
+                    if (credential.provider != "docker" || credential.credentialType != "registry" || credential.scope != registry || !credential.current) {
+                        return@put call.respondError(HttpStatusCode.BadRequest, "invalid_registry_credential", "Select a current credential for this registry")
+                    }
+                    DeploymentJobRepository.updateConfiguration(config.id, UpdateDeploymentConfigurationRequest(registryCredentialId = credentialId.toString()))
+                    credential
+                }
                 call.respond(ProjectSetupCredentialsResponse(
                     registry, providerCredential != null || currentCredential != null,
-                    providerCredential?.version ?: currentCredential?.version,
-                    updated?.secretSetId?.toString(), updated?.secretSetVersion, deploymentId?.toString()
+                    currentCredential?.version ?: providerCredential?.version
                 ))
             }
 
@@ -794,7 +796,8 @@ private fun validSetupDeployment(body: CreateDeploymentRequest, repository: Stri
 
 private fun DeploymentJobRepository.ConfigurationSummary.toSetupResponse() = ProjectSetupConfigurationResponse(
     id.toString(), repository, gitRef, registry, imageName, imageTag, autoDeploy, containerPort, hostPort, network, restartPolicy,
-    environment, env, envKeys, secretSetId?.toString(), secretSetVersion
+    environment, env, envKeys, secretSetId?.toString(), secretSetVersion,
+    registryCredentialId?.toString()
 )
 
 private fun projectOverviewFinancials(

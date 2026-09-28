@@ -62,6 +62,29 @@ object DeploymentJobRepository {
         }
     }
 
+    fun registryCredentialForDeployment(id: UUID): RegistryCredentialRecord? {
+        val credentialId = DeploymentExecutions.selectAll().where { DeploymentExecutions.id eq id }
+            .singleOrNull()?.get(DeploymentExecutions.registryCredentialId)
+        val job = DeploymentJobs.selectAll().where { DeploymentJobs.id eq id }.singleOrNull() ?: return null
+        val registry = job[DeploymentJobs.registry]
+        return if (credentialId != null) {
+            val selected = RegistryCredentialRepository.findByCredentialId(credentialId)
+                ?: error("Selected registry credential no longer exists")
+            require(selected.registry == registry) { "Selected registry credential does not match deployment registry" }
+            selected
+        } else RegistryCredentialRepository.find(registry)
+    }
+
+    private fun requireRegistryCredential(id: UUID, registry: String) {
+        val metadata = ProviderCredentialRepository.findMetadata(id)
+            ?: error("Selected registry credential does not exist")
+        require(metadata.provider == "docker" && metadata.credentialType == "registry") {
+            "Selected provider credential is not a registry credential"
+        }
+        require(metadata.current) { "Selected registry credential has been retired" }
+        require(metadata.scope == registry) { "Selected registry credential does not match the configured registry" }
+    }
+
     data class ConfigurationSummary(
         val id: UUID,
         val repository: String?,
@@ -78,7 +101,8 @@ object DeploymentJobRepository {
         val env: Map<String, String>,
         val envKeys: List<String>,
         val secretSetId: UUID?,
-        val secretSetVersion: Int?
+        val secretSetVersion: Int?,
+        val registryCredentialId: UUID?
     )
 
     fun configurationIdForProject(projectId: UUID, environment: String = "production"): UUID? = transaction {
@@ -126,6 +150,7 @@ object DeploymentJobRepository {
         val serviceSet = createSecretSetVersion(projectId, environment, values, actor, serviceId)
         DeploymentConfigurations.update({ DeploymentConfigurations.id eq row[DeploymentConfigurations.id] }) {
             it[DeploymentConfigurations.serviceId] = serviceId
+            it[DeploymentConfigurations.registry] = registry ?: row[DeploymentConfigurations.registry]
             it[DeploymentConfigurations.secretSetId] = serviceSet.id
             it[DeploymentConfigurations.secretSetVersion] = serviceSet.version
             it[DeploymentConfigurations.sharedEnvironmentSetId] = sharedSet?.id
@@ -134,6 +159,10 @@ object DeploymentJobRepository {
             it[DeploymentConfigurations.secretEnvEncrypted] = null
             registry?.let { value -> it[DeploymentConfigurations.registry] = value }
             it[DeploymentConfigurations.updatedAt] = LocalDateTime.now()
+        }
+        DeploymentJobs.update({ DeploymentJobs.id eq row[DeploymentConfigurations.id] }) {
+            it[DeploymentJobs.registry] = registry ?: row[DeploymentConfigurations.registry]
+            it[DeploymentJobs.updatedAt] = LocalDateTime.now()
         }
         val updated = DeploymentConfigurations.selectAll().where { DeploymentConfigurations.id eq row[DeploymentConfigurations.id] }.single()
         val request = requestFromConfiguration(updated, "service_environment_update", serviceId)
@@ -293,7 +322,8 @@ object DeploymentJobRepository {
             row[DeploymentConfigurations.imageName], row[DeploymentConfigurations.imageTag], row[DeploymentConfigurations.autoDeploy], row[DeploymentConfigurations.containerPort],
             row[DeploymentConfigurations.hostPort], row[DeploymentConfigurations.network], row[DeploymentConfigurations.restartPolicy],
             row[DeploymentConfigurations.environment] ?: "production", emptyMap(), envKeys,
-            row[DeploymentConfigurations.secretSetId], row[DeploymentConfigurations.secretSetVersion]
+            row[DeploymentConfigurations.secretSetId], row[DeploymentConfigurations.secretSetVersion],
+            row[DeploymentConfigurations.registryCredentialId]
         )
     }
 
@@ -303,6 +333,7 @@ object DeploymentJobRepository {
         if (currentId == null) return createConfiguration(projectId, request)
         val updated = updateConfiguration(currentId, com.gatekeeper.deployment.UpdateDeploymentConfigurationRequest(
             repository = request.repository, gitRef = request.gitRef, registry = request.registry,
+            registryCredentialId = request.registryCredentialId,
             imageName = request.imageName, imageTag = request.imageTag,
             hostPort = request.hostPort, containerPort = request.containerPort, network = request.network,
             restartPolicy = request.restartPolicy, env = request.env, volumes = request.volumes,
@@ -394,6 +425,9 @@ object DeploymentJobRepository {
         DeploymentConfigurations.insert {
             it[DeploymentConfigurations.id] = id
             it[repository] = request.repository; it[gitRef] = request.gitRef; it[registry] = request.registry
+            val registryCredentialId = request.registryCredentialId?.takeIf(String::isNotBlank)?.let(UUID::fromString)
+            registryCredentialId?.let { requireRegistryCredential(it, request.registry) }
+            it[DeploymentConfigurations.registryCredentialId] = registryCredentialId
             it[imageName] = request.imageName; it[imageTag] = request.imageTag
             it[hostPort] = request.hostPort; it[containerPort] = request.containerPort; it[network] = request.network
             it[restartPolicy] = request.restartPolicy; it[DeploymentConfigurations.envJson] = "{}"
@@ -472,6 +506,8 @@ object DeploymentJobRepository {
             it[DeploymentExecutions.repository] = null
             it[DeploymentExecutions.gitRef] = ""
             it[DeploymentExecutions.registry] = registry
+            it[DeploymentExecutions.registryCredentialId] = DeploymentConfigurations.selectAll()
+                .where { DeploymentConfigurations.id eq configurationId }.single()[DeploymentConfigurations.registryCredentialId]
             it[DeploymentExecutions.imageName] = imageName
             it[DeploymentExecutions.imageTag] = imageTag
             it[DeploymentExecutions.hostPort] = null
@@ -493,6 +529,8 @@ object DeploymentJobRepository {
             it[DeploymentExecutions.readinessTimeoutSeconds] = 1
             it[DeploymentExecutions.readinessIntervalSeconds] = 1
             it[DeploymentExecutions.readinessProbeTimeoutMillis] = 1000
+            it[DeploymentExecutions.registryCredentialId] = DeploymentConfigurations.selectAll()
+                .where { DeploymentConfigurations.id eq configurationId }.single()[DeploymentConfigurations.registryCredentialId]
             it[DeploymentExecutions.triggerSource] = "container_adoption"
             it[DeploymentExecutions.status] = "succeeded"
             it[DeploymentExecutions.currentStep] = "readiness_succeeded"
@@ -563,6 +601,8 @@ object DeploymentJobRepository {
             SharedEnvironmentSetReference(sharedId, row[DeploymentConfigurations.sharedEnvironmentSetVersion] ?: error("Shared environment version is missing"))
         }
         val readinessType = request.readinessType?.let { it.trim().lowercase().also { type -> require(type in supportedReadinessTypes) { "Readiness type must be docker, http, tcp, or process" } } }
+        val registryCredentialId = request.registryCredentialId?.takeIf(String::isNotBlank)?.let(UUID::fromString)
+        if (registryCredentialId != null) requireRegistryCredential(registryCredentialId, request.registry ?: row[DeploymentConfigurations.registry])
         val readinessTarget = request.readinessTarget?.also { require(it.isNotBlank()) { "Readiness target must not be blank" } }
         request.readinessTimeoutSeconds?.let { require(it in 1..600) { "Readiness timeout must be between 1 and 600 seconds" } }
         request.readinessIntervalSeconds?.let { require(it in 1..30) { "Readiness interval must be between 1 and 30 seconds" } }
@@ -571,6 +611,7 @@ object DeploymentJobRepository {
             if (replaceRepository) it[repository] = request.repository else request.repository?.let { value -> it[repository] = value }
             request.gitRef?.let { value -> it[gitRef] = value }
             request.registry?.let { value -> it[registry] = value }; request.imageName?.let { value -> it[imageName] = value }
+            if (request.registryCredentialId != null) it[DeploymentConfigurations.registryCredentialId] = registryCredentialId
             request.imageTag?.let { value -> it[imageTag] = value }
             request.hostPort?.let { value -> it[hostPort] = value }; request.containerPort?.let { value -> it[containerPort] = value }
             request.network?.let { value -> it[network] = value }; request.restartPolicy?.let { value -> it[restartPolicy] = value }
@@ -729,10 +770,13 @@ object DeploymentJobRepository {
             resolvedServiceValues.keys.forEach { put(it, "service") }
         }
         val volumesJson = Json.encodeToString(request.volumes)
+        val registryCredentialId = request.registryCredentialId?.takeIf(String::isNotBlank)?.let(UUID::fromString)
+        registryCredentialId?.let { requireRegistryCredential(it, request.registry) }
         // Save editable configuration and immutable execution snapshot before queuing work.
         DeploymentConfigurations.insert {
             it[DeploymentConfigurations.id] = id
             it[repository] = request.repository; it[gitRef] = request.gitRef; it[registry] = request.registry
+            it[DeploymentConfigurations.registryCredentialId] = registryCredentialId
             it[imageName] = request.imageName; it[imageTag] = request.imageTag
             it[hostPort] = request.hostPort; it[containerPort] = request.containerPort; it[network] = request.network
             it[restartPolicy] = request.restartPolicy; it[DeploymentConfigurations.envJson] = "{}"
@@ -754,6 +798,7 @@ object DeploymentJobRepository {
         DeploymentExecutions.insert {
             it[DeploymentExecutions.id] = id; it[configurationId] = id
             it[repository] = request.repository; it[gitRef] = request.gitRef; it[registry] = request.registry
+            it[DeploymentExecutions.registryCredentialId] = registryCredentialId
             it[imageName] = request.imageName; it[imageTag] = request.imageTag
             it[hostPort] = request.hostPort; it[containerPort] = request.containerPort; it[network] = request.network
             it[restartPolicy] = request.restartPolicy; it[DeploymentExecutions.envJson] = "{}"
@@ -856,6 +901,7 @@ object DeploymentJobRepository {
             repository = execution[DeploymentExecutions.repository],
             gitRef = execution[DeploymentExecutions.gitRef],
             registry = execution[DeploymentExecutions.registry],
+            registryCredentialId = execution[DeploymentExecutions.registryCredentialId]?.toString(),
             imageName = execution[DeploymentExecutions.imageName],
             imageTag = execution[DeploymentExecutions.imageTag],
             projectId = ownerId.toString(),

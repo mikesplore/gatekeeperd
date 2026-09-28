@@ -16,7 +16,7 @@ import io.ktor.server.routing.*
 import kotlinx.serialization.Serializable
 import java.util.UUID
 
-@Serializable private data class RegistryCredentialRequest(val username: String, val password: String)
+@Serializable private data class RegistryCredentialRequest(val username: String, val password: String, val displayName: String? = null)
 @Serializable private data class RegistryMetadataResponse(val registry: String, val username: String, val configured: Boolean)
 @Serializable private data class RegistryCredentialResponse(
     val registry: String,
@@ -56,7 +56,7 @@ fun Application.configureRegistryAdminRoutes() {
             val body = runCatching { call.receive<RegistryCredentialRequest>() }.getOrNull()
             if (registry.isNullOrBlank() || !registry.matches(Regex("^[a-z0-9.-]+(:[0-9]{1,5})?$")) || body == null || body.username.isBlank() || body.password.isBlank()) { call.respondError(HttpStatusCode.BadRequest, "invalid_registry_credentials", "Registry, username, and password are required"); return@put }
             if (!SecretValueCipher.isConfigured()) { call.respondError(HttpStatusCode.ServiceUnavailable, "secrets_unconfigured", "Secret encryption is not configured"); return@put }
-            val credential = RegistryCredentialRepository.save(registry, body.username, body.password)
+            val credential = RegistryCredentialRepository.save(registry, body.username, body.password, body.displayName?.trim()?.takeIf(String::isNotBlank))
             AuditRepository.write(null, "registry_credentials_updated", "admin", "registry=$registry username=${body.username} version=${credential.version}")
             call.respond(RegistryCredentialResponse(registry, body.username, true, credential.id.toString(), credential.version))
         }

@@ -12,6 +12,7 @@ object DeploymentExecutions : Table("deployment_executions") {
     val repository = text("repository").nullable()
     val gitRef = text("git_ref")
     val registry = text("registry")
+    val registryCredentialId = uuid("registry_credential_id").references(ProviderCredentials.id, onDelete = ReferenceOption.RESTRICT).nullable()
     val imageName = text("image_name")
     val imageTag = text("image_tag")
     val hostPort = integer("host_port").nullable()

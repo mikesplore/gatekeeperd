@@ -234,7 +234,7 @@ Returns `201 Created` with `{ "projectId": "<uuid>", "slug": "<slug>", "status":
 
 #### GET /api/admin/project-setup/projects/{projectId}?serviceId={uuid}
 
-Read setup progress for continuing optional service configuration. `serviceId` is optional and defaults to the project's default service. Returns project identity, that service's saved source/runtime configuration (environment keys and version references only), whether registry credentials are configured and their version, desired gateway/site state, and both the active deployment pointer and latest deployment attempt status. It never returns registry passwords or application environment values.
+Read setup progress for continuing optional service configuration. `serviceId` is optional and defaults to the project's default service. Returns project identity, that service's saved source/runtime configuration (environment keys, version references, and selected registry credential ID only), whether that service has a registry credential selected, desired gateway/site state, and both the active deployment pointer and latest deployment attempt status. It never returns registry passwords or application environment values.
 
 #### GET /api/admin/project-setup/containers
 
@@ -246,13 +246,13 @@ Attach an already-running container as a canonical active deployment without res
 
 #### PUT /api/admin/project-setup/projects/{projectId}/source-runtime
 
-Create or update the desired configuration for a service/environment. Accepts optional `serviceId` (omitted selects `default`), `repository` and `gitRef`, registry/image, required `containerPort`, optional `hostPort`, network/restart policy, service-level `env`, optional pinned `sharedEnvironmentSetId` plus `sharedEnvironmentSetVersion`, `environment`, and readiness settings. Environment values are stored only in encrypted, immutable versions; responses expose key names and version references, never values. At deployment time, imported shared variables are loaded first and service values override matching keys. Provide a GitHub repository to build from source; omit it to pull and run the configured prebuilt registry image directly. GitHub auto-deploy is only available when a repository is configured. The host port may be omitted so Docker can allocate an ephemeral port for candidate coexistence. `environment` defaults to `production`. This saves desired state only and is safe to repeat; it does not queue a deployment.
+Create or update the desired configuration for a service/environment. Accepts optional `serviceId` (omitted selects `default`), `repository` and `gitRef`, registry/image, optional `registryCredentialId` referring to a current Docker registry provider credential for the configured registry, required `containerPort`, optional `hostPort`, network/restart policy, service-level `env`, optional pinned `sharedEnvironmentSetId` plus `sharedEnvironmentSetVersion`, `environment`, and readiness settings. Environment values are stored only in encrypted, immutable versions; responses expose key names and version references, never values. At deployment time, imported shared variables are loaded first and service values override matching keys. Provide a GitHub repository to build from source; omit it to pull and run the configured prebuilt registry image directly. GitHub auto-deploy is only available when a repository is configured. The host port may be omitted so Docker can allocate an ephemeral port for candidate coexistence. `environment` defaults to `production`. This saves desired state only and is safe to repeat; it does not queue a deployment.
 
 Returns `{ "configurationId": "<uuid>", "environment": "production", "status": "configured" }`.
 
 #### PUT /api/admin/project-setup/projects/{projectId}/credentials
 
-Optionally accepts `registry`, `username`, and `password` to create/rotate registry credentials, plus `secretEnv` to replace a service's environment set. `serviceId` selects a service (omitted selects `default`), and `environment` defaults to `production`. Omitting registry username/password preserves the existing credential; omitting `secretEnv` preserves the current service set. Supplying an empty `secretEnv` replaces it with an empty version. A supplied `secretEnv` is saved and deployed atomically; the response includes its `deploymentId`. Environment values are write-only.
+Selects or clears the service's provider credential with `registryCredentialId`; `registry` may be supplied to change its registry scope. `serviceId` selects a service (omitted selects `default`), and `environment` defaults to `production`. Application environment values are not accepted here; use the shared/service environment endpoints. Credential values are managed separately through the provider connection APIs and are write-only.
 
 #### PUT /api/admin/projects/{projectId}/environment/shared
 
@@ -302,7 +302,7 @@ Creates an immutable secret-set version, updates the desired configuration refer
 
 Lists provider credential metadata only. Optional `provider` (`docker`, `github`) and `type` (`registry`, `app_private_key`, `webhook_secret`) filters. Payloads are never selected for this response.
 
-Registry credentials rotate through `PUT /api/admin/registries/{registry}`. GitHub webhook secrets and App private keys rotate through `PUT /api/admin/github/credentials/{webhook_secret|app_private_key}`. These routes accept a value once and return only write-only/version metadata; later list/detail requests never return plaintext.
+Docker Hub/registry provider credentials connect through `PUT /api/admin/registries/{registry}`. GitHub webhook secrets and App private keys rotate through `PUT /api/admin/github/credentials/{webhook_secret|app_private_key}`. These routes accept a value once and return only write-only/version metadata; later list/detail requests never return plaintext. Service deployment configuration references a provider credential by ID, and each execution snapshots that immutable credential reference.
 
 ### PATCH /api/admin/projects/{slug}
 Update project fields.
@@ -1172,7 +1172,7 @@ Payment-required responses for blocked backend projects extend this format:
 ```json
 {
   "error": "payment_required",
-  "message": "Access is temporarily paused.",
+  "message": "Access has been temporarily paused.",
   "timestamp": "2026-07-28T12:00:00",
   "payment_link": "https://paystack.com/pay/xxxx",
   "block_reason": "manual_hold",

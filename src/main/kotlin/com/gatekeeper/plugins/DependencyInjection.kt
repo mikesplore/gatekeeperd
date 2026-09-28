@@ -16,6 +16,7 @@ import com.gatekeeper.feature.payment.data.provider.PaymentProviderReadinessAdap
 import com.gatekeeper.feature.payment.data.provider.JsonMpesaCallbackDecoder
 import com.gatekeeper.feature.payment.domain.repository.PaymentRepository as PaymentDomainRepository
 import com.gatekeeper.feature.payment.domain.repository.PaymentEventRepository as PaymentEventDomainRepository
+import com.gatekeeper.feature.payment.domain.gateway.PaymentGateway
 import com.gatekeeper.feature.payment.domain.usecase.ApplyWebhookEvent
 import com.gatekeeper.feature.payment.domain.usecase.PaymentEffects
 import com.gatekeeper.feature.payment.domain.usecase.ReconcilePayments
@@ -64,8 +65,8 @@ private val applicationModule = module {
     single { PaymentBalanceAdapter(get<PaymentDomainRepository>(), get(), get()) }
     single<PaymentEffects> { PaymentEffectsAdapter(get()) }
     single { ApplyWebhookEvent(get(), get()) }
-    single(named("paystackGateway")) { PaystackGateway() }
-    single(named("mpesaGateway")) { MpesaGateway }
+    single<PaymentGateway>(named("paystackGateway")) { PaystackGateway() }
+    single<PaymentGateway>(named("mpesaGateway")) { MpesaGateway }
     single<PaymentProviderReadiness> { PaymentProviderReadinessAdapter() }
     single { GetPaymentMethodAvailability(get()) }
     single { ListPayments(get()) }

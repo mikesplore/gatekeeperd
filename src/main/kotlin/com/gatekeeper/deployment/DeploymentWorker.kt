@@ -108,10 +108,7 @@ object DeploymentWorker {
                 DeploymentJobRepository.update(job.id, "checked_out", "Repository checked out", commitSha = commit)
                 image = registryImage(job.registry, job.imageName, job.imageTag)
             }
-            RegistryCredentialRepository.find(job.registry)?.let { credential ->
-                if (credential.credentialId != null && credential.version != null) {
-                    DeploymentApplicationService.recordCredentialReference(job.id, credential.credentialId, credential.version)
-                }
+            DeploymentJobRepository.registryCredentialForDeployment(job.id)?.let { credential ->
                 dockerLogin(job.id, job.registry, credential.username, credential.password)
             }
             if (rollbackArtifact == null && !job.repository.isNullOrBlank()) {

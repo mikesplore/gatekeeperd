@@ -44,10 +44,16 @@ object RegistryCredentialRepository {
         }
     }
 
-    fun save(registry: String, username: String, password: String): ProviderCredentialMetadata = transaction {
+    fun findByCredentialId(id: UUID): RegistryCredentialRecord? = ProviderCredentialRepository.findById(id)?.let { stored ->
+        if (stored.metadata.provider != PROVIDER || stored.metadata.credentialType != TYPE) return@let null
+        val payload = Json.decodeFromString<RegistryPayload>(stored.payload)
+        RegistryCredentialRecord(stored.metadata.scope, payload.username, payload.password, stored.metadata.updatedAt, stored.metadata.id, stored.metadata.version)
+    }
+
+    fun save(registry: String, username: String, password: String, displayName: String? = null): ProviderCredentialMetadata = transaction {
         val now = LocalDateTime.now()
         val credential = ProviderCredentialRepository.createOrRotate(
-            PROVIDER, TYPE, username, registry, Json.encodeToString(RegistryPayload(username, password))
+            PROVIDER, TYPE, displayName ?: username, registry, Json.encodeToString(RegistryPayload(username, password))
         )
 
         // Compatibility copy for older workers/instances during the rollout.

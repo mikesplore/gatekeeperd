@@ -45,6 +45,12 @@ object ProviderCredentialRepository {
         ProviderCredentials.selectAll().where { ProviderCredentials.id eq id }.singleOrNull()?.let(::metadata)
     }
 
+    fun findById(id: UUID): StoredProviderCredential? = transaction {
+        ProviderCredentials.selectAll().where { ProviderCredentials.id eq id }.singleOrNull()?.let { row ->
+            StoredProviderCredential(metadata(row), SecretValueCipher.decrypt(row[ProviderCredentials.encryptedPayload]))
+        }
+    }
+
     fun findCurrent(provider: String, credentialType: String, scope: String): StoredProviderCredential? = transaction {
         ProviderCredentials.selectAll().where {
             (ProviderCredentials.provider eq provider) and
