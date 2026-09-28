@@ -63,8 +63,10 @@ Process liveness check. Returns `200 OK` when the application process is running
 ### GET /api/health/ready
 Dependency readiness check. Returns `200 OK` only when PostgreSQL and Redis are reachable; otherwise returns `503 Service Unavailable` with dependency booleans.
 
-### GET /api/gate/check?project={slug}
+### GET /api/gate/check?project={slug}[&domain={domain}]
 Gate check endpoint called by Traefik ForwardAuth. Never expose this to the public internet directly.
+
+When `domain` is supplied, Gatekeeperd resolves the configured site by domain, then its service and project access state. This determines service-scoped blocking and the reason source. Calls that omit `domain` continue to resolve by project/site slug.
 
 **Responses:**
 - `200 OK` — project is active, Traefik forwards the request to the client container
@@ -74,9 +76,13 @@ Gate check endpoint called by Traefik ForwardAuth. Never expose this to the publ
     ```json
     {
       "error": "payment_required",
-      "message": "Access to this API is suspended pending payment.",
+      "message": "Access is temporarily paused.",
       "timestamp": "2026-07-28T12:00:00",
       "payment_link": "https://paystack.com/pay/xxxx",
+      "block_reason": "manual_hold",
+      "reason_source": "service",
+      "reason_note": "Maintenance requested by the customer",
+      "service": "frontend",
       "contact": "support@gatekeeper.local"
     }
     ```
@@ -93,7 +99,7 @@ Gate check endpoint called by Traefik ForwardAuth. Never expose this to the publ
 - This endpoint must NOT be internet-reachable. Only Traefik on the internal Docker network should call it.
 - Redis cache TTL is 60 seconds. Admin actions explicitly delete the cache for instant propagation.
 
-### GET /api/gate/auth?project={slug}
+### GET /api/gate/auth?project={slug}[&domain={domain}]
 Lightweight gate check for **nginx `auth_request` only**. Returns empty body. The `project` parameter may be a project slug for its default service or a site slug for a service-specific site. Project billing blocks apply to every service; service access blocks apply only to that site's service.
 
 **Responses:**
@@ -104,8 +110,8 @@ Lightweight gate check for **nginx `auth_request` only**. Returns empty body. Th
 
 See `docs/nginx-client-gating.md` for a full nginx example.
 
-### GET /api/gate/paywall?project={slug}
-HTML payment page for blocked clients. Shows project name, domain, amount due, due date, and a **Pay Now** button.
+### GET /api/gate/paywall?project={slug}[&domain={domain}]
+Reason-specific HTML block page for blocked clients. The site's domain resolves to its service. A project block applies to every service and takes precedence when choosing the reason and note; a service-only block applies only to that service. Payment blocks include billing details and payment controls. Other reasons show their reason and support contact without payment controls.
 
 **Response:** `402 Payment Required`, `Content-Type: text/html`
 
@@ -262,7 +268,7 @@ List project services or create one with `{ "name": "frontend" }`. Service names
 
 #### GET, PATCH, DELETE /api/admin/projects/{projectId}/services/{serviceId}
 
-Read, update, or delete a service. PATCH accepts `name`, `accessStatus` (`active`, `blocked`, or `manual_block`), and `blockReason`. The default service cannot be renamed or deleted. Services with deployment, environment, or site history cannot be deleted.
+Read, update, or delete a service. PATCH accepts `name`, `accessStatus` (`active`, `blocked`, or `manual_block`), and the compatibility `blockReason` text. Structured blocks accept `blockReasonCode` (`payment`, `manual_hold`, `abuse_tos`, `suspended_by_request`, or `other`) and optional `blockReasonNote`. Responses include these reason fields. Setting access to `active` clears the reason and note. The default service cannot be renamed or deleted. Services with deployment, environment, or site history cannot be deleted.
 
 #### GET, PUT /api/admin/projects/{projectId}/services/{serviceId}/environment?environment={name}
 
@@ -343,7 +349,7 @@ Archive a project (soft delete). Sets `deleted_at`, blocks gating, and **preserv
 - Writes an audit log entry with action `project_archived`.
 
 ### POST /api/admin/projects/{slug}/block
-Manually block a project.
+Manually block a project. The supplied `reason` is stored as the optional `manual_hold` note, and this project-level reason is shown for every service under the project.
 
 **Request:**
 ```json
@@ -1166,9 +1172,13 @@ Payment-required responses for blocked backend projects extend this format:
 ```json
 {
   "error": "payment_required",
-  "message": "Access to this API is suspended pending payment.",
+  "message": "Access is temporarily paused.",
   "timestamp": "2026-07-28T12:00:00",
   "payment_link": "https://paystack.com/pay/xxxx",
+  "block_reason": "manual_hold",
+  "reason_source": "service",
+  "reason_note": "Maintenance requested by the customer",
+  "service": "frontend",
   "contact": "support@gatekeeper.local"
 }
 ```
