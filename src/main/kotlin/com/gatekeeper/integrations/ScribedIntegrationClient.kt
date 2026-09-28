@@ -30,6 +30,7 @@ import io.ktor.client.statement.bodyAsText
 @Serializable data class ScribedSuspensionPayload(val project_id: String, val project_slug: String, val status: String, val reason: String, val occurred_at: String)
 @Serializable data class ScribedPaymentPayload(val project_id: String, val project_slug: String, val provider: String, val provider_reference: String, val amount: String, val currency: String, val paid_at: String, val status: String = "success", val service_id: String? = null)
 @Serializable data class ScribedLedgerAdjustment(val id: String, val type: String, val amount: String, val reason: String, val actor: String)
+@Serializable data class ScribedServiceLedgerPayload(val service_id: String, val adjustments: List<ScribedLedgerAdjustment>)
 @Serializable data class ScribedLedgerPayload(val project_id: String, val project_slug: String, val ledger_version: String, val base_amount: String, val additional_charges: String, val discounts: String, val successful_payments: String, val outstanding_balance: String, val currency: String, val adjustments: List<ScribedLedgerAdjustment>)
 @Serializable data class ScribedInvoiceEmailPayload(val invoice_id: Long)
 @Serializable data class ScribedInvoiceCreatePayload(
@@ -257,6 +258,16 @@ object ScribedIntegrationClient {
         IntegrationOutboxRepository.enqueue("ledger", "ledger:${project.id}:$ledgerVersion", json.encodeToString(payload))
     }
 
+    fun notifyServiceLedger(serviceId: java.util.UUID, ledgerVersion: String) {
+        val base = AppConfig.scribedCallbackUrl.trim().trimEnd('/')
+        if (base.isBlank() || AppConfig.scribedIntegrationSecret.trim().isBlank()) return
+        val adjustments = ProjectAdjustmentRepository.findByServiceId(serviceId).map {
+            ScribedLedgerAdjustment(it.id.toString(), it.type.name, it.amount.toPlainString(), it.reason, it.actor)
+        }
+        val payload = ScribedServiceLedgerPayload(serviceId.toString(), adjustments)
+        IntegrationOutboxRepository.enqueue("service_ledger", "service-ledger:$serviceId:$ledgerVersion", json.encodeToString(payload))
+    }
+
     fun syncProject(project: ProjectRepository.ProjectRecord, payments: PaymentDomainRepository, balances: ProjectBalanceAdapter): Int {
         notifyLedger(project, "sync-${java.util.UUID.randomUUID()}", balances)
         val successfulPayments = payments.findByProjectId(project.id)
@@ -300,6 +311,21 @@ object ScribedIntegrationClient {
         val base = AppConfig.scribedCallbackUrl.trim().trimEnd('/'); val secret = AppConfig.scribedIntegrationSecret.trim()
         val apiToken = AppConfig.scribedApiToken.trim()
         if (base.isBlank() || secret.isBlank() || apiToken.isBlank()) return false
+        if (event.eventType == "service_ledger") {
+            val payload = runCatching { json.decodeFromString<ScribedServiceLedgerPayload>(event.payload) }.getOrNull() ?: return false
+            if (serviceInvoiceStatus(payload.service_id).body == null) return false
+            return runCatching {
+                val response = http.post("$base/integrations/gatekeeper/services/${payload.service_id}/adjustments") {
+                    contentType(ContentType.Application.Json)
+                    header(HttpHeaders.Authorization, "Bearer $apiToken")
+                    header("X-Gatekeeper-Secret", secret)
+                    header("Idempotency-Key", event.idempotencyKey)
+                    setBody(payload)
+                }
+                if (!response.status.isSuccess()) logger.warn("Scribed service ledger rejected event={} status={}", event.id, response.status)
+                response.status.isSuccess()
+            }.getOrElse { logger.warn("Scribed service ledger delivery failed id=${event.id}: ${it.message}"); false }
+        }
         if (event.eventType == "payment" || event.eventType == "ledger") {
             val projectId = runCatching {
                 when (event.eventType) {

@@ -5,7 +5,11 @@ import com.gatekeeper.db.repositories.DeploymentJobRepository
 import com.gatekeeper.db.repositories.EnvironmentSetRepository
 import com.gatekeeper.db.repositories.ProjectRepository
 import com.gatekeeper.db.repositories.ServiceRepository
+import com.gatekeeper.db.repositories.ProjectAdjustmentRepository
+import com.gatekeeper.db.repositories.AuditRepository
+import com.gatekeeper.db.tables.AdjustmentType
 import com.gatekeeper.db.tables.AccessBlockReason
+import com.gatekeeper.integrations.ScribedIntegrationClient
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.auth.authenticate
 import io.ktor.server.auth.principal
@@ -13,9 +17,11 @@ import io.ktor.server.application.Application
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.request.receive
 import io.ktor.server.response.respond
+import io.ktor.server.auth.jwt.JWTPrincipal
 import io.ktor.server.routing.*
 import kotlinx.serialization.Serializable
 import java.util.UUID
+import java.math.BigDecimal
 
 @Serializable
 data class ServiceAdminView(
@@ -25,6 +31,12 @@ data class ServiceAdminView(
 
 @Serializable
 data class CreateServiceRequest(val name: String)
+
+@Serializable
+data class CreateServiceAdjustmentRequest(val type: String, val amount: Double, val reason: String)
+
+@Serializable
+data class ServiceAdjustmentView(val id: String, val projectId: String, val serviceId: String, val type: String, val amount: Double, val reason: String, val actor: String, val createdAt: String)
 
 @Serializable
 data class UpdateServiceRequest(
@@ -109,6 +121,31 @@ fun Application.configureServiceAdminRoutes() {
                 val service = ServiceRepository.findByProjectAndId(projectId, serviceId)
                     ?: return@get call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
                 call.respond(service.toView())
+            }
+
+            post("/api/admin/projects/{projectId}/services/{serviceId}/adjustments") {
+                val (projectId, serviceId) = call.serviceCoordinates() ?: return@post
+                val service = ServiceRepository.findByProjectAndId(projectId, serviceId)
+                    ?: return@post call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
+                val body = runCatching { call.receive<CreateServiceAdjustmentRequest>() }.getOrNull()
+                    ?: return@post call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid service adjustment request")
+                val type = runCatching { AdjustmentType.valueOf(body.type.trim().uppercase()) }.getOrNull()
+                    ?: return@post call.respondError(HttpStatusCode.BadRequest, "invalid_adjustment_type", "type must be ADDITIONAL_CHARGE or DISCOUNT")
+                val amount = runCatching { BigDecimal.valueOf(body.amount) }.getOrNull()
+                if (amount == null || amount <= BigDecimal.ZERO) return@post call.respondError(HttpStatusCode.BadRequest, "invalid_adjustment_amount", "amount must be greater than zero")
+                if (body.reason.isBlank()) return@post call.respondError(HttpStatusCode.BadRequest, "invalid_adjustment_reason", "reason is required")
+                if (body.reason.length > 500) return@post call.respondError(HttpStatusCode.BadRequest, "invalid_adjustment_reason", "reason must be at most 500 characters")
+                val invoice = ScribedIntegrationClient.serviceInvoiceStatus(serviceId.toString())
+                if (invoice.status == HttpStatusCode.NotFound) {
+                    return@post call.respondError(HttpStatusCode.Conflict, "service_invoice_required", "Create a service invoice in Scribed before adding service charges")
+                }
+                if (invoice.body == null) return@post call.respondError(HttpStatusCode.BadGateway, "invoice_integration_unavailable", "The service invoice could not be checked")
+                val actor = call.principal<JWTPrincipal>()?.payload?.subject ?: "unknown"
+                val adjustment = try { ProjectAdjustmentRepository.create(projectId, type, amount, body.reason, actor, serviceId) }
+                    catch (e: IllegalArgumentException) { return@post call.respondError(HttpStatusCode.BadRequest, "invalid_adjustment", e.message ?: "Invalid adjustment") }
+                AuditRepository.write(projectId, "service_adjustment", actor, "service=${service.name} ${type.name} amount=$amount reason=${body.reason.trim()}")
+                ScribedIntegrationClient.notifyServiceLedger(serviceId, "adjustment-${adjustment.id}")
+                call.respond(HttpStatusCode.Created, ServiceAdjustmentView(adjustment.id.toString(), projectId.toString(), serviceId.toString(), type.name, amount.toDouble(), adjustment.reason, actor, adjustment.createdAt.toString()))
             }
 
             patch("/api/admin/projects/{projectId}/services/{serviceId}") {

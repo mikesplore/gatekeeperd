@@ -270,6 +270,10 @@ List project services or create one with `{ "name": "frontend" }`. Service names
 
 Read, update, or delete a service. PATCH accepts `name`, `accessStatus` (`active`, `blocked`, or `manual_block`), and the compatibility `blockReason` text. Structured blocks accept `blockReasonCode` (`payment`, `manual_hold`, `abuse_tos`, `suspended_by_request`, or `other`) and optional `blockReasonNote`. Responses include these reason fields. Setting access to `active` clears the reason and note. The default service cannot be renamed or deleted. Services with deployment, environment, or site history cannot be deleted.
 
+#### POST /api/admin/projects/{projectId}/services/{serviceId}/adjustments
+
+Add a service-scoped charge or discount with `{ "type": "ADDITIONAL_CHARGE", "amount": 500.00, "reason": "Added reporting feature" }`. The service must already have a Scribed service invoice; otherwise the API returns `409 service_invoice_required`. The adjustment is stored against that service and synchronized to its invoice, leaving sibling service and project-level balances unchanged. The operation writes a `service_adjustment` audit entry.
+
 #### GET, PUT /api/admin/projects/{projectId}/services/{serviceId}/environment?environment={name}
 
 GET returns version metadata and the desired configuration's service and shared set references, with key names only. PUT accepts `{ "environment": "production", "values": { "KEY": "value" }, "sharedEnvironmentSetId": "<uuid>", "sharedEnvironmentSetVersion": 2 }`; both shared-reference fields may be null to unpin shared variables. It writes an encrypted immutable service version, saves the selected shared-set pin, and queues that service's deployment in one transaction. Values are write-only; the response contains the service set/version and deployment IDs.
@@ -430,6 +434,8 @@ Create a Scribed invoice for a project that does not already have one.
 ```
 
 Gatekeeperd supplies the project billing contact, current invoice total, currency, and due date from its project ledger. Scribed creates or links the invoice; Gatekeeperd then queues a ledger sync and replays successful payments so prior adjustments are reflected and missing receipts are generated. Verified payments also bootstrap a missing Scribed invoice automatically.
+
+Service adjustments are synchronized through Scribed's authenticated `POST /integrations/gatekeeper/services/{service_id}/adjustments` endpoint. It updates only the invoice linked to that service and applies adjustment IDs idempotently.
 
 ### GET /api/admin/projects/{slug}/invoice/download
 Download the current Scribed invoice PDF. If no invoice exists yet, Gatekeeperd creates or links one and queues a ledger/payment sync before returning the PDF.

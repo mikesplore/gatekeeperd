@@ -2,6 +2,7 @@ package com.gatekeeper.db.repositories
 
 import com.gatekeeper.db.tables.AdjustmentType
 import com.gatekeeper.db.tables.ProjectAdjustments
+import com.gatekeeper.db.tables.Services
 import java.math.BigDecimal
 import java.time.LocalDateTime
 import java.util.UUID
@@ -16,6 +17,7 @@ object ProjectAdjustmentRepository {
     data class AdjustmentRecord(
         val id: UUID,
         val projectId: UUID,
+        val serviceId: UUID?,
         val type: AdjustmentType,
         val amount: BigDecimal,
         val reason: String,
@@ -23,15 +25,19 @@ object ProjectAdjustmentRepository {
         val createdAt: LocalDateTime
     )
 
-    fun create(projectId: UUID, type: AdjustmentType, amount: BigDecimal, reason: String, actor: String): AdjustmentRecord {
+    fun create(projectId: UUID, type: AdjustmentType, amount: BigDecimal, reason: String, actor: String, serviceId: UUID? = null): AdjustmentRecord {
         require(amount > BigDecimal.ZERO) { "Adjustment amount must be greater than zero" }
         require(reason.isNotBlank()) { "Adjustment reason is required" }
         require(actor.isNotBlank()) { "Adjustment actor is required" }
         return transaction {
+            if (serviceId != null) require(Services.selectAll().where { (Services.id eq serviceId) and (Services.projectId eq projectId) }.count() == 1L) {
+                "Service does not belong to project"
+            }
             val id = UUID.randomUUID()
             ProjectAdjustments.insert {
                 it[ProjectAdjustments.id] = id
                 it[ProjectAdjustments.projectId] = projectId
+                it[ProjectAdjustments.serviceId] = serviceId
                 it[ProjectAdjustments.type] = type
                 it[ProjectAdjustments.amount] = amount
                 it[ProjectAdjustments.reason] = reason.trim()
@@ -44,12 +50,24 @@ object ProjectAdjustmentRepository {
     fun totalForProject(projectId: UUID, type: AdjustmentType): BigDecimal = transaction {
         ProjectAdjustments
             .select(ProjectAdjustments.amount)
-            .where { (ProjectAdjustments.projectId eq projectId) and (ProjectAdjustments.type eq type) }
+            .where { (ProjectAdjustments.projectId eq projectId) and ProjectAdjustments.serviceId.isNull() and (ProjectAdjustments.type eq type) }
             .fold(BigDecimal.ZERO) { total, row -> total + row[ProjectAdjustments.amount] }
     }
 
     fun findByProjectId(projectId: UUID): List<AdjustmentRecord> = transaction {
-        ProjectAdjustments.selectAll().where { ProjectAdjustments.projectId eq projectId }
+        ProjectAdjustments.selectAll().where { (ProjectAdjustments.projectId eq projectId) and ProjectAdjustments.serviceId.isNull() }
+            .orderBy(ProjectAdjustments.createdAt, org.jetbrains.exposed.sql.SortOrder.DESC)
+            .map { it.toRecord() }
+    }
+
+    fun totalForService(serviceId: UUID, type: AdjustmentType): BigDecimal = transaction {
+        ProjectAdjustments.select(ProjectAdjustments.amount)
+            .where { (ProjectAdjustments.serviceId eq serviceId) and (ProjectAdjustments.type eq type) }
+            .fold(BigDecimal.ZERO) { total, row -> total + row[ProjectAdjustments.amount] }
+    }
+
+    fun findByServiceId(serviceId: UUID): List<AdjustmentRecord> = transaction {
+        ProjectAdjustments.selectAll().where { ProjectAdjustments.serviceId eq serviceId }
             .orderBy(ProjectAdjustments.createdAt, org.jetbrains.exposed.sql.SortOrder.DESC)
             .map { it.toRecord() }
     }
@@ -57,6 +75,7 @@ object ProjectAdjustmentRepository {
     private fun org.jetbrains.exposed.sql.ResultRow.toRecord() = AdjustmentRecord(
         id = this[ProjectAdjustments.id],
         projectId = this[ProjectAdjustments.projectId],
+        serviceId = this[ProjectAdjustments.serviceId],
         type = this[ProjectAdjustments.type],
         amount = this[ProjectAdjustments.amount],
         reason = this[ProjectAdjustments.reason],

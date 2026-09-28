@@ -7,6 +7,7 @@ import com.gatekeeper.db.tables.DeploymentExecutions
 import com.gatekeeper.db.tables.DeploymentJobs
 import com.gatekeeper.db.tables.Deployments
 import com.gatekeeper.db.tables.ProjectSecretSetVersions
+import com.gatekeeper.db.tables.ProjectAdjustments
 import com.gatekeeper.db.tables.Sites
 import com.gatekeeper.plugins.RedisService
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
@@ -118,6 +119,7 @@ object ServiceRepository {
             DeploymentJobs.selectAll().where { DeploymentJobs.serviceId eq id }.count() > 0L ||
             Deployments.selectAll().where { Deployments.serviceId eq id }.count() > 0L ||
             ProjectSecretSetVersions.selectAll().where { ProjectSecretSetVersions.serviceId eq id }.count() > 0L ||
+            ProjectAdjustments.selectAll().where { ProjectAdjustments.serviceId eq id }.count() > 0L ||
             Sites.selectAll().where { Sites.serviceId eq id }.count() > 0L
         if (inUse) return@transaction false
         Services.deleteWhere { (Services.projectId eq projectId) and (Services.id eq id) } > 0
