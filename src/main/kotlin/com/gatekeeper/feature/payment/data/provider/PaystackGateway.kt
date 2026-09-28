@@ -18,7 +18,7 @@ class PaystackGateway : PaymentGateway {
         if (base.isBlank()) return Result.failure(IllegalStateException("GATEKEEPER_PUBLIC_URL is not configured"))
         return PaystackClient.initializePaymentWithReference(
             email, command.amount, command.projectSlug, command.currency,
-            command.callbackUrl ?: "$base/api/gate/payment/callback?project=${command.projectSlug}"
+            command.callbackUrl ?: "$base/api/gate/payment/callback?project=${command.projectSlug}", command.serviceId
         ).map { (reference, url) -> InitiatedPayment(reference, url) }
     }
 

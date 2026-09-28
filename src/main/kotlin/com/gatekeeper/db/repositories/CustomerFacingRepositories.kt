@@ -15,6 +15,7 @@ interface ProjectQueryRepository {
 
 data class GateTarget(
     val project: ProjectRepository.ProjectRecord,
+    val serviceId: UUID,
     val siteDomain: String,
     val siteSlug: String,
     val serviceName: String,
@@ -52,6 +53,7 @@ class ExposedProjectQueryRepository : ProjectQueryRepository {
         val service = ServiceRepository.findAccessById(serviceId) ?: return null
         return GateTarget(
             project = project,
+            serviceId = service.id,
             siteDomain = site?.domain ?: project.domain,
             siteSlug = site?.projectSlug ?: project.slug,
             serviceName = service.name,

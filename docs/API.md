@@ -115,12 +115,12 @@ Reason-specific HTML block page for blocked clients. The site's domain resolves 
 
 **Response:** `402 Payment Required`, `Content-Type: text/html`
 
-### GET /api/gate/pay?project={slug}&amount={amount}
-Public payment initiation for a suspended project. Creates a Paystack checkout session and redirects the browser to Paystack. `amount` is optional; when omitted, Gatekeeper requests the full available balance. A requested amount must be greater than zero and no more than the available balance after pending payments.
+### GET /api/gate/pay?project={slug}[&serviceId={uuid}][&amount={amount}]
+Public payment initiation. For a single-service project, this uses the existing project balance. For a multi-service project, `serviceId` is required and the balance is read from that service’s linked invoice; the default is its full available balance. A requested amount must be greater than zero and no more than the available balance after pending payments. The multi-service paywall lists each service with an outstanding invoice and provides separate Paystack and M-Pesa actions.
 
 **Response:** `302` redirect to Paystack, or `4xx/5xx` JSON error if Paystack is not configured.
 
-**Requires:** project is blocked, `amount_due` and `client_email` set, `PAYSTACK_SECRET_KEY` and `GATEKEEPER_PUBLIC_URL` in env.
+**Requires:** billing email and payment provider configuration. Project-wide checkout is rejected for public multi-service projects unless a service is selected.
 
 ### GET /api/gate/payment/callback?project={slug}&reference={ref}
 Paystack browser return URL after payment. Redirects the browser to the project domain. Project activation is handled by the Paystack webhook.
@@ -1111,7 +1111,7 @@ Delete a Docker image from the local Docker host.
 
 ### M-Pesa
 
-`POST /api/mpesa/pay?project={slug}&phone={msisdn}&amount={amount}` starts an M-Pesa STK Push and returns `202` with a pending provider reference. Kenyan mobile numbers may use `07XXXXXXXX`, `01XXXXXXXX`, `2547XXXXXXXX`, `2541XXXXXXXX`, or `+254...` format; Gatekeeperd normalizes them to `254...` before sending them to Daraja. `amount` is optional and defaults to the full available balance; partial requests must be whole KES amounts and cannot exceed the available balance after pending payments. `POST /api/mpesa/callback` receives the Daraja callback. M-Pesa payments are stored and reconciled through the same payment application and reconciliation service as Paystack.
+`POST /api/mpesa/pay?project={slug}[&serviceId={uuid}]&phone={msisdn}[&amount={amount}]` starts an M-Pesa STK Push and returns `202` with a pending provider reference. On multi-service projects, `serviceId` is required and the balance is isolated to that service invoice. Kenyan mobile numbers may use `07XXXXXXXX`, `01XXXXXXXX`, `2547XXXXXXXX`, `2541XXXXXXXX`, or `+254...` format; Gatekeeperd normalizes them to `254...` before sending them to Daraja. `amount` defaults to the selected balance; partial requests must be whole KES amounts and cannot exceed the available balance after pending payments. `POST /api/mpesa/callback` receives the Daraja callback. M-Pesa payments are stored and reconciled through the same payment application and reconciliation service as Paystack.
 
 Required configuration: `MPESA_CONSUMER_KEY`, `MPESA_CONSUMER_SECRET`, `MPESA_SHORT_CODE`, `MPESA_PASSKEY`, `MPESA_CALLBACK_URL`, and `MPESA_ENVIRONMENT` (`sandbox` or `production`).
 

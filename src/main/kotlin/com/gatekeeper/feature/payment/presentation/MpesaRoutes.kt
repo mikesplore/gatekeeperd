@@ -26,8 +26,14 @@ fun Application.configureMpesaRoutes() {
                 call.respondError(HttpStatusCode.BadRequest, "invalid_payment_amount", "M-Pesa payment amount must be a whole KES amount")
                 return@post
             }
+            val serviceIdText = call.request.queryParameters["serviceId"]
+            val serviceId = serviceIdText?.let { runCatching { java.util.UUID.fromString(it) }.getOrNull() }
+            if (serviceIdText != null && serviceId == null) {
+                call.respondError(HttpStatusCode.BadRequest, "invalid_service_id", "A valid service ID is required")
+                return@post
+            }
             val initiated = call.application.get<InitiatePayment>()(
-                InitiatePayment.Command("mpesa", slug.orEmpty(), amount, phone = phone, currency = "KES")
+                InitiatePayment.Command("mpesa", slug.orEmpty(), amount, phone = phone, currency = "KES", serviceId = serviceId)
             )
             initiated.fold(
                 onSuccess = { result -> call.respond(HttpStatusCode.Accepted, mapOf("provider" to "mpesa", "reference" to result.reference, "status" to "pending")) },

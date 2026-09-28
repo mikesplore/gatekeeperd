@@ -28,7 +28,7 @@ import com.gatekeeper.db.tables.AdjustmentType
 import io.ktor.client.statement.bodyAsText
 
 @Serializable data class ScribedSuspensionPayload(val project_id: String, val project_slug: String, val status: String, val reason: String, val occurred_at: String)
-@Serializable data class ScribedPaymentPayload(val project_id: String, val project_slug: String, val provider: String, val provider_reference: String, val amount: String, val currency: String, val paid_at: String, val status: String = "success")
+@Serializable data class ScribedPaymentPayload(val project_id: String, val project_slug: String, val provider: String, val provider_reference: String, val amount: String, val currency: String, val paid_at: String, val status: String = "success", val service_id: String? = null)
 @Serializable data class ScribedLedgerAdjustment(val id: String, val type: String, val amount: String, val reason: String, val actor: String)
 @Serializable data class ScribedLedgerPayload(val project_id: String, val project_slug: String, val ledger_version: String, val base_amount: String, val additional_charges: String, val discounts: String, val successful_payments: String, val outstanding_balance: String, val currency: String, val adjustments: List<ScribedLedgerAdjustment>)
 @Serializable data class ScribedInvoiceEmailPayload(val invoice_id: Long)
@@ -237,10 +237,11 @@ object ScribedIntegrationClient {
         }
     }
 
-    fun notifyPayment(project: ProjectRepository.ProjectRecord, provider: String, reference: String, amount: String, currency: String, paidAt: String) {
+    fun notifyPayment(project: ProjectRepository.ProjectRecord, provider: String, reference: String, amount: String, currency: String, paidAt: String, serviceId: java.util.UUID? = null) {
         val base = AppConfig.scribedCallbackUrl.trim().trimEnd('/'); val secret = AppConfig.scribedIntegrationSecret.trim()
         if (base.isBlank() || secret.isBlank()) return
-        IntegrationOutboxRepository.enqueue("payment", "payment:${project.id}:$provider:$reference", json.encodeToString(ScribedPaymentPayload(project.id.toString(), project.slug, provider, reference, amount, currency, paidAt)))
+        val ownerKey = serviceId?.toString() ?: project.id.toString()
+        IntegrationOutboxRepository.enqueue("payment", "payment:$ownerKey:$provider:$reference", json.encodeToString(ScribedPaymentPayload(project.id.toString(), project.slug, provider, reference, amount, currency, paidAt, service_id = serviceId?.toString())))
     }
 
     fun notifyLedger(project: ProjectRepository.ProjectRecord, ledgerVersion: String, balances: ProjectBalanceAdapter) {
@@ -308,6 +309,16 @@ object ScribedIntegrationClient {
             }.getOrNull() ?: return false
             val projectUuid = runCatching { java.util.UUID.fromString(projectId) }.getOrNull() ?: return false
             val project = ProjectRepository.findById(projectUuid) ?: return false
+            val serviceId = if (event.eventType == "payment") runCatching {
+                json.decodeFromString<ScribedPaymentPayload>(event.payload).service_id
+            }.getOrNull() else null
+            if (serviceId != null) {
+                val serviceInvoice = serviceInvoiceStatus(serviceId)
+                if (serviceInvoice.status == HttpStatusCode.NotFound || serviceInvoice.body == null) {
+                    logger.warn("Scribed service invoice is unavailable before payment delivery service={}", serviceId)
+                    return false
+                }
+            } else {
             val beforeEnsure = invoiceStatus(projectId)
             if (beforeEnsure.status == HttpStatusCode.NotFound) {
                 if (!ensureInvoice(project, balances)) return false
@@ -315,6 +326,7 @@ object ScribedIntegrationClient {
             } else if (beforeEnsure.body == null) {
                 logger.warn("Scribed invoice check failed before ${event.eventType} delivery project=${project.id}: status=${beforeEnsure.status}, error=${beforeEnsure.error}")
                 return false
+            }
             }
         }
         if (event.eventType == "invoice_email") {

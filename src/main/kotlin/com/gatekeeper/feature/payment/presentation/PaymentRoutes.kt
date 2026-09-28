@@ -27,8 +27,13 @@ fun Application.configurePaymentRoutes() {
             if (amountText != null && amount == null) {
                 return@get call.respondError(HttpStatusCode.BadRequest, "invalid_payment_amount", "Payment amount must be a valid number")
             }
+            val serviceIdText = call.request.queryParameters["serviceId"]
+            val serviceId = serviceIdText?.let { runCatching { java.util.UUID.fromString(it) }.getOrNull() }
+            if (serviceIdText != null && serviceId == null) {
+                return@get call.respondError(HttpStatusCode.BadRequest, "invalid_service_id", "A valid service ID is required")
+            }
             call.application.get<InitiatePayment>()(
-                InitiatePayment.Command("paystack", slug, amount, currency = "", requireSuspendedProject = true)
+                InitiatePayment.Command("paystack", slug, amount, currency = "", requireSuspendedProject = true, serviceId = serviceId)
             ).fold(
                 onSuccess = { initiated ->
                     call.respondRedirect(

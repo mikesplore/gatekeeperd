@@ -40,6 +40,7 @@ class GateService(
             project = project,
             financials = projectBalances.financials(project),
             domain = target.siteDomain,
+            serviceId = target.serviceId,
             serviceName = target.serviceName,
             blockReasonCode = reasonCode,
             blockReasonNote = resolvedNote,

@@ -15,7 +15,8 @@ data class InitiatePaymentCommand(
     val phone: String? = null,
     val amount: BigDecimal,
     val currency: String,
-    val callbackUrl: String? = null
+    val callbackUrl: String? = null,
+    val serviceId: java.util.UUID? = null
 )
 
 data class InitiatedPayment(val reference: String, val authorizationUrl: String? = null)

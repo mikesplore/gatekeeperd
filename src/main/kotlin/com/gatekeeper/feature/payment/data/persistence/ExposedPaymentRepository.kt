@@ -104,8 +104,17 @@ class ExposedPaymentRepository : PaymentRepository {
             .orderBy(Payments.createdAt).map { it.toDomain() }
     }
 
+    override fun findPendingByServiceId(serviceId: UUID): List<Payment> = transaction {
+        Payments.selectAll().where { (Payments.serviceId eq serviceId) and (Payments.gatewayStatus eq "pending") }
+            .orderBy(Payments.createdAt).map { it.toDomain() }
+    }
+
     override fun successfulAmountForProject(projectId: UUID): BigDecimal = sumForProject(projectId, "success")
     override fun pendingAmountForProject(projectId: UUID): BigDecimal = sumForProject(projectId, "pending")
+    override fun pendingAmountForServiceId(serviceId: UUID): BigDecimal = transaction {
+        Payments.select(Payments.amount).where { (Payments.serviceId eq serviceId) and (Payments.gatewayStatus eq "pending") }
+            .fold(BigDecimal.ZERO) { total, row -> total + row[Payments.amount] }
+    }
 
     private fun sumForProject(projectId: UUID, status: String): BigDecimal = transaction {
         Payments.select(Payments.amount).where { (Payments.projectId eq projectId) and (Payments.gatewayStatus eq status) }

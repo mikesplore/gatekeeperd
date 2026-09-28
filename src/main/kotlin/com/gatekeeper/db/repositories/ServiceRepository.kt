@@ -166,6 +166,22 @@ object ServiceRepository {
         return updated > 0
     }
 
+    /** Clear only a payment-coded service block after its linked invoice is paid. */
+    fun clearAutoBlockForPayment(id: UUID): Boolean {
+        val updated = transaction {
+            Services.update({
+                (Services.id eq id) and (Services.accessStatus eq "blocked") and (Services.blockReasonCode eq AccessBlockReason.PAYMENT)
+            }) {
+                it[Services.accessStatus] = "active"
+                it[Services.blockReason] = null
+                it[Services.blockReasonCode] = null
+                it[Services.blockReasonNote] = null
+            }
+        }
+        if (updated > 0) SiteRepository.findGateSlugsByServiceId(id).forEach(::invalidateGateCache)
+        return updated > 0
+    }
+
     private fun invalidateGateCache(slug: String) {
         try {
             RedisService.delete("project:status:$slug")

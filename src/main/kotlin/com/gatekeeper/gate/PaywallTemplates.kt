@@ -8,13 +8,29 @@ import com.gatekeeper.db.tables.AccessBlockReason
 import java.math.BigDecimal
 import java.util.Base64
 import java.time.format.DateTimeFormatter
+import java.time.LocalDate
+import java.util.UUID
 
 object PaywallTemplates {
+
+    data class ServiceInvoiceDue(
+        val serviceId: UUID,
+        val serviceName: String,
+        val amountDue: BigDecimal,
+        val currency: String,
+        val dueDate: LocalDate?
+    )
 
     private val dateFormatter = DateTimeFormatter.ofPattern("MMMM d, yyyy")
     private val illustrationDataUri: String = loadIllustrationDataUri()
 
-    fun htmlBlockWall(info: PaywallInfo, payEnabled: Boolean, paymentMethods: PaymentMethodAvailability): String {
+    fun htmlBlockWall(
+        info: PaywallInfo,
+        payEnabled: Boolean,
+        paymentMethods: PaymentMethodAvailability,
+        serviceInvoices: List<ServiceInvoiceDue> = emptyList(),
+        serviceBillingMode: Boolean = false
+    ): String {
         val amountLabel = formatAmount(info.amountDue, info.currency)
         val amountValue = info.amountDue?.stripTrailingZeros()?.toPlainString().orEmpty()
         val dueLabel = info.dueDate?.format(dateFormatter)
@@ -67,6 +83,35 @@ object PaywallTemplates {
             else -> null
         }
         val showPayButton = paymentBlock && payEnabled && payDisabledReason == null
+        val serviceBillingSection = if (serviceInvoices.isEmpty()) {
+            "<p class=\"helper\">No outstanding service invoices were found. Contact support if you believe this is incorrect.</p>"
+        } else serviceInvoices.joinToString(separator = "") { invoice ->
+            val serviceParam = "&serviceId=${encode(invoice.serviceId.toString())}"
+            val servicePayUrl = "/api/gate/pay?project=${encode(info.slug)}$serviceParam"
+            val serviceMpesaUrl = "/api/mpesa/pay?project=${encode(info.slug)}$serviceParam"
+            val due = invoice.dueDate?.format(dateFormatter)?.let { "<span class=\"due\">Due ${escapeHtml(it)}</span>" }.orEmpty()
+            val payButtons = buildString {
+                val canPaystack = paystackAvailable && !info.customerEmail.isNullOrBlank() && AppConfig.publicBaseUrl.isNotBlank()
+                if (canPaystack && payEnabled) append("<a class=\"btn\" href=\"$servicePayUrl\">Pay ${escapeHtml(invoice.serviceName)} with Paystack</a>")
+                else if (paystackAvailable && payEnabled && info.customerEmail.isNullOrBlank()) append("<p class=\"helper helper-error\">Paystack is unavailable because no billing email is configured.</p>")
+                if (mpesaAvailable && payEnabled) {
+                    val serviceKey = invoice.serviceId.toString()
+                    append("""<div class="service-mpesa">
+                        <label class="label" for="phone-$serviceKey">M-Pesa phone number</label>
+                        <input id="phone-$serviceKey" class="input" type="tel" inputmode="tel" placeholder="2547XXXXXXXX">
+                        <button type="button" class="btn" onclick="payServiceWithMpesa('$serviceMpesaUrl','${invoice.amountDue.stripTrailingZeros().toPlainString()}','phone-$serviceKey','message-$serviceKey')">Pay ${escapeHtml(invoice.serviceName)} with M-Pesa</button>
+                        <p id="message-$serviceKey" class="helper"></p>
+                    </div>""")
+                }
+                if (!payEnabled || (!canPaystack && !mpesaAvailable)) append("<p class=\"helper helper-error\">Online payment is currently unavailable. Contact support.</p>")
+            }
+            """<div class="amount service-invoice">
+                <span class="label">${escapeHtml(invoice.serviceName)}</span>
+                <strong>${escapeHtml(formatAmount(invoice.amountDue, invoice.currency))}</strong>
+                $due
+                $payButtons
+            </div>"""
+        }
 
         return pageShell(
             title = escapeHtml(presentation.title),
@@ -84,7 +129,11 @@ object PaywallTemplates {
                 <p class="domain">Reason set at: ${if (info.reasonSource == "project") "project" else "service"} level</p>
                 <p class="summary">${escapeHtml(presentation.summary)}</p>
                 ${info.blockReasonNote?.takeIf { it.isNotBlank() }?.let { "<p class=\"helper\">${escapeHtml(it)}</p>" }.orEmpty()}
-                ${if (paymentBlock) """
+                ${if (serviceBillingMode) """
+                <h2 class="section-title">Outstanding service invoices</h2>
+                <p class="helper">Each service has a separate balance. Paying one service will not pay or unblock another.</p>
+                $serviceBillingSection
+                """ else if (paymentBlock) """
                 <div class="amount">
                     <span class="label">Amount due</span>
                     <strong>$amountLabel</strong>
@@ -171,6 +220,18 @@ async function payWithMpesa() {
     message.textContent = 'Sending payment prompt…';
     try {
         var response = await fetch(form.dataset.url + '&phone=' + encodeURIComponent(phone), { method: 'POST' });
+        if (!response.ok) throw new Error('Unable to initiate payment');
+        message.textContent = 'Check your phone and approve the M-Pesa prompt.';
+    } catch (error) { message.textContent = error.message; }
+}
+async function payServiceWithMpesa(baseUrl, amount, phoneId, messageId) {
+    var phone = document.getElementById(phoneId).value.trim();
+    var message = document.getElementById(messageId);
+    if (!Number.isInteger(Number(amount))) { message.textContent = 'M-Pesa payments must be a whole KES amount.'; return; }
+    if (!phone) { message.textContent = 'Enter your M-Pesa phone number.'; return; }
+    message.textContent = 'Sending payment prompt…';
+    try {
+        var response = await fetch(baseUrl + '&amount=' + encodeURIComponent(amount) + '&phone=' + encodeURIComponent(phone), { method: 'POST' });
         if (!response.ok) throw new Error('Unable to initiate payment');
         message.textContent = 'Check your phone and approve the M-Pesa prompt.';
     } catch (error) { message.textContent = error.message; }
@@ -272,6 +333,11 @@ if (document.getElementById('payment-method')) {
             line-height: 1.1;
             color: #111827;
         }
+        .section-title { margin: 1rem 0 0.25rem; font-size: 1.1rem; }
+        .service-invoice { margin-top: 0.85rem; }
+        .service-invoice strong { font-size: 1.55rem; }
+        .service-invoice .btn { margin-top: 0.65rem; }
+        .service-mpesa { display: grid; gap: 0.5rem; margin-top: 0.85rem; }
         .due {
             font-size: 0.875rem;
             color: #4b5563;

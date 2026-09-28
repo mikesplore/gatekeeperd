@@ -4,6 +4,7 @@ import com.gatekeeper.feature.payment.domain.gateway.InitiatePaymentCommand
 import com.gatekeeper.feature.payment.domain.gateway.PaymentGateway
 import com.gatekeeper.feature.payment.domain.repository.PaymentRepository
 import com.gatekeeper.feature.payment.domain.model.MpesaPhoneNumber
+import com.gatekeeper.db.repositories.ServiceRepository
 import java.math.BigDecimal
 import java.util.UUID
 
@@ -16,14 +17,20 @@ class InitiatePayment(
     suspend operator fun invoke(command: Command): Result<PaymentInitiation> = runCatching {
         if (command.projectSlug.isBlank()) invalid("missing_payment_details", "project is required")
         val project = projects.find(command.projectSlug) ?: fail("project_not_found", "Project not found", FailureKind.NOT_FOUND)
-        if (command.requireSuspendedProject && project.status?.lowercase() !in setOf("blocked", "manual_block")) {
+        val service = command.serviceId?.let { serviceId -> ServiceRepository.findByProjectAndId(project.id, serviceId) }
+        if (command.serviceId != null && service == null) fail("service_not_found", "Service not found for this project", FailureKind.NOT_FOUND)
+        if (command.serviceId == null && (command.requireSuspendedProject || command.provider.equals("mpesa", ignoreCase = true)) &&
+            balance.requiresServiceScope(project.id)) {
+            invalid("service_required", "Choose a service to pay for this multi-service project")
+        }
+        if (command.requireSuspendedProject && command.serviceId == null && project.status?.lowercase() !in setOf("blocked", "manual_block")) {
             invalid("project_active", "This project is not suspended")
         }
         if (command.currency.isNotBlank() && !project.currency.equals(command.currency, ignoreCase = true)) invalid("invalid_payment_amount", "Unsupported payment currency")
         val gateway = gateways[command.provider.lowercase()]
             ?: fail("payment_unavailable", "Payment provider is unavailable", FailureKind.PROVIDER_UNAVAILABLE)
         val amount = try {
-            balance.availableAmount(project.id, command.requestedAmount)
+            balance.availableAmount(project.id, command.requestedAmount, command.serviceId)
         } catch (error: IllegalArgumentException) {
             invalid("invalid_payment_amount", error.message ?: "Invalid payment amount")
         } catch (error: IllegalStateException) {
@@ -40,11 +47,11 @@ class InitiatePayment(
                 ?: invalid("invalid_mpesa_phone", "Enter a valid Kenyan mobile number, such as 0712345678 or 254712345678")
         } else command.phone
         val initiated = gateway.initiate(
-            InitiatePaymentCommand(project.id, project.slug, command.email ?: project.customerEmail, phone, amount, project.currency, command.callbackUrl)
+            InitiatePaymentCommand(project.id, project.slug, command.email ?: project.customerEmail, phone, amount, project.currency, command.callbackUrl, command.serviceId)
         ).getOrElse { error ->
             fail(if (gateway.provider == "mpesa") "mpesa_unavailable" else "paystack_error", error.message ?: "Payment provider could not initiate payment", FailureKind.PROVIDER_UNAVAILABLE)
         }
-        payments.create(project.id, gateway.provider, initiated.reference, amount, "pending", authorizationUrl = initiated.authorizationUrl)
+        payments.create(project.id, gateway.provider, initiated.reference, amount, "pending", authorizationUrl = initiated.authorizationUrl, serviceId = command.serviceId)
         PaymentInitiation(initiated.reference, initiated.authorizationUrl, amount)
     }
 
@@ -56,7 +63,8 @@ class InitiatePayment(
         val phone: String? = null,
         val currency: String,
         val callbackUrl: String? = null,
-        val requireSuspendedProject: Boolean = false
+        val requireSuspendedProject: Boolean = false,
+        val serviceId: UUID? = null
     )
 
     private fun invalid(code: String, message: String): Nothing =
@@ -86,4 +94,8 @@ data class PaymentProject(
 )
 
 interface PaymentProjectPort { fun find(slug: String): PaymentProject? }
-interface PaymentBalancePort { suspend fun availableAmount(projectId: UUID, requestedAmount: BigDecimal?): BigDecimal }
+interface PaymentBalancePort {
+    suspend fun availableAmount(projectId: UUID, requestedAmount: BigDecimal?): BigDecimal
+    suspend fun availableAmount(projectId: UUID, requestedAmount: BigDecimal?, serviceId: UUID?): BigDecimal = availableAmount(projectId, requestedAmount)
+    suspend fun requiresServiceScope(projectId: UUID): Boolean = false
+}
