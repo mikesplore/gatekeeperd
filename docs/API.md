@@ -292,7 +292,7 @@ Returns sectioned project state: `accessLifecycle`, `desiredConfiguration`, `cur
 
 ### GET /api/admin/projects/{slug}/deployments/history
 
-Returns canonical deployment history for a project (optional `environment`, default `production`). Optional `serviceId` filters the list to one service owned by the project. Each item includes source commit, image digest, trigger metadata, status, readiness result, failure reason, credential and secret-set ID/version references, and available `rollback`/`redeploy` actions. It never returns encrypted payloads or plaintext values. Actor is `null` until deployments store a separate authenticated actor field.
+Returns canonical deployment history for a project (optional `environment`, default `production`). Optional `serviceId` filters the list to one service owned by the project. Each item includes source commit, image digest, trigger metadata, status, readiness result, failure reason, credential and secret-set ID/version references, and available `rollback`/`redeploy` actions. Redeploy is available for active deployments and the latest failed attempt for each service. It never returns encrypted payloads or plaintext values. Actor is `null` until deployments store a separate authenticated actor field.
 
 ### POST /api/admin/projects/{projectId}/secret-sets/rotate-and-deploy
 

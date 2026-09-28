@@ -754,7 +754,7 @@ fun Application.configureProjectSetupAdminRoutes() {
                     ?: return@post call.respondError(HttpStatusCode.BadRequest, "invalid_deployment_id", "Invalid deployment ID")
                 val item = DeploymentApplicationService.deploymentHistory(project.id, "production").firstOrNull { it.id == id }
                     ?: return@post call.respondError(HttpStatusCode.NotFound, "deployment_not_found", "Deployment not found for project")
-                if (!item.canRedeploy) return@post call.respondError(HttpStatusCode.Conflict, "redeploy_unavailable", "Only the active deployment can be redeployed from project history")
+                if (!item.canRedeploy) return@post call.respondError(HttpStatusCode.Conflict, "redeploy_unavailable", "Only an active deployment or the latest failed attempt for a service can be redeployed")
                 val deploymentId = DeploymentJobRepository.redeployConfiguration(item.configurationId)
                     ?: return@post call.respondError(HttpStatusCode.Conflict, "redeploy_unavailable", "Deployment configuration could not be queued")
                 call.respond(HttpStatusCode.Accepted, ProjectSetupDeployResponse(deploymentId.toString()))

@@ -255,6 +255,8 @@ object DeploymentApplicationService {
             (Deployments.projectId eq projectId) and (Deployments.environment eq environment)
         }.toList().filter { serviceId == null || it[Deployments.serviceId] == serviceId }
             .sortedByDescending { it[Deployments.createdAt] }
+        val latestDeploymentByService = deployments.groupBy { it[Deployments.serviceId] }
+            .mapValues { (_, rows) -> rows.first()[Deployments.id] }
         deployments.mapNotNull { deployment ->
             val execution = com.gatekeeper.db.tables.DeploymentExecutions.selectAll()
                 .where { com.gatekeeper.db.tables.DeploymentExecutions.id eq deployment[Deployments.executionId] }
@@ -285,7 +287,10 @@ object DeploymentApplicationService {
                 deployment[Deployments.credentialSetId], deployment[Deployments.credentialSetVersion],
                 deployment[Deployments.secretSetId] ?: execution[com.gatekeeper.db.tables.DeploymentExecutions.secretSetId],
                 deployment[Deployments.secretSetVersion] ?: execution[com.gatekeeper.db.tables.DeploymentExecutions.secretSetVersion],
-                canRollback, status == DeploymentStatus.ACTIVE, deployment[Deployments.configurationId]
+                canRollback,
+                status == DeploymentStatus.ACTIVE ||
+                    status == DeploymentStatus.FAILED && latestDeploymentByService[deployment[Deployments.serviceId]] == targetId,
+                deployment[Deployments.configurationId]
             )
         }
     }
