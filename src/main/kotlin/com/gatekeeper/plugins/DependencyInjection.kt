@@ -12,6 +12,7 @@ import com.gatekeeper.feature.payment.data.persistence.PaymentEffectsAdapter
 import com.gatekeeper.feature.payment.data.persistence.PaymentProjectAdapter
 import com.gatekeeper.feature.payment.data.persistence.PaymentBalanceAdapter
 import com.gatekeeper.feature.payment.data.provider.PaymentProviderReadinessAdapter
+import com.gatekeeper.feature.payment.data.provider.JsonMpesaCallbackDecoder
 import com.gatekeeper.feature.payment.domain.repository.PaymentRepository as PaymentDomainRepository
 import com.gatekeeper.feature.payment.domain.repository.PaymentEventRepository as PaymentEventDomainRepository
 import com.gatekeeper.feature.payment.domain.usecase.ApplyWebhookEvent
@@ -22,6 +23,8 @@ import com.gatekeeper.feature.payment.domain.usecase.ProcessPaymentEvent
 import com.gatekeeper.feature.payment.domain.usecase.VerifyPayment
 import com.gatekeeper.feature.payment.domain.usecase.ListPaymentEvents
 import com.gatekeeper.feature.payment.domain.usecase.GetPaymentMethodAvailability
+import com.gatekeeper.feature.payment.domain.usecase.HandleMpesaCallback
+import com.gatekeeper.feature.payment.domain.usecase.MpesaCallbackDecoder
 import com.gatekeeper.feature.payment.domain.usecase.PaymentProviderReadiness
 import com.gatekeeper.feature.payment.data.provider.PaystackGateway
 import com.gatekeeper.feature.payment.data.provider.MpesaGateway
@@ -51,6 +54,8 @@ private val applicationModule = module {
     single { GetPaymentMethodAvailability(get()) }
     single { InitiatePayment(get(), get<PaymentProjectAdapter>(), get<PaymentBalanceAdapter>(), mapOf("paystack" to get(named("paystackGateway")), "mpesa" to get(named("mpesaGateway")))) }
     single { ProcessPaymentEvent(get(), get(), get<PaymentProjectAdapter>(), get()) }
+    single<MpesaCallbackDecoder> { JsonMpesaCallbackDecoder() }
+    single { HandleMpesaCallback(get(), get()) }
     single { ListPaymentEvents(get()) }
     single { VerifyPayment(mapOf("paystack" to get(named("paystackGateway")), "mpesa" to get(named("mpesaGateway"))), get()) }
     single { ReconcilePayments(get(), mapOf("paystack" to get(named("paystackGateway")), "mpesa" to get(named("mpesaGateway"))), get()) }

@@ -20,6 +20,8 @@ import com.gatekeeper.feature.payment.domain.usecase.PaymentBalancePort
 import com.gatekeeper.feature.payment.domain.usecase.PaymentProject
 import com.gatekeeper.feature.payment.domain.usecase.PaymentProjectPort
 import com.gatekeeper.feature.payment.domain.usecase.ProcessPaymentEvent
+import com.gatekeeper.feature.payment.domain.usecase.HandleMpesaCallback
+import com.gatekeeper.feature.payment.domain.usecase.MpesaCallbackData
 import com.gatekeeper.feature.payment.domain.usecase.GetPaymentMethodAvailability
 import com.gatekeeper.feature.payment.domain.usecase.PaymentProviderReadiness
 import java.math.BigDecimal
@@ -131,6 +133,25 @@ class PaymentUseCasesTest {
 
         assertEquals(ProcessPaymentEvent.Outcome.PROCESSED, useCase(command))
         assertEquals(ProcessPaymentEvent.Outcome.DUPLICATE, useCase(command))
+        assertEquals("success", repository.payment?.status)
+        assertEquals("processed", events.status)
+    }
+
+    @Test
+    fun `mpesa callback use case translates successful result and applies payment`() {
+        val repository = FakePaymentRepository(payment().copy(provider = "mpesa", reference = "checkout-1", providerReference = "checkout-1"))
+        val events = FakePaymentEventRepository()
+        val process = ProcessPaymentEvent(
+            repository, events,
+            object : PaymentProjectPort { override fun find(slug: String) = null },
+            ApplyWebhookEvent(repository, FakePaymentEffects())
+        )
+        val useCase = HandleMpesaCallback(
+            { MpesaCallbackData("checkout-1", 0, BigDecimal("20.00")) },
+            process
+        )
+
+        assertEquals(ProcessPaymentEvent.Outcome.PROCESSED, useCase("callback"))
         assertEquals("success", repository.payment?.status)
         assertEquals("processed", events.status)
     }

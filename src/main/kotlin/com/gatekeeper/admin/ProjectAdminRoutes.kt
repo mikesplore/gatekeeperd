@@ -690,9 +690,10 @@ fun Application.configureProjectAdminRoutes() {
                     },
                     onFailure = { err ->
                         logger.error("Failed to initialize payment for $slug", err)
+                        val failure = err as? InitiatePayment.PaymentInitiationFailure
                         call.respondError(
-                            if (err is IllegalArgumentException || err.message?.contains("balance", ignoreCase = true) == true) HttpStatusCode.BadRequest else HttpStatusCode.BadGateway,
-                            if (err is IllegalArgumentException || err.message?.contains("balance", ignoreCase = true) == true) "invalid_payment_amount" else "paystack_error",
+                            if (failure?.kind == InitiatePayment.FailureKind.INVALID_REQUEST) HttpStatusCode.BadRequest else HttpStatusCode.BadGateway,
+                            failure?.code ?: "paystack_error",
                             err.message ?: "Failed to initialize payment with Paystack"
                         )
                     }

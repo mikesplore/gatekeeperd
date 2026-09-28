@@ -136,9 +136,11 @@ fun Application.configureGateRoutes() {
             ).fold(
                 onSuccess = { result -> call.respondRedirect(result.authorizationUrl ?: "/api/gate/payment/callback?project=${project.slug}&reference=${result.reference}", permanent = false) },
                 onFailure = { err ->
+                    val failure = err as? InitiatePayment.PaymentInitiationFailure
+                    val invalidAmount = failure?.kind == InitiatePayment.FailureKind.INVALID_REQUEST
                     call.respondError(
-                        if (err.message?.contains("balance", ignoreCase = true) == true || err is IllegalArgumentException) HttpStatusCode.BadRequest else HttpStatusCode.BadGateway,
-                        if (err.message?.contains("balance", ignoreCase = true) == true || err is IllegalArgumentException) "invalid_payment_amount" else "payment_unavailable",
+                        if (invalidAmount) HttpStatusCode.BadRequest else HttpStatusCode.BadGateway,
+                        failure?.code ?: "payment_unavailable",
                         err.message ?: "Unable to start payment"
                     )
                 }
