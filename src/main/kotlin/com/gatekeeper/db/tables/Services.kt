@@ -9,6 +9,13 @@ object Services : Table("services") {
     val name = text("name")
     val accessStatus = text("access_status").default("active")
     val blockReason = text("block_reason").nullable()
+    val blockReasonCode = customEnumeration(
+        "block_reason_code",
+        "TEXT",
+        { value -> AccessBlockReason.entries.first { it.value == (value as String) } },
+        { it.value }
+    ).nullable()
+    val blockReasonNote = text("block_reason_note").nullable()
 
     override val primaryKey = PrimaryKey(id)
 

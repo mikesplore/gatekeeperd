@@ -82,7 +82,10 @@ Keep subsequent Phase 7 chunks independently reviewable and compatible with the 
 ### Chunk 8 — Access policy per service
 
 - Add service `access_status` and `block_reason` fields, independent of deployment/runtime health.
+- Extend the access-block model additively on both `projects` and `services`: add a nullable `block_reason_code` backed by the shared `access_block_reason` enum and a nullable free-text `block_reason_note`. Keep the existing free-text `block_reason` columns during compatibility; classify only recognized legacy values in the migration and preserve unrecognized values unchanged.
+- Supported reason codes are `payment`, `manual_hold`, `abuse_tos`, `suspended_by_request`, and `other`.
 - Gate checks resolve the requested project or site slug to its site, then its service, and compute effective access: a project billing block denies all services; otherwise that service's access status applies.
+- Resolve the wall's reason from the block that actually denies access: project reason code/note takes precedence whenever the project is blocked; otherwise use the blocked service's reason code/note. A service-only block must not affect sibling services.
 - Auto-blocking continues to set only the project billing block. It does not set service access status.
 - Invalidate cached decisions for affected project and site slugs when project or service access changes.
 - Scope deployment cutover, rollback, and gateway reconciliation to the service's site. Distinct sites use distinct nginx config slugs; rendered config includes stable site identity so reconciliation can distinguish multiple domains in one project.

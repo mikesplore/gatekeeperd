@@ -24,6 +24,13 @@ object Projects : Table("projects") {
         { it.value }
     ).default(ProjectStatus.ACTIVE)
     val blockReason = text("block_reason").nullable()
+    val blockReasonCode = customEnumeration(
+        "block_reason_code",
+        "TEXT",
+        { value -> AccessBlockReason.entries.first { it.value == (value as String) } },
+        { it.value }
+    ).nullable()
+    val blockReasonNote = text("block_reason_note").nullable()
     val deploymentMode = text("deployment_mode").default("developer_hosted")
     val serviceMode = text("service_mode").default("development")
     val lifecycleStatus = text("lifecycle_status").default("active")
