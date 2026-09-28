@@ -276,7 +276,7 @@ GET returns version metadata and the desired configuration's service and shared 
 
 #### GET /api/admin/projects/{projectId}/services/{serviceId}/active-deployment?environment={name}
 
-Returns the active deployment's image/commit metadata and its shared/service environment version references. Each resolved environment key includes its source (`project_shared` or `service`) and an HMAC-SHA-256 fingerprint of the key/value pair, allowing comparisons without returning values. No active deployment returns `404 active_deployment_not_found`.
+Returns the active deployment's container name, image/commit metadata, and its shared/service environment version references. Each resolved environment key includes its source (`project_shared` or `service`) and an HMAC-SHA-256 fingerprint of the key/value pair, allowing comparisons without returning values. No active deployment returns `404 active_deployment_not_found`.
 
 #### PUT /api/admin/project-setup/projects/{projectId}/domain-gateway
 

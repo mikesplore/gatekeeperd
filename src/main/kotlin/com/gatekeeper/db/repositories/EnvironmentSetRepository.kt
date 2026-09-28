@@ -45,6 +45,7 @@ object EnvironmentSetRepository {
 
     data class ActiveDeploymentInspection(
         val deploymentId: UUID,
+        val containerName: String?,
         val serviceId: UUID,
         val environment: String,
         val imageName: String,
@@ -143,7 +144,7 @@ object EnvironmentSetRepository {
             FingerprintedVariable(key, source, SecretValueCipher.fingerprint("$key\u0000$value"))
         }
         ActiveDeploymentInspection(
-            deployment[Deployments.id], serviceId, environment,
+            deployment[Deployments.id], deployment[Deployments.runtimeContainerName], serviceId, environment,
             execution[DeploymentExecutions.imageName], execution[DeploymentExecutions.imageTag],
             execution[DeploymentExecutions.imageDigest], execution[DeploymentExecutions.commitSha],
             deployment[Deployments.activeAt], sharedSetId, sharedVersion, serviceSetId, serviceVersion, variables
