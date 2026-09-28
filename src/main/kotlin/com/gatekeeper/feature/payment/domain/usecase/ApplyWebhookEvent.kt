@@ -27,7 +27,7 @@ class ApplyWebhookEvent(
         if (current == null) return false
         if (command.status == "reversed") effects.paymentReversed(current)
         payments.updateStatus(current.provider, current.providerReference, command.status, command.verifiedVia, command.paidAt, command.amount)
-        if (command.status == "success") effects.paymentSucceeded(current, amount, command.currency, command.paidAt)
+        if (command.status == "success") effects.paymentSucceeded(current, amount, command.currency, command.paidAt, command.actor)
         if (command.status == "failed" || command.status == "abandoned") effects.paymentFailed(current)
         return true
     }
@@ -41,13 +41,14 @@ class ApplyWebhookEvent(
         val currency: String? = null,
         val paidAt: LocalDateTime? = null,
         val projectId: UUID? = null,
-        val rawPayload: String? = null
+        val rawPayload: String? = null,
+        val actor: String = "system"
     )
 }
 
 interface PaymentEffects {
     fun acceptSuccessfulPayment(payment: com.gatekeeper.feature.payment.domain.model.Payment?, projectId: UUID, amount: BigDecimal, currency: String?): Boolean
-    fun paymentSucceeded(payment: com.gatekeeper.feature.payment.domain.model.Payment, amount: BigDecimal, currency: String?, paidAt: LocalDateTime?)
+    fun paymentSucceeded(payment: com.gatekeeper.feature.payment.domain.model.Payment, amount: BigDecimal, currency: String?, paidAt: LocalDateTime?, actor: String)
     fun paymentFailed(payment: com.gatekeeper.feature.payment.domain.model.Payment)
     fun paymentReversed(payment: com.gatekeeper.feature.payment.domain.model.Payment)
 }

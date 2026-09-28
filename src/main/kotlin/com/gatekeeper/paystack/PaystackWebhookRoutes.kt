@@ -2,10 +2,7 @@ package com.gatekeeper.paystack
 
 import com.gatekeeper.api.respondError
 import com.gatekeeper.config.AppConfig
-import com.gatekeeper.db.repositories.PaymentEventRepository
-import com.gatekeeper.db.repositories.PaymentRepository
-import com.gatekeeper.db.repositories.ProjectRepository
-import com.gatekeeper.feature.payment.domain.usecase.ApplyWebhookEvent
+import com.gatekeeper.feature.payment.domain.usecase.ProcessPaymentEvent
 import org.koin.ktor.ext.get
 import io.ktor.http.*
 import io.ktor.server.application.*
@@ -22,38 +19,28 @@ import javax.crypto.spec.SecretKeySpec
 private val logger = LoggerFactory.getLogger("com.gatekeeper.paystack.PaystackWebhookRoutes")
 private val json = Json { ignoreUnknownKeys = true }
 
-suspend fun replayPaystackWebhook(rawBody: String): Boolean {
+suspend fun replayPaystackWebhook(rawBody: String, processPaymentEvent: ProcessPaymentEvent): Boolean {
     val event = runCatching { json.decodeFromString<PaystackWebhookPayload>(rawBody) }.getOrNull() ?: return false
     val data = event.data
     return runCatching {
-        when (event.event) {
-            "charge.success" -> {
-                val slug = data.metadata["project_slug"] ?: return@runCatching false
-                if (!data.status.equals("success", ignoreCase = true)) return@runCatching false
-                PaymentService.applySuccessfulPayment(
-                    reference = data.reference,
-                    projectSlug = slug,
-                    amountNaira = koboToNaira(data.amount),
-                    currency = data.currency,
-                    verifiedVia = "admin_replay",
-                    rawPayload = rawBody
-                )
-            }
-            "charge.failed" -> {
-                PaymentService.handleChargeFailed(data.reference, data.metadata["project_slug"], rawBody)
-                true
-            }
-            "transfer.reversed", "charge.reversed" -> {
-                PaymentService.handleReversal(data.reference)
-                true
-            }
-            else -> false
+        val status = when (event.event) {
+            "charge.success" -> if (data.status.equals("success", true)) "success" else return@runCatching false
+            "charge.failed" -> "failed"
+            "transfer.reversed", "charge.reversed" -> "reversed"
+            else -> return@runCatching false
         }
+        processPaymentEvent(
+            ProcessPaymentEvent.Command(
+                provider = "paystack", eventType = event.event, dedupeKey = "admin-replay:${event.event}:${data.reference}",
+                rawPayload = rawBody, reference = data.reference, projectSlug = data.metadata["project_slug"],
+                status = status, verifiedVia = "admin_replay", amount = koboToNaira(data.amount), currency = data.currency
+            )
+        ) != ProcessPaymentEvent.Outcome.REJECTED
     }.getOrDefault(false)
 }
 
 fun Application.configurePaystackWebhookRoutes() {
-    val applyWebhookEvent = get<ApplyWebhookEvent>()
+    val processPaymentEvent = get<ProcessPaymentEvent>()
     routing {
         post("/api/paystack/webhook") {
             Metrics.increment("webhook.received")
@@ -94,92 +81,43 @@ fun Application.configurePaystackWebhookRoutes() {
 
             val data = event.data
             val reference = data.reference
-            val dedupeKey = "${event.event}:$reference"
-
-            if (PaymentEventRepository.alreadyRecorded(dedupeKey)) {
-                logger.info("Ignoring duplicate Paystack webhook event=$dedupeKey")
-                call.respond(HttpStatusCode.OK, mapOf("status" to "duplicate"))
-                return@post
-            }
-
             val projectSlug = data.metadata["project_slug"]
-            val projectId = resolveProjectId(projectSlug, reference)
-            val paymentId = PaymentRepository.findByReference(reference)?.id
-
-            val eventId = PaymentEventRepository.recordIfNew(
-                dedupeKey = dedupeKey,
-                eventType = event.event,
-                rawPayload = rawBody,
-                projectId = projectId,
-                paymentId = paymentId,
-                paystackReference = reference
-            )
-            if (eventId == null) {
-                Metrics.increment("webhook.duplicate")
-                logger.info("Ignoring duplicate Paystack webhook event=$dedupeKey")
-                call.respond(HttpStatusCode.OK, mapOf("status" to "duplicate"))
-                return@post
-            }
-
             try {
-                when (event.event) {
-                    "charge.success" -> {
-                        if (!data.status.equals("success", ignoreCase = true)) {
-                            logger.info("Ignoring charge.success with non-success data.status=${data.status}, ref=$reference")
-                        } else if (projectSlug.isNullOrBlank()) {
-                            logger.warn("charge.success missing project_slug, ref=$reference")
-                        } else {
-                            val applied = applyWebhookEvent(
-                                ApplyWebhookEvent.Command(
-                                    provider = "paystack",
-                                    reference = reference,
-                                    status = "success",
-                                    verifiedVia = "webhook",
-                                    amount = koboToNaira(data.amount),
-                                    currency = data.currency,
-                                    projectId = ProjectRepository.findBySlug(projectSlug)?.id,
-                                    rawPayload = rawBody
-                                )
-                            )
-                            if (!applied) {
-                                PaymentEventRepository.markFailed(eventId, "Payment integrity checks failed")
-                                call.respond(HttpStatusCode.OK, mapOf("status" to "rejected"))
-                                return@post
-                            }
-                        }
-                    }
-                    "charge.failed" -> {
-                        applyWebhookEvent(ApplyWebhookEvent.Command(
-                            "paystack", reference, "failed", "webhook",
-                            projectId = projectSlug?.let { ProjectRepository.findBySlug(it)?.id },
-                            rawPayload = rawBody
-                        ))
-                    }
-                    "transfer.reversed", "charge.reversed" -> {
-                        applyWebhookEvent(ApplyWebhookEvent.Command("paystack", reference, "reversed", "webhook"))
-                    }
-                    else -> {
-                        logger.info("Webhook event recorded, no handler: ${event.event}, ref=$reference")
-                    }
+                val status = when (event.event) {
+                    "charge.success" -> if (data.status.equals("success", true)) "success" else null
+                    "charge.failed" -> "failed"
+                    "transfer.reversed", "charge.reversed" -> "reversed"
+                    else -> null
                 }
-                PaymentEventRepository.markProcessed(eventId)
-                Metrics.increment("webhook.processed")
+                val outcome = processPaymentEvent(
+                    ProcessPaymentEvent.Command(
+                        provider = "paystack", eventType = event.event, dedupeKey = "${event.event}:$reference",
+                        rawPayload = rawBody, reference = reference, projectSlug = projectSlug,
+                        status = status, verifiedVia = "webhook",
+                        amount = if (status == "success") koboToNaira(data.amount) else null,
+                        currency = data.currency
+                    )
+                )
+                when (outcome) {
+                    ProcessPaymentEvent.Outcome.DUPLICATE -> Metrics.increment("webhook.duplicate")
+                    ProcessPaymentEvent.Outcome.PROCESSED -> Metrics.increment("webhook.processed")
+                    ProcessPaymentEvent.Outcome.REJECTED -> Metrics.increment("webhook.failed")
+                }
+                val responseStatus = when (outcome) {
+                    ProcessPaymentEvent.Outcome.PROCESSED -> "ok"
+                    ProcessPaymentEvent.Outcome.DUPLICATE -> "duplicate"
+                    ProcessPaymentEvent.Outcome.REJECTED -> "rejected"
+                }
+                call.respond(HttpStatusCode.OK, mapOf("status" to responseStatus))
+                return@post
             } catch (e: Exception) {
                 Metrics.increment("webhook.failed")
                 logger.error("Error processing webhook ${event.event}, ref=$reference", e)
-                PaymentEventRepository.markFailed(eventId, e.message ?: "Webhook processing failed")
+                call.respond(HttpStatusCode.OK, mapOf("status" to "failed"))
+                return@post
             }
-
-            call.respond(HttpStatusCode.OK, mapOf("status" to "ok"))
         }
     }
-}
-
-private fun resolveProjectId(projectSlug: String?, reference: String): java.util.UUID? {
-    projectSlug?.let { slug ->
-        ProjectRepository.findBySlug(slug)?.id?.let { return it }
-    }
-    return PaymentRepository.findByReference(reference)?.projectId
 }
 
 private fun verifySignature(rawBody: String, signature: String, secretKey: String): Boolean {

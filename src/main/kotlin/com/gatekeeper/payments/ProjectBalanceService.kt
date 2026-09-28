@@ -33,30 +33,4 @@ object ProjectBalanceService {
         return amount
     }
 
-    suspend fun requireAvailableForNewPaymentWithReconciliation(
-        project: ProjectRepository.ProjectRecord,
-        requestedAmount: BigDecimal? = null
-    ): BigDecimal {
-        val outstanding = outstandingBalance(project)
-        val pending = PaymentRepository.pendingAmountForProject(project.id)
-        val available = outstanding - pending
-        val needsReconciliation = pending > BigDecimal.ZERO &&
-            (available <= BigDecimal.ZERO || (requestedAmount != null && requestedAmount > available))
-        if (needsReconciliation) {
-            PaymentRepository.findPendingByProjectId(project.id).forEach { payment ->
-                PaymentReconciliationService.reconcile(payment)
-            }
-        }
-        val currentProject = ProjectRepository.findById(project.id) ?: project
-        val currentOutstanding = outstandingBalance(currentProject)
-        val currentPending = PaymentRepository.pendingAmountForProject(currentProject.id)
-        val currentAvailable = currentOutstanding - currentPending
-        if (currentPending > BigDecimal.ZERO &&
-            (requestedAmount == null || requestedAmount <= currentOutstanding) &&
-            (currentAvailable <= BigDecimal.ZERO || (requestedAmount != null && requestedAmount > currentAvailable))
-        ) {
-            error("A payment for this balance is still pending. Try again after it is confirmed or canceled.")
-        }
-        return requireAvailableForNewPayment(currentProject, requestedAmount)
-    }
 }

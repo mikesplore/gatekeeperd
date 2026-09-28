@@ -12,3 +12,10 @@ interface PaymentRepository {
     fun updateStatus(provider: String, reference: String, status: String, verifiedVia: String, paidAt: java.time.LocalDateTime? = null, amount: java.math.BigDecimal? = null)
     fun pendingPayments(olderThanMinutes: Long): List<Payment>
 }
+
+interface PaymentEventRepository {
+    fun alreadyRecorded(dedupeKey: String): Boolean
+    fun recordIfNew(dedupeKey: String, eventType: String, rawPayload: String, projectId: UUID?, paymentId: UUID?, reference: String?, provider: String): UUID?
+    fun markProcessed(id: UUID)
+    fun markFailed(id: UUID, error: String)
+}

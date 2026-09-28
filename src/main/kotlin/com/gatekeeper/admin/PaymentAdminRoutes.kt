@@ -15,12 +15,13 @@ import io.ktor.server.request.receive
 import io.ktor.server.routing.*
 import java.time.LocalDate
 import com.gatekeeper.plugins.Metrics
-import com.gatekeeper.payments.PaymentReconciliationService
 import java.util.UUID
 import java.math.BigDecimal
 import java.time.LocalDateTime
-import com.gatekeeper.payments.PaymentApplicationService
-import com.gatekeeper.payments.PaymentProvider
+import com.gatekeeper.feature.payment.domain.usecase.ApplyWebhookEvent
+import com.gatekeeper.feature.payment.domain.usecase.ReconcilePayments
+import com.gatekeeper.feature.payment.domain.repository.PaymentRepository as PaymentDomainRepository
+import org.koin.ktor.ext.get
 import kotlinx.serialization.Serializable
 
 @Serializable
@@ -57,10 +58,10 @@ fun Application.configurePaymentAdminRoutes() {
             post("/api/admin/payments/{id}/reconcile") {
                 val id = runCatching { UUID.fromString(call.parameters["id"]) }.getOrNull()
                     ?: return@post call.respondError(HttpStatusCode.BadRequest, "invalid_payment_id", "Invalid payment ID")
-                val payment = PaymentRepository.findById(id)
+                val payment = call.application.get<PaymentDomainRepository>().findById(id)
                     ?: return@post call.respondError(HttpStatusCode.NotFound, "payment_not_found", "Payment not found")
-                val reconciled = PaymentReconciliationService.reconcile(payment)
-                call.respond(mapOf("id" to id.toString(), "reconciled" to reconciled, "gatewayStatus" to PaymentRepository.findById(id)?.gatewayStatus))
+                val reconciled = call.application.get<ReconcilePayments>().reconcile(payment)
+                call.respond(mapOf("id" to id.toString(), "reconciled" to reconciled, "gatewayStatus" to call.application.get<PaymentDomainRepository>().findById(id)?.status))
             }
 
             post("/api/admin/projects/{slug}/payments/cash") {
@@ -79,16 +80,12 @@ fun Application.configurePaymentAdminRoutes() {
                     ?.let { "cash-$it" }
                     ?: "cash-${UUID.randomUUID()}"
                 val notes = request.notes?.trim()?.takeIf { it.isNotEmpty() }
-                val applied = PaymentApplicationService.applySuccessfulPayment(
-                    provider = PaymentProvider.CASH,
-                    reference = reference,
-                    projectSlug = slug,
-                    amount = BigDecimal.valueOf(request.amount),
-                    currency = request.currency ?: project.currency,
-                    verifiedVia = "manual_cash",
-                    paidAt = paidAt,
-                    rawPayload = notes,
-                    actor = actor
+                val applied = call.application.get<ApplyWebhookEvent>()(
+                    ApplyWebhookEvent.Command(
+                        provider = "cash", reference = reference, status = "success", verifiedVia = "manual_cash",
+                        amount = BigDecimal.valueOf(request.amount), currency = request.currency ?: project.currency,
+                        paidAt = paidAt, projectId = project.id, rawPayload = notes, actor = actor
+                    )
                 )
                 if (!applied) {
                     return@post call.respondError(HttpStatusCode.BadRequest, "payment_capture_rejected", "Cash payment exceeds the project's remaining balance or has an invalid currency")

@@ -1,11 +1,8 @@
 package com.gatekeeper.mpesa
 
 import com.gatekeeper.api.respondError
-import com.gatekeeper.db.repositories.ProjectRepository
-import com.gatekeeper.db.repositories.PaymentEventRepository
-import com.gatekeeper.payments.ProjectBalanceService
-import com.gatekeeper.payments.PaymentApplicationService
 import com.gatekeeper.feature.payment.domain.usecase.InitiatePayment
+import com.gatekeeper.feature.payment.domain.usecase.ProcessPaymentEvent
 import org.koin.ktor.ext.get
 import io.ktor.http.*
 import io.ktor.server.application.*
@@ -14,11 +11,11 @@ import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import kotlinx.serialization.json.Json
 import java.math.BigDecimal
-import java.util.UUID
 
 private val json = Json { ignoreUnknownKeys = true }
 
 fun Application.configureMpesaRoutes() {
+    val processPaymentEvent = get<ProcessPaymentEvent>()
     routing {
         post("/api/mpesa/pay") {
             val slug = call.request.queryParameters["project"]
@@ -62,37 +59,29 @@ fun Application.configureMpesaRoutes() {
             val callback = runCatching { json.decodeFromString<MpesaCallback>(raw) }.getOrNull()
             val result = callback?.Body?.stkCallback
             if (result == null) {
-                val eventId = PaymentEventRepository.recordIfNew(
-                    dedupeKey = "mpesa-callback:${UUID.randomUUID()}", eventType = "stk_callback",
-                    rawPayload = raw, projectId = null, paymentId = null, paystackReference = null, provider = "mpesa"
+                processPaymentEvent(
+                    ProcessPaymentEvent.Command(
+                        provider = "mpesa", eventType = "stk_callback", dedupeKey = "mpesa-callback-invalid:${raw.hashCode()}",
+                        rawPayload = raw, validationError = "Invalid M-Pesa callback payload"
+                    )
                 )
-                eventId?.let { PaymentEventRepository.markFailed(it, "Invalid M-Pesa callback payload") }
                 call.respond(HttpStatusCode.OK, MpesaCallbackAck())
                 return@post
             }
             val reference = result.CheckoutRequestID
-            val payment = reference?.let { com.gatekeeper.db.repositories.PaymentRepository.findByProviderReference(com.gatekeeper.payments.PaymentProvider.MPESA, it) }
-            val eventId = PaymentEventRepository.recordIfNew(
-                dedupeKey = "mpesa-callback:${UUID.randomUUID()}", eventType = "stk_callback",
-                rawPayload = raw, projectId = payment?.projectId, paymentId = payment?.id,
-                paystackReference = reference, provider = "mpesa"
-            )
-            when {
-                reference.isNullOrBlank() || result.ResultCode == null -> eventId?.let { PaymentEventRepository.markFailed(it, "M-Pesa callback is missing its request reference or result code") }
-                payment == null -> eventId?.let { PaymentEventRepository.markFailed(it, "No matching M-Pesa payment was found") }
-                result.ResultCode == 0 -> {
-                    val amount = result.CallbackMetadata?.Item?.firstOrNull { it.Name == "Amount" }?.Value?.toString()?.trim('"')?.toBigDecimalOrNull() ?: payment.amount
-                    val project = ProjectRepository.findById(payment.projectId)
-                    val applied = project != null && PaymentApplicationService.applySuccessfulPayment(
-                        com.gatekeeper.payments.PaymentProvider.MPESA, reference, project.slug, amount, project.currency, "webhook", rawPayload = raw
-                    )
-                    eventId?.let { if (applied) PaymentEventRepository.markProcessed(it) else PaymentEventRepository.markFailed(it, "M-Pesa payment callback could not be applied") }
-                }
-                else -> {
-                    com.gatekeeper.db.repositories.PaymentRepository.markGatewayStatusByProviderReference(com.gatekeeper.payments.PaymentProvider.MPESA, reference, "failed", "webhook")
-                    eventId?.let { PaymentEventRepository.markProcessed(it) }
-                }
+            val amount = result.CallbackMetadata?.Item?.firstOrNull { it.Name == "Amount" }?.Value?.toString()?.trim('"')?.toBigDecimalOrNull()
+            val error = when {
+                reference.isNullOrBlank() || result.ResultCode == null -> "M-Pesa callback is missing its request reference or result code"
+                else -> null
             }
+            processPaymentEvent(
+                ProcessPaymentEvent.Command(
+                    provider = "mpesa", eventType = "stk_callback",
+                    dedupeKey = "mpesa-callback:${reference.orEmpty()}:${result.ResultCode}", rawPayload = raw,
+                    reference = reference, status = if (error == null) if (result.ResultCode == 0) "success" else "failed" else null,
+                    verifiedVia = "webhook", amount = amount, validationError = error
+                )
+            )
             call.respond(HttpStatusCode.OK, MpesaCallbackAck())
         }
     }

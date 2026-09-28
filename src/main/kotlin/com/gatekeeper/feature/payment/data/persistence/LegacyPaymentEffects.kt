@@ -20,11 +20,11 @@ class LegacyPaymentEffects : PaymentEffects {
             (payment == null || payment.status != "pending" || amount.compareTo(payment.amount) == 0)
     }
 
-    override fun paymentSucceeded(payment: Payment, amount: BigDecimal, currency: String?, paidAt: LocalDateTime?) {
+    override fun paymentSucceeded(payment: Payment, amount: BigDecimal, currency: String?, paidAt: LocalDateTime?, actor: String) {
         val project = ProjectRepository.findById(payment.projectId) ?: return
-        val remaining = ProjectBalanceService.outstandingBalance(project) - amount
+        val remaining = ProjectBalanceService.outstandingBalance(project)
         if (remaining <= BigDecimal.ZERO) ProjectRepository.setStatusAndClearDueDate(project.id, "active")
-        AuditRepository.write(project.id, "payment_received", "system", "Payment ref=${payment.reference} provider=${payment.provider} amount=$amount remaining=$remaining verified via payment_use_case")
+        AuditRepository.write(project.id, "payment_received", actor, "Payment ref=${payment.reference} provider=${payment.provider} amount=$amount remaining=$remaining verified via payment_use_case")
         ProjectRepository.invalidateCache(project.slug)
         val timestamp = paidAt ?: LocalDateTime.now()
         ScribedIntegrationClient.notifyPayment(project, payment.provider, payment.reference, amount.toPlainString(), currency ?: project.currency, timestamp.toString())

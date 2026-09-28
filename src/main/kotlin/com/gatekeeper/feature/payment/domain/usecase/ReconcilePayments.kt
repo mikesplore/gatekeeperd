@@ -3,6 +3,7 @@ package com.gatekeeper.feature.payment.domain.usecase
 import com.gatekeeper.feature.payment.domain.gateway.PaymentGateway
 import com.gatekeeper.feature.payment.domain.model.Payment
 import com.gatekeeper.feature.payment.domain.repository.PaymentRepository
+import java.util.UUID
 
 class ReconcilePayments(
     private val payments: PaymentRepository,
@@ -31,5 +32,10 @@ class ReconcilePayments(
                 paidAt = verified.paidAt
             )
         )
+    }
+
+    suspend fun reconcile(provider: String, reference: String): Boolean {
+        val payment = payments.findByProviderReference(provider, reference) ?: return false
+        return reconcile(payment)
     }
 }

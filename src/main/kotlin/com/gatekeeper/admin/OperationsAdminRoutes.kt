@@ -19,6 +19,8 @@ import com.gatekeeper.nginx.requireValidHostname
 import com.gatekeeper.db.tables.ReconciliationStatus
 import com.gatekeeper.config.AppConfig
 import com.gatekeeper.paystack.replayPaystackWebhook
+import com.gatekeeper.feature.payment.domain.usecase.ProcessPaymentEvent
+import org.koin.ktor.ext.get
 import com.gatekeeper.payments.ProjectBalanceService
 import com.gatekeeper.deployment.DeploymentApplicationService
 import com.gatekeeper.nginx.DeploymentUpstreamResolver
@@ -506,7 +508,7 @@ fun Application.configureOperationsAdminRoutes() {
                     call.respondError(HttpStatusCode.Conflict, "event_not_failed", "Only failed payment events can be replayed")
                     return@post
                 }
-                val replayed = replayPaystackWebhook(event.rawPayload)
+                val replayed = replayPaystackWebhook(event.rawPayload, call.application.get<ProcessPaymentEvent>())
                 if (!replayed) {
                     call.respondError(HttpStatusCode.UnprocessableEntity, "replay_failed", "Payment event replay failed integrity or processing checks")
                     return@post

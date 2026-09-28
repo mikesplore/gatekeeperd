@@ -6,6 +6,7 @@ import com.gatekeeper.feature.payment.domain.gateway.InitiatedPayment
 import com.gatekeeper.feature.payment.domain.gateway.VerifiedPayment
 import com.gatekeeper.feature.payment.domain.model.Payment
 import com.gatekeeper.feature.payment.domain.repository.PaymentRepository
+import com.gatekeeper.feature.payment.domain.repository.PaymentEventRepository
 import com.gatekeeper.feature.payment.domain.usecase.ApplyWebhookEvent
 import com.gatekeeper.feature.payment.domain.usecase.PaymentEffects
 import com.gatekeeper.feature.payment.domain.usecase.ReconcilePayments
@@ -13,6 +14,7 @@ import com.gatekeeper.feature.payment.domain.usecase.InitiatePayment
 import com.gatekeeper.feature.payment.domain.usecase.PaymentBalancePort
 import com.gatekeeper.feature.payment.domain.usecase.PaymentProject
 import com.gatekeeper.feature.payment.domain.usecase.PaymentProjectPort
+import com.gatekeeper.feature.payment.domain.usecase.ProcessPaymentEvent
 import java.math.BigDecimal
 import java.time.LocalDateTime
 import java.util.UUID
@@ -80,6 +82,26 @@ class PaymentUseCasesTest {
         assertEquals("254712345678", received?.phone)
     }
 
+    @Test
+    fun `provider event is applied once and recorded as processed`() {
+        val repository = FakePaymentRepository(payment())
+        val events = FakePaymentEventRepository()
+        val useCase = ProcessPaymentEvent(
+            repository, events,
+            object : PaymentProjectPort { override fun find(slug: String) = PaymentProject(repository.payment!!.projectId, slug, "KES", null) },
+            ApplyWebhookEvent(repository, FakePaymentEffects())
+        )
+        val command = ProcessPaymentEvent.Command(
+            provider = "paystack", eventType = "charge.success", dedupeKey = "charge.success:ref-1",
+            rawPayload = "{}", reference = "ref-1", status = "success", amount = BigDecimal("20.00"), currency = "KES"
+        )
+
+        assertEquals(ProcessPaymentEvent.Outcome.PROCESSED, useCase(command))
+        assertEquals(ProcessPaymentEvent.Outcome.DUPLICATE, useCase(command))
+        assertEquals("success", repository.payment?.status)
+        assertEquals("processed", events.status)
+    }
+
     private fun command(amount: BigDecimal = BigDecimal("20.00")) = ApplyWebhookEvent.Command(
         provider = "paystack", reference = "ref-1", status = "success", verifiedVia = "test", amount = amount, currency = "KES"
     )
@@ -103,8 +125,20 @@ class PaymentUseCasesTest {
     private class FakePaymentEffects : PaymentEffects {
         var successCount = 0
         override fun acceptSuccessfulPayment(payment: Payment?, projectId: UUID, amount: BigDecimal, currency: String?) = currency == null || payment?.currency == currency
-        override fun paymentSucceeded(payment: Payment, amount: BigDecimal, currency: String?, paidAt: LocalDateTime?) { successCount++ }
+        override fun paymentSucceeded(payment: Payment, amount: BigDecimal, currency: String?, paidAt: LocalDateTime?, actor: String) { successCount++ }
         override fun paymentFailed(payment: Payment) = Unit
         override fun paymentReversed(payment: Payment) = Unit
+    }
+
+    private class FakePaymentEventRepository : PaymentEventRepository {
+        private val dedupeKeys = mutableSetOf<String>()
+        var status: String? = null
+        override fun alreadyRecorded(dedupeKey: String) = dedupeKey in dedupeKeys
+        override fun recordIfNew(dedupeKey: String, eventType: String, rawPayload: String, projectId: UUID?, paymentId: UUID?, reference: String?, provider: String): UUID? {
+            if (!dedupeKeys.add(dedupeKey)) return null
+            return UUID.randomUUID().also { status = "received" }
+        }
+        override fun markProcessed(id: UUID) { status = "processed" }
+        override fun markFailed(id: UUID, error: String) { status = "failed" }
     }
 }

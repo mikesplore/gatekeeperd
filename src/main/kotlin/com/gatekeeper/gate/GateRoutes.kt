@@ -3,9 +3,8 @@ package com.gatekeeper.gate
 import com.gatekeeper.api.InputValidators
 import com.gatekeeper.api.respondError
 import com.gatekeeper.db.repositories.ProjectRepository
-import com.gatekeeper.paystack.PaystackClient
-import com.gatekeeper.paystack.PaymentService
 import com.gatekeeper.feature.payment.domain.usecase.InitiatePayment
+import com.gatekeeper.feature.payment.domain.usecase.VerifyPayment
 import io.ktor.http.*
 import io.ktor.server.application.*
 import io.ktor.server.response.*
@@ -157,22 +156,11 @@ fun Application.configureGateRoutes() {
                 return@get
             }
 
-            val verification = PaystackClient.verifyTransaction(reference).getOrNull()
-            val verified = verification?.status?.equals("success", ignoreCase = true) == true
-
-            if (verified && verification.reference == reference) {
-                val applied = PaymentService.applySuccessfulPayment(
-                    reference = reference,
-                    projectSlug = project.slug,
-                    amountNaira = BigDecimal.valueOf(verification.amount ?: 0L).movePointLeft(2),
-                    currency = verification.currency,
-                    verifiedVia = "callback"
-                )
-                if (applied) {
-                    logger.info("Payment callback verified and applied for ${project.slug}, ref=$reference")
-                } else {
-                    logger.warn("Payment callback verified but failed integrity checks for ${project.slug}, ref=$reference")
-                }
+            val verification = call.application.get<VerifyPayment>()(
+                VerifyPayment.Command("paystack", reference, project.id, "callback")
+            ).getOrNull()
+            if (verification?.success == true) {
+                logger.info("Payment callback verified and applied for ${project.slug}, ref=$reference")
             } else {
                 logger.warn("Payment callback could not be verified for ${project.slug}, ref=$reference")
             }
