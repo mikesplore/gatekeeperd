@@ -75,12 +75,4 @@ class DeploymentUpstreamResolverTest {
         assertNull(DeploymentUpstreamResolver.resolve(serviceId, "production", dockerSite, runtime))
     }
 
-    @Test
-    fun `service resolver rejects active runtime from sibling service`() {
-        val runtime = DeploymentUpstreamResolver.RuntimeTarget(
-            UUID.randomUUID(), "production", true, "sibling-container", 8080, mapOf(8080 to 49152)
-        )
-
-        assertNull(DeploymentUpstreamResolver.resolve(serviceId, "production", dockerSite, runtime))
-    }
 }

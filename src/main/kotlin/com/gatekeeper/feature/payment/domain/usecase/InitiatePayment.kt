@@ -4,7 +4,6 @@ import com.gatekeeper.feature.payment.domain.gateway.InitiatePaymentCommand
 import com.gatekeeper.feature.payment.domain.gateway.PaymentGateway
 import com.gatekeeper.feature.payment.domain.repository.PaymentRepository
 import com.gatekeeper.feature.payment.domain.model.MpesaPhoneNumber
-import com.gatekeeper.db.repositories.ServiceRepository
 import java.math.BigDecimal
 import java.util.UUID
 
@@ -12,13 +11,15 @@ class InitiatePayment(
     private val payments: PaymentRepository,
     private val projects: PaymentProjectPort,
     private val balance: PaymentBalancePort,
-    private val gateways: Map<String, PaymentGateway>
+    private val gateways: Map<String, PaymentGateway>,
+    private val services: PaymentServicePort = PaymentServicePort { _, _ -> false }
 ) {
     suspend operator fun invoke(command: Command): Result<PaymentInitiation> = runCatching {
         if (command.projectSlug.isBlank()) invalid("missing_payment_details", "project is required")
         val project = projects.find(command.projectSlug) ?: fail("project_not_found", "Project not found", FailureKind.NOT_FOUND)
-        val service = command.serviceId?.let { serviceId -> ServiceRepository.findByProjectAndId(project.id, serviceId) }
-        if (command.serviceId != null && service == null) fail("service_not_found", "Service not found for this project", FailureKind.NOT_FOUND)
+        if (command.serviceId != null && !services.belongsToProject(project.id, command.serviceId)) {
+            fail("service_not_found", "Service not found for this project", FailureKind.NOT_FOUND)
+        }
         if (command.serviceId == null && (command.requireSuspendedProject || command.provider.equals("mpesa", ignoreCase = true)) &&
             balance.requiresServiceScope(project.id)) {
             invalid("service_required", "Choose a service to pay for this multi-service project")
@@ -94,6 +95,7 @@ data class PaymentProject(
 )
 
 interface PaymentProjectPort { fun find(slug: String): PaymentProject? }
+fun interface PaymentServicePort { fun belongsToProject(projectId: UUID, serviceId: UUID): Boolean }
 interface PaymentBalancePort {
     suspend fun availableAmount(projectId: UUID, requestedAmount: BigDecimal?): BigDecimal
     suspend fun availableAmount(projectId: UUID, requestedAmount: BigDecimal?, serviceId: UUID?): BigDecimal = availableAmount(projectId, requestedAmount)

@@ -11,6 +11,7 @@ import com.gatekeeper.feature.payment.data.persistence.ExposedPaymentEventReposi
 import com.gatekeeper.feature.payment.data.persistence.PaymentEffectsAdapter
 import com.gatekeeper.feature.payment.data.persistence.PaymentProjectAdapter
 import com.gatekeeper.feature.payment.data.persistence.PaymentBalanceAdapter
+import com.gatekeeper.feature.payment.data.persistence.PaymentServiceAdapter
 import com.gatekeeper.feature.payment.data.persistence.ProjectBalanceAdapter
 import com.gatekeeper.feature.payment.data.provider.PaymentProviderReadinessAdapter
 import com.gatekeeper.feature.payment.data.provider.JsonMpesaCallbackDecoder
@@ -62,6 +63,7 @@ private val applicationModule = module {
     single { ProjectBalanceAdapter(get<PaymentDomainRepository>()) }
     single<PaymentEventDomainRepository> { ExposedPaymentEventRepository() }
     single { PaymentProjectAdapter() }
+    single { PaymentServiceAdapter() }
     single { PaymentBalanceAdapter(get<PaymentDomainRepository>(), get(), get()) }
     single<PaymentEffects> { PaymentEffectsAdapter(get()) }
     single { ApplyWebhookEvent(get(), get()) }
@@ -79,7 +81,7 @@ private val applicationModule = module {
     single { RecordCashPayment(get<PaymentProjectAdapter>(), get<PaymentDomainRepository>(), get()) }
     single<PaymentCurrencyPort> { PaymentCurrencyPort { ProjectRepository.findAll().firstOrNull()?.currency } }
     single { GetPaymentRevenue(get<PaymentDomainRepository>(), get()) }
-    single { InitiatePayment(get(), get<PaymentProjectAdapter>(), get<PaymentBalanceAdapter>(), mapOf("paystack" to get(named("paystackGateway")), "mpesa" to get(named("mpesaGateway")))) }
+    single { InitiatePayment(get(), get<PaymentProjectAdapter>(), get<PaymentBalanceAdapter>(), mapOf("paystack" to get(named("paystackGateway")), "mpesa" to get(named("mpesaGateway"))), get<PaymentServiceAdapter>()) }
     single { ProcessPaymentEvent(get(), get(), get<PaymentProjectAdapter>(), get()) }
     single { HandlePaystackWebhook(get()) }
     single { ReplayPaystackEvent(get(), get()) }

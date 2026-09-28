@@ -177,9 +177,9 @@ class PaymentUseCasesTest {
         override fun findByProviderReference(provider: String, reference: String) = payment?.takeIf { it.provider == provider && it.providerReference == reference }
         override fun findById(id: UUID) = payment?.takeIf { it.id == id }
         override fun findByReference(reference: String) = payment?.takeIf { it.reference == reference }
-        override fun create(projectId: UUID, provider: String, reference: String, amount: BigDecimal, status: String, rawPayload: String?, authorizationUrl: String?) =
-            (payment?.copy(projectId = projectId, provider = provider, reference = reference, providerReference = reference, amount = amount, status = status)
-                ?: Payment(UUID.randomUUID(), projectId, provider, reference, amount, status)).also { payment = it }
+        override fun create(projectId: UUID, provider: String, reference: String, amount: BigDecimal, status: String, rawPayload: String?, authorizationUrl: String?, serviceId: UUID?) =
+            (payment?.copy(projectId = projectId, provider = provider, reference = reference, providerReference = reference, amount = amount, status = status, serviceId = serviceId)
+                ?: Payment(UUID.randomUUID(), projectId, provider, reference, amount, status, serviceId = serviceId)).also { payment = it }
         override fun save(payment: Payment): Payment { this.payment = payment; return payment }
         override fun updateStatus(provider: String, reference: String, status: String, verifiedVia: String, paidAt: LocalDateTime?, amount: BigDecimal?) {
             payment = payment?.copy(status = status, amount = amount ?: payment!!.amount, paidAt = paidAt ?: payment!!.paidAt)

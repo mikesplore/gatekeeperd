@@ -345,7 +345,7 @@ class NginxServiceTest {
                 else BackfillDockerTarget("failed-container", 9999)
             },
             autoCertificatePath = { null },
-            render = { model -> if (model.slug == "migrated") fixture.resolve(model.slug).readText() else "different" },
+            render = { model -> if (model.domain == "migrated.example.com") fixture.resolve("migrated").readText() else "different" },
             createSite = { project, model -> created += project.slug; createdModels[project.slug] = model },
             deleteSite = { project -> deleted += project.slug }
         ).run()
@@ -443,18 +443,26 @@ class NginxServiceTest {
     @Test
     fun `backfill skips sites already registered by project id`() {
         val root = Files.createTempDirectory("gk-nginx-backfill-existing-site").toFile()
-        File(root, "app").writeText("server { listen 80; server_name app.example.com; location / { proxy_pass http://127.0.0.1:3001; } }\n")
+        File(root, "app").writeText("""
+            server {
+                listen 80;
+                server_name app.example.com;
+                location / { proxy_pass http://127.0.0.1:3001; }
+            }
+        """.trimIndent() + "\n")
         val project = BackfillProject(java.util.UUID.randomUUID(), "app", "app-container")
         var createCalls = 0
         var deleteCalls = 0
+        var checkedDomain: String? = null
 
         val report = NginxSiteBackfill(
             sitesAvailable = root, findProject = { project }, expectedDockerTarget = { BackfillDockerTarget("app-container", 3001) },
             autoCertificatePath = { null }, render = { "unused" }, createSite = { _, _ -> createCalls++ },
-            deleteSite = { deleteCalls++ }, siteExists = { it == project.id }
+            deleteSite = { deleteCalls++ }, siteExists = { projectId, domain -> checkedDomain = domain; projectId == project.id }
         ).run()
 
         assertEquals(listOf("app"), report.skippedExistingSite)
+        assertEquals("app.example.com", checkedDomain)
         assertEquals(0, createCalls)
         assertEquals(0, deleteCalls)
     }

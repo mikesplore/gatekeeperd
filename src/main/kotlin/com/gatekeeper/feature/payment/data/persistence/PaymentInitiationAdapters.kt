@@ -6,6 +6,7 @@ import com.gatekeeper.feature.payment.domain.repository.PaymentRepository
 import com.gatekeeper.feature.payment.domain.usecase.PaymentBalancePort
 import com.gatekeeper.feature.payment.domain.usecase.PaymentProject
 import com.gatekeeper.feature.payment.domain.usecase.PaymentProjectPort
+import com.gatekeeper.feature.payment.domain.usecase.PaymentServicePort
 import com.gatekeeper.feature.payment.domain.usecase.ReconcilePayments
 import java.math.BigDecimal
 import java.util.UUID
@@ -19,6 +20,11 @@ class PaymentProjectAdapter : PaymentProjectPort {
     override fun find(slug: String): PaymentProject? = ProjectRepository.findBySlug(slug)?.let {
         PaymentProject(it.id, it.slug, it.currency, it.customerEmail, it.domain, it.status)
     }
+}
+
+class PaymentServiceAdapter : PaymentServicePort {
+    override fun belongsToProject(projectId: UUID, serviceId: UUID): Boolean =
+        ServiceRepository.findByProjectAndId(projectId, serviceId) != null
 }
 
 class PaymentBalanceAdapter(
