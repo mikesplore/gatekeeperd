@@ -15,9 +15,12 @@ class ProcessPaymentEvent(
     operator fun invoke(command: Command): Outcome {
         if (events.alreadyRecorded(command.dedupeKey)) return Outcome.DUPLICATE
         val payment = command.reference?.let { payments.findByProviderReference(command.provider, it) }
-        val projectId = command.projectId ?: payment?.projectId ?: command.projectSlug?.let { projects.find(it)?.id }
+        // A provider reference maps to the persisted payment target. The legacy
+        // project metadata is only a fallback when no local payment exists.
+        val projectId = payment?.projectId ?: command.projectId ?: command.projectSlug?.let { projects.find(it)?.id }
+        val serviceId = payment?.serviceId
         val eventId = events.recordIfNew(
-            command.dedupeKey, command.eventType, command.rawPayload, projectId, payment?.id, command.reference, command.provider
+            command.dedupeKey, command.eventType, command.rawPayload, projectId, payment?.id, serviceId, command.reference, command.provider
         ) ?: return Outcome.DUPLICATE
 
         if (command.validationError != null) {
@@ -40,6 +43,7 @@ class ProcessPaymentEvent(
                     currency = command.currency,
                     paidAt = command.paidAt,
                     projectId = projectId,
+                    serviceId = serviceId,
                     rawPayload = command.rawPayload,
                     actor = command.actor
                 )

@@ -31,6 +31,8 @@ interface PaymentRepository {
 interface PaymentEventRepository {
     fun alreadyRecorded(dedupeKey: String): Boolean
     fun recordIfNew(dedupeKey: String, eventType: String, rawPayload: String, projectId: UUID?, paymentId: UUID?, reference: String?, provider: String): UUID?
+    fun recordIfNew(dedupeKey: String, eventType: String, rawPayload: String, projectId: UUID?, paymentId: UUID?, serviceId: UUID?, reference: String?, provider: String): UUID? =
+        recordIfNew(dedupeKey, eventType, rawPayload, projectId, paymentId, reference, provider)
     fun markProcessed(id: UUID)
     fun markFailed(id: UUID, error: String)
     fun findByStatus(status: String?, limit: Int, offset: Int, provider: String?): Pair<List<com.gatekeeper.feature.payment.domain.model.PaymentEvent>, Long>

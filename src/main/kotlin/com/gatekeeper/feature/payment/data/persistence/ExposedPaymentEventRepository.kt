@@ -16,6 +16,10 @@ class ExposedPaymentEventRepository : PaymentEventRepository {
 
     override fun recordIfNew(
         dedupeKey: String, eventType: String, rawPayload: String, projectId: UUID?, paymentId: UUID?, reference: String?, provider: String
+    ): UUID? = recordIfNew(dedupeKey, eventType, rawPayload, projectId, paymentId, null, reference, provider)
+
+    override fun recordIfNew(
+        dedupeKey: String, eventType: String, rawPayload: String, projectId: UUID?, paymentId: UUID?, serviceId: UUID?, reference: String?, provider: String
     ): UUID? {
         val id = UUID.randomUUID()
         return try {
@@ -27,6 +31,7 @@ class ExposedPaymentEventRepository : PaymentEventRepository {
                     it[PaymentEvents.provider] = provider
                     it[PaymentEvents.rawPayload] = rawPayload
                     it[PaymentEvents.projectId] = projectId
+                    it[PaymentEvents.serviceId] = serviceId
                     it[PaymentEvents.paymentId] = paymentId
                     it[PaymentEvents.paystackReference] = reference
                 }
@@ -71,7 +76,7 @@ class ExposedPaymentEventRepository : PaymentEventRepository {
                         row[PaymentEvents.id], row[PaymentEvents.provider], row[PaymentEvents.paystackReference],
                         row[PaymentEvents.eventType], row[PaymentEvents.receivedAt], row[PaymentEvents.dedupeKey],
                         row[PaymentEvents.processingStatus], row[PaymentEvents.processingAttempts],
-                        row[PaymentEvents.processingError], row[PaymentEvents.processedAt]
+                        row[PaymentEvents.processingError], row[PaymentEvents.processedAt], row[PaymentEvents.serviceId]
                     )
                 }
             events to total

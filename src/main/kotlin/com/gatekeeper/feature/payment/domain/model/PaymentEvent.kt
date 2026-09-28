@@ -13,7 +13,8 @@ data class PaymentEvent(
     val processingStatus: String = "received",
     val processingAttempts: Int = 0,
     val processingError: String? = null,
-    val processedAt: LocalDateTime? = null
+    val processedAt: LocalDateTime? = null,
+    val serviceId: UUID? = null
 )
 
 data class PaymentEventReplay(val id: UUID, val rawPayload: String, val processingStatus: String)
