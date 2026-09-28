@@ -6,6 +6,7 @@ import java.nio.charset.StandardCharsets
 import java.security.SecureRandom
 import java.util.Base64
 import javax.crypto.Cipher
+import javax.crypto.Mac
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
@@ -30,6 +31,14 @@ object SecretValueCipher {
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(TAG_BITS, packed.copyOfRange(0, IV_SIZE)))
         return cipher.doFinal(packed.copyOfRange(IV_SIZE, packed.size)).toString(StandardCharsets.UTF_8)
+    }
+
+    /** Stable, non-reversible fingerprint for comparing a value without exposing it. */
+    fun fingerprint(value: String): String {
+        val mac = Mac.getInstance("HmacSHA256")
+        mac.init(SecretKeySpec(key().encoded, "HmacSHA256"))
+        return mac.doFinal(value.toByteArray(StandardCharsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
     }
 
     fun redact(text: String, secrets: Collection<String>): String =

@@ -6,6 +6,7 @@ import com.gatekeeper.auth.configureAuthRoutes
 import com.gatekeeper.config.AppConfig
 import com.gatekeeper.customer.configureCustomerRoutes
 import com.gatekeeper.db.tables.Users
+import com.gatekeeper.db.ServiceIdentityBackfill
 import com.gatekeeper.deployment.DeploymentWorker
 import com.gatekeeper.gate.configureGateRoutes
 import com.gatekeeper.integrations.configureGitHubAdminRoutes
@@ -80,6 +81,21 @@ private fun operationalCommand(command: String, args: Array<String>) {
             }
         }
 
+        "service-backfill" -> {
+            require(args.contains("--dry-run")) {
+                "service-backfill currently supports report-only mode; pass --dry-run"
+            }
+            val report = ServiceIdentityBackfill.report(
+                AppConfig.dbUrl,
+                AppConfig.dbUser,
+                AppConfig.dbPassword
+            )
+            println("Service identity backfill dry-run")
+            println("projects_without_default_service=${report.projectsWithoutDefaultService}")
+            println("projects_already_with_default_service=${report.projectsWithDefaultService}")
+            println("planned_default_services=${report.projectsWithoutDefaultService}")
+        }
+
         "health-check" -> {
             DatabaseFactory.init(
                 AppConfig.dbUrl,
@@ -92,7 +108,7 @@ private fun operationalCommand(command: String, args: Array<String>) {
             ); println("ready")
         }
 
-        else -> error("Unknown command '$command'. Use serve, migrate, backfill, or health-check.")
+        else -> error("Unknown command '$command'. Use serve, migrate, backfill, service-backfill, or health-check.")
     }
 }
 
@@ -115,6 +131,7 @@ fun Application.module() {
     configureAuthRoutes()
     configureProjectAdminRoutes()
     configureProjectSetupAdminRoutes()
+    configureServiceAdminRoutes()
     configureOperationsAdminRoutes()
     configureIntegrationAdminRoutes()
     configurePaymentAdminRoutes()

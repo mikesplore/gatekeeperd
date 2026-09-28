@@ -255,7 +255,9 @@ class NginxService(
         http2 = site.tlsMode == TlsRenderMode.HTTPS_HTTP2,
         gateEnabled = site.gateEnabled,
         bypassPaths = site.bypassPaths,
-        projectId = site.projectId
+        projectId = site.projectId,
+        serviceId = site.serviceId,
+        siteId = site.siteId
     )
 
     fun generateNginxConfig(
@@ -270,7 +272,9 @@ class NginxService(
         http2: Boolean = true,
         gateEnabled: Boolean = true,
         bypassPaths: List<String> = DEFAULT_GATEKEEPER_BYPASS_PATHS,
-        projectId: java.util.UUID? = null
+        projectId: java.util.UUID? = null,
+        serviceId: java.util.UUID? = null,
+        siteId: java.util.UUID? = null
     ): String {
         requireValidHostname(domain)
         val effectiveSslCert = sslCertificatePath?.let { requireCertificatePath(it, sslCertPath) }
@@ -281,6 +285,8 @@ class NginxService(
 
         return buildString {
             projectId?.let { appendLine("# gatekeeperd:project_id:$it") }
+            serviceId?.let { appendLine("# gatekeeperd:service_id:$it") }
+            siteId?.let { appendLine("# gatekeeperd:site_id:$it") }
             appendLine("server {")
             appendLine("    # gatekeeperd:block:server")
             if (sslEnabled) {
@@ -480,18 +486,18 @@ class NginxService(
     }
 
     /** Route a managed project site to a ready candidate and reload nginx before reporting success. */
-    fun switchDeploymentUpstream(projectId: java.util.UUID, slug: String, host: String, port: Int): Boolean {
-        val site = SiteRepository.findByProjectId(projectId) ?: return true
+    fun switchDeploymentUpstream(serviceId: java.util.UUID, slug: String, host: String, port: Int): Boolean {
+        val site = SiteRepository.findByServiceId(serviceId) ?: return true
         val previousContent = inspectSite(slug).content
         val previousPort = site.upstreamExplicitPort
         val containerPort = site.upstreamExplicitPort ?: port
-        return switchDeploymentUpstream(projectId, slug, host, containerPort, port)
+        return switchDeploymentUpstream(serviceId, slug, host, containerPort, port)
     }
 
-    fun switchDeploymentUpstream(projectId: java.util.UUID, slug: String, host: String, containerPort: Int, hostPort: Int): Boolean {
+    fun switchDeploymentUpstream(serviceId: java.util.UUID, slug: String, host: String, containerPort: Int, hostPort: Int): Boolean {
         require(host == "127.0.0.1") { "Deployment upstream must use loopback" }
         require(containerPort in 1..65535 && hostPort in 1..65535) { "Deployment upstream ports must be between 1 and 65535" }
-        val site = SiteRepository.findByProjectId(projectId) ?: return true
+        val site = SiteRepository.findByServiceId(serviceId) ?: return true
         val previousContent = inspectSite(slug).content
         val previousPort = site.upstreamExplicitPort
         val certificate = when (site.certMode) {
@@ -507,7 +513,9 @@ class NginxService(
         }
         val model = NginxSiteRenderModel(
             slug = slug,
-            projectId = projectId,
+            projectId = site.projectId,
+            serviceId = site.serviceId,
+            siteId = site.id,
             domain = site.domain,
             upstreamHost = host,
             appPort = hostPort,
@@ -522,9 +530,9 @@ class NginxService(
         )
         val config = generateNginxConfig(model)
         if (!enableProject(slug, config)) return false
-        if (SiteRepository.updateDeploymentUpstream(projectId, host, hostPort) != null) return true
+        if (SiteRepository.updateDeploymentUpstreamForSite(site.id, host, hostPort) != null) return true
         previousContent?.let { restoreSiteConfiguration(slug, it) }
-        previousPort?.let { SiteRepository.updateDeploymentUpstream(projectId, site.upstreamHost, it) }
+        previousPort?.let { SiteRepository.updateDeploymentUpstreamForSite(site.id, site.upstreamHost, it) }
         return false
     }
 

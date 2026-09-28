@@ -7,5 +7,5 @@ class GateApplicationService(
     private val gate: GateService
 ) {
     fun check(slug: String): GateResult = gate.check(slug)
-    fun findProject(slug: String) = projects.findBySlug(slug)
+    fun findProject(slug: String) = projects.findGateTargetBySlug(slug)?.project
 }

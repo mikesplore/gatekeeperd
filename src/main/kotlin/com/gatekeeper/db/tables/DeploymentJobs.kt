@@ -26,6 +26,7 @@ object DeploymentJobs : Table("deployment_jobs") {
     val imageDigest = text("image_digest").nullable()
     val cancelledAt = datetime("cancelled_at").nullable()
     val projectId = uuid("project_id")
+    val serviceId = uuid("service_id").references(Services.id, onDelete = org.jetbrains.exposed.sql.ReferenceOption.RESTRICT).nullable().index()
     val environment = text("environment").default("production")
     val readinessType = text("readiness_type").nullable()
     val readinessTarget = text("readiness_target").nullable()

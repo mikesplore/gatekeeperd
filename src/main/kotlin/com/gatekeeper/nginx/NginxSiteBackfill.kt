@@ -33,7 +33,8 @@ class NginxSiteBackfill(
     private val dryRun: Boolean = false,
     private val log: (String) -> Unit = {},
     private val findProjectById: (java.util.UUID) -> BackfillProject? = { null },
-    private val siteExists: (java.util.UUID) -> Boolean = { false }
+    private val siteExists: (java.util.UUID, String) -> Boolean = { _, _ -> false },
+    private val serviceIdForProject: (java.util.UUID) -> java.util.UUID? = { null }
 ) {
     fun run(): NginxBackfillReport {
         val migrated = mutableListOf<String>()
@@ -61,21 +62,25 @@ class NginxSiteBackfill(
                     log(if (identity.present) "SKIPPED ${file.name}: project_id marker is unresolved" else "SKIPPED ${file.name}: no matching project")
                     return@forEach
                 }
-                if (siteExists(project.id)) {
+                val actual = runCatching { extract(original) }.getOrElse { error ->
+                    failed[file.name] = error.message ?: error::class.simpleName.orEmpty()
+                    log("FAILED ${file.name}: ${failed[file.name]}")
+                    return@forEach
+                }
+                if (siteExists(project.id, actual.domain)) {
                     skippedExisting += file.name
-                    log("SKIPPED ${file.name}: project already has a site")
+                    log("SKIPPED ${file.name}: domain already has a site")
                     return@forEach
                 }
                 var createdSite = false
                 try {
-                    val actual = extract(original)
                     val expectedDockerTarget = expectedDockerTarget(project)
                     val dockerDiscovery = expectedDockerTarget?.hostPort == actual.port
                     val certAuto = autoCertificatePath(actual.domain)
                     val autoCert = actual.certPath == certAuto ||
                         (actual.tlsMode == TlsRenderMode.HTTP_ONLY && actual.certPath == null)
                     val model = NginxSiteRenderModel(
-                        slug = project.slug,
+                        slug = "${project.slug}-${actual.domain.lowercase().replace(Regex("[^a-z0-9]+"), "-").trim('-')}",
                         projectId = project.id.takeIf { identity.present },
                         domain = actual.domain,
                         appPort = actual.port,
@@ -84,7 +89,8 @@ class NginxSiteBackfill(
                         certificatePath = if (autoCert) null else actual.certPath,
                         certificateKeyPath = if (autoCert) null else actual.keyPath,
                         upstreamMode = if (dockerDiscovery) com.gatekeeper.db.tables.UpstreamMode.DOCKER_DISCOVERY else com.gatekeeper.db.tables.UpstreamMode.EXPLICIT_PORT,
-                        certMode = if (autoCert) com.gatekeeper.db.tables.CertMode.AUTO_RESOLVE else com.gatekeeper.db.tables.CertMode.EXPLICIT_PATH
+                        certMode = if (autoCert) com.gatekeeper.db.tables.CertMode.AUTO_RESOLVE else com.gatekeeper.db.tables.CertMode.EXPLICIT_PATH,
+                        serviceId = serviceIdForProject(project.id)
                     )
                     if (!dryRun) {
                         createSite(project, model)

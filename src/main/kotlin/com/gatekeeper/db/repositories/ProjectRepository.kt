@@ -205,7 +205,7 @@ object ProjectRepository {
             }
             project[Projects.slug]
         }
-        slug?.let(::invalidateCache)
+        slug?.let { invalidateCache(it, id) }
     }
 
     fun archive(slug: String, actor: String, reason: String?): Boolean {
@@ -231,7 +231,10 @@ object ProjectRepository {
             }
             true
         }.also { archived ->
-            if (archived) invalidateCache(slug)
+            if (archived) {
+                val projectId = findBySlug(slug, includeArchived = true)?.id
+                invalidateCache(slug, projectId)
+            }
         }
     }
 
@@ -270,9 +273,13 @@ object ProjectRepository {
     @Deprecated("Use archive — hard delete removed to preserve payment/audit history", ReplaceWith("archive(slug, actor, reason)"))
     fun delete(slug: String): Boolean = archive(slug, "system", "legacy delete call")
 
-    fun invalidateCache(slug: String) {
+    fun invalidateCache(slug: String, projectId: UUID? = null) {
         try {
             RedisService.delete("$REDIS_KEY_PREFIX$slug")
+            val id = projectId ?: findBySlug(slug)?.id
+            id?.let { SiteRepository.findGateSlugsByProjectId(it).forEach { siteSlug ->
+                RedisService.delete("$REDIS_KEY_PREFIX$siteSlug")
+            } }
         } catch (_: Exception) {
             // Non-fatal
         }

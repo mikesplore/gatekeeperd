@@ -52,32 +52,21 @@ Deploy with:
 docker-compose up -d
 ```
 
-## Option 2: Using the deployment script (Recommended)
+## Deploy the systemd service from a CI artifact
 
-### On your dev machine (build + push)
-
-```bash
-./build.sh
-./push.sh
-```
-
-### On the VPS (pull + run)
-
-Copy only `deploy.sh` and `.env` to the server — no Dockerfile or source code needed.
+The repository's `deploy.sh` downloads the JAR from the latest successful `build.yml`
+workflow run on `main`. On the VPS, authenticate GitHub CLI with permission to read
+workflow artifacts, then copy the script and run it:
 
 ```bash
+gh auth login
 chmod +x deploy.sh
-./deploy.sh          # pulls mikesplore/gatekeeperd:1.0.0-SNAPSHOT from Docker Hub
-./deploy.sh --fresh  # also resets the postgres volume (use when DB credentials changed)
+./deploy.sh
 ```
 
-Use `./deploy.sh --fresh` when DB credentials changed since the first deploy.
-1. Create the `gatekeeper-internal` network if it doesn't exist
-2. Create the `pgdata` volume for postgres (or reset it with `--fresh`)
-3. Pull the app image from Docker Hub (postgres + redis too)
-4. Stop and remove existing containers if they exist
-5. Start postgres, verify credentials, then start redis and gatekeeperd
-6. Wait for `/api/health` to respond
+The script downloads from a specific workflow run, checks the JAR SHA-256, prints the
+full source commit, saves it to `/opt/gatekeeperd/source-commit.txt`, and restarts the
+systemd service. The printed commit identifies the exact CI artifact installed.
 
 ## Running gatekeeperd on the host (for nginx management)
 
@@ -117,8 +106,9 @@ instead of hanging for a password.
 
 ### Install jar on VPS
 
-Download the latest workflow artifact from GitHub Actions, place it under a stable path
-(for example `/opt/gatekeeperd/gatekeeperd-all.jar`), then restart the systemd service.
+Run the repository's `deploy.sh` on the VPS. It selects a specific successful workflow
+run, reports its source commit, validates the downloaded checksum, installs the JAR at
+`/opt/gatekeeperd/gatekeeperd-all.jar`, and restarts the systemd service.
 
 To stop all services:
 ```bash

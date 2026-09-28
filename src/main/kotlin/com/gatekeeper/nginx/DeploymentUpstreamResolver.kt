@@ -5,23 +5,23 @@ import com.gatekeeper.db.tables.UpstreamMode
 import com.gatekeeper.deployment.DeploymentApplicationService
 import java.util.UUID
 
-/** Resolves a project's desired gateway target without changing persisted site configuration. */
+/** Resolves a service's desired gateway target without changing persisted site configuration. */
 object DeploymentUpstreamResolver {
     data class Target(val host: String, val port: Int, val containerName: String? = null)
     data class SiteTarget(val mode: UpstreamMode, val host: String, val explicitPort: Int?)
     data class RuntimeTarget(
-        val projectId: UUID?, val environment: String, val active: Boolean,
+        val serviceId: UUID?, val environment: String, val active: Boolean,
         val containerName: String?, val containerPort: Int?, val publishedPorts: Map<Int, Int>
     )
 
     fun resolve(
-        projectId: UUID,
+        serviceId: UUID,
         environment: String,
         site: SiteTarget,
         activeRuntime: RuntimeTarget?
     ): Target? {
         val runtime = activeRuntime?.takeIf {
-            it.projectId == projectId && it.environment == environment && it.active
+            it.serviceId == serviceId && it.environment == environment && it.active
         }
         if (runtime == null && site.mode == UpstreamMode.EXPLICIT_PORT) {
             val port = site.explicitPort?.takeIf { it in 1..65535 } ?: return null
@@ -38,26 +38,34 @@ object DeploymentUpstreamResolver {
     }
 
     fun resolve(
-        projectId: UUID,
+        serviceId: UUID,
         environment: String,
         site: SiteRepository.SiteRecord,
         activeRuntime: DeploymentApplicationService.ActiveDeploymentRuntime?
     ): Target? = resolve(
-        projectId,
+        serviceId,
         environment,
         SiteTarget(site.upstreamMode, site.upstreamHost, site.upstreamExplicitPort),
         activeRuntime?.let {
             RuntimeTarget(
-                it.projectId, it.environment,
+                it.serviceId, it.environment,
                 it.status == com.gatekeeper.db.tables.DeploymentStatus.ACTIVE,
                 it.containerName, it.containerPort, it.publishedPorts
             )
         }
     )
 
-    fun resolve(projectId: UUID, environment: String): Target? {
+    fun resolve(serviceId: UUID, environment: String): Target? {
+        val site = SiteRepository.findByServiceId(serviceId) ?: return null
+        val runtime = DeploymentApplicationService.activeDeploymentRuntime(serviceId, environment)
+        return resolve(serviceId, environment, site, runtime)
+    }
+
+    /** Compatibility lookup for project-level admin views: resolve its default service. */
+    fun resolveProjectDefault(projectId: UUID, environment: String): Target? {
         val site = SiteRepository.findByProjectId(projectId) ?: return null
-        val runtime = DeploymentApplicationService.activeDeploymentRuntime(projectId, environment)
-        return resolve(projectId, environment, site, runtime)
+        val serviceId = site.serviceId ?: return null
+        val runtime = DeploymentApplicationService.activeDeploymentRuntime(serviceId, environment)
+        return resolve(serviceId, environment, site, runtime)
     }
 }

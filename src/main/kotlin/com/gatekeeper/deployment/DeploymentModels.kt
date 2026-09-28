@@ -15,10 +15,13 @@ data class CreateDeploymentRequest(
     val network: String = "bridge",
     val restartPolicy: String = "unless-stopped",
     val projectId: String? = null,
+    val serviceId: String? = null,
     val autoDeploy: Boolean = false,
     val triggerSource: String = "manual",
     val env: Map<String, String> = emptyMap(),
     val secretEnv: Map<String, String> = emptyMap(),
+    val sharedEnvironmentSetId: String? = null,
+    val sharedEnvironmentSetVersion: Int? = null,
     val volumes: List<VolumeMount> = emptyList(),
     val createNetworkIfMissing: Boolean = false,
     val environment: String = "production",
@@ -43,6 +46,8 @@ data class UpdateDeploymentConfigurationRequest(
     val env: Map<String, String>? = null,
     /** Null preserves existing secrets; an explicit map replaces them, including an empty map. */
     val secretEnv: Map<String, String>? = null,
+    val sharedEnvironmentSetId: String? = null,
+    val sharedEnvironmentSetVersion: Int? = null,
     val volumes: List<VolumeMount>? = null,
     val createNetworkIfMissing: Boolean? = null,
     val autoDeploy: Boolean? = null,
@@ -51,5 +56,6 @@ data class UpdateDeploymentConfigurationRequest(
     val readinessTarget: String? = null,
     val readinessTimeoutSeconds: Int? = null,
     val readinessIntervalSeconds: Int? = null,
-    val readinessProbeTimeoutMillis: Int? = null
+    val readinessProbeTimeoutMillis: Int? = null,
+    val serviceId: String? = null
 )

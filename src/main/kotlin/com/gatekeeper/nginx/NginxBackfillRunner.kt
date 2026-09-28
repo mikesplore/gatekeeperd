@@ -26,9 +26,10 @@ object NginxBackfillRunner {
                         BackfillProject(it.id, it.slug, null)
                     }
                 },
-                siteExists = SiteRepository::existsForProject,
+                siteExists = SiteRepository::existsForDomain,
+                serviceIdForProject = SiteRepository::findDefaultServiceId,
                 expectedDockerTarget = { project ->
-                    val target = DeploymentUpstreamResolver.resolve(project.id, "production")
+                    val target = SiteRepository.findByProjectId(project.id)?.serviceId?.let { DeploymentUpstreamResolver.resolve(it, "production") }
                     val containerName = target?.containerName
                     if (docker == null || target == null || containerName.isNullOrBlank()) null
                     else BackfillDockerTarget(containerName, target.port)
@@ -36,12 +37,12 @@ object NginxBackfillRunner {
                 autoCertificatePath = { domain -> nginx.resolveCertificateForDomain(domain)?.certificatePath },
                 render = { model -> nginx.generateNginxConfig(model) },
                 createSite = { project, model ->
-                    val site = SiteRepository.create(project.id, model)
+                    SiteRepository.create(project.id, model)
                     if (model.certMode == com.gatekeeper.db.tables.CertMode.AUTO_RESOLVE) {
                         nginx.resolveCertificateForDomain(model.domain)?.let { resolved ->
                             val certificate =
                                 CertificateRepository.upsert(resolved.certificateDomain, null, null, "discovered")
-                            SiteRepository.linkCertificate(project.id, certificate.id)
+                            SiteRepository.linkCertificateForDomain(model.domain, certificate.id)
                         }
                     }
                 },

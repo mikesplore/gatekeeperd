@@ -103,7 +103,7 @@ private fun renderModelFromSite(
         UpstreamMode.EXPLICIT_PORT -> site.upstreamHost to
             (site.upstreamExplicitPort ?: error("Site $slug has no explicit upstream port"))
         UpstreamMode.DOCKER_DISCOVERY -> {
-            val target = DeploymentUpstreamResolver.resolve(site.projectId, "production")
+            val target = site.serviceId?.let { DeploymentUpstreamResolver.resolve(it, "production") }
                 ?: error("Could not resolve the active deployment upstream for Docker site $slug")
             val containerName = target.containerName
                 ?: error("Active deployment runtime has no container name for Docker site $slug")
@@ -124,6 +124,8 @@ private fun renderModelFromSite(
     return NginxSiteRenderModel(
         slug = slug,
         projectId = site.projectId,
+        serviceId = site.serviceId,
+        siteId = site.id,
         domain = site.domain,
         upstreamHost = upstreamHost,
         appPort = port,
@@ -349,8 +351,9 @@ fun Application.configureNginxAdminRoutes() {
                     available && enabledLink
                 }
 
-                val activeRuntime = DeploymentApplicationService.activeDeploymentRuntime(project.id, "production")
-                val resolvedTarget = DeploymentUpstreamResolver.resolve(project.id, "production")
+                val site = SiteRepository.findByProjectId(project.id)
+                val activeRuntime = site?.serviceId?.let { DeploymentApplicationService.activeDeploymentRuntime(it, "production") }
+                val resolvedTarget = site?.serviceId?.let { DeploymentUpstreamResolver.resolve(it, "production") }
                 val configuredPort = resolvedTarget?.port
 
                 val dockerHealth = runCatching {
@@ -398,7 +401,7 @@ fun Application.configureNginxAdminRoutes() {
                 when (val result = computeNginxEnablePlan(
                     slug = slug,
                     projectDomain = project.domain,
-                    activeRuntimeName = DeploymentApplicationService.activeDeploymentRuntime(project.id, "production")?.containerName,
+                    activeRuntimeName = SiteRepository.findByProjectId(project.id)?.serviceId?.let { DeploymentApplicationService.activeDeploymentRuntime(it, "production")?.containerName },
                     request = body,
                     nginxService = nginxService,
                     dockerService = dockerService
@@ -466,7 +469,7 @@ fun Application.configureNginxAdminRoutes() {
                         enabled = enabled,
                         configPath = "$sitesAvailablePath/$slug",
                         enabledPath = "$sitesEnabledPath/$slug",
-                        port = DeploymentUpstreamResolver.resolve(project.id, "production")?.port,
+                        port = SiteRepository.findByProjectId(project.id)?.serviceId?.let { DeploymentUpstreamResolver.resolve(it, "production")?.port },
                         sslEnabled = resolvedCert != null,
                         certificateDomain = resolvedCert?.certificateDomain,
                         domain = project.domain,
@@ -593,7 +596,7 @@ fun Application.configureNginxAdminRoutes() {
                     val plan = when (val result = computeNginxEnablePlan(
                     slug = slug,
                     projectDomain = project.domain,
-                    activeRuntimeName = DeploymentApplicationService.activeDeploymentRuntime(project.id, "production")?.containerName,
+                    activeRuntimeName = SiteRepository.findByProjectId(project.id)?.serviceId?.let { DeploymentApplicationService.activeDeploymentRuntime(it, "production")?.containerName },
                     request = body,
                     nginxService = nginxService,
                     dockerService = dockerService
@@ -614,6 +617,7 @@ fun Application.configureNginxAdminRoutes() {
                     siteToPersist = NginxSiteRenderModel(
                         slug = slug,
                         projectId = project.id,
+                        serviceId = SiteRepository.findDefaultServiceId(project.id),
                         domain = plan.domain,
                         appPort = plan.appPort,
                         upstreamScheme = plan.upstreamScheme,
@@ -631,11 +635,13 @@ fun Application.configureNginxAdminRoutes() {
                         sslEnabled = responseSslEnabled,
                         sslCertificatePath = plan.resolvedCertificate?.certificatePath,
                         sslCertificateKeyPath = plan.resolvedCertificate?.privateKeyPath,
-                        projectId = project.id
+                        projectId = project.id,
+                        serviceId = SiteRepository.findDefaultServiceId(project.id)
                     )
                 }
 
-                val enabled = nginxService.enableProject(slug, config)
+                val enabledSlug = siteToPersist?.slug ?: slug
+                val enabled = nginxService.enableProject(enabledSlug, config)
                 if (!enabled) {
                     call.respondError(
                         HttpStatusCode.UnprocessableEntity,
@@ -647,7 +653,7 @@ fun Application.configureNginxAdminRoutes() {
 
                 val reloaded = nginxService.reloadNginx()
                 if (!reloaded) {
-                    nginxService.disableProject(slug)
+                    nginxService.disableProject(enabledSlug)
                     call.respondError(HttpStatusCode.InternalServerError, "nginx_error", "Failed to reload nginx")
                     return@post
                 }
@@ -656,7 +662,7 @@ fun Application.configureNginxAdminRoutes() {
                     runCatching { SiteRepository.create(project.id, model) }
                         .onFailure { error ->
                             logger.error("Nginx site enabled but database registration failed for project $slug", error)
-                            nginxService.removeProject(slug)
+                            nginxService.removeProject(enabledSlug)
                             nginxService.reloadNginx()
                             call.respondError(
                                 HttpStatusCode.InternalServerError,

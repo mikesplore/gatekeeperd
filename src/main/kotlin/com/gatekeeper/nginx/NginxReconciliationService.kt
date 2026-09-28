@@ -37,19 +37,24 @@ class NginxReconciliationService(
         /** Docker-backed check used by production reconciliation wiring and integration tests. */
         fun dockerCheck(
             docker: DockerService,
-            resolveContainer: (projectId: UUID, environment: String) -> String? = { projectId, environment ->
-                DeploymentUpstreamResolver.resolve(projectId, environment)?.containerName
+            resolveContainer: (serviceId: UUID, environment: String) -> String? = { serviceId, environment ->
+                DeploymentUpstreamResolver.resolve(serviceId, environment)?.containerName
             }
         ): (SiteRepository.SiteRecord) -> String? = { site ->
             if (site.upstreamMode != UpstreamMode.DOCKER_DISCOVERY) {
                 null
             } else {
-                val container = resolveContainer(site.projectId, "production")
-                when {
-                    container.isNullOrBlank() -> "Docker discovery site has no container name"
-                    docker.containerHealth(container) != "running" ->
-                        "Docker container '$container' is not running"
-                    else -> null
+                val serviceId = site.serviceId
+                if (serviceId == null) {
+                    "Site has no service identity"
+                } else {
+                    val container = resolveContainer(serviceId, "production")
+                    when {
+                        container.isNullOrBlank() -> "Docker discovery site has no container name"
+                        docker.containerHealth(container) != "running" ->
+                            "Docker container '$container' is not running"
+                        else -> null
+                    }
                 }
             }
         }
@@ -77,31 +82,36 @@ class NginxReconciliationService(
 
     private fun evaluateAll(): NginxReconciliationReport {
         val sites = listSites()
-        val sitesByProjectId = sites.associateBy { it.projectId }
+        val sitesBySiteId = sites.associateBy { it.id }
         val fileNames = (siteFiles(sitesAvailablePath) + siteFiles(sitesEnabledPath)).toSet()
         val resolvedFiles = fileNames.associateWith { fileName ->
-            val marker = projectIdMarker(fileName)
+            val marker = siteIdentityMarker(fileName)
             when {
-                marker.present -> marker.projectId?.let(sitesByProjectId::get)
+                marker.present && marker.siteId != null -> sitesBySiteId[marker.siteId]
+                marker.present -> marker.projectId?.let { projectId ->
+                    sites.firstOrNull { it.projectId == projectId && it.domain.equals(File(sitesAvailablePath, fileName).name, ignoreCase = true) }
+                        ?: sites.firstOrNull { it.projectId == projectId && fileName.endsWith(it.domain.replace(Regex("[^a-zA-Z0-9]+"), "-").trim('-'), ignoreCase = true) }
+                        ?: sites.firstOrNull { it.projectId == projectId }
+                }
                 else -> null
             }
         }
-        val filesByProjectId = resolvedFiles.entries.mapNotNull { (fileName, site) ->
-            site?.let { it.projectId to fileName }
+        val filesBySiteId = resolvedFiles.entries.mapNotNull { (fileName, site) ->
+            site?.let { it.id to fileName }
         }.groupBy({ it.first }, { it.second })
         val orphaned = resolvedFiles.filterValues { it == null }.keys.sorted()
         val nginxOutput = nginxTest()
         val results = sites.map { site ->
-            val ownedFiles = filesByProjectId[site.projectId].orEmpty().sorted()
+            val ownedFiles = filesBySiteId[site.id].orEmpty().sorted()
             val result = when {
                 ownedFiles.size > 1 -> NginxReconciliationResult(
                     site.id.toString(), ReconciliationStatus.ERROR,
-                    "Multiple nginx files identify project ${site.projectId}: ${ownedFiles.joinToString()}",
+                    "Multiple nginx files identify site ${site.id}: ${ownedFiles.joinToString()}",
                     projectId = site.projectId
                 )
                 ownedFiles.isEmpty() && site.id.toString() in orphaned -> NginxReconciliationResult(
                     site.id.toString(), ReconciliationStatus.DEAD_CONFIG,
-                    "Nginx file does not identify project ${site.projectId}", projectId = site.projectId
+                    "Nginx file does not identify site ${site.id}", projectId = site.projectId
                 )
                 else -> evaluate(site, ownedFiles.singleOrNull() ?: site.id.toString(), nginxOutput)
             }
@@ -132,12 +142,12 @@ class NginxReconciliationService(
         return NginxReconciliationResult(slug, ReconciliationStatus.HEALTHY, projectId = site.projectId)
     }
 
-    private fun projectIdMarker(fileName: String): SiteProjectIdentityMarker {
+    private fun siteIdentityMarker(fileName: String): SiteIdentityMarker {
         val file = File(sitesAvailablePath, fileName).takeIf { it.isFile }
             ?: File(sitesEnabledPath, fileName).takeIf { it.exists() }
-            ?: return SiteProjectIdentityMarker(false, null)
+            ?: return SiteIdentityMarker(false, null, null)
         val content = runCatching { file.readText() }.getOrDefault("")
-        return parseSiteProjectIdentityMarker(content)
+        return parseSiteIdentityMarker(content)
     }
 
     private fun referencesSite(output: String, file: File): Boolean =

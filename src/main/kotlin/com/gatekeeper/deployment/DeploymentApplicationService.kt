@@ -4,6 +4,7 @@ import com.gatekeeper.db.tables.Deployments
 import com.gatekeeper.db.tables.DeploymentStatus
 import com.gatekeeper.db.tables.Projects
 import com.gatekeeper.db.tables.AuditLog
+import com.gatekeeper.db.tables.Services
 import org.jetbrains.exposed.sql.insert
 import org.jetbrains.exposed.sql.and
 import org.jetbrains.exposed.sql.selectAll
@@ -16,6 +17,10 @@ import java.util.UUID
 
 /** The only writer of canonical deployment lifecycle state. */
 object DeploymentApplicationService {
+    private fun defaultServiceId(projectId: UUID): UUID = Services.selectAll().where {
+        (Services.projectId eq projectId) and (Services.name eq "default")
+    }.singleOrNull()?.get(Services.id) ?: error("Default service not found for project $projectId")
+
     private val allowedTransitions = mapOf(
         DeploymentStatus.QUEUED to setOf(DeploymentStatus.BUILDING, DeploymentStatus.CANCELLED),
         DeploymentStatus.BUILDING to setOf(DeploymentStatus.STARTING, DeploymentStatus.FAILED, DeploymentStatus.CANCELLED),
@@ -31,6 +36,7 @@ object DeploymentApplicationService {
     fun createQueued(
         id: UUID,
         projectId: UUID,
+        serviceId: UUID,
         configurationId: UUID,
         executionId: UUID,
         triggerSource: String,
@@ -45,6 +51,7 @@ object DeploymentApplicationService {
         Deployments.insert {
             it[Deployments.id] = id
             it[Deployments.projectId] = projectId
+            it[Deployments.serviceId] = serviceId
             it[Deployments.environment] = environment
             it[Deployments.configurationId] = configurationId
             it[Deployments.executionId] = executionId
@@ -65,6 +72,7 @@ object DeploymentApplicationService {
     fun recordAdoptedRuntime(
         id: UUID,
         projectId: UUID,
+        serviceId: UUID,
         configurationId: UUID,
         executionId: UUID,
         environment: String,
@@ -81,6 +89,7 @@ object DeploymentApplicationService {
         Deployments.insert {
             it[Deployments.id] = id
             it[Deployments.projectId] = projectId
+            it[Deployments.serviceId] = serviceId
             it[Deployments.environment] = environment
             it[Deployments.configurationId] = configurationId
             it[Deployments.executionId] = executionId
@@ -164,9 +173,9 @@ object DeploymentApplicationService {
         val env: Map<String, String>, val secretEnv: Map<String, String>, val volumes: List<com.gatekeeper.docker.VolumeMount>
     )
 
-    fun activeRuntime(projectId: UUID, environment: String): ActiveRuntime? = transaction {
+    fun activeRuntime(serviceId: UUID, environment: String): ActiveRuntime? = transaction {
         Deployments.selectAll().where {
-            (Deployments.projectId eq projectId) and (Deployments.environment eq environment) and (Deployments.status eq DeploymentStatus.ACTIVE)
+            (Deployments.serviceId eq serviceId) and (Deployments.environment eq environment) and (Deployments.status eq DeploymentStatus.ACTIVE)
         }.singleOrNull()?.let { row ->
             val execution = com.gatekeeper.db.tables.DeploymentExecutions.selectAll()
                 .where { com.gatekeeper.db.tables.DeploymentExecutions.id eq row[Deployments.executionId] }.singleOrNull()
@@ -191,7 +200,8 @@ object DeploymentApplicationService {
         val status: DeploymentStatus,
         val containerName: String?,
         val containerPort: Int?,
-        val publishedPorts: Map<Int, Int>
+        val publishedPorts: Map<Int, Int>,
+        val serviceId: UUID = UUID(0, 0)
     )
 
     data class ActiveDeploymentSummary(
@@ -240,10 +250,11 @@ object DeploymentApplicationService {
     )
 
     /** History metadata only: never reads encrypted environment or credential payloads. */
-    fun deploymentHistory(projectId: UUID, environment: String): List<DeploymentHistoryEntry> = transaction {
+    fun deploymentHistory(projectId: UUID, environment: String, serviceId: UUID? = null): List<DeploymentHistoryEntry> = transaction {
         val deployments = Deployments.selectAll().where {
             (Deployments.projectId eq projectId) and (Deployments.environment eq environment)
-        }.toList().sortedByDescending { it[Deployments.createdAt] }
+        }.toList().filter { serviceId == null || it[Deployments.serviceId] == serviceId }
+            .sortedByDescending { it[Deployments.createdAt] }
         deployments.mapNotNull { deployment ->
             val execution = com.gatekeeper.db.tables.DeploymentExecutions.selectAll()
                 .where { com.gatekeeper.db.tables.DeploymentExecutions.id eq deployment[Deployments.executionId] }
@@ -261,6 +272,7 @@ object DeploymentApplicationService {
             val targetId = deployment[Deployments.id]
             val canRollback = status == DeploymentStatus.SUPERSEDED && deployments.any {
                 it[Deployments.status] == DeploymentStatus.ACTIVE && it[Deployments.environment] == environment
+                    && it[Deployments.serviceId] == deployment[Deployments.serviceId]
             }
             DeploymentHistoryEntry(
                 targetId, deployment[Deployments.projectId] ?: error("Deployment has no project_id"), deployment[Deployments.environment], status.value,
@@ -300,7 +312,8 @@ object DeploymentApplicationService {
                 else -> "not_run"
             }
             val hasActive = Deployments.selectAll().where {
-                (Deployments.projectId eq projectId) and (Deployments.environment eq environment) and (Deployments.status eq DeploymentStatus.ACTIVE)
+                (Deployments.serviceId eq deployment[Deployments.serviceId]) and
+                    (Deployments.environment eq environment) and (Deployments.status eq DeploymentStatus.ACTIVE)
             }.count() > 0
             val entry = DeploymentHistoryEntry(
                 deployment[Deployments.id], projectId, environment, status.value,
@@ -320,11 +333,15 @@ object DeploymentApplicationService {
     }
 
     /** Metadata for the active pointer only. Never selects or decrypts environment values. */
-    fun activeDeploymentSummary(projectId: UUID, environment: String): ActiveDeploymentSummary? = transaction {
+    fun activeDeploymentSummary(projectId: UUID, environment: String): ActiveDeploymentSummary? =
+        activeDeploymentSummaryForService(defaultServiceId(projectId), environment)
+
+    fun activeDeploymentSummaryForService(serviceId: UUID, environment: String): ActiveDeploymentSummary? = transaction {
         val deployment = Deployments.selectAll().where {
-            (Deployments.projectId eq projectId) and (Deployments.environment eq environment) and
+            (Deployments.serviceId eq serviceId) and (Deployments.environment eq environment) and
                 (Deployments.status eq DeploymentStatus.ACTIVE)
         }.singleOrNull() ?: return@transaction null
+        val projectId = deployment[Deployments.projectId] ?: return@transaction null
         val execution = com.gatekeeper.db.tables.DeploymentExecutions.selectAll()
             .where { com.gatekeeper.db.tables.DeploymentExecutions.id eq deployment[Deployments.executionId] }
             .singleOrNull() ?: return@transaction null
@@ -345,16 +362,19 @@ object DeploymentApplicationService {
         )
     }
 
-    fun latestDeploymentState(projectId: UUID, environment: String): Pair<UUID, String>? = transaction {
+    fun latestDeploymentState(projectId: UUID, environment: String): Pair<UUID, String>? =
+        latestDeploymentStateForService(defaultServiceId(projectId), environment)
+
+    fun latestDeploymentStateForService(serviceId: UUID, environment: String): Pair<UUID, String>? = transaction {
         Deployments.selectAll().where {
-            (Deployments.projectId eq projectId) and (Deployments.environment eq environment)
+            (Deployments.serviceId eq serviceId) and (Deployments.environment eq environment)
         }.maxByOrNull { it[Deployments.createdAt] }?.let { it[Deployments.id] to it[Deployments.status].value }
     }
 
     /** Lightweight active-pointer lookup for gateway resolution; never loads secret environment values. */
-    fun activeDeploymentRuntime(projectId: UUID, environment: String): ActiveDeploymentRuntime? = transaction {
+    fun activeDeploymentRuntime(serviceId: UUID, environment: String): ActiveDeploymentRuntime? = transaction {
         val row = Deployments.selectAll().where {
-            (Deployments.projectId eq projectId) and (Deployments.environment eq environment) and
+            (Deployments.serviceId eq serviceId) and (Deployments.environment eq environment) and
                 (Deployments.status eq DeploymentStatus.ACTIVE)
         }.singleOrNull() ?: return@transaction null
         val containerPort = com.gatekeeper.db.tables.DeploymentExecutions.selectAll()
@@ -365,8 +385,9 @@ object DeploymentApplicationService {
                 .mapKeys { it.key.toInt() }
         }.getOrDefault(emptyMap())
         ActiveDeploymentRuntime(
-            row[Deployments.id], row[Deployments.projectId] ?: error("Active deployment has no project_id"), row[Deployments.environment], row[Deployments.status],
-            row[Deployments.runtimeContainerName], containerPort, publishedPorts
+            row[Deployments.id], row[Deployments.projectId] ?: error("Active deployment has no project_id"),
+            row[Deployments.environment], row[Deployments.status], row[Deployments.runtimeContainerName], containerPort, publishedPorts,
+            row[Deployments.serviceId] ?: error("Active deployment has no service_id")
         )
     }
 
@@ -399,11 +420,12 @@ object DeploymentApplicationService {
         val row = Deployments.selectAll().where { Deployments.id eq id }.singleOrNull() ?: return@transaction false
         check(row[Deployments.status] == DeploymentStatus.HEALTH_CHECKING) { "Deployment $id is not health-checking" }
         val projectId = row[Deployments.projectId] ?: error("Deployment has no project_id")
+        val serviceId = row[Deployments.serviceId] ?: error("Deployment has no service_id")
         val environment = row[Deployments.environment]
         val activeRows = Deployments.selectAll().where {
-            (Deployments.projectId eq projectId) and (Deployments.environment eq environment) and (Deployments.status eq DeploymentStatus.ACTIVE)
+            (Deployments.serviceId eq serviceId) and (Deployments.environment eq environment) and (Deployments.status eq DeploymentStatus.ACTIVE)
         }.toList()
-        check(activeRows.size <= 1) { "Multiple active deployments found for $projectId/$environment" }
+        check(activeRows.size <= 1) { "Multiple active deployments found for $serviceId/$environment" }
         val previousId = activeRows.singleOrNull()?.get(Deployments.id)
         if (replacesDeploymentId != null) check(previousId == replacesDeploymentId) { "Active deployment changed during cutover" }
         val now = LocalDateTime.now()
@@ -450,11 +472,11 @@ object DeploymentApplicationService {
         val now = LocalDateTime.now()
         var effectiveReplacementId = replacesDeploymentId
         if (target == DeploymentStatus.ACTIVE) {
-            val projectId = row[Deployments.projectId] ?: error("Deployment has no project_id")
+            val serviceId = row[Deployments.serviceId] ?: error("Deployment has no service_id")
             run {
                 val environment = row[Deployments.environment]
                 val prior = Deployments.selectAll().where {
-                    (Deployments.projectId eq projectId) and
+                    (Deployments.serviceId eq serviceId) and
                         (Deployments.environment eq environment) and
                         (Deployments.status eq DeploymentStatus.ACTIVE)
                 }.singleOrNull()
@@ -468,7 +490,7 @@ object DeploymentApplicationService {
                         it[supersededAt] = now
                         it[updatedAt] = now
                     }
-                    check(superseded == 1) { "Active deployment changed concurrently for project $projectId/$environment" }
+                    check(superseded == 1) { "Active deployment changed concurrently for service $serviceId/$environment" }
                     effectiveReplacementId = effectiveReplacementId ?: priorId
                 }
             }

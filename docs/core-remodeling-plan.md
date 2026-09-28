@@ -20,6 +20,81 @@ Infrastructure credentials (GitHub, registry, and future providers) belong to Ga
 
 For the initial implementation, one project has one primary service and one active deployment at a time. The model should leave room for multiple services later, without exposing multi-service orchestration in the first UI/API iteration.
 
+## Phase 7 — Service identity (chunked)
+
+Phase 7 evolves the project-centered model so one customer project can own multiple independently configured services/deployments (for example, a frontend and backend). Implement this phase in small, reviewable chunks. The decisions below are locked for implementation and supersede conflicting earlier assumptions in this document, including project-owned sites and source settings.
+
+### Chunk 0 — Locked decisions
+
+1. **Effective status:** Project access status controls customer access across all services. A service status controls only that service's deployment/runtime. A project-level block gates every service; a service-level block affects only that service. Deployment health does not implicitly mutate project access or service status.
+2. **Shared variable imports:** A service pins imported project-level variable versions when configured. Later edits to shared variables do not silently alter that service's desired configuration; an explicit import refresh/update followed by redeployment applies them. Each deployment records the resolved variable versions it used.
+3. **Site ownership:** A site attaches to a service because it routes to one service. Project identity, billing, and customer ownership remain project-scoped.
+4. **Source settings:** Repository, branch/ref, and related build/source settings belong to a service. Services in the same project may use different sources.
+5. **Project-level environment:** Keep project-level variables as shared variables that services can import. Service-specific variables may add or override imported keys. The resolved values used by each deployment are captured in that deployment's immutable configuration snapshot, while secret values remain protected under the existing secret-handling rules.
+
+### Chunk sequence
+
+Keep subsequent Phase 7 chunks independently reviewable and compatible with the existing single-service workflow. Establish service identity and backfill existing project configuration as the first implementation chunk; then migrate source/configuration ownership, environment imports and snapshots, site routing, and API/UI workflows in separate chunks. Update this sequence as each chunk's concrete schema/API scope is agreed.
+
+### Chunk 1 — Service identity table and default-service backfill
+
+- Add an additive Flyway migration creating `services` with UUID `id`, required `project_id` FK, required `name`, and unique `(project_id, name)` constraint.
+- Backfill exactly one `default` service for each existing project that does not already have one. Preserve existing project data and make the insert idempotent.
+- Before applying the migration in an environment, run `service-backfill --dry-run`; the command reports project counts with and without a default service and the planned insert count, without modifying data. The Flyway migration remains the only write path for this chunk.
+- This chunk establishes identity only. It does not yet move deployment configuration, source settings, environment variables, sites, routes, or runtime status to service ownership.
+
+### Chunk 2 — Service ownership on runtime records
+
+- Add nullable `service_id` foreign keys to deployment configurations, deployment executions, deployment jobs, and project secret-set versions. Keep existing `project_id` columns during the compatibility period.
+- Backfill each row to the `default` service for its project where that association resolves. Keep unresolved legacy rows nullable and visible; do not guess ownership.
+- Scope secret-set version uniqueness by `(service_id, environment, version)` while retaining `project_id` as a compatibility owner.
+- Dual-write project and service IDs for new/updated configurations, execution snapshots, queued jobs, and secret-set versions. Existing project-based configuration/job lookups resolve to the project's default service and prefer matching `service_id` rows, with a nullable-ID fallback for legacy data.
+- Validate a deployment's secret-set service ownership when resolving its execution snapshot, while tolerating historical rows whose service ID remains null.
+- Do not yet remove project-level ownership, alter site ownership, or expose multiple services through routes/UI.
+
+### Chunk 3 — Deployment lifecycle per service
+
+- Add nullable `service_id` to canonical deployments and backfill from the associated execution/configuration service, falling back to the project's `default` service when necessary.
+- Replace the partial unique active-deployment index on `(project_id, environment)` with one on `(service_id, environment)`, retaining the `status = 'active'` predicate.
+- Write service ownership when creating queued or adopted deployment lifecycle records. Scope activation/supersession and rollback-active checks to service plus environment; keep the existing status transition graph unchanged.
+- Serialize worker processing with a distributed lock keyed by service ID and environment. Resolve the claimed job's service ID and use it when locating the prior active runtime.
+
+### Chunk 5 — Versioned shared and service environment sets
+
+- Keep service-level environment versions in the existing encrypted version table, now owned by `service_id`; add a separate project/environment table for immutable encrypted shared-variable versions.
+- Desired configuration may pin an optional shared-set ID/version and a service-set ID/version. Shared-set references are validated against the owning project and environment.
+- At deployment creation, resolve the pinned shared map first, then apply service values so the service wins on duplicate keys. The immutable execution snapshot stores the two set references and a key-to-source metadata map (`project_shared` or `service`), never environment values.
+- Store environment values only in the encrypted version-set payloads for newly written configurations/executions. Keep a compatibility resolver for historic snapshots that still have inline `env_json` or encrypted legacy secret payloads.
+- The worker resolves version references immediately before container creation. Log/error redaction uses resolved values in memory; values are not copied into deployment, execution, or queue snapshots.
+
+### Chunk 6 — Environment edit redeployment
+
+- Editing a service environment creates a new encrypted service-set version, updates that service's desired configuration reference, and queues a deployment from that configuration in one database transaction.
+- Editing shared project variables creates a new shared-set version. Services pinned to the previous latest shared version are explicitly refreshed to the new version and redeployed; services pinned to an older version remain unchanged, following Chunk 0's pin policy.
+- Each shared-edit fan-out deployment is queued with that service's own configuration and environment set. The shared edit and all resulting service configuration/deployment records commit atomically.
+- Environment values are accepted write-only and remain only in encrypted version payloads. API responses return version IDs and queued deployment IDs.
+
+### Chunk 7 — Gateway ownership by service
+
+- Add nullable `sites.service_id` with a foreign key to `services`, and backfill existing sites to their project's `default` service. Keep the project FK for project ownership and billing/gate policy.
+- Resolve a gateway site using `(service_id, environment)` and select that service's active deployment. Project-level views without an explicit service continue to use the default service.
+
+### Chunk 8 — Access policy per service
+
+- Add service `access_status` and `block_reason` fields, independent of deployment/runtime health.
+- Gate checks resolve the requested project or site slug to its site, then its service, and compute effective access: a project billing block denies all services; otherwise that service's access status applies.
+- Auto-blocking continues to set only the project billing block. It does not set service access status.
+- Invalidate cached decisions for affected project and site slugs when project or service access changes.
+- Scope deployment cutover, rollback, and gateway reconciliation to the service's site. Distinct sites use distinct nginx config slugs; rendered config includes stable site identity so reconciliation can distinguish multiple domains in one project.
+- Retain the existing multi-site database support; do not add a project-wide uniqueness restriction.
+
+### Chunk 9 — Service and environment APIs
+
+- Add authenticated service list/create/read/update/delete endpoints scoped to a project. Keep the default service permanent and preserve any service referenced by deployment, environment, or site history.
+- Add metadata-only reads for project shared and service environment versions. Responses may include key names, versions, timestamps, and pinned configuration references, but never environment values.
+- Provide a dedicated service environment write endpoint that creates a new encrypted version and queues that service's deployment atomically. Keep the shared environment write endpoint's existing atomic fan-out policy.
+- Add active-deployment inspection scoped to a service and environment. It reports immutable deployment and set-version references plus each resolved key's source and keyed HMAC fingerprint; it never returns plaintext values.
+
 ## Current state and gaps
 
 | Area | Already present | Gap to address |

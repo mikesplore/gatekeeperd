@@ -53,7 +53,7 @@ private val applicationModule = module {
     single<ProjectQueryRepository> { ExposedProjectQueryRepository() }
     single<SupportRequestRepository> { ExposedSupportRequestRepository() }
     single { CustomerApplicationService(get<ProjectQueryRepository>(), get(), get(), get<SupportRequestRepository>()) }
-    single { GateService(get<GetLatestPaymentLink>(), get()) }
+    single { GateService(get<ProjectQueryRepository>(), get<GetLatestPaymentLink>(), get()) }
     single { GateApplicationService(get<ProjectQueryRepository>(), get<GateService>()) }
     single { NginxService() }
     single { NginxAdminService(get()) }

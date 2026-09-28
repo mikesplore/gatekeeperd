@@ -76,7 +76,7 @@ data class BulkProjectResult(val slug: String, val status: String, val message: 
     val upstreamHost: String? = null, val upstreamMode: String? = null,
     val upstreamExplicitPort: Int? = null, val runtimeHealth: String? = null,
     val resolvedUpstreamHost: String? = null, val resolvedUpstreamPort: Int? = null,
-    val tlsMode: String? = null, val gateEnabled: Boolean? = null
+    val tlsMode: String? = null, val gateEnabled: Boolean? = null, val serviceId: String? = null
 )
 
 @Serializable data class DashboardSiteDetailResponse(
@@ -129,7 +129,7 @@ private fun dashboardUpstreamState(site: SiteRepository.SiteRecord, dockerServic
     val port = when (site.upstreamMode) {
         com.gatekeeper.db.tables.UpstreamMode.EXPLICIT_PORT -> site.upstreamExplicitPort ?: return "unknown"
         com.gatekeeper.db.tables.UpstreamMode.DOCKER_DISCOVERY -> {
-            val target = DeploymentUpstreamResolver.resolve(site.projectId, "production") ?: return "unknown"
+            val target = site.serviceId?.let { DeploymentUpstreamResolver.resolve(it, "production") } ?: return "unknown"
             val docker = dockerService ?: return "unknown"
             val name = target.containerName ?: return "unknown"
             val container = runCatching { docker.getContainer(name) }.getOrNull() ?: return "down"
@@ -154,7 +154,7 @@ private fun dashboardSite(site: SiteRepository.SiteRecord, dockerService: Docker
     val project = ProjectRepository.findById(site.projectId)
     val customer = project?.customerId?.let(CustomerRepository::findById)
     val slug = site.projectSlug ?: site.projectId.toString()
-    val resolved = DeploymentUpstreamResolver.resolve(site.projectId, "production")
+    val resolved = site.serviceId?.let { DeploymentUpstreamResolver.resolve(it, "production") }
     return DashboardSiteResponse(
         slug, site.projectId.toString(), customer?.id?.toString(), customer?.name, site.domain,
         site.reconciliationStatus.value,
@@ -166,7 +166,7 @@ private fun dashboardSite(site: SiteRepository.SiteRecord, dockerService: Docker
             val name = resolved?.containerName
             if (name == null || dockerService == null) null else runCatching { dockerService.containerHealth(name) }.getOrNull()
         } else null,
-        resolved?.host, resolved?.port, site.tlsMode.value, site.gateEnabled
+        resolved?.host, resolved?.port, site.tlsMode.value, site.gateEnabled, site.serviceId?.toString()
     )
 }
 
@@ -226,17 +226,20 @@ fun Application.configureOperationsAdminRoutes() {
             }
             get("/api/admin/dashboard/sites/{slug}") {
                 val slug = call.parameters["slug"] ?: run { call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing slug"); return@get }
-                val site = SiteRepository.findByProjectSlug(slug) ?: run { call.respondError(HttpStatusCode.NotFound, "site_not_found", "Site not found"); return@get }
+                val site = SiteRepository.findByProjectSlug(slug) ?: SiteRepository.findByDomain(slug)
+                    ?: run { call.respondError(HttpStatusCode.NotFound, "site_not_found", "Site not found"); return@get }
                 val nginx = NginxService()
-                val inspection = nginx.inspectSite(slug)
+                val siteSlug = site.projectSlug ?: slug
+                val inspection = nginx.inspectSite(siteSlug)
                 val cert = nginx.resolveCertificateForDomain(site.domain)
                 val expiry = cert?.let { nginx.certificateExpiry(it.certificateDomain) }
                 val response = withDashboardDocker(listOf(site)) { docker -> dashboardSite(site, docker) }
-                call.respond(DashboardSiteDetailResponse(response, inspection.content?.takeIf { inspection.managed }, inspection.content, cert != null, expiry?.second, nginx.listBackups(slug).map { it.name }))
+                call.respond(DashboardSiteDetailResponse(response, inspection.content?.takeIf { inspection.managed }, inspection.content, cert != null, expiry?.second, nginx.listBackups(siteSlug).map { it.name }))
             }
             patch("/api/admin/dashboard/sites/{slug}") {
                 val slug = call.parameters["slug"] ?: run { call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing slug"); return@patch }
-                val site = SiteRepository.findByProjectSlug(slug) ?: run { call.respondError(HttpStatusCode.NotFound, "site_not_found", "Site not found"); return@patch }
+                val site = SiteRepository.findByProjectSlug(slug) ?: SiteRepository.findByDomain(slug)
+                    ?: run { call.respondError(HttpStatusCode.NotFound, "site_not_found", "Site not found"); return@patch }
                 val body = runCatching { call.receive<DashboardSiteUpdateRequest>() }.getOrElse { call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid site update body"); return@patch }
                 val update = runCatching {
                     SiteRepository.SiteDashboardUpdate(
@@ -251,12 +254,13 @@ fun Application.configureOperationsAdminRoutes() {
                 }.getOrElse { call.respondError(HttpStatusCode.BadRequest, "invalid_site_update", it.message ?: "Invalid site update"); return@patch }
                 val updated = SiteRepository.updateDashboard(site.id, update) ?: run { call.respondError(HttpStatusCode.NotFound, "site_not_found", "Site not found"); return@patch }
                 val nginx = NginxService()
-                val resolved = if (updated.upstreamMode == com.gatekeeper.db.tables.UpstreamMode.DOCKER_DISCOVERY) DeploymentUpstreamResolver.resolve(updated.projectId, "production") else null
+                val resolved = if (updated.upstreamMode == com.gatekeeper.db.tables.UpstreamMode.DOCKER_DISCOVERY) updated.serviceId?.let { DeploymentUpstreamResolver.resolve(it, "production") } else null
                 val port = (if (updated.upstreamMode == com.gatekeeper.db.tables.UpstreamMode.EXPLICIT_PORT) updated.upstreamExplicitPort else resolved?.port)
                     ?: run { call.respondError(HttpStatusCode.UnprocessableEntity, "site_configuration_invalid", "No active deployment runtime is available"); return@patch }
                 val cert = if (updated.certMode == com.gatekeeper.db.tables.CertMode.AUTO_RESOLVE) nginx.resolveCertificateForDomain(updated.domain) else null
                 val config = nginx.generateNginxConfig(NginxSiteRenderModel(
                     slug = slug, projectId = updated.projectId, domain = updated.domain, upstreamHost = resolved?.host ?: updated.upstreamHost, appPort = port,
+                    serviceId = updated.serviceId, siteId = updated.id,
                     upstreamScheme = if (updated.tlsMode == com.gatekeeper.db.tables.TlsMode.HTTP_ONLY) "http" else "https",
                     tlsMode = when (updated.tlsMode) {
                         com.gatekeeper.db.tables.TlsMode.HTTP_ONLY -> com.gatekeeper.nginx.TlsRenderMode.HTTP_ONLY
@@ -267,16 +271,16 @@ fun Application.configureOperationsAdminRoutes() {
                     certMode = updated.certMode,
                     gateEnabled = updated.gateEnabled, bypassPaths = updated.bypassPaths
                 ))
-                if (!nginx.enableProject(slug, config)) { call.respondError(HttpStatusCode.UnprocessableEntity, "nginx_error", "Validation or activation failed; previous configuration was preserved"); return@patch }
-                val responseSite = SiteRepository.findByProjectSlug(slug) ?: updated
+                val siteSlug = updated.projectSlug ?: slug
+                if (!nginx.enableProject(siteSlug, config)) { call.respondError(HttpStatusCode.UnprocessableEntity, "nginx_error", "Validation or activation failed; previous configuration was preserved"); return@patch }
+                val responseSite = SiteRepository.findByProjectSlug(siteSlug) ?: SiteRepository.findByDomain(siteSlug) ?: updated
                 call.respond(withDashboardDocker(listOf(responseSite)) { docker -> dashboardSite(responseSite, docker) })
             }
             delete("/api/admin/dashboard/sites/{slug}") {
                 val slug = call.parameters["slug"] ?: run { call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing slug"); return@delete }
-                val project = ProjectRepository.findBySlug(slug) ?: run { call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found"); return@delete }
                 val nginx = NginxService()
                 if (!nginx.removeProject(slug)) { call.respondError(HttpStatusCode.InternalServerError, "nginx_cleanup_failed", "Unable to remove nginx artifacts"); return@delete }
-                SiteRepository.deleteByProjectId(project.id)
+                (SiteRepository.findByProjectSlug(slug) ?: SiteRepository.findByDomain(slug))?.let { SiteRepository.deleteById(it.id) }
                 call.respond(mapOf("deleted" to true, "slug" to slug))
             }
             get("/api/admin/dashboard/dead-configs") {

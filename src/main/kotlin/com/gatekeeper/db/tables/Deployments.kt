@@ -9,6 +9,7 @@ import java.time.LocalDateTime
 object Deployments : Table("deployments") {
     val id = uuid("id")
     val projectId = uuid("project_id").references(Projects.id, onDelete = ReferenceOption.RESTRICT).nullable()
+    val serviceId = uuid("service_id").references(Services.id, onDelete = ReferenceOption.RESTRICT).nullable()
     val environment = text("environment").default("production")
     val configurationId = uuid("configuration_id").references(DeploymentConfigurations.id, onDelete = ReferenceOption.RESTRICT)
     val executionId = uuid("execution_id").uniqueIndex().references(DeploymentExecutions.id, onDelete = ReferenceOption.RESTRICT)

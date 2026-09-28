@@ -94,11 +94,11 @@ Gate check endpoint called by Traefik ForwardAuth. Never expose this to the publ
 - Redis cache TTL is 60 seconds. Admin actions explicitly delete the cache for instant propagation.
 
 ### GET /api/gate/auth?project={slug}
-Lightweight gate check for **nginx `auth_request` only**. Returns empty body.
+Lightweight gate check for **nginx `auth_request` only**. Returns empty body. The `project` parameter may be a project slug for its default service or a site slug for a service-specific site. Project billing blocks apply to every service; service access blocks apply only to that site's service.
 
 **Responses:**
-- `200 OK` — project is active; nginx should proxy to the client app
-- `403 Forbidden` — project is blocked or unknown; pair with `error_page 403 = @paywall` and serve `/api/gate/check` from a named location for the paywall body
+- `200 OK` — effective access is active; nginx should proxy to the client app
+- `403 Forbidden` — effective access is blocked or unknown; pair with `error_page 403 = @paywall` and serve `/api/gate/check` from a named location for the paywall body
 
 **Why this exists:** nginx `auth_request` treats `402` as an internal error and returns **500** to the client. Only `401` and `403` are valid deny codes for the auth subrequest. Use `/api/gate/auth` for the subrequest and `/api/gate/check` for the paywall response.
 
@@ -226,9 +226,9 @@ Create a project without a Docker container or domain. Requires `name` and `cust
 
 Returns `201 Created` with `{ "projectId": "<uuid>", "slug": "<slug>", "status": "created" }`.
 
-#### GET /api/admin/project-setup/projects/{projectId}
+#### GET /api/admin/project-setup/projects/{projectId}?serviceId={uuid}
 
-Read setup progress for continuing optional project configuration. Returns the project identity, saved source/runtime configuration (non-secret environment values only), whether registry credentials are configured and their version, desired gateway/site state, and both the active deployment pointer and latest deployment attempt status. It never returns registry passwords or application secret values.
+Read setup progress for continuing optional service configuration. `serviceId` is optional and defaults to the project's default service. Returns project identity, that service's saved source/runtime configuration (environment keys and version references only), whether registry credentials are configured and their version, desired gateway/site state, and both the active deployment pointer and latest deployment attempt status. It never returns registry passwords or application environment values.
 
 #### GET /api/admin/project-setup/containers
 
@@ -236,25 +236,49 @@ List running Docker containers that can be considered for project adoption. The 
 
 #### POST /api/admin/project-setup/projects/{projectId}/adopt-container
 
-Attach an already-running container as a canonical active deployment without restarting it. Accepts `{ "containerId": "<docker-id-or-name>", "containerPort": 8080 }`; the selected TCP container port must be published and reachable on the host. The project's desired source/runtime configuration is updated to match the adopted container. Existing container environment values are captured into an encrypted project secret-set version and are never returned. If the project has a managed nginx site, its config is validated and switched before the deployment becomes active. Any previous runtime is left running. Returns `201 Created` with deployment ID, container name, and environment variable count.
+Attach an already-running container as a canonical active deployment without restarting it. Accepts `{ "containerId": "<docker-id-or-name>", "containerPort": 8080 }`; the selected TCP container port must be published and reachable on the host. The project's desired source/runtime configuration is updated to match the adopted container. Existing container environment values are captured into an encrypted service environment-set version and are never returned or copied into the deployment snapshot. If the project has a managed nginx site, its config is validated and switched before the deployment becomes active. Any previous runtime is left running. Returns `201 Created` with deployment ID, container name, and environment variable count.
 
 #### PUT /api/admin/project-setup/projects/{projectId}/source-runtime
 
-Create or update the desired configuration for the project/environment. Accepts optional `repository` and `gitRef`, registry/image, required `containerPort`, optional `hostPort`, network/restart policy, non-secret `env`, `environment`, and readiness settings. Provide a GitHub repository to build from source; omit it to pull and run the configured prebuilt registry image directly. GitHub auto-deploy is only available when a repository is configured. The host port may be omitted so Docker can allocate an ephemeral port for candidate coexistence. `environment` defaults to `production`. This saves desired state only and is safe to repeat; it does not queue a deployment. Send application secrets through the credentials step.
+Create or update the desired configuration for a service/environment. Accepts optional `serviceId` (omitted selects `default`), `repository` and `gitRef`, registry/image, required `containerPort`, optional `hostPort`, network/restart policy, service-level `env`, optional pinned `sharedEnvironmentSetId` plus `sharedEnvironmentSetVersion`, `environment`, and readiness settings. Environment values are stored only in encrypted, immutable versions; responses expose key names and version references, never values. At deployment time, imported shared variables are loaded first and service values override matching keys. Provide a GitHub repository to build from source; omit it to pull and run the configured prebuilt registry image directly. GitHub auto-deploy is only available when a repository is configured. The host port may be omitted so Docker can allocate an ephemeral port for candidate coexistence. `environment` defaults to `production`. This saves desired state only and is safe to repeat; it does not queue a deployment.
 
 Returns `{ "configurationId": "<uuid>", "environment": "production", "status": "configured" }`.
 
 #### PUT /api/admin/project-setup/projects/{projectId}/credentials
 
-Optionally accepts `registry`, `username`, and `password` to create/rotate registry credentials, plus `secretEnv` to create a new project/environment secret-set version. Omitting registry username/password preserves the existing credential; omitting `secretEnv` preserves the current secret set. Supplying an empty `secretEnv` replaces it with an empty version. Returned data is metadata and version references only; values are write-only. Saving credentials does not deploy them.
+Optionally accepts `registry`, `username`, and `password` to create/rotate registry credentials, plus `secretEnv` to replace a service's environment set. `serviceId` selects a service (omitted selects `default`), and `environment` defaults to `production`. Omitting registry username/password preserves the existing credential; omitting `secretEnv` preserves the current service set. Supplying an empty `secretEnv` replaces it with an empty version. A supplied `secretEnv` is saved and deployed atomically; the response includes its `deploymentId`. Environment values are write-only.
+
+#### PUT /api/admin/projects/{projectId}/environment/shared
+
+Accepts `{ "environment": "production", "values": { "KEY": "value" } }` and creates a new encrypted project shared-environment version. Services pinned to the previous latest shared version are refreshed to the new version and each gets a deployment queued in the same transaction. Services pinned to older versions are left pinned. Returns `202 Accepted` with `{ "setId": "<uuid>", "version": 2, "deploymentIds": ["<uuid>"] }`. Values are write-only.
+
+#### GET /api/admin/projects/{projectId}/environment/shared?environment={name}
+
+Returns shared environment version metadata: latest version, IDs, version numbers, key names, creation timestamps, and actors. Values are never returned.
+
+#### GET, POST /api/admin/projects/{projectId}/services
+
+List project services or create one with `{ "name": "frontend" }`. Service names are unique within a project; `default` is reserved. Responses include service access status and block reason.
+
+#### GET, PATCH, DELETE /api/admin/projects/{projectId}/services/{serviceId}
+
+Read, update, or delete a service. PATCH accepts `name`, `accessStatus` (`active`, `blocked`, or `manual_block`), and `blockReason`. The default service cannot be renamed or deleted. Services with deployment, environment, or site history cannot be deleted.
+
+#### GET, PUT /api/admin/projects/{projectId}/services/{serviceId}/environment?environment={name}
+
+GET returns version metadata and the desired configuration's service and shared set references, with key names only. PUT accepts `{ "environment": "production", "values": { "KEY": "value" }, "sharedEnvironmentSetId": "<uuid>", "sharedEnvironmentSetVersion": 2 }`; both shared-reference fields may be null to unpin shared variables. It writes an encrypted immutable service version, saves the selected shared-set pin, and queues that service's deployment in one transaction. Values are write-only; the response contains the service set/version and deployment IDs.
+
+#### GET /api/admin/projects/{projectId}/services/{serviceId}/active-deployment?environment={name}
+
+Returns the active deployment's image/commit metadata and its shared/service environment version references. Each resolved environment key includes its source (`project_shared` or `service`) and an HMAC-SHA-256 fingerprint of the key/value pair, allowing comparisons without returning values. No active deployment returns `404 active_deployment_not_found`.
 
 #### PUT /api/admin/project-setup/projects/{projectId}/domain-gateway
 
-Save project domain and desired gateway settings before a runtime exists. Accepts `domain`, `tlsMode` (`http_only`, `https`, or `https_http2`), and `gateEnabled`. This stores a site draft; the worker activates/renders it only after a candidate passes readiness and gateway validation.
+Save a service's domain and desired gateway settings before a runtime exists. Accepts `domain`, `tlsMode` (`http_only`, `https`, or `https_http2`), `gateEnabled`, and optional `serviceId` (omitted selects `default`). This stores a site draft attached to that service; the worker activates/renders it only after a candidate for that service passes readiness and gateway validation. Site records are service-owned and multiple domains can belong to one project.
 
-#### POST /api/admin/project-setup/projects/{projectId}/deploy
+#### POST /api/admin/project-setup/projects/{projectId}/deploy?serviceId={uuid}
 
-Queue a deployment from the saved desired configuration. Returns `202 Accepted` with `{ "deploymentId": "<uuid>", "status": "queued" }`.
+Queue a deployment from the saved desired configuration. `serviceId` is optional and defaults to the project's default service. Returns `202 Accepted` with `{ "deploymentId": "<uuid>", "status": "queued" }`.
 
 ### GET /api/admin/projects/{slug}/overview
 
@@ -262,7 +286,7 @@ Returns sectioned project state: `accessLifecycle`, `desiredConfiguration`, `cur
 
 ### GET /api/admin/projects/{slug}/deployments/history
 
-Returns canonical deployment history for a project (optional `environment`, default `production`). Each item includes source commit, image digest, trigger metadata, status, readiness result, failure reason, credential and secret-set ID/version references, and available `rollback`/`redeploy` actions. It never returns encrypted payloads or plaintext values. Actor is `null` until deployments store a separate authenticated actor field.
+Returns canonical deployment history for a project (optional `environment`, default `production`). Optional `serviceId` filters the list to one service owned by the project. Each item includes source commit, image digest, trigger metadata, status, readiness result, failure reason, credential and secret-set ID/version references, and available `rollback`/`redeploy` actions. It never returns encrypted payloads or plaintext values. Actor is `null` until deployments store a separate authenticated actor field.
 
 ### POST /api/admin/projects/{projectId}/secret-sets/rotate-and-deploy
 

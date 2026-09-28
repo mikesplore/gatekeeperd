@@ -66,7 +66,9 @@ data class ProjectSetupCredentialsRequest(
     val registry: String? = null,
     val username: String? = null,
     val password: String? = null,
-    val secretEnv: Map<String, String>? = null
+    val secretEnv: Map<String, String>? = null,
+    val serviceId: String? = null,
+    val environment: String = "production"
 )
 
 @Serializable
@@ -76,14 +78,29 @@ data class ProjectSetupCredentialsResponse(
     val credentialVersion: Int? = null,
     val secretSetId: String? = null,
     val secretSetVersion: Int? = null,
+    val deploymentId: String? = null,
     val secretEnv: String = "write-only"
+)
+
+@Serializable
+data class ProjectSharedEnvironmentRequest(
+    val environment: String = "production",
+    val values: Map<String, String>
+)
+
+@Serializable
+data class ProjectEnvironmentDeployResponse(
+    val setId: String,
+    val version: Int,
+    val deploymentIds: List<String>
 )
 
 @Serializable
 data class ProjectSetupGatewayRequest(
     val domain: String,
     val tlsMode: String = "http_only",
-    val gateEnabled: Boolean = true
+    val gateEnabled: Boolean = true,
+    val serviceId: String? = null
 )
 
 @Serializable
@@ -398,14 +415,21 @@ fun Application.configureProjectSetupAdminRoutes() {
                 val projectId = call.setupProjectId() ?: return@get
                 val project = ProjectRepository.findActiveById(projectId)
                     ?: return@get call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
-                val config = DeploymentJobRepository.configurationSummary(projectId)
+                val serviceId = call.request.queryParameters["serviceId"]?.let { raw ->
+                    runCatching { UUID.fromString(raw) }.getOrNull()
+                        ?: return@get call.respondError(HttpStatusCode.BadRequest, "invalid_service_id", "Service ID is invalid")
+                } ?: DeploymentJobRepository.defaultServiceIdForProject(projectId)
+                if (ServiceRepository.findByProjectAndId(projectId, serviceId) == null) {
+                    return@get call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
+                }
+                val config = DeploymentJobRepository.configurationSummaryForService(projectId, serviceId)
                 val credential = config?.let { c ->
                     ProviderCredentialRepository.listMetadata("docker", "registry")
                         .firstOrNull { it.scope == c.registry && it.current }
                 }
-                val site = SiteRepository.findByProjectId(projectId)
-                val active = DeploymentApplicationService.activeDeploymentSummary(projectId, "production")
-                val latest = DeploymentApplicationService.latestDeploymentState(projectId, "production")
+                val site = SiteRepository.findByProjectIdAndServiceId(projectId, serviceId)
+                val active = DeploymentApplicationService.activeDeploymentSummaryForService(serviceId, "production")
+                val latest = DeploymentApplicationService.latestDeploymentStateForService(serviceId, "production")
                 call.respond(ProjectSetupStatusResponse(
                     projectId.toString(), project.slug, project.name, project.domain,
                     config?.toSetupResponse(), credential != null, credential?.version,
@@ -440,17 +464,18 @@ fun Application.configureProjectSetupAdminRoutes() {
                 if (!reachable) {
                     return@post call.respondError(HttpStatusCode.Conflict, "container_port_unreachable", "The container's published port is not reachable from this server")
                 }
-                val previous = DeploymentApplicationService.activeDeploymentSummary(projectId, "production")
                 val actor = call.principal<io.ktor.server.auth.jwt.JWTPrincipal>()?.payload?.subject ?: "admin"
                 val adopted = runCatching { DeploymentJobRepository.createAdoptedRuntime(projectId, details, request.containerPort, actor) }
                     .getOrElse { error ->
                         return@post call.respondError(HttpStatusCode.Conflict, "container_adoption_failed", error.message ?: "Container could not be adopted")
                     }
-                val site = SiteRepository.findByProjectId(projectId)
+                val site = SiteRepository.findByServiceId(adopted.serviceId)
                 val nginx = if (site != null) NginxService() else null
-                val previousConfig = if (site != null) runCatching { nginx?.inspectSite(project.slug)?.content }.getOrNull() else null
+                val siteSlug = site?.projectSlug ?: project.slug
+                val previous = DeploymentApplicationService.activeDeploymentSummaryForService(adopted.serviceId, "production")
+                val previousConfig = if (site != null) runCatching { nginx?.inspectSite(siteSlug)?.content }.getOrNull() else null
                 val routed = site == null || runCatching {
-                    nginx?.switchDeploymentUpstream(projectId, project.slug, "127.0.0.1", request.containerPort, hostPort) == true
+                    nginx?.switchDeploymentUpstream(adopted.serviceId, siteSlug, "127.0.0.1", request.containerPort, hostPort) == true
                 }.getOrDefault(false)
                 if (!routed) {
                     DeploymentApplicationService.transition(adopted.deploymentId, com.gatekeeper.db.tables.DeploymentStatus.FAILED, "Gateway validation failed while adopting the running container")
@@ -459,8 +484,8 @@ fun Application.configureProjectSetupAdminRoutes() {
                 val activated = runCatching { DeploymentApplicationService.activateAfterCutover(adopted.deploymentId, previous?.id) }.getOrDefault(false)
                 if (!activated) {
                     if (site != null && previousConfig != null) {
-                        runCatching { nginx?.restoreSiteConfiguration(project.slug, previousConfig) }
-                        runCatching { SiteRepository.restoreDeploymentUpstream(projectId, site) }
+                        runCatching { nginx?.restoreSiteConfiguration(siteSlug, previousConfig) }
+                        runCatching { SiteRepository.restoreDeploymentUpstreamForSite(site) }
                     }
                     DeploymentApplicationService.transition(adopted.deploymentId, com.gatekeeper.db.tables.DeploymentStatus.FAILED, "Active deployment changed during container adoption")
                     return@post call.respondError(HttpStatusCode.Conflict, "container_adoption_conflict", "Project runtime changed while the container was being attached; its gateway route was restored")
@@ -469,7 +494,7 @@ fun Application.configureProjectSetupAdminRoutes() {
                 call.respond(HttpStatusCode.Created, AdoptContainerResponse(
                     adopted.deploymentId.toString(), details.name, environmentVariableCount = details.environment.size,
                     message = if (details.environment.isNotEmpty()) {
-                        "Running container attached without restarting it. Its environment was saved as encrypted project secrets, and the previous runtime was left running."
+                        "Running container attached without restarting it. Its environment was saved as encrypted service variables, and the previous runtime was left running."
                     } else {
                         "Running container attached without restarting it. The previous runtime was left running."
                     }
@@ -504,7 +529,15 @@ fun Application.configureProjectSetupAdminRoutes() {
                 }
                 val body = runCatching { call.receive<ProjectSetupCredentialsRequest>() }.getOrNull()
                     ?: return@put call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid credentials request")
-                val config = DeploymentJobRepository.configurationSummary(projectId)
+                val serviceId = body.serviceId?.let { raw -> runCatching { UUID.fromString(raw) }.getOrNull() }
+                    ?: if (body.serviceId == null) null else return@put call.respondError(HttpStatusCode.BadRequest, "invalid_service_id", "Service ID is invalid")
+                val environment = body.environment.trim().lowercase()
+                if (!environment.matches(Regex("^[a-z][a-z0-9_-]{0,31}$"))) {
+                    return@put call.respondError(HttpStatusCode.BadRequest, "invalid_environment", "Environment name is invalid")
+                }
+                val targetServiceId = serviceId ?: DeploymentJobRepository.defaultServiceIdForProject(projectId)
+                val configId = DeploymentJobRepository.configurationIdForService(projectId, targetServiceId, environment)
+                val config = configId?.let(DeploymentJobRepository::configurationSummaryById)
                     ?: return@put call.respondError(HttpStatusCode.Conflict, "source_runtime_required", "Save source/runtime configuration before credentials")
                 val registry = (body.registry ?: config.registry).trim().lowercase()
                 if (!registry.matches(Regex("^(docker\\.io|[A-Za-z0-9.-]+(:[0-9]{1,5})?)$"))) {
@@ -515,28 +548,65 @@ fun Application.configureProjectSetupAdminRoutes() {
                 if ((username.isBlank()) != password.isBlank()) {
                     return@put call.respondError(HttpStatusCode.BadRequest, "invalid_registry_credentials", "Provide both username and password to save registry credentials")
                 }
-                if ((body.secretEnv?.keys ?: emptySet()).any { !it.matches(Regex("[A-Za-z_][A-Za-z0-9_]*")) }) {
-                    return@put call.respondError(HttpStatusCode.BadRequest, "invalid_secret_keys", "Secret environment variable names are invalid")
+                val serviceEnvKeys = body.secretEnv?.keys ?: emptySet()
+                if (serviceEnvKeys.any { !it.matches(Regex("[A-Za-z_][A-Za-z0-9_]*")) } ||
+                    body.secretEnv.orEmpty().any { (key, value) -> key.contains('=') || value.contains('\u0000') }) {
+                    return@put call.respondError(HttpStatusCode.BadRequest, "invalid_secret_keys", "Environment variable names or values are invalid")
                 }
                 if ((username.isNotBlank() || body.secretEnv != null) && !SecretValueCipher.isConfigured()) {
                     return@put call.respondError(HttpStatusCode.ServiceUnavailable, "secrets_unconfigured", "Secret encryption is not configured")
                 }
                 val providerCredential = if (username.isNotBlank()) RegistryCredentialRepository.save(registry, username, password) else null
+                var deploymentId: UUID? = null
                 if (body.secretEnv != null) {
-                    DeploymentJobRepository.updateConfiguration(
-                        config.id,
-                        UpdateDeploymentConfigurationRequest(registry = registry, secretEnv = body.secretEnv)
-                    )
+                    val result = runCatching {
+                        DeploymentJobRepository.updateServiceEnvironmentAndDeploy(
+                            projectId, targetServiceId, environment, body.secretEnv, actor = call.principal<io.ktor.server.auth.jwt.JWTPrincipal>()?.payload?.subject ?: "admin",
+                            registry = registry
+                        )
+                    }.getOrElse { error ->
+                        return@put call.respondError(HttpStatusCode.Conflict, "environment_update_failed", error.message ?: "Environment could not be saved")
+                    } ?: return@put call.respondError(HttpStatusCode.Conflict, "source_runtime_required", "Save service source/runtime configuration before credentials")
+                    deploymentId = result.deploymentIds.singleOrNull()
                 } else if (registry != config.registry) {
                     DeploymentJobRepository.updateConfiguration(config.id, UpdateDeploymentConfigurationRequest(registry = registry))
                 }
-                val updated = DeploymentJobRepository.configurationSummary(projectId)
+                val updated = configId?.let(DeploymentJobRepository::configurationSummaryById)
                 val currentCredential = ProviderCredentialRepository.listMetadata("docker", "registry")
                     .firstOrNull { it.scope == registry && it.current }
                 call.respond(ProjectSetupCredentialsResponse(
                     registry, providerCredential != null || currentCredential != null,
                     providerCredential?.version ?: currentCredential?.version,
-                    updated?.secretSetId?.toString(), updated?.secretSetVersion
+                    updated?.secretSetId?.toString(), updated?.secretSetVersion, deploymentId?.toString()
+                ))
+            }
+
+            put("/api/admin/projects/{projectId}/environment/shared") {
+                val projectId = call.setupProjectId() ?: return@put
+                if (ProjectRepository.findActiveById(projectId) == null) {
+                    return@put call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
+                }
+                val body = runCatching { call.receive<ProjectSharedEnvironmentRequest>() }.getOrNull()
+                    ?: return@put call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid shared environment request")
+                val environment = body.environment.trim().lowercase()
+                if (!environment.matches(Regex("^[a-z][a-z0-9_-]{0,31}$"))) {
+                    return@put call.respondError(HttpStatusCode.BadRequest, "invalid_environment", "Environment name is invalid")
+                }
+                if (body.values.keys.any { !it.matches(Regex("[A-Za-z_][A-Za-z0-9_]*")) } ||
+                    body.values.any { (key, value) -> key.contains('=') || value.contains('\u0000') }) {
+                    return@put call.respondError(HttpStatusCode.BadRequest, "invalid_environment_keys", "Environment variable names are invalid")
+                }
+                if (!SecretValueCipher.isConfigured()) {
+                    return@put call.respondError(HttpStatusCode.ServiceUnavailable, "secrets_unconfigured", "Environment encryption is not configured")
+                }
+                val actor = call.principal<io.ktor.server.auth.jwt.JWTPrincipal>()?.payload?.subject ?: "admin"
+                val result = runCatching {
+                    DeploymentJobRepository.updateSharedEnvironmentAndDeploy(projectId, environment, body.values, actor)
+                }.getOrElse { error ->
+                    return@put call.respondError(HttpStatusCode.Conflict, "shared_environment_update_failed", error.message ?: "Shared environment could not be saved")
+                }
+                call.respond(HttpStatusCode.Accepted, ProjectEnvironmentDeployResponse(
+                    result.setId.toString(), result.version, result.deploymentIds.map(UUID::toString)
                 ))
             }
 
@@ -551,11 +621,16 @@ fun Application.configureProjectSetupAdminRoutes() {
                 }
                 val tls = TlsMode.entries.firstOrNull { it.value == body.tlsMode.lowercase() }
                     ?: return@put call.respondError(HttpStatusCode.BadRequest, "invalid_tls_mode", "tlsMode must be http_only, https, or https_http2")
-                ProjectRepository.update(
+                val serviceId = body.serviceId?.let { raw -> runCatching { UUID.fromString(raw) }.getOrNull() }
+                    ?: if (body.serviceId == null) DeploymentJobRepository.defaultServiceIdForProject(projectId)
+                    else return@put call.respondError(HttpStatusCode.BadRequest, "invalid_service_id", "Service ID is invalid")
+                val service = ServiceRepository.findByProjectAndId(projectId, serviceId)
+                    ?: return@put call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
+                if (service.name == "default") ProjectRepository.update(
                     slug = project.slug, name = null, domain = domain, type = null,
                     amountDue = null, currency = null, dueDate = null, gracePeriodDays = null
                 ) ?: return@put call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
-                val site = SiteRepository.saveSetupDraft(projectId, domain, tls, body.gateEnabled, CertMode.AUTO_RESOLVE)
+                val site = SiteRepository.saveSetupDraft(projectId, domain, tls, body.gateEnabled, CertMode.AUTO_RESOLVE, serviceId)
                 call.respond(ProjectSetupGatewayResponse(site.domain, site.tlsMode.value, site.gateEnabled, site.reconciliationStatus.value))
             }
 
@@ -564,7 +639,14 @@ fun Application.configureProjectSetupAdminRoutes() {
                 if (ProjectRepository.findActiveById(projectId) == null) {
                     return@post call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
                 }
-                val configurationId = DeploymentJobRepository.configurationIdForProject(projectId)
+                val serviceId = call.request.queryParameters["serviceId"]?.let { raw ->
+                    runCatching { UUID.fromString(raw) }.getOrNull()
+                        ?: return@post call.respondError(HttpStatusCode.BadRequest, "invalid_service_id", "Service ID is invalid")
+                } ?: DeploymentJobRepository.defaultServiceIdForProject(projectId)
+                if (ServiceRepository.findByProjectAndId(projectId, serviceId) == null) {
+                    return@post call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
+                }
+                val configurationId = DeploymentJobRepository.configurationIdForService(projectId, serviceId)
                     ?: return@post call.respondError(HttpStatusCode.Conflict, "source_runtime_required", "Save source/runtime configuration before deploying")
                 val deploymentId = DeploymentJobRepository.redeployConfiguration(configurationId)
                     ?: return@post call.respondError(HttpStatusCode.Conflict, "deployment_not_queued", "Deployment could not be queued")
@@ -599,14 +681,15 @@ fun Application.configureProjectSetupAdminRoutes() {
                     ?: return@get call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
                 val config = DeploymentJobRepository.configurationSummary(project.id)
                 val site = SiteRepository.findByProjectId(project.id)
-                val active = DeploymentApplicationService.activeDeploymentSummary(project.id, "production")
+                val serviceId = site?.serviceId ?: DeploymentJobRepository.defaultServiceIdForProject(project.id)
+                val active = DeploymentApplicationService.activeDeploymentSummaryForService(serviceId, "production")
                 val dockerHealth = active?.containerName?.let { name ->
                     runCatching {
                         val docker = DockerService(AppConfig.dockerSocket)
                         try { docker.containerHealth(name) } finally { docker.close() }
                     }.getOrDefault("unknown")
                 } ?: "not_deployed"
-                val upstream = if (site != null) DeploymentUpstreamResolver.resolve(project.id, "production") else null
+                val upstream = site?.serviceId?.let { DeploymentUpstreamResolver.resolve(it, "production") }
                 val financials = projectOverviewFinancials(project, call.application.get<ProjectBalanceAdapter>())
                 call.respond(ProjectOverviewResponse(
                     project.id.toString(), project.slug, project.name, project.type,
@@ -641,7 +724,14 @@ fun Application.configureProjectSetupAdminRoutes() {
                 val project = ProjectRepository.findBySlug(slug)
                     ?: return@get call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
                 val environment = call.request.queryParameters["environment"]?.trim()?.takeIf(String::isNotEmpty) ?: "production"
-                val items = DeploymentApplicationService.deploymentHistory(project.id, environment).map { item ->
+                val serviceId = call.request.queryParameters["serviceId"]?.let { raw ->
+                    runCatching { UUID.fromString(raw) }.getOrNull()
+                        ?: return@get call.respondError(HttpStatusCode.BadRequest, "invalid_service_id", "Service ID is invalid")
+                }
+                if (serviceId != null && ServiceRepository.findByProjectAndId(project.id, serviceId) == null) {
+                    return@get call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
+                }
+                val items = DeploymentApplicationService.deploymentHistory(project.id, environment, serviceId).map { item ->
                     ProjectDeploymentHistoryItem(
                         item.id.toString(), item.environment, item.sourceCommit, item.imageName, item.imageTag,
                         item.imageDigest, item.triggerSource, item.actor, item.status, item.createdAt.toString(),
@@ -651,7 +741,7 @@ fun Application.configureProjectSetupAdminRoutes() {
                         buildList { if (item.canRollback) add("rollback"); if (item.canRedeploy) add("redeploy") }
                     )
                 }
-                call.respond(ProjectDeploymentHistoryResponse(project.id.toString(), environment, items))
+                    call.respond(ProjectDeploymentHistoryResponse(project.id.toString(), environment, items))
             }
 
             post("/api/admin/projects/{slug}/deployments/{id}/redeploy") {

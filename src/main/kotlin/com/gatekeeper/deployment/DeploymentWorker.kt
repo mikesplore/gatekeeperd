@@ -42,7 +42,7 @@ object DeploymentWorker {
 
     private suspend fun processNext() {
         val job = DeploymentJobRepository.claimNext() ?: return
-        DistributedLock.withLock("deployment-project:${job.projectId}") {
+        DistributedLock.withLock("deployment-service:${job.serviceId}:${job.environment}") {
             runBlocking { processClaimedJob(job) }
         }
     }
@@ -142,7 +142,7 @@ object DeploymentWorker {
                     randomHostPorts = dynamicContainerPorts,
                     network = job.network,
                     restartPolicy = job.restartPolicy,
-                    env = job.env + DeploymentJobRepository.resolveSecretEnvForExecution(job.id),
+                    env = DeploymentJobRepository.resolveEnvironmentForExecution(job.id).values,
                     volumes = job.volumes,
                     pullImage = false
                 ))
@@ -197,29 +197,28 @@ object DeploymentWorker {
             ?: error("Canonical candidate runtime missing for deployment ${job.id}")
         val candidateRuntimeName = requireNotNull(runtime.name) { "Candidate container name is missing" }
         check(docker.containerHealth(candidateRuntimeName) == "running") { "Ready candidate runtime is no longer running" }
-        val previousDeployment = DeploymentApplicationService.activeRuntime(runtime.projectId, job.environment)
+        val previousDeployment = DeploymentApplicationService.activeRuntime(job.serviceId, job.environment)
         val previousContainer = previousDeployment?.name
         val changesProductionRoute = job.environment == "production"
-        val hasManagedSite = changesProductionRoute && SiteRepository.existsForProject(runtime.projectId)
+        val hasManagedSite = changesProductionRoute && SiteRepository.existsForService(job.serviceId)
         var rollbackRoute: (() -> Boolean)? = null
         if (hasManagedSite) {
-            val ownerId = runtime.projectId
-            val ownerSlug = requireNotNull(runtime.projectSlug)
+            val site = SiteRepository.findByServiceId(job.serviceId) ?: error("Managed site record missing for service ${job.serviceId}")
+            val ownerSlug = site.projectSlug ?: error("Managed site nginx slug is unavailable for site ${site.id}")
             val siteService = NginxService()
             val previousConfig = siteService.inspectSite(ownerSlug).content
-            val site = SiteRepository.findByProjectId(ownerId) ?: error("Managed site record missing for project $ownerId")
             val containerPort = site.upstreamExplicitPort ?: job.containerPort
                 ?: error("Managed site has no upstream port and deployment has no container port")
             val hostPort = runtime.ports[containerPort]
                 ?: if (site.upstreamMode == com.gatekeeper.db.tables.UpstreamMode.EXPLICIT_PORT) runtime.hostPort
                     ?: error("Candidate runtime host port is missing")
                 else error("Candidate does not publish managed site container port $containerPort")
-            check(siteService.switchDeploymentUpstream(ownerId, ownerSlug, "127.0.0.1", containerPort, hostPort)) {
+            check(siteService.switchDeploymentUpstream(job.serviceId, ownerSlug, "127.0.0.1", containerPort, hostPort)) {
                 "Gateway/site upstream cutover failed; previous runtime remains active"
             }
             rollbackRoute = {
                 val restored = previousConfig?.let { siteService.restoreSiteConfiguration(ownerSlug, it) } ?: false
-                if (restored) SiteRepository.restoreDeploymentUpstream(ownerId, site) != null else false
+                if (restored) SiteRepository.restoreDeploymentUpstreamForSite(site) != null else false
             }
             onRouteRollback(rollbackRoute)
         }
@@ -247,7 +246,7 @@ object DeploymentWorker {
                     ports = if (previousDeployment.hostConfigPort != null && previousDeployment.containerPort != null) mapOf(previousDeployment.hostConfigPort to previousDeployment.containerPort) else emptyMap(),
                     network = previousDeployment.network,
                     restartPolicy = previousDeployment.restartPolicy,
-                    env = previousDeployment.env + DeploymentJobRepository.resolveSecretEnvForExecution(previousDeployment.executionId),
+                    env = DeploymentJobRepository.resolveEnvironmentForExecution(previousDeployment.executionId).values,
                     volumes = previousDeployment.volumes,
                     pullImage = true
                 ))

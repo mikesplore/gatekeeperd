@@ -188,7 +188,7 @@ GET /api/gate/check?project={slug}
   Redis + Postgres both down?  ──► FAIL_MODE (open → 200, closed → 402)
 ```
 
-**Redis key:** `project:status:{slug}` → `"active"` | `"blocked"`, TTL 60s. Explicit delete on block/unblock/webhook/delete.
+**Redis key:** `project:status:{slug}` → effective `"active"` | `"blocked"` access for that project or site slug, TTL 60s. Project access changes invalidate project and site slugs; service access changes invalidate that service's site slug.
 
 ---
 

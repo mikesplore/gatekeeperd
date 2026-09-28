@@ -3,11 +3,13 @@ package com.gatekeeper.db.tables
 import org.jetbrains.exposed.sql.Table
 import org.jetbrains.exposed.sql.javatime.CurrentDateTime
 import org.jetbrains.exposed.sql.javatime.datetime
+import org.jetbrains.exposed.sql.ReferenceOption
 
 /** Desired nginx render configuration for a project. Deployed files remain filesystem state. */
 object Sites : Table("sites") {
     val id = uuid("id").autoGenerate()
     val projectId = reference("project_id", Projects.id).index()
+    val serviceId = reference("service_id", Services.id, onDelete = ReferenceOption.RESTRICT).nullable().index()
     val certificateId = reference("certificate_id", Certificates.id).nullable().index()
     val domain = text("domain")
     val upstreamHost = text("upstream_host").default("127.0.0.1")

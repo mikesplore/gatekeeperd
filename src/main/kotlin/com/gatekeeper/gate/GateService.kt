@@ -2,6 +2,7 @@ package com.gatekeeper.gate
 
 import com.gatekeeper.config.AppConfig
 import com.gatekeeper.db.repositories.ProjectRepository
+import com.gatekeeper.db.repositories.ProjectQueryRepository
 import com.gatekeeper.feature.payment.domain.usecase.GetLatestPaymentLink
 import com.gatekeeper.feature.payment.data.persistence.ProjectBalanceAdapter
 import com.gatekeeper.plugins.RedisService
@@ -10,19 +11,24 @@ import org.slf4j.LoggerFactory
 
 private val logger = LoggerFactory.getLogger("com.gatekeeper.gate.GateService")
 
-class GateService(private val latestPaymentLink: GetLatestPaymentLink, private val projectBalances: ProjectBalanceAdapter) {
+class GateService(
+    private val projects: ProjectQueryRepository,
+    private val latestPaymentLink: GetLatestPaymentLink,
+    private val projectBalances: ProjectBalanceAdapter
+) {
 
     companion object {
         private const val REDIS_KEY_PREFIX = "project:status:"
         private const val REDIS_TTL_SECONDS = 60
     }
 
-    private fun blockedResult(project: ProjectRepository.ProjectRecord): GateResult.Blocked =
+    private fun blockedResult(project: ProjectRepository.ProjectRecord, blockReason: String? = project.blockReason): GateResult.Blocked =
         GateResult.Blocked(
             type = project.type,
             paymentLink = latestPaymentLink(project.id),
             projectName = project.name,
-            paywall = PaywallInfo.from(project, projectBalances.financials(project))
+            paywall = PaywallInfo.from(project, projectBalances.financials(project)),
+            blockReason = blockReason
         )
 
     fun check(slug: String): GateResult {
@@ -33,9 +39,9 @@ class GateService(private val latestPaymentLink: GetLatestPaymentLink, private v
                 return when (cached) {
                     "active" -> GateResult.Active
                     "blocked", "manual_block" -> {
-                        val project = ProjectRepository.findBySlug(slug)
-                        if (project != null) {
-                            blockedResult(project)
+                        val target = projects.findGateTargetBySlug(slug)
+                        if (target != null) {
+                            blockedResult(target.project, target.project.blockReason ?: target.serviceBlockReason)
                         } else {
                             GateResult.Unknown("unknown project")
                         }
@@ -48,28 +54,28 @@ class GateService(private val latestPaymentLink: GetLatestPaymentLink, private v
         }
 
         try {
-            val project = ProjectRepository.findBySlug(slug)
-            if (project == null) {
+            val target = projects.findGateTargetBySlug(slug)
+            if (target == null) {
                 logger.warn("Gate check for unknown slug: $slug")
                 return GateResult.Unknown("unknown project")
             }
+            val project = target.project
 
-            val redisValue = when (project.status) {
-                "active" -> "active"
-                "blocked", "manual_block" -> "blocked"
-                else -> "blocked"
-            }
+            // Project billing status applies to every service. A service access block is scoped
+            // to the resolved site's service and never derives from deployment health.
+            val blocked = project.status != "active" || target.serviceAccessStatus != "active"
+
+            val redisValue = if (blocked) "blocked" else "active"
             try {
                 RedisService.set("$REDIS_KEY_PREFIX$slug", redisValue, REDIS_TTL_SECONDS)
             } catch (e: Exception) {
                 logger.warn("Failed to write to Redis cache (non-fatal): ${e.message}")
             }
 
-            return when (project.status) {
-                "active" -> GateResult.Active
-                "blocked", "manual_block" -> blockedResult(project)
-                else -> blockedResult(project)
-            }
+            return if (!blocked) GateResult.Active else blockedResult(
+                project,
+                project.blockReason ?: target.serviceBlockReason
+            )
         } catch (e: Exception) {
             logger.error("Postgres unavailable for gate check (slug=$slug): ${e.message}")
         }

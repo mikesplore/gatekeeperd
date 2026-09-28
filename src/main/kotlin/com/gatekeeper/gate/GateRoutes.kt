@@ -2,7 +2,6 @@ package com.gatekeeper.gate
 
 import com.gatekeeper.api.InputValidators
 import com.gatekeeper.api.respondError
-import com.gatekeeper.db.repositories.ProjectRepository
 import com.gatekeeper.gate.GateApplicationService
 import com.gatekeeper.feature.payment.domain.usecase.GetPaymentMethodAvailability
 import com.gatekeeper.feature.payment.data.persistence.ProjectBalanceAdapter
@@ -52,8 +51,6 @@ private suspend fun ApplicationCall.respondBlocked(result: GateResult.Blocked) {
     }
 }
 
-private fun isSuspended(status: String): Boolean = status.lowercase() in listOf("blocked", "manual_block")
-
 fun Application.configureGateRoutes() {
     routing {
         get("/api/gate/check") {
@@ -79,12 +76,14 @@ fun Application.configureGateRoutes() {
 
         get("/api/gate/paywall") {
             val slug = call.requireProjectSlug() ?: return@get
-            val project = ProjectRepository.findBySlug(slug)
+            val service = call.application.get<GateApplicationService>()
+            val project = service.findProject(slug)
             if (project == null) {
                 call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
                 return@get
             }
-            if (!isSuspended(project.status)) {
+            val gateResult = service.check(slug)
+            if (gateResult !is GateResult.Blocked) {
                 call.respondError(HttpStatusCode.BadRequest, "project_active", "This project is not suspended")
                 return@get
             }

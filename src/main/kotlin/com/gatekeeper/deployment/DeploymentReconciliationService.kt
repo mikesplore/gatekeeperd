@@ -64,6 +64,7 @@ class DeploymentReconciliationService(
     private data class ActiveDeployment(
         val id: UUID,
         val projectId: UUID,
+        val serviceId: UUID?,
         val slug: String?,
         val environment: String,
         val containerName: String?,
@@ -89,6 +90,7 @@ class DeploymentReconciliationService(
                         }
                     ActiveDeployment(
                         id = row[Deployments.id], projectId = projectId,
+                        serviceId = row[Deployments.serviceId],
                         slug = project?.get(Projects.slug),
                         environment = row[Deployments.environment], containerName = row[Deployments.runtimeContainerName],
                         hostPort = row[Deployments.runtimeHostPort], ports = ports
@@ -148,7 +150,7 @@ class DeploymentReconciliationService(
             drift += DeploymentDriftItem("project_missing", "Persisted project_id ${deployment.projectId} has no project row")
         }
 
-        val site = runCatching { SiteRepository.findByProjectId(deployment.projectId) }.getOrElse {
+        val site = runCatching { deployment.serviceId?.let(SiteRepository::findByServiceId) }.getOrElse {
                 errors += "gateway site lookup failed for deployment ${deployment.id}: ${it.message ?: it.javaClass.simpleName}"
                 null
             }
@@ -157,9 +159,9 @@ class DeploymentReconciliationService(
         } else {
                 gatewayTarget = when (site.upstreamMode) {
                     UpstreamMode.EXPLICIT_PORT -> "${site.upstreamHost}:${site.upstreamExplicitPort ?: "missing-port"}"
-                    UpstreamMode.DOCKER_DISCOVERY -> DeploymentUpstreamResolver.resolve(site.projectId, deployment.environment)?.let { "${it.host}:${it.port}" } ?: "missing-runtime"
+                    UpstreamMode.DOCKER_DISCOVERY -> site.serviceId?.let { DeploymentUpstreamResolver.resolve(it, deployment.environment) }?.let { "${it.host}:${it.port}" } ?: "missing-runtime"
                 }
-                val siteSlug = slug ?: project?.slug ?: run {
+                val siteSlug = site.projectSlug ?: slug ?: project?.slug ?: run {
                     drift += DeploymentDriftItem("project_slug_missing", "Project slug is unavailable for managed gateway inspection")
                     return@observe ActiveDeploymentReconciliation(
                         projectId = deployment.projectId.toString(), projectSlug = null, environment = deployment.environment,
@@ -184,7 +186,7 @@ class DeploymentReconciliationService(
                         .firstOrNull { it.substringBefore('/') != "127.0.0.1:8080" }
                     val expectedTarget = when (site.upstreamMode) {
                         UpstreamMode.EXPLICIT_PORT -> site.upstreamExplicitPort?.let { "${site.upstreamHost}:$it" }
-                        UpstreamMode.DOCKER_DISCOVERY -> DeploymentUpstreamResolver.resolve(site.projectId, deployment.environment)?.let { "${it.host}:${it.port}" }
+                        UpstreamMode.DOCKER_DISCOVERY -> site.serviceId?.let { DeploymentUpstreamResolver.resolve(it, deployment.environment) }?.let { "${it.host}:${it.port}" }
                     }
                     if (configuredTarget == null || expectedTarget == null || configuredTarget != expectedTarget) {
                         drift += DeploymentDriftItem("gateway_config_drift", "Persisted gateway target '$expectedTarget' does not match nginx target '${configuredTarget ?: "missing"}'")
@@ -196,7 +198,7 @@ class DeploymentReconciliationService(
                             drift += DeploymentDriftItem("gateway_active_runtime_mismatch", "Gateway targets ${site.upstreamHost}:${site.upstreamExplicitPort}; active deployment runtime is published on $expectedHostPort")
                         }
                     }
-                    val resolvedDockerTarget = if (site.upstreamMode == UpstreamMode.DOCKER_DISCOVERY) DeploymentUpstreamResolver.resolve(site.projectId, deployment.environment) else null
+                    val resolvedDockerTarget = if (site.upstreamMode == UpstreamMode.DOCKER_DISCOVERY) site.serviceId?.let { DeploymentUpstreamResolver.resolve(it, deployment.environment) } else null
                     if (deployment.environment == "production" && site.upstreamMode == UpstreamMode.DOCKER_DISCOVERY && resolvedDockerTarget?.containerName != containerName) {
                         drift += DeploymentDriftItem("gateway_active_runtime_mismatch", "Gateway discovery target '${resolvedDockerTarget?.containerName ?: "missing"}' does not match active deployment runtime '$containerName'")
                     }
