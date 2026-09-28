@@ -3,7 +3,7 @@ package com.gatekeeper.gate
 import com.gatekeeper.db.repositories.ProjectRepository
 import java.math.BigDecimal
 import java.time.LocalDate
-import com.gatekeeper.feature.payment.data.persistence.ProjectBalanceAdapter
+import com.gatekeeper.feature.payment.domain.model.ProjectFinancials
 
 data class PaywallInfo(
     val slug: String,
@@ -15,11 +15,11 @@ data class PaywallInfo(
     val customerEmail: String?
 ) {
     companion object {
-        fun from(project: ProjectRepository.ProjectRecord) = PaywallInfo(
+        fun from(project: ProjectRepository.ProjectRecord, financials: ProjectFinancials) = PaywallInfo(
             slug = project.slug,
             name = project.name,
             domain = project.domain,
-            amountDue = ProjectBalanceAdapter.outstandingBalance(project),
+            amountDue = financials.outstanding,
             currency = project.currency,
             dueDate = project.dueDate,
             customerEmail = project.customerEmail

@@ -16,3 +16,11 @@ data class ProjectBalance(
         }
     }
 }
+
+data class ProjectFinancials(
+    val originalCharge: BigDecimal,
+    val additionalCharges: BigDecimal,
+    val discounts: BigDecimal,
+    val paid: BigDecimal,
+    val outstanding: BigDecimal
+)

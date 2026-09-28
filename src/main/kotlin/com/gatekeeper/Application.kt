@@ -14,10 +14,13 @@ import com.gatekeeper.feature.payment.data.provider.MpesaGateway
 import com.gatekeeper.feature.payment.data.provider.PaystackClient
 import com.gatekeeper.feature.payment.presentation.configureMpesaRoutes
 import com.gatekeeper.feature.payment.presentation.configurePaystackWebhookRoutes
+import com.gatekeeper.feature.payment.presentation.configurePaymentAdminRoutes
+import com.gatekeeper.feature.payment.presentation.configurePaymentRoutes
 import com.gatekeeper.nginx.NginxBackfillRunner
 import com.gatekeeper.plugins.*
 import com.gatekeeper.feature.payment.domain.usecase.ReconcilePayments
 import com.gatekeeper.feature.payment.domain.repository.PaymentRepository as PaymentDomainRepository
+import com.gatekeeper.feature.payment.data.persistence.ProjectBalanceAdapter
 import org.koin.ktor.ext.get
 import com.gatekeeper.scheduler.AutoBlockerJob
 import com.gatekeeper.scheduler.IntegrationOutboxJob
@@ -107,6 +110,7 @@ fun Application.module() {
     configureSecurity()
     configureRouting()
     configureGateRoutes()
+    configurePaymentRoutes()
     configureCustomerRoutes()
     configureAuthRoutes()
     configureProjectAdminRoutes()
@@ -128,7 +132,7 @@ fun Application.module() {
     val appScope = CoroutineScope(SupervisorJob())
     AutoBlockerJob.start(appScope)
     ReconciliationJob.start(appScope, get<ReconcilePayments>())
-    IntegrationOutboxJob.start(appScope, get<PaymentDomainRepository>())
+    IntegrationOutboxJob.start(appScope, get<PaymentDomainRepository>(), get<ProjectBalanceAdapter>())
     DeploymentWorker.start(appScope)
 
     monitor.subscribe(ApplicationStopping) {

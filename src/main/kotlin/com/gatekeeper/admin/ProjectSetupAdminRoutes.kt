@@ -12,6 +12,7 @@ import com.gatekeeper.nginx.DeploymentUpstreamResolver
 import com.gatekeeper.nginx.NginxService
 import com.gatekeeper.nginx.requireValidHostname
 import com.gatekeeper.security.SecretValueCipher
+import com.gatekeeper.feature.payment.data.persistence.ProjectBalanceAdapter
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.Application
 import io.ktor.server.auth.authenticate
@@ -20,6 +21,7 @@ import io.ktor.server.request.receive
 import io.ktor.server.response.respond
 import io.ktor.server.routing.*
 import kotlinx.serialization.Serializable
+import org.koin.ktor.ext.get
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.math.BigDecimal
@@ -605,7 +607,7 @@ fun Application.configureProjectSetupAdminRoutes() {
                     }.getOrDefault("unknown")
                 } ?: "not_deployed"
                 val upstream = if (site != null) DeploymentUpstreamResolver.resolve(project.id, "production") else null
-                val financials = projectOverviewFinancials(project)
+                val financials = projectOverviewFinancials(project, call.application.get<ProjectBalanceAdapter>())
                 call.respond(ProjectOverviewResponse(
                     project.id.toString(), project.slug, project.name, project.type,
                     ProjectOverviewAccessLifecycle(project.status, project.blockReason, project.deploymentMode, project.serviceMode, project.lifecycleStatus),
@@ -705,10 +707,10 @@ private fun DeploymentJobRepository.ConfigurationSummary.toSetupResponse() = Pro
     environment, env, envKeys, secretSetId?.toString(), secretSetVersion
 )
 
-private fun projectOverviewFinancials(project: ProjectRepository.ProjectRecord): Triple<BigDecimal, BigDecimal, BigDecimal> {
-    val billed = com.gatekeeper.feature.payment.data.persistence.ProjectBalanceAdapter.originalCharge(project) +
-        com.gatekeeper.feature.payment.data.persistence.ProjectBalanceAdapter.additionalCharges(project) -
-        com.gatekeeper.feature.payment.data.persistence.ProjectBalanceAdapter.discounts(project)
-    val paid = com.gatekeeper.feature.payment.data.persistence.ProjectBalanceAdapter.successfulPayments(project)
-    return Triple(billed, paid, com.gatekeeper.feature.payment.data.persistence.ProjectBalanceAdapter.outstandingBalance(project))
+private fun projectOverviewFinancials(
+    project: ProjectRepository.ProjectRecord,
+    balances: ProjectBalanceAdapter
+): Triple<BigDecimal, BigDecimal, BigDecimal> {
+    val financials = balances.financials(project)
+    return Triple(financials.originalCharge + financials.additionalCharges - financials.discounts, financials.paid, financials.outstanding)
 }

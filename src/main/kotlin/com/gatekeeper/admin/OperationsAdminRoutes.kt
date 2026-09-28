@@ -5,7 +5,6 @@ import com.gatekeeper.api.dto.PaginatedResponse
 import com.gatekeeper.api.dto.toResponse
 import com.gatekeeper.db.repositories.AuditRepository
 import com.gatekeeper.db.repositories.NotificationRepository
-import com.gatekeeper.feature.payment.domain.repository.PaymentEventRepository as PaymentEventDomainRepository
 import com.gatekeeper.db.repositories.ProjectRepository
 import com.gatekeeper.db.repositories.SiteRepository
 import com.gatekeeper.db.repositories.CustomerRepository
@@ -18,8 +17,6 @@ import com.gatekeeper.nginx.requireCertificatePath
 import com.gatekeeper.nginx.requireValidHostname
 import com.gatekeeper.db.tables.ReconciliationStatus
 import com.gatekeeper.config.AppConfig
-import com.gatekeeper.feature.payment.presentation.replayPaystackWebhook
-import com.gatekeeper.feature.payment.domain.usecase.ProcessPaymentEvent
 import org.koin.ktor.ext.get
 import com.gatekeeper.feature.payment.data.persistence.ProjectBalanceAdapter
 import com.gatekeeper.deployment.DeploymentApplicationService
@@ -32,7 +29,8 @@ import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import kotlinx.serialization.Serializable
-import com.gatekeeper.feature.payment.domain.repository.PaymentRepository as PaymentDomainRepository
+import com.gatekeeper.feature.payment.domain.usecase.ListPaymentsByProject
+import com.gatekeeper.feature.payment.domain.usecase.GetPaymentDashboardData
 import com.gatekeeper.db.repositories.IntegrationOutboxRepository
 import com.gatekeeper.plugins.Metrics
 import java.time.OffsetDateTime
@@ -188,12 +186,10 @@ private data class DashboardProjectFinancials(
     val balance: java.math.BigDecimal
 )
 
-private fun dashboardProjectFinancials(project: ProjectRepository.ProjectRecord): DashboardProjectFinancials {
-    val billed = ProjectBalanceAdapter.originalCharge(project) +
-        ProjectBalanceAdapter.additionalCharges(project) -
-        ProjectBalanceAdapter.discounts(project)
-    val paid = ProjectBalanceAdapter.successfulPayments(project)
-    return DashboardProjectFinancials(billed, paid, ProjectBalanceAdapter.outstandingBalance(project))
+private fun dashboardProjectFinancials(project: ProjectRepository.ProjectRecord, balances: ProjectBalanceAdapter): DashboardProjectFinancials {
+    val financials = balances.financials(project)
+    val billed = financials.originalCharge + financials.additionalCharges - financials.discounts
+    return DashboardProjectFinancials(billed, financials.paid, financials.outstanding)
 }
 
 private fun derivedBillingStatus(financials: List<DashboardProjectFinancials>): String = when {
@@ -215,6 +211,10 @@ private fun derivedBillingStatus(financials: List<DashboardProjectFinancials>): 
 fun Application.configureOperationsAdminRoutes() {
     routing {
         authenticate("auth-jwt") {
+            get("/api/admin/metrics") {
+                call.respond(Metrics.snapshot())
+            }
+
             get("/api/admin/dashboard/sites") {
                 val status = call.request.queryParameters["status"]?.lowercase()
                 val offset = call.request.queryParameters["offset"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0
@@ -329,7 +329,8 @@ fun Application.configureOperationsAdminRoutes() {
                 val (customers, total) = CustomerRepository.findPage(query, limit, offset)
                 val responses = customers.map { customer ->
                     val owned = CustomerRepository.findSites(customer.id)
-                    val financials = owned.map { dashboardProjectFinancials(it.project) }
+                    val balances = call.application.get<ProjectBalanceAdapter>()
+                    val financials = owned.map { dashboardProjectFinancials(it.project, balances) }
                     val billed = financials.sumOf { it.billed }
                     val paid = financials.sumOf { it.paid }
                     val balance = financials.sumOf { it.balance }
@@ -341,10 +342,11 @@ fun Application.configureOperationsAdminRoutes() {
                 val id = runCatching { UUID.fromString(call.parameters["id"]) }.getOrNull() ?: run { call.respondError(HttpStatusCode.BadRequest, "invalid_customer_id", "Invalid customer ID"); return@get }
                 val customer = CustomerRepository.findById(id) ?: run { call.respondError(HttpStatusCode.NotFound, "customer_not_found", "Customer not found"); return@get }
                 val owned = CustomerRepository.findSites(id)
-                val financials = owned.map { dashboardProjectFinancials(it.project) }
+                val balances = call.application.get<ProjectBalanceAdapter>()
+                val financials = owned.map { dashboardProjectFinancials(it.project, balances) }
                 val projects = owned.map { ownedProject ->
                     val project = ownedProject.project
-                    val projectFinancials = dashboardProjectFinancials(project)
+                    val projectFinancials = dashboardProjectFinancials(project, balances)
                     DashboardCustomerProjectResponse(
                         id = project.id.toString(), slug = project.slug, name = project.name, domain = project.domain,
                         amountDue = projectFinancials.billed.toDouble(), totalPaid = projectFinancials.paid.toDouble(),
@@ -362,9 +364,9 @@ fun Application.configureOperationsAdminRoutes() {
             get("/api/admin/dashboard/customers/{id}/transactions") {
                 val id = runCatching { UUID.fromString(call.parameters["id"]) }.getOrNull() ?: run { call.respondError(HttpStatusCode.BadRequest, "invalid_customer_id", "Invalid customer ID"); return@get }
                 if (CustomerRepository.findById(id) == null) { call.respondError(HttpStatusCode.NotFound, "customer_not_found", "Customer not found"); return@get }
-                val paymentRepository = call.application.get<PaymentDomainRepository>()
+                val listPayments = call.application.get<ListPaymentsByProject>()
                 val transactions = CustomerRepository.findSites(id).flatMap { owned ->
-                    paymentRepository.findByProjectId(owned.project.id).map { payment ->
+                    listPayments(owned.project.id).map { payment ->
                         DashboardCustomerTransactionResponse(payment.id.toString(), owned.project.id.toString(), owned.project.name, owned.project.slug, payment.amount.toDouble(), payment.recordStatus, payment.status, payment.provider, payment.providerReference, payment.paidAt?.toString(), payment.createdAt?.toString().orEmpty())
                     }
                 }.sortedByDescending { it.createdAt }
@@ -372,9 +374,7 @@ fun Application.configureOperationsAdminRoutes() {
             }
             get("/api/admin/dashboard/summary") {
                 val projects = ProjectRepository.findAll()
-                val paymentRepository = call.application.get<PaymentDomainRepository>()
-                val payments = paymentRepository.findAllFiltered(null, null, null, null, 10000, 0).first.map { it.payment }
-                val revenue = paymentRepository.revenueTotals()
+                val paymentDashboard = call.application.get<GetPaymentDashboardData>()()
                 val outbox = IntegrationOutboxRepository.summary()
                 val available = File(AppConfig.nginxSitesAvailablePath).listFiles()?.count { it.isFile && !it.name.startsWith(".") }?.toLong() ?: 0
                 val enabled = File(AppConfig.nginxSitesEnabledPath).listFiles()?.size?.toLong() ?: 0
@@ -389,7 +389,7 @@ fun Application.configureOperationsAdminRoutes() {
                         }
                     }
                 }
-                call.respond(DashboardSummaryResponse(OffsetDateTime.now().toString(), projects.groupingBy { it.status.lowercase() }.eachCount().mapValues { it.value.toLong() }, payments.groupingBy { it.gatewayStatus.lowercase() }.eachCount().mapValues { it.value.toLong() }, mapOf("thisMonth" to revenue.first.toPlainString(), "lastMonth" to revenue.second.toPlainString()), mapOf("outboxPending" to outbox.pending, "outboxProcessing" to outbox.processing, "outboxDeadLetter" to outbox.deadLetter, "outboxDelivered" to outbox.delivered), siteCounts + mapOf("availableSites" to available, "enabledSites" to enabled), Metrics.snapshot(), certificateAlerts))
+                call.respond(DashboardSummaryResponse(OffsetDateTime.now().toString(), projects.groupingBy { it.status.lowercase() }.eachCount().mapValues { it.value.toLong() }, paymentDashboard.paymentCountsByStatus, mapOf("thisMonth" to paymentDashboard.thisMonthRevenue, "lastMonth" to paymentDashboard.lastMonthRevenue), mapOf("outboxPending" to outbox.pending, "outboxProcessing" to outbox.processing, "outboxDeadLetter" to outbox.deadLetter, "outboxDelivered" to outbox.delivered), siteCounts + mapOf("availableSites" to available, "enabledSites" to enabled), Metrics.snapshot(), certificateAlerts))
             }
             get("/api/admin/notifications") {
                 val limit = call.request.queryParameters["limit"]?.toIntOrNull()?.coerceIn(1, 100) ?: 25
@@ -456,7 +456,7 @@ fun Application.configureOperationsAdminRoutes() {
                 val ready = project.status == "active" && active != null && (containerHealth == null || containerHealth == "running")
                 call.respond(
                     ProjectHealthResponse(
-                        project = project.toResponse(),
+                        project = project.toResponse(call.application.get<ProjectBalanceAdapter>().financials(project)),
                         runtimeHealth = containerHealth,
                         nginxEnabled = nginxEnabled,
                         certificateInstalled = certificateInstalled,
@@ -495,29 +495,6 @@ fun Application.configureOperationsAdminRoutes() {
                         BulkProjectResult(slug, "active")
                     }
                 })
-            }
-
-            post("/api/admin/payment-events/{id}/replay") {
-                val id = call.parameters["id"]?.let { runCatching { UUID.fromString(it) }.getOrNull() } ?: run {
-                    call.respondError(HttpStatusCode.BadRequest, "invalid_event_id", "Invalid payment event ID")
-                    return@post
-                }
-                val eventRepository = call.application.get<PaymentEventDomainRepository>()
-                val event = eventRepository.findForReplay(id) ?: run {
-                    call.respondError(HttpStatusCode.NotFound, "payment_event_not_found", "Payment event not found")
-                    return@post
-                }
-                if (event.processingStatus != "failed") {
-                    call.respondError(HttpStatusCode.Conflict, "event_not_failed", "Only failed payment events can be replayed")
-                    return@post
-                }
-                val replayed = replayPaystackWebhook(event.rawPayload, call.application.get<ProcessPaymentEvent>())
-                if (!replayed) {
-                    call.respondError(HttpStatusCode.UnprocessableEntity, "replay_failed", "Payment event replay failed integrity or processing checks")
-                    return@post
-                }
-                eventRepository.markProcessed(id)
-                call.respond(mapOf("status" to "replayed", "eventId" to id.toString()))
             }
 
             get("/api/admin/audit/export") {

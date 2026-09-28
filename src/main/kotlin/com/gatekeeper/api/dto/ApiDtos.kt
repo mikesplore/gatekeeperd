@@ -4,7 +4,7 @@ import com.gatekeeper.db.repositories.AuditRepository
 import com.gatekeeper.feature.payment.domain.model.Payment
 import com.gatekeeper.db.repositories.ProjectRepository
 import com.gatekeeper.db.repositories.ProjectAdjustmentRepository
-import com.gatekeeper.feature.payment.data.persistence.ProjectBalanceAdapter
+import com.gatekeeper.feature.payment.domain.model.ProjectFinancials
 import kotlinx.serialization.Serializable
 
 import java.math.BigDecimal
@@ -191,7 +191,7 @@ data class StatusChangeResponse(
     val slug: String
 )
 
-fun ProjectRepository.ProjectRecord.toResponse(remainingBalance: BigDecimal? = null): ProjectResponse = ProjectResponse(
+fun ProjectRepository.ProjectRecord.toResponse(financials: ProjectFinancials): ProjectResponse = ProjectResponse(
     id = id.toString(),
     slug = slug,
     name = name,
@@ -212,10 +212,10 @@ fun ProjectRepository.ProjectRecord.toResponse(remainingBalance: BigDecimal? = n
     paystackCustomerCode = paystackCustomerCode,
     amountDue = amountDue?.toDouble(),
     baseAmount = baseAmount?.toDouble(),
-    additionalCharges = ProjectBalanceAdapter.additionalCharges(this).toDouble(),
-    discounts = ProjectBalanceAdapter.discounts(this).toDouble(),
-    successfulPayments = ProjectBalanceAdapter.successfulPayments(this).toDouble(),
-    remainingBalance = remainingBalance?.toDouble(),
+    additionalCharges = financials.additionalCharges.toDouble(),
+    discounts = financials.discounts.toDouble(),
+    successfulPayments = financials.paid.toDouble(),
+    remainingBalance = financials.outstanding.toDouble(),
     currency = currency,
     dueDate = dueDate?.toString(),
     gracePeriodDays = gracePeriodDays,

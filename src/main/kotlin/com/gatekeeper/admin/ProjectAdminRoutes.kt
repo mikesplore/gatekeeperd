@@ -1,8 +1,8 @@
 package com.gatekeeper.admin
 
 import com.gatekeeper.api.dto.AuditLogPageResponse
-import com.gatekeeper.api.dto.PaymentResponse
 import com.gatekeeper.api.dto.ProjectDetailResponse
+import com.gatekeeper.api.dto.OverdueProjectResponse
 import com.gatekeeper.api.dto.ProjectsListResponse
 import com.gatekeeper.api.dto.StatusChangeResponse
 import com.gatekeeper.api.dto.toResponse
@@ -12,6 +12,8 @@ import com.gatekeeper.api.respondError
 import com.gatekeeper.api.respondErrorWithData
 import com.gatekeeper.db.repositories.AuditRepository
 import com.gatekeeper.feature.payment.domain.repository.PaymentRepository as PaymentDomainRepository
+import com.gatekeeper.feature.payment.domain.usecase.ListProjectPayments
+import com.gatekeeper.feature.payment.domain.usecase.GetPayment
 import com.gatekeeper.db.repositories.ProjectRepository
 import com.gatekeeper.db.repositories.CustomerRepository
 import com.gatekeeper.db.repositories.ProjectAdjustmentRepository
@@ -33,7 +35,6 @@ import com.gatekeeper.docker.PortsAvailabilityRequest
 import com.gatekeeper.docker.PortsAvailabilityResponse
 import com.gatekeeper.docker.parseImageRef
 import com.gatekeeper.nginx.NginxService
-import com.gatekeeper.feature.payment.domain.usecase.InitiatePayment
 import com.gatekeeper.feature.payment.data.persistence.ProjectBalanceAdapter
 import io.ktor.http.*
 import io.ktor.server.application.*
@@ -102,16 +103,7 @@ data class ProjectAdjustmentResponse(
 )
 
 @Serializable
-data class InitializePaymentRequest(val email: String, val amount: Double? = null)
-
-@Serializable
-data class InitializePaymentResponse(val payment_link: String)
-
-@Serializable
 data class CreateProjectInvoiceRequest(val description: String)
-
-@Serializable
-data class ProjectPaymentsPageResponse(val payments: List<PaymentResponse>, val total: Long, val limit: Int, val offset: Int, val hasMore: Boolean)
 
 @Serializable
 data class StatusChangeRequest(val reason: String)
@@ -137,14 +129,25 @@ fun Application.configureProjectAdminRoutes() {
                 call.respond(
                     ProjectsListResponse(
                         projects = filteredProjects.drop(offset).take(limit).map { project ->
-                            val remaining = ProjectBalanceAdapter.outstandingBalance(project)
-                            project.toResponse(remaining)
+                            project.toResponse(call.application.get<ProjectBalanceAdapter>().financials(project))
                         },
                         total = filteredProjects.size,
                         limit = limit,
                         offset = offset
                     )
                 )
+            }
+
+            get("/api/admin/projects/overdue") {
+                val overdue = ProjectRepository.findOverdue(java.time.LocalDate.now()).map { item ->
+                    OverdueProjectResponse(
+                        slug = item.slug, name = item.name, customerName = item.customerName,
+                        customerEmail = item.customerEmail, dueDate = item.dueDate.toString(),
+                        daysOverdue = item.daysOverdue, gracePeriodDays = item.gracePeriodDays,
+                        willAutoBlockOn = item.willAutoBlockOn.toString(), amountDue = item.amountDue?.toDouble() ?: 0.0
+                    )
+                }
+                call.respond(overdue)
             }
 
             get("/api/admin/projects/{slug}") {
@@ -158,29 +161,22 @@ fun Application.configureProjectAdminRoutes() {
                     call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
                     return@get
                 }
-                val paymentRepository = call.application.get<PaymentDomainRepository>()
-                val payments = paymentRepository.findByProjectId(project.id)
+                val payments = call.application.get<ListProjectPayments>()(
+                    ListProjectPayments.Command(project.slug, 500, 0)
+                ).getOrElse {
+                    call.respondError(HttpStatusCode.InternalServerError, "payment_list_failed", "Unable to load project payments")
+                    return@get
+                }.items
                 val adjustments = ProjectAdjustmentRepository.findByProjectId(project.id)
                 val auditLog = AuditRepository.findByProjectId(project.id)
                 call.respond(
                     ProjectDetailResponse(
-                        project = project.toResponse(
-                            ProjectBalanceAdapter.outstandingBalance(project)
-                        ),
+                        project = project.toResponse(call.application.get<ProjectBalanceAdapter>().financials(project)),
                         payments = payments.map { it.toResponse() },
                         audit_log = auditLog.map { it.toResponse() },
                         adjustments = adjustments.map { it.toResponse() }
                     )
                 )
-            }
-
-            get("/api/admin/projects/{slug}/payments") {
-                val slug = call.parameters["slug"] ?: return@get call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing slug path parameter")
-                val project = ProjectRepository.findBySlug(slug) ?: return@get call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
-                val limit = (call.request.queryParameters["limit"]?.toIntOrNull() ?: 25).coerceIn(1, 500)
-                val offset = (call.request.queryParameters["offset"]?.toIntOrNull() ?: 0).coerceAtLeast(0)
-                val (rows, total) = call.application.get<PaymentDomainRepository>().findByProjectIdPage(project.id, limit, offset)
-                call.respond(ProjectPaymentsPageResponse(rows.map { it.toResponse() }, total, limit, offset, offset + rows.size < total))
             }
 
             get("/api/admin/projects/{slug}/invoice") {
@@ -233,13 +229,14 @@ fun Application.configureProjectAdminRoutes() {
                     call.respondError(HttpStatusCode.BadGateway, "invoice_integration_unavailable", "Could not check whether an invoice already exists")
                     return@post
                 }
-                val invoiceAmount = ProjectBalanceAdapter.originalCharge(project) +
-                    ProjectBalanceAdapter.additionalCharges(project) - ProjectBalanceAdapter.discounts(project)
+                val invoiceFinancials = call.application.get<ProjectBalanceAdapter>().financials(project)
+                val invoiceAmount = invoiceFinancials.originalCharge + invoiceFinancials.additionalCharges - invoiceFinancials.discounts
                 if (invoiceAmount <= BigDecimal.ZERO) {
                     call.respondError(HttpStatusCode.BadRequest, "invoice_amount_unavailable", "Project has no billable amount for an invoice")
                     return@post
                 }
-                val result = ScribedIntegrationClient.createInvoice(project, description, invoiceAmount.toPlainString())
+                val projectBalances = call.application.get<ProjectBalanceAdapter>()
+                val result = ScribedIntegrationClient.createInvoice(project, description, invoiceAmount.toPlainString(), projectBalances)
                 if (result.status == HttpStatusCode.Conflict) {
                     call.respondError(HttpStatusCode.Conflict, "invoice_already_exists", "Scribed already has an invoice for this project")
                     return@post
@@ -249,7 +246,7 @@ fun Application.configureProjectAdminRoutes() {
                     call.respondError(HttpStatusCode.BadGateway, "invoice_creation_failed", "Scribed could not create the invoice")
                     return@post
                 }
-                val syncedPayments = ScribedIntegrationClient.syncProject(project, call.application.get<PaymentDomainRepository>())
+                val syncedPayments = ScribedIntegrationClient.syncProject(project, call.application.get<PaymentDomainRepository>(), projectBalances)
                 val lookup = ScribedIntegrationClient.invoiceStatus(project.id.toString())
                 val invoiceId = lookup.body?.get("invoice")?.jsonObject?.get("id")?.jsonPrimitive?.longOrNull
                 call.respond(HttpStatusCode.Created, mapOf("status" to "created", "invoiceId" to invoiceId, "paymentsQueued" to syncedPayments))
@@ -263,8 +260,9 @@ fun Application.configureProjectAdminRoutes() {
                     return@get
                 }
                 var lookup = ScribedIntegrationClient.invoiceStatus(project.id.toString())
-                if (lookup.status == HttpStatusCode.NotFound && ScribedIntegrationClient.ensureInvoice(project)) {
-                    ScribedIntegrationClient.syncProject(project, call.application.get<PaymentDomainRepository>())
+                val projectBalances = call.application.get<ProjectBalanceAdapter>()
+                if (lookup.status == HttpStatusCode.NotFound && ScribedIntegrationClient.ensureInvoice(project, projectBalances)) {
+                    ScribedIntegrationClient.syncProject(project, call.application.get<PaymentDomainRepository>(), projectBalances)
                     lookup = ScribedIntegrationClient.invoiceStatus(project.id.toString())
                 }
                 val invoiceId = lookup.body?.get("invoice")?.jsonObject?.get("id")?.jsonPrimitive?.longOrNull
@@ -293,13 +291,15 @@ fun Application.configureProjectAdminRoutes() {
                     call.respondError(HttpStatusCode.BadRequest, "invalid_payment_id", "Invalid payment ID")
                     return@get
                 }
-                val payment = call.application.get<PaymentDomainRepository>().findById(paymentId)?.takeIf { it.projectId == project.id }
+                val payment = call.application.get<GetPayment>()(paymentId)?.takeIf { it.projectId == project.id }
                     ?: return@get call.respondError(HttpStatusCode.NotFound, "payment_not_found", "Payment not found")
                 if (payment.gatewayStatus != "success") {
                     call.respondError(HttpStatusCode.Conflict, "payment_not_complete", "A receipt is available after successful payment")
                     return@get
                 }
-                val (status, bytes) = ScribedIntegrationClient.receiptPdfForPayment(project, payment, call.application.get<PaymentDomainRepository>())
+                val (status, bytes) = ScribedIntegrationClient.receiptPdfForPayment(
+                    project, payment, call.application.get<PaymentDomainRepository>(), call.application.get<ProjectBalanceAdapter>()
+                )
                 if (bytes == null) {
                     call.respondError(if (status == HttpStatusCode.NotFound) status else HttpStatusCode.BadGateway, "receipt_download_failed", "Scribed could not generate or retrieve this receipt")
                     return@get
@@ -336,11 +336,12 @@ fun Application.configureProjectAdminRoutes() {
                     call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
                     return@post
                 }
-                if (!ScribedIntegrationClient.ensureInvoice(project)) {
+                val projectBalances = call.application.get<ProjectBalanceAdapter>()
+                if (!ScribedIntegrationClient.ensureInvoice(project, projectBalances)) {
                     call.respondError(HttpStatusCode.BadGateway, "invoice_sync_failed", "Scribed could not create or locate the project invoice")
                     return@post
                 }
-                val syncedPayments = ScribedIntegrationClient.syncProject(project, call.application.get<PaymentDomainRepository>())
+                val syncedPayments = ScribedIntegrationClient.syncProject(project, call.application.get<PaymentDomainRepository>(), projectBalances)
                 call.respond(HttpStatusCode.Accepted, mapOf("status" to "queued", "project" to project.slug, "paymentsQueued" to syncedPayments))
             }
 
@@ -437,7 +438,8 @@ fun Application.configureProjectAdminRoutes() {
 
                 ProjectRepository.invalidateCache(slug)
                 logger.info("Project updated: $slug")
-                call.respond((assignedProject ?: project).toResponse())
+                val responseProject = assignedProject ?: project
+                call.respond(responseProject.toResponse(call.application.get<ProjectBalanceAdapter>().financials(responseProject)))
             }
 
             post("/api/admin/projects/{slug}/adjustments") {
@@ -469,7 +471,8 @@ fun Application.configureProjectAdminRoutes() {
                     call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
                     return@post
                 }
-                val oldBalance = ProjectBalanceAdapter.outstandingBalance(project)
+                val projectBalances = call.application.get<ProjectBalanceAdapter>()
+                val oldBalance = projectBalances.outstandingBalance(project)
                 val actor = call.principal<JWTPrincipal>()?.payload?.subject ?: "unknown"
                 val adjustment = try {
                     ProjectAdjustmentRepository.create(project.id, type, amount, body.reason, actor)
@@ -477,14 +480,14 @@ fun Application.configureProjectAdminRoutes() {
                     call.respondError(HttpStatusCode.BadRequest, "invalid_adjustment", e.message ?: "Invalid adjustment")
                     return@post
                 }
-                val newBalance = ProjectBalanceAdapter.outstandingBalance(project)
+                val newBalance = projectBalances.outstandingBalance(project)
                 AuditRepository.write(
                     project.id,
                     "project_adjustment",
                     actor,
                     "${type.name} amount=$amount oldBalance=$oldBalance newBalance=$newBalance reason=${body.reason.trim()}"
                 )
-                ScribedIntegrationClient.notifyLedger(project, "adjustment-${adjustment.id}")
+                ScribedIntegrationClient.notifyLedger(project, "adjustment-${adjustment.id}", call.application.get<ProjectBalanceAdapter>())
                 ProjectRepository.invalidateCache(slug)
                 call.respond(ProjectAdjustmentResponse(adjustment.id.toString(), project.id.toString(), type.name, amount.toDouble(), adjustment.reason, actor, adjustment.createdAt.toString(), oldBalance.toDouble(), newBalance.toDouble()))
             }
@@ -523,7 +526,7 @@ fun Application.configureProjectAdminRoutes() {
                     actor = actor,
                     reason = "Transferred via admin API"
                 ) ?: current
-                call.respond(updated.toResponse())
+                call.respond(updated.toResponse(call.application.get<ProjectBalanceAdapter>().financials(updated)))
             }
 
             delete("/api/admin/projects/{slug}") {
@@ -636,69 +639,6 @@ fun Application.configureProjectAdminRoutes() {
                 call.respond(StatusChangeResponse(status = "active", slug = slug))
             }
 
-            post("/api/admin/projects/{slug}/payment/initialize") {
-                val slug = call.parameters["slug"]
-                if (slug == null) {
-                    call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing slug path parameter")
-                    return@post
-                }
-                val body = try {
-                    call.receive<InitializePaymentRequest>()
-                } catch (_: Exception) {
-                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Email is required")
-                    return@post
-                }
-
-                val project = ProjectRepository.findBySlug(slug)
-                if (project == null) {
-                    call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
-                    return@post
-                }
-
-                if (project.amountDue == null || project.customerEmail == null) {
-                    call.respondError(
-                        HttpStatusCode.BadRequest,
-                        "invalid_request",
-                        "Project has no amount_due or customer email configured"
-                    )
-                    return@post
-                }
-
-                val emailOverride = body.email.trim().ifBlank { null }
-                if (emailOverride != null && !InputValidators.isValidEmail(emailOverride)) {
-                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "email is not a valid email address")
-                    return@post
-                }
-
-                val requestedAmount = body.amount?.let {
-                    if (!it.isFinite() || it <= 0.0) {
-                        call.respondError(HttpStatusCode.BadRequest, "invalid_payment_amount", "Payment amount must be greater than zero")
-                        return@post
-                    }
-                    BigDecimal.valueOf(it)
-                }
-                val result = call.application.get<InitiatePayment>()(
-                    InitiatePayment.Command(
-                        provider = "paystack", projectSlug = project.slug, requestedAmount = requestedAmount,
-                        email = emailOverride, currency = project.currency
-                    )
-                )
-
-                result.fold(
-                    onSuccess = { initiated ->
-                        call.respond(InitializePaymentResponse(payment_link = initiated.authorizationUrl.orEmpty()))
-                    },
-                    onFailure = { err ->
-                        logger.error("Failed to initialize payment for $slug", err)
-                        val failure = err as? InitiatePayment.PaymentInitiationFailure
-                        call.respondError(
-                            if (failure?.kind == InitiatePayment.FailureKind.INVALID_REQUEST) HttpStatusCode.BadRequest else HttpStatusCode.BadGateway,
-                            failure?.code ?: "paystack_error",
-                            err.message ?: "Failed to initialize payment with Paystack"
-                        )
-                    }
-                )
-            }
 
             get("/api/admin/audit") {
                 val limit = (call.request.queryParameters["limit"]?.toIntOrNull() ?: 50).coerceIn(1, 500)

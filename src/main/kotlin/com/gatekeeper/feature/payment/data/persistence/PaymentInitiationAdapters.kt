@@ -11,14 +11,18 @@ import java.util.UUID
 
 class PaymentProjectAdapter : PaymentProjectPort {
     override fun find(slug: String): PaymentProject? = ProjectRepository.findBySlug(slug)?.let {
-        PaymentProject(it.id, it.slug, it.currency, it.customerEmail)
+        PaymentProject(it.id, it.slug, it.currency, it.customerEmail, it.domain, it.status)
     }
 }
 
-class PaymentBalanceAdapter(private val payments: PaymentRepository, private val reconciliation: ReconcilePayments) : PaymentBalancePort {
+class PaymentBalanceAdapter(
+    private val payments: PaymentRepository,
+    private val reconciliation: ReconcilePayments,
+    private val projectBalances: ProjectBalanceAdapter
+) : PaymentBalancePort {
     override suspend fun availableAmount(projectId: UUID, requestedAmount: BigDecimal?): BigDecimal {
         var project = ProjectRepository.findById(projectId) ?: error("Project not found")
-        val initialOutstanding = ProjectBalanceAdapter.outstandingBalance(project)
+        val initialOutstanding = projectBalances.outstandingBalance(project)
         val initialPending = payments.pendingAmountForProject(projectId)
         val initialAvailable = initialOutstanding - initialPending
         val needsReconciliation = initialPending > BigDecimal.ZERO &&
@@ -28,7 +32,7 @@ class PaymentBalanceAdapter(private val payments: PaymentRepository, private val
             project = ProjectRepository.findById(projectId) ?: project
         }
 
-        val outstanding = ProjectBalanceAdapter.outstandingBalance(project)
+        val outstanding = projectBalances.outstandingBalance(project)
         val pending = payments.pendingAmountForProject(projectId)
         val available = outstanding - pending
         if (pending > BigDecimal.ZERO && (requestedAmount == null || requestedAmount <= outstanding) &&

@@ -16,7 +16,10 @@ class InitiatePayment(
     suspend operator fun invoke(command: Command): Result<PaymentInitiation> = runCatching {
         if (command.projectSlug.isBlank()) invalid("missing_payment_details", "project is required")
         val project = projects.find(command.projectSlug) ?: fail("project_not_found", "Project not found", FailureKind.NOT_FOUND)
-        if (!project.currency.equals(command.currency, ignoreCase = true)) invalid("invalid_payment_amount", "Unsupported payment currency")
+        if (command.requireSuspendedProject && project.status?.lowercase() !in setOf("blocked", "manual_block")) {
+            invalid("project_active", "This project is not suspended")
+        }
+        if (command.currency.isNotBlank() && !project.currency.equals(command.currency, ignoreCase = true)) invalid("invalid_payment_amount", "Unsupported payment currency")
         val gateway = gateways[command.provider.lowercase()]
             ?: fail("payment_unavailable", "Payment provider is unavailable", FailureKind.PROVIDER_UNAVAILABLE)
         val amount = try {
@@ -52,7 +55,8 @@ class InitiatePayment(
         val email: String? = null,
         val phone: String? = null,
         val currency: String,
-        val callbackUrl: String? = null
+        val callbackUrl: String? = null,
+        val requireSuspendedProject: Boolean = false
     )
 
     private fun invalid(code: String, message: String): Nothing =
@@ -72,7 +76,14 @@ class InitiatePayment(
 
 data class PaymentInitiation(val reference: String, val authorizationUrl: String?, val amount: BigDecimal)
 
-data class PaymentProject(val id: UUID, val slug: String, val currency: String, val customerEmail: String?)
+data class PaymentProject(
+    val id: UUID,
+    val slug: String,
+    val currency: String,
+    val customerEmail: String?,
+    val domain: String? = null,
+    val status: String? = null
+)
 
 interface PaymentProjectPort { fun find(slug: String): PaymentProject? }
 interface PaymentBalancePort { suspend fun availableAmount(projectId: UUID, requestedAmount: BigDecimal?): BigDecimal }

@@ -2,7 +2,7 @@ package com.gatekeeper.feature.payment.presentation
 
 import com.gatekeeper.api.respondError
 import com.gatekeeper.config.AppConfig
-import com.gatekeeper.feature.payment.data.provider.PaystackWebhookPayload
+import com.gatekeeper.feature.payment.presentation.dto.PaystackWebhookPayload
 import org.koin.ktor.ext.get
 import io.ktor.http.*
 import io.ktor.server.application.*
@@ -12,36 +12,16 @@ import io.ktor.server.routing.*
 import kotlinx.serialization.json.Json
 import org.slf4j.LoggerFactory
 import com.gatekeeper.plugins.Metrics
-import java.math.BigDecimal
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
+import com.gatekeeper.feature.payment.domain.usecase.HandlePaystackWebhook
 import com.gatekeeper.feature.payment.domain.usecase.ProcessPaymentEvent
 
 private val logger = LoggerFactory.getLogger("com.gatekeeper.feature.payment.PaystackWebhookRoutes")
 private val json = Json { ignoreUnknownKeys = true }
 
-suspend fun replayPaystackWebhook(rawBody: String, processPaymentEvent: ProcessPaymentEvent): Boolean {
-    val event = runCatching { json.decodeFromString<PaystackWebhookPayload>(rawBody) }.getOrNull() ?: return false
-    val data = event.data
-    return runCatching {
-        val status = when (event.event) {
-            "charge.success" -> if (data.status.equals("success", true)) "success" else return@runCatching false
-            "charge.failed" -> "failed"
-            "transfer.reversed", "charge.reversed" -> "reversed"
-            else -> return@runCatching false
-        }
-        processPaymentEvent(
-            ProcessPaymentEvent.Command(
-                provider = "paystack", eventType = event.event, dedupeKey = "admin-replay:${event.event}:${data.reference}",
-                rawPayload = rawBody, reference = data.reference, projectSlug = data.metadata["project_slug"],
-                status = status, verifiedVia = "admin_replay", amount = koboToNaira(data.amount), currency = data.currency
-            )
-        ) != ProcessPaymentEvent.Outcome.REJECTED
-    }.getOrDefault(false)
-}
-
 fun Application.configurePaystackWebhookRoutes() {
-    val processPaymentEvent = get<ProcessPaymentEvent>()
+    val handlePaystackWebhook = get<HandlePaystackWebhook>()
     routing {
         post("/api/paystack/webhook") {
             Metrics.increment("webhook.received")
@@ -84,19 +64,11 @@ fun Application.configurePaystackWebhookRoutes() {
             val reference = data.reference
             val projectSlug = data.metadata["project_slug"]
             try {
-                val status = when (event.event) {
-                    "charge.success" -> if (data.status.equals("success", true)) "success" else null
-                    "charge.failed" -> "failed"
-                    "transfer.reversed", "charge.reversed" -> "reversed"
-                    else -> null
-                }
-                val outcome = processPaymentEvent(
-                    ProcessPaymentEvent.Command(
-                        provider = "paystack", eventType = event.event, dedupeKey = "${event.event}:$reference",
-                        rawPayload = rawBody, reference = reference, projectSlug = projectSlug,
-                        status = status, verifiedVia = "webhook",
-                        amount = if (status == "success") koboToNaira(data.amount) else null,
-                        currency = data.currency
+                val outcome = handlePaystackWebhook(
+                    HandlePaystackWebhook.Command(
+                        eventType = event.event, paymentStatus = data.status, reference = reference,
+                        projectSlug = projectSlug, amountKobo = data.amount,
+                        currency = data.currency, rawPayload = rawBody
                     )
                 )
                 when (outcome) {
@@ -141,9 +113,6 @@ private fun constantTimeEquals(a: String, b: String): Boolean {
     }
     return result == 0
 }
-
-private fun koboToNaira(amountKobo: Long): BigDecimal =
-    BigDecimal.valueOf(amountKobo).movePointLeft(2)
 
 private fun bytesToHex(bytes: ByteArray): String {
     return bytes.joinToString("") { "%02x".format(it) }

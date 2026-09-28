@@ -1,6 +1,7 @@
 package com.gatekeeper
 
 import com.gatekeeper.gate.configureGateRoutes
+import com.gatekeeper.feature.payment.presentation.configurePaymentRoutes
 import com.gatekeeper.plugins.configureSerialization
 import io.ktor.server.application.install
 import io.ktor.server.auth.Authentication
@@ -83,6 +84,7 @@ class ServerTest {
         application {
             configureSerialization()
             configureGateRoutes()
+            configurePaymentRoutes()
         }
         val response = client.get("/api/gate/pay?project=INVALID SLUG")
         assertEquals(HttpStatusCode.BadRequest, response.status)

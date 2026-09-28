@@ -2,14 +2,15 @@ package com.gatekeeper.gate
 
 import com.gatekeeper.config.AppConfig
 import com.gatekeeper.db.repositories.ProjectRepository
-import com.gatekeeper.feature.payment.domain.repository.PaymentRepository as PaymentDomainRepository
+import com.gatekeeper.feature.payment.domain.usecase.GetLatestPaymentLink
+import com.gatekeeper.feature.payment.data.persistence.ProjectBalanceAdapter
 import com.gatekeeper.plugins.RedisService
 import com.gatekeeper.plugins.Metrics
 import org.slf4j.LoggerFactory
 
 private val logger = LoggerFactory.getLogger("com.gatekeeper.gate.GateService")
 
-class GateService(private val payments: PaymentDomainRepository) {
+class GateService(private val latestPaymentLink: GetLatestPaymentLink, private val projectBalances: ProjectBalanceAdapter) {
 
     companion object {
         private const val REDIS_KEY_PREFIX = "project:status:"
@@ -19,9 +20,9 @@ class GateService(private val payments: PaymentDomainRepository) {
     private fun blockedResult(project: ProjectRepository.ProjectRecord): GateResult.Blocked =
         GateResult.Blocked(
             type = project.type,
-            paymentLink = payments.latestPendingAuthorizationUrl(project.id),
+            paymentLink = latestPaymentLink(project.id),
             projectName = project.name,
-            paywall = PaywallInfo.from(project)
+            paywall = PaywallInfo.from(project, projectBalances.financials(project))
         )
 
     fun check(slug: String): GateResult {
