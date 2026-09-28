@@ -9,7 +9,10 @@ class ArchitectureRulesTest {
     @Test
     fun `domain source files do not import framework or infrastructure packages`() {
         val sourceRoot = Path.of("src/main/kotlin/com/gatekeeper")
-        val forbiddenPrefixes = listOf("io.ktor.", "org.jetbrains.exposed.", "com.github.dockerjava.")
+        val forbiddenPrefixes = listOf(
+            "io.ktor.", "org.jetbrains.exposed.", "com.github.dockerjava.",
+            "com.gatekeeper.db.", "com.gatekeeper.payments."
+        )
         val legacyAllowList = emptySet<String>() // New feature domain packages start clean.
         val violations = mutableListOf<String>()
 

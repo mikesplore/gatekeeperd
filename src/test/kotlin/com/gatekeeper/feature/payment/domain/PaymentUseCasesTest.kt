@@ -139,6 +139,12 @@ class PaymentUseCasesTest {
             payment = payment?.copy(status = status, amount = amount ?: payment!!.amount, paidAt = paidAt ?: payment!!.paidAt)
         }
         override fun pendingPayments(olderThanMinutes: Long) = listOfNotNull(payment?.takeIf { it.status == "pending" })
+        override fun findPendingByProjectId(projectId: UUID) =
+            listOfNotNull(payment?.takeIf { it.projectId == projectId && it.status == "pending" })
+        override fun successfulAmountForProject(projectId: UUID) =
+            payment?.takeIf { it.projectId == projectId && it.status == "success" }?.amount ?: BigDecimal.ZERO
+        override fun pendingAmountForProject(projectId: UUID) =
+            payment?.takeIf { it.projectId == projectId && it.status == "pending" }?.amount ?: BigDecimal.ZERO
         override fun findByProjectId(projectId: UUID) = listOfNotNull(payment?.takeIf { it.projectId == projectId })
         override fun findByProjectIdPage(projectId: UUID, limit: Int, offset: Int) = findByProjectId(projectId).drop(offset).take(limit) to findByProjectId(projectId).size.toLong()
         override fun findAllFiltered(status: String?, projectSlug: String?, from: LocalDate?, until: LocalDate?, limit: Int, offset: Int): Pair<List<PaymentWithProject>, Long> = emptyList<PaymentWithProject>() to 0L

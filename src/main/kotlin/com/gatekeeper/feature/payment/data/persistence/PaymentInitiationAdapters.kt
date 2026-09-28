@@ -1,7 +1,7 @@
 package com.gatekeeper.feature.payment.data.persistence
 
 import com.gatekeeper.db.repositories.ProjectRepository
-import com.gatekeeper.db.repositories.PaymentRepository as LegacyPaymentRepository
+import com.gatekeeper.feature.payment.domain.repository.PaymentRepository
 import com.gatekeeper.feature.payment.domain.usecase.PaymentBalancePort
 import com.gatekeeper.feature.payment.domain.usecase.PaymentProject
 import com.gatekeeper.feature.payment.domain.usecase.PaymentProjectPort
@@ -15,21 +15,21 @@ class LegacyPaymentProjectAdapter : PaymentProjectPort {
     }
 }
 
-class LegacyPaymentBalanceAdapter(private val reconciliation: ReconcilePayments) : PaymentBalancePort {
+class LegacyPaymentBalanceAdapter(private val payments: PaymentRepository, private val reconciliation: ReconcilePayments) : PaymentBalancePort {
     override suspend fun availableAmount(projectId: UUID, requestedAmount: BigDecimal?): BigDecimal {
         var project = ProjectRepository.findById(projectId) ?: error("Project not found")
         val initialOutstanding = ProjectBalanceAdapter.outstandingBalance(project)
-        val initialPending = LegacyPaymentRepository.pendingAmountForProject(projectId)
+        val initialPending = payments.pendingAmountForProject(projectId)
         val initialAvailable = initialOutstanding - initialPending
         val needsReconciliation = initialPending > BigDecimal.ZERO &&
             (initialAvailable <= BigDecimal.ZERO || (requestedAmount != null && requestedAmount > initialAvailable))
         if (needsReconciliation) {
-            LegacyPaymentRepository.findPendingByProjectId(projectId).forEach { reconciliation.reconcile(it.provider.name.lowercase(), it.providerReference) }
+            payments.findPendingByProjectId(projectId).forEach { reconciliation.reconcile(it.provider, it.providerReference) }
             project = ProjectRepository.findById(projectId) ?: project
         }
 
         val outstanding = ProjectBalanceAdapter.outstandingBalance(project)
-        val pending = LegacyPaymentRepository.pendingAmountForProject(projectId)
+        val pending = payments.pendingAmountForProject(projectId)
         val available = outstanding - pending
         if (pending > BigDecimal.ZERO && (requestedAmount == null || requestedAmount <= outstanding) &&
             (available <= BigDecimal.ZERO || (requestedAmount != null && requestedAmount > available))) {

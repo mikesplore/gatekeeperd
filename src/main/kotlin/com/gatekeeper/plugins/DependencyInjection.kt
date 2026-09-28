@@ -43,7 +43,7 @@ private val applicationModule = module {
     single<PaymentDomainRepository> { ExposedPaymentRepository() }
     single<PaymentEventDomainRepository> { ExposedPaymentEventRepository() }
     single { LegacyPaymentProjectAdapter() }
-    single { LegacyPaymentBalanceAdapter(get()) }
+    single { LegacyPaymentBalanceAdapter(get<PaymentDomainRepository>(), get()) }
     single<PaymentEffects> { LegacyPaymentEffects() }
     single { ApplyWebhookEvent(get(), get()) }
     single(named("paystackGateway")) { LegacyPaymentGatewayAdapter(PaystackProviderClient()) }
