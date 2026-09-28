@@ -23,8 +23,8 @@ import com.gatekeeper.feature.payment.domain.usecase.VerifyPayment
 import com.gatekeeper.feature.payment.domain.usecase.ListPaymentEvents
 import com.gatekeeper.feature.payment.domain.usecase.GetPaymentMethodAvailability
 import com.gatekeeper.feature.payment.domain.usecase.PaymentProviderReadiness
-import com.gatekeeper.paystack.PaystackProviderClient
-import com.gatekeeper.mpesa.MpesaClient
+import com.gatekeeper.feature.payment.data.provider.PaystackGateway
+import com.gatekeeper.feature.payment.data.provider.MpesaGateway
 import org.koin.dsl.module
 import org.koin.core.qualifier.named
 import org.koin.ktor.plugin.Koin
@@ -45,8 +45,8 @@ private val applicationModule = module {
     single { PaymentBalanceAdapter(get<PaymentDomainRepository>(), get()) }
     single<PaymentEffects> { PaymentEffectsAdapter() }
     single { ApplyWebhookEvent(get(), get()) }
-    single(named("paystackGateway")) { PaystackProviderClient() }
-    single(named("mpesaGateway")) { MpesaClient }
+    single(named("paystackGateway")) { PaystackGateway() }
+    single(named("mpesaGateway")) { MpesaGateway }
     single<PaymentProviderReadiness> { PaymentProviderReadinessAdapter() }
     single { GetPaymentMethodAvailability(get()) }
     single { InitiatePayment(get(), get<PaymentProjectAdapter>(), get<PaymentBalanceAdapter>(), mapOf("paystack" to get(named("paystackGateway")), "mpesa" to get(named("mpesaGateway")))) }

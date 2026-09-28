@@ -1,4 +1,4 @@
-package com.gatekeeper.paystack
+package com.gatekeeper.feature.payment.data.provider
 
 import com.gatekeeper.config.AppConfig
 import com.gatekeeper.feature.payment.domain.gateway.InitiatePaymentCommand
@@ -7,7 +7,7 @@ import com.gatekeeper.feature.payment.domain.gateway.PaymentGateway
 import com.gatekeeper.feature.payment.domain.gateway.VerifiedPayment
 import java.math.BigDecimal
 
-class PaystackProviderClient : PaymentGateway {
+class PaystackGateway : PaymentGateway {
     override val provider = "paystack"
 
     override suspend fun initiate(command: InitiatePaymentCommand): Result<InitiatedPayment> {

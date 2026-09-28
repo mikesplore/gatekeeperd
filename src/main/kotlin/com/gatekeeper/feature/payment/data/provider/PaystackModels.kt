@@ -1,4 +1,4 @@
-package com.gatekeeper.paystack
+package com.gatekeeper.feature.payment.data.provider
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable

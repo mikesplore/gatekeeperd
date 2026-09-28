@@ -1,4 +1,4 @@
-package com.gatekeeper.mpesa
+package com.gatekeeper.feature.payment.data.provider
 
 import kotlinx.serialization.Serializable
 

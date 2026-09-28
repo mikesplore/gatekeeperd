@@ -1,6 +1,5 @@
-package com.gatekeeper.mpesa
+package com.gatekeeper.feature.payment.domain.model
 
-import com.gatekeeper.feature.payment.domain.model.MpesaPhoneNumber
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull

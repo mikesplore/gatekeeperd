@@ -1,8 +1,8 @@
-package com.gatekeeper.paystack
+package com.gatekeeper.feature.payment.presentation
 
 import com.gatekeeper.api.respondError
 import com.gatekeeper.config.AppConfig
-import com.gatekeeper.feature.payment.domain.usecase.ProcessPaymentEvent
+import com.gatekeeper.feature.payment.data.provider.PaystackWebhookPayload
 import org.koin.ktor.ext.get
 import io.ktor.http.*
 import io.ktor.server.application.*
@@ -15,8 +15,9 @@ import com.gatekeeper.plugins.Metrics
 import java.math.BigDecimal
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
+import com.gatekeeper.feature.payment.domain.usecase.ProcessPaymentEvent
 
-private val logger = LoggerFactory.getLogger("com.gatekeeper.paystack.PaystackWebhookRoutes")
+private val logger = LoggerFactory.getLogger("com.gatekeeper.feature.payment.PaystackWebhookRoutes")
 private val json = Json { ignoreUnknownKeys = true }
 
 suspend fun replayPaystackWebhook(rawBody: String, processPaymentEvent: ProcessPaymentEvent): Boolean {

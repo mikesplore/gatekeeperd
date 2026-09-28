@@ -11,7 +11,7 @@ class ArchitectureRulesTest {
         val sourceRoot = Path.of("src/main/kotlin/com/gatekeeper")
         val forbiddenPrefixes = listOf(
             "io.ktor.", "org.jetbrains.exposed.", "com.github.dockerjava.",
-            "com.gatekeeper.db.", "com.gatekeeper.payments."
+            "com.gatekeeper.db.", "com.gatekeeper.payments.", "com.gatekeeper.mpesa.", "com.gatekeeper.paystack."
         )
         val legacyAllowList = emptySet<String>() // New feature domain packages start clean.
         val violations = mutableListOf<String>()

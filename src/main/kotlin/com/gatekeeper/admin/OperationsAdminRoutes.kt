@@ -18,7 +18,7 @@ import com.gatekeeper.nginx.requireCertificatePath
 import com.gatekeeper.nginx.requireValidHostname
 import com.gatekeeper.db.tables.ReconciliationStatus
 import com.gatekeeper.config.AppConfig
-import com.gatekeeper.paystack.replayPaystackWebhook
+import com.gatekeeper.feature.payment.presentation.replayPaystackWebhook
 import com.gatekeeper.feature.payment.domain.usecase.ProcessPaymentEvent
 import org.koin.ktor.ext.get
 import com.gatekeeper.feature.payment.data.persistence.ProjectBalanceAdapter

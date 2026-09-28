@@ -1,4 +1,4 @@
-package com.gatekeeper.paystack
+package com.gatekeeper.feature.payment.data.provider
 
 import com.gatekeeper.config.AppConfig
 import io.ktor.client.*
@@ -15,7 +15,7 @@ import java.time.LocalDateTime
 
 object PaystackClient {
 
-    private val logger = LoggerFactory.getLogger("com.gatekeeper.paystack.PaystackClient")
+    private val logger = LoggerFactory.getLogger("com.gatekeeper.feature.payment.PaystackClient")
     private val baseUrl = "https://api.paystack.co"
 
     private val http = HttpClient {

@@ -10,11 +10,11 @@ import com.gatekeeper.deployment.DeploymentWorker
 import com.gatekeeper.gate.configureGateRoutes
 import com.gatekeeper.integrations.configureGitHubAdminRoutes
 import com.gatekeeper.integrations.configureGitHubWebhookRoutes
-import com.gatekeeper.mpesa.MpesaClient
-import com.gatekeeper.mpesa.configureMpesaRoutes
+import com.gatekeeper.feature.payment.data.provider.MpesaGateway
+import com.gatekeeper.feature.payment.data.provider.PaystackClient
+import com.gatekeeper.feature.payment.presentation.configureMpesaRoutes
+import com.gatekeeper.feature.payment.presentation.configurePaystackWebhookRoutes
 import com.gatekeeper.nginx.NginxBackfillRunner
-import com.gatekeeper.paystack.PaystackClient
-import com.gatekeeper.paystack.configurePaystackWebhookRoutes
 import com.gatekeeper.plugins.*
 import com.gatekeeper.feature.payment.domain.usecase.ReconcilePayments
 import com.gatekeeper.feature.payment.domain.repository.PaymentRepository as PaymentDomainRepository
@@ -133,7 +133,7 @@ fun Application.module() {
 
     monitor.subscribe(ApplicationStopping) {
         runCatching { PaystackClient.close() }
-        runCatching { MpesaClient.close() }
+        runCatching { MpesaGateway.close() }
         runCatching { org.koin.core.context.stopKoin() }
         runCatching { Telemetry.close() }
     }

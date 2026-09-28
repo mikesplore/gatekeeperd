@@ -1,4 +1,4 @@
-package com.gatekeeper.mpesa
+package com.gatekeeper.feature.payment.data.provider
 
 import com.gatekeeper.config.AppConfig
 import com.gatekeeper.feature.payment.domain.gateway.PaymentGateway
@@ -20,9 +20,9 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.*
 
-object MpesaClient : PaymentGateway {
+object MpesaGateway : PaymentGateway {
     override val provider = "mpesa"
-    private val logger = LoggerFactory.getLogger("com.gatekeeper.mpesa.MpesaClient")
+    private val logger = LoggerFactory.getLogger("com.gatekeeper.feature.payment.MpesaGateway")
     private val http = HttpClient { install(ContentNegotiation) { json(Json { ignoreUnknownKeys = true }) } }
     private val baseUrl get() = if (AppConfig.mpesaEnvironment.equals("production", true)) "https://api.safaricom.co.ke" else "https://sandbox.safaricom.co.ke"
     fun isConfigured() = listOf(
