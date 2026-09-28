@@ -11,7 +11,7 @@ import com.gatekeeper.config.AppConfig
 import com.gatekeeper.api.respondError
 import com.gatekeeper.api.respondErrorWithData
 import com.gatekeeper.db.repositories.AuditRepository
-import com.gatekeeper.db.repositories.PaymentRepository
+import com.gatekeeper.feature.payment.domain.repository.PaymentRepository as PaymentDomainRepository
 import com.gatekeeper.db.repositories.ProjectRepository
 import com.gatekeeper.db.repositories.CustomerRepository
 import com.gatekeeper.db.repositories.ProjectAdjustmentRepository
@@ -34,7 +34,7 @@ import com.gatekeeper.docker.PortsAvailabilityResponse
 import com.gatekeeper.docker.parseImageRef
 import com.gatekeeper.nginx.NginxService
 import com.gatekeeper.feature.payment.domain.usecase.InitiatePayment
-import com.gatekeeper.payments.ProjectBalanceService
+import com.gatekeeper.feature.payment.data.persistence.ProjectBalanceAdapter
 import io.ktor.http.*
 import io.ktor.server.application.*
 import io.ktor.server.auth.*
@@ -137,7 +137,7 @@ fun Application.configureProjectAdminRoutes() {
                 call.respond(
                     ProjectsListResponse(
                         projects = filteredProjects.drop(offset).take(limit).map { project ->
-                            val remaining = ProjectBalanceService.outstandingBalance(project)
+                            val remaining = ProjectBalanceAdapter.outstandingBalance(project)
                             project.toResponse(remaining)
                         },
                         total = filteredProjects.size,
@@ -158,13 +158,14 @@ fun Application.configureProjectAdminRoutes() {
                     call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
                     return@get
                 }
-                val payments = PaymentRepository.findByProjectId(project.id)
+                val paymentRepository = call.application.get<PaymentDomainRepository>()
+                val payments = paymentRepository.findByProjectId(project.id)
                 val adjustments = ProjectAdjustmentRepository.findByProjectId(project.id)
                 val auditLog = AuditRepository.findByProjectId(project.id)
                 call.respond(
                     ProjectDetailResponse(
                         project = project.toResponse(
-                            ProjectBalanceService.outstandingBalance(project)
+                            ProjectBalanceAdapter.outstandingBalance(project)
                         ),
                         payments = payments.map { it.toResponse() },
                         audit_log = auditLog.map { it.toResponse() },
@@ -178,7 +179,7 @@ fun Application.configureProjectAdminRoutes() {
                 val project = ProjectRepository.findBySlug(slug) ?: return@get call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
                 val limit = (call.request.queryParameters["limit"]?.toIntOrNull() ?: 25).coerceIn(1, 500)
                 val offset = (call.request.queryParameters["offset"]?.toIntOrNull() ?: 0).coerceAtLeast(0)
-                val (rows, total) = PaymentRepository.findByProjectIdPage(project.id, limit, offset)
+                val (rows, total) = call.application.get<PaymentDomainRepository>().findByProjectIdPage(project.id, limit, offset)
                 call.respond(ProjectPaymentsPageResponse(rows.map { it.toResponse() }, total, limit, offset, offset + rows.size < total))
             }
 
@@ -232,8 +233,8 @@ fun Application.configureProjectAdminRoutes() {
                     call.respondError(HttpStatusCode.BadGateway, "invoice_integration_unavailable", "Could not check whether an invoice already exists")
                     return@post
                 }
-                val invoiceAmount = ProjectBalanceService.originalCharge(project) +
-                    ProjectBalanceService.additionalCharges(project) - ProjectBalanceService.discounts(project)
+                val invoiceAmount = ProjectBalanceAdapter.originalCharge(project) +
+                    ProjectBalanceAdapter.additionalCharges(project) - ProjectBalanceAdapter.discounts(project)
                 if (invoiceAmount <= BigDecimal.ZERO) {
                     call.respondError(HttpStatusCode.BadRequest, "invoice_amount_unavailable", "Project has no billable amount for an invoice")
                     return@post
@@ -248,7 +249,7 @@ fun Application.configureProjectAdminRoutes() {
                     call.respondError(HttpStatusCode.BadGateway, "invoice_creation_failed", "Scribed could not create the invoice")
                     return@post
                 }
-                val syncedPayments = ScribedIntegrationClient.syncProject(project)
+                val syncedPayments = ScribedIntegrationClient.syncProject(project, call.application.get<PaymentDomainRepository>())
                 val lookup = ScribedIntegrationClient.invoiceStatus(project.id.toString())
                 val invoiceId = lookup.body?.get("invoice")?.jsonObject?.get("id")?.jsonPrimitive?.longOrNull
                 call.respond(HttpStatusCode.Created, mapOf("status" to "created", "invoiceId" to invoiceId, "paymentsQueued" to syncedPayments))
@@ -263,7 +264,7 @@ fun Application.configureProjectAdminRoutes() {
                 }
                 var lookup = ScribedIntegrationClient.invoiceStatus(project.id.toString())
                 if (lookup.status == HttpStatusCode.NotFound && ScribedIntegrationClient.ensureInvoice(project)) {
-                    ScribedIntegrationClient.syncProject(project)
+                    ScribedIntegrationClient.syncProject(project, call.application.get<PaymentDomainRepository>())
                     lookup = ScribedIntegrationClient.invoiceStatus(project.id.toString())
                 }
                 val invoiceId = lookup.body?.get("invoice")?.jsonObject?.get("id")?.jsonPrimitive?.longOrNull
@@ -292,13 +293,13 @@ fun Application.configureProjectAdminRoutes() {
                     call.respondError(HttpStatusCode.BadRequest, "invalid_payment_id", "Invalid payment ID")
                     return@get
                 }
-                val payment = PaymentRepository.findById(paymentId)?.takeIf { it.projectId == project.id }
+                val payment = call.application.get<PaymentDomainRepository>().findById(paymentId)?.takeIf { it.projectId == project.id }
                     ?: return@get call.respondError(HttpStatusCode.NotFound, "payment_not_found", "Payment not found")
                 if (payment.gatewayStatus != "success") {
                     call.respondError(HttpStatusCode.Conflict, "payment_not_complete", "A receipt is available after successful payment")
                     return@get
                 }
-                val (status, bytes) = ScribedIntegrationClient.receiptPdfForPayment(project, payment)
+                val (status, bytes) = ScribedIntegrationClient.receiptPdfForPayment(project, payment, call.application.get<PaymentDomainRepository>())
                 if (bytes == null) {
                     call.respondError(if (status == HttpStatusCode.NotFound) status else HttpStatusCode.BadGateway, "receipt_download_failed", "Scribed could not generate or retrieve this receipt")
                     return@get
@@ -339,7 +340,7 @@ fun Application.configureProjectAdminRoutes() {
                     call.respondError(HttpStatusCode.BadGateway, "invoice_sync_failed", "Scribed could not create or locate the project invoice")
                     return@post
                 }
-                val syncedPayments = ScribedIntegrationClient.syncProject(project)
+                val syncedPayments = ScribedIntegrationClient.syncProject(project, call.application.get<PaymentDomainRepository>())
                 call.respond(HttpStatusCode.Accepted, mapOf("status" to "queued", "project" to project.slug, "paymentsQueued" to syncedPayments))
             }
 
@@ -468,7 +469,7 @@ fun Application.configureProjectAdminRoutes() {
                     call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
                     return@post
                 }
-                val oldBalance = ProjectBalanceService.outstandingBalance(project)
+                val oldBalance = ProjectBalanceAdapter.outstandingBalance(project)
                 val actor = call.principal<JWTPrincipal>()?.payload?.subject ?: "unknown"
                 val adjustment = try {
                     ProjectAdjustmentRepository.create(project.id, type, amount, body.reason, actor)
@@ -476,7 +477,7 @@ fun Application.configureProjectAdminRoutes() {
                     call.respondError(HttpStatusCode.BadRequest, "invalid_adjustment", e.message ?: "Invalid adjustment")
                     return@post
                 }
-                val newBalance = ProjectBalanceService.outstandingBalance(project)
+                val newBalance = ProjectBalanceAdapter.outstandingBalance(project)
                 AuditRepository.write(
                     project.id,
                     "project_adjustment",

@@ -17,6 +17,7 @@ import com.gatekeeper.paystack.PaystackClient
 import com.gatekeeper.paystack.configurePaystackWebhookRoutes
 import com.gatekeeper.plugins.*
 import com.gatekeeper.feature.payment.domain.usecase.ReconcilePayments
+import com.gatekeeper.feature.payment.domain.repository.PaymentRepository as PaymentDomainRepository
 import org.koin.ktor.ext.get
 import com.gatekeeper.scheduler.AutoBlockerJob
 import com.gatekeeper.scheduler.IntegrationOutboxJob
@@ -127,7 +128,7 @@ fun Application.module() {
     val appScope = CoroutineScope(SupervisorJob())
     AutoBlockerJob.start(appScope)
     ReconciliationJob.start(appScope, get<ReconcilePayments>())
-    IntegrationOutboxJob.start(appScope)
+    IntegrationOutboxJob.start(appScope, get<PaymentDomainRepository>())
     DeploymentWorker.start(appScope)
 
     monitor.subscribe(ApplicationStopping) {

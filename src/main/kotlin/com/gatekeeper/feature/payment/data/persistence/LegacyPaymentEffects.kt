@@ -5,7 +5,6 @@ import com.gatekeeper.db.repositories.ProjectRepository
 import com.gatekeeper.feature.payment.domain.model.Payment
 import com.gatekeeper.feature.payment.domain.usecase.PaymentEffects
 import com.gatekeeper.integrations.ScribedIntegrationClient
-import com.gatekeeper.payments.ProjectBalanceService
 import java.math.BigDecimal
 import java.time.LocalDate
 import java.time.LocalDateTime
@@ -15,14 +14,14 @@ class LegacyPaymentEffects : PaymentEffects {
     override fun acceptSuccessfulPayment(payment: Payment?, projectId: java.util.UUID, amount: BigDecimal, currency: String?): Boolean {
         val project = ProjectRepository.findById(projectId) ?: return false
         if (!currency.isNullOrBlank() && !project.currency.equals(currency, ignoreCase = true)) return false
-        val outstanding = ProjectBalanceService.outstandingBalance(project)
+        val outstanding = ProjectBalanceAdapter.outstandingBalance(project)
         return outstanding > BigDecimal.ZERO && amount <= outstanding &&
             (payment == null || payment.status != "pending" || amount.compareTo(payment.amount) == 0)
     }
 
     override fun paymentSucceeded(payment: Payment, amount: BigDecimal, currency: String?, paidAt: LocalDateTime?, actor: String) {
         val project = ProjectRepository.findById(payment.projectId) ?: return
-        val remaining = ProjectBalanceService.outstandingBalance(project)
+        val remaining = ProjectBalanceAdapter.outstandingBalance(project)
         if (remaining <= BigDecimal.ZERO) ProjectRepository.setStatusAndClearDueDate(project.id, "active")
         AuditRepository.write(project.id, "payment_received", actor, "Payment ref=${payment.reference} provider=${payment.provider} amount=$amount remaining=$remaining verified via payment_use_case")
         ProjectRepository.invalidateCache(project.slug)

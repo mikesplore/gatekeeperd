@@ -1,10 +1,10 @@
 package com.gatekeeper.api.dto
 
 import com.gatekeeper.db.repositories.AuditRepository
-import com.gatekeeper.db.repositories.PaymentRepository
+import com.gatekeeper.feature.payment.domain.model.Payment
 import com.gatekeeper.db.repositories.ProjectRepository
 import com.gatekeeper.db.repositories.ProjectAdjustmentRepository
-import com.gatekeeper.payments.ProjectBalanceService
+import com.gatekeeper.feature.payment.data.persistence.ProjectBalanceAdapter
 import kotlinx.serialization.Serializable
 
 import java.math.BigDecimal
@@ -212,9 +212,9 @@ fun ProjectRepository.ProjectRecord.toResponse(remainingBalance: BigDecimal? = n
     paystackCustomerCode = paystackCustomerCode,
     amountDue = amountDue?.toDouble(),
     baseAmount = baseAmount?.toDouble(),
-    additionalCharges = ProjectBalanceService.additionalCharges(this).toDouble(),
-    discounts = ProjectBalanceService.discounts(this).toDouble(),
-    successfulPayments = ProjectBalanceService.successfulPayments(this).toDouble(),
+    additionalCharges = ProjectBalanceAdapter.additionalCharges(this).toDouble(),
+    discounts = ProjectBalanceAdapter.discounts(this).toDouble(),
+    successfulPayments = ProjectBalanceAdapter.successfulPayments(this).toDouble(),
     remainingBalance = remainingBalance?.toDouble(),
     currency = currency,
     dueDate = dueDate?.toString(),
@@ -223,19 +223,12 @@ fun ProjectRepository.ProjectRecord.toResponse(remainingBalance: BigDecimal? = n
     updatedAt = updatedAt.toNairobiTimestamp(),
 )
 
-fun PaymentRepository.PaymentRecord.toResponse(): PaymentResponse = PaymentResponse(
-    id = id.toString(),
-    projectId = projectId.toString(),
-    provider = provider.name.lowercase(),
-    providerReference = providerReference,
-    paystackReference = paystackReference,
-    amount = amount.toDouble(),
-    status = status,
-    gatewayStatus = gatewayStatus,
-    verifiedVia = verifiedVia,
-    paidAt = paidAt?.toNairobiTimestamp(),
-    rawWebhookPayload = rawWebhookPayload,
-    createdAt = createdAt.toNairobiTimestamp()
+fun Payment.toResponse(): PaymentResponse = PaymentResponse(
+    id = id.toString(), projectId = projectId.toString(), provider = provider.lowercase(),
+    providerReference = providerReference, paystackReference = providerReference,
+    amount = amount.toDouble(), status = recordStatus, gatewayStatus = status,
+    verifiedVia = verifiedVia, paidAt = paidAt?.toNairobiTimestamp(), rawWebhookPayload = rawPayload,
+    createdAt = createdAt?.toNairobiTimestamp() ?: ""
 )
 
 fun AuditRepository.AuditRecord.toResponse(): AuditLogResponse = AuditLogResponse(

@@ -6,7 +6,6 @@ import com.gatekeeper.feature.payment.domain.usecase.PaymentBalancePort
 import com.gatekeeper.feature.payment.domain.usecase.PaymentProject
 import com.gatekeeper.feature.payment.domain.usecase.PaymentProjectPort
 import com.gatekeeper.feature.payment.domain.usecase.ReconcilePayments
-import com.gatekeeper.payments.ProjectBalanceService
 import java.math.BigDecimal
 import java.util.UUID
 
@@ -19,7 +18,7 @@ class LegacyPaymentProjectAdapter : PaymentProjectPort {
 class LegacyPaymentBalanceAdapter(private val reconciliation: ReconcilePayments) : PaymentBalancePort {
     override suspend fun availableAmount(projectId: UUID, requestedAmount: BigDecimal?): BigDecimal {
         var project = ProjectRepository.findById(projectId) ?: error("Project not found")
-        val initialOutstanding = ProjectBalanceService.outstandingBalance(project)
+        val initialOutstanding = ProjectBalanceAdapter.outstandingBalance(project)
         val initialPending = LegacyPaymentRepository.pendingAmountForProject(projectId)
         val initialAvailable = initialOutstanding - initialPending
         val needsReconciliation = initialPending > BigDecimal.ZERO &&
@@ -29,7 +28,7 @@ class LegacyPaymentBalanceAdapter(private val reconciliation: ReconcilePayments)
             project = ProjectRepository.findById(projectId) ?: project
         }
 
-        val outstanding = ProjectBalanceService.outstandingBalance(project)
+        val outstanding = ProjectBalanceAdapter.outstandingBalance(project)
         val pending = LegacyPaymentRepository.pendingAmountForProject(projectId)
         val available = outstanding - pending
         if (pending > BigDecimal.ZERO && (requestedAmount == null || requestedAmount <= outstanding) &&

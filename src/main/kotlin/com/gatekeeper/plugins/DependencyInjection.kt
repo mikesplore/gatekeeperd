@@ -3,6 +3,7 @@ package com.gatekeeper.plugins
 import com.gatekeeper.customer.CustomerApplicationService
 import com.gatekeeper.db.repositories.*
 import com.gatekeeper.gate.GateApplicationService
+import com.gatekeeper.gate.GateService
 import com.gatekeeper.nginx.NginxAdminService
 import com.gatekeeper.nginx.NginxService
 import com.gatekeeper.feature.payment.data.persistence.ExposedPaymentRepository
@@ -19,6 +20,7 @@ import com.gatekeeper.feature.payment.domain.usecase.ReconcilePayments
 import com.gatekeeper.feature.payment.domain.usecase.InitiatePayment
 import com.gatekeeper.feature.payment.domain.usecase.ProcessPaymentEvent
 import com.gatekeeper.feature.payment.domain.usecase.VerifyPayment
+import com.gatekeeper.feature.payment.domain.usecase.ListPaymentEvents
 import com.gatekeeper.paystack.PaystackProviderClient
 import com.gatekeeper.mpesa.MpesaClient
 import org.koin.dsl.module
@@ -29,9 +31,10 @@ import io.ktor.server.application.install
 
 private val applicationModule = module {
     single<ProjectQueryRepository> { ExposedProjectQueryRepository() }
-    single<PaymentQueryRepository> { ExposedPaymentQueryRepository() }
     single<SupportRequestRepository> { ExposedSupportRequestRepository() }
-    single { CustomerApplicationService(get(), get(), get()) }
+    single { CustomerApplicationService(get<ProjectQueryRepository>(), get<PaymentDomainRepository>(), get<SupportRequestRepository>()) }
+    single { GateService(get<PaymentDomainRepository>()) }
+    single { GateApplicationService(get<ProjectQueryRepository>(), get<GateService>()) }
     single { NginxService() }
     single { NginxAdminService(get()) }
     single<PaymentDomainRepository> { ExposedPaymentRepository() }
@@ -44,6 +47,7 @@ private val applicationModule = module {
     single(named("mpesaGateway")) { LegacyPaymentGatewayAdapter(MpesaClient) }
     single { InitiatePayment(get(), get<LegacyPaymentProjectAdapter>(), get<LegacyPaymentBalanceAdapter>(), mapOf("paystack" to get(named("paystackGateway")), "mpesa" to get(named("mpesaGateway")))) }
     single { ProcessPaymentEvent(get(), get(), get<LegacyPaymentProjectAdapter>(), get()) }
+    single { ListPaymentEvents(get()) }
     single { VerifyPayment(mapOf("paystack" to get(named("paystackGateway")), "mpesa" to get(named("mpesaGateway"))), get()) }
     single { ReconcilePayments(get(), mapOf("paystack" to get(named("paystackGateway")), "mpesa" to get(named("mpesaGateway"))), get()) }
 }

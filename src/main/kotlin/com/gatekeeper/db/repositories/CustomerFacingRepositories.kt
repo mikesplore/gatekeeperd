@@ -10,24 +10,12 @@ interface ProjectQueryRepository {
     fun findBySlug(slug: String): ProjectRepository.ProjectRecord?
 }
 
-interface PaymentQueryRepository {
-    fun findByProjectId(projectId: UUID): List<PaymentRepository.PaymentRecord>
-    fun findById(id: UUID): PaymentRepository.PaymentRecord?
-    fun findLatestPendingAuthorizationUrl(projectId: UUID): String?
-}
-
 interface SupportRequestRepository {
     fun create(projectId: UUID, name: String?, email: String, message: String): UUID
 }
 
 class ExposedProjectQueryRepository : ProjectQueryRepository {
     override fun findBySlug(slug: String) = ProjectRepository.findBySlug(slug)
-}
-
-class ExposedPaymentQueryRepository : PaymentQueryRepository {
-    override fun findByProjectId(projectId: UUID) = PaymentRepository.findByProjectId(projectId)
-    override fun findById(id: UUID) = PaymentRepository.findById(id)
-    override fun findLatestPendingAuthorizationUrl(projectId: UUID) = PaymentRepository.findLatestPendingAuthorizationUrl(projectId)
 }
 
 class ExposedSupportRequestRepository : SupportRequestRepository {

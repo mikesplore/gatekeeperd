@@ -5,7 +5,7 @@ import com.gatekeeper.api.dto.PaginatedResponse
 import com.gatekeeper.api.dto.toResponse
 import com.gatekeeper.db.repositories.AuditRepository
 import com.gatekeeper.db.repositories.NotificationRepository
-import com.gatekeeper.db.repositories.PaymentEventRepository
+import com.gatekeeper.feature.payment.domain.repository.PaymentEventRepository as PaymentEventDomainRepository
 import com.gatekeeper.db.repositories.ProjectRepository
 import com.gatekeeper.db.repositories.SiteRepository
 import com.gatekeeper.db.repositories.CustomerRepository
@@ -21,7 +21,7 @@ import com.gatekeeper.config.AppConfig
 import com.gatekeeper.paystack.replayPaystackWebhook
 import com.gatekeeper.feature.payment.domain.usecase.ProcessPaymentEvent
 import org.koin.ktor.ext.get
-import com.gatekeeper.payments.ProjectBalanceService
+import com.gatekeeper.feature.payment.data.persistence.ProjectBalanceAdapter
 import com.gatekeeper.deployment.DeploymentApplicationService
 import com.gatekeeper.nginx.DeploymentUpstreamResolver
 import io.ktor.http.*
@@ -32,7 +32,7 @@ import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import kotlinx.serialization.Serializable
-import com.gatekeeper.db.repositories.PaymentRepository
+import com.gatekeeper.feature.payment.domain.repository.PaymentRepository as PaymentDomainRepository
 import com.gatekeeper.db.repositories.IntegrationOutboxRepository
 import com.gatekeeper.plugins.Metrics
 import java.time.OffsetDateTime
@@ -189,11 +189,11 @@ private data class DashboardProjectFinancials(
 )
 
 private fun dashboardProjectFinancials(project: ProjectRepository.ProjectRecord): DashboardProjectFinancials {
-    val billed = ProjectBalanceService.originalCharge(project) +
-        ProjectBalanceService.additionalCharges(project) -
-        ProjectBalanceService.discounts(project)
-    val paid = ProjectBalanceService.successfulPayments(project)
-    return DashboardProjectFinancials(billed, paid, ProjectBalanceService.outstandingBalance(project))
+    val billed = ProjectBalanceAdapter.originalCharge(project) +
+        ProjectBalanceAdapter.additionalCharges(project) -
+        ProjectBalanceAdapter.discounts(project)
+    val paid = ProjectBalanceAdapter.successfulPayments(project)
+    return DashboardProjectFinancials(billed, paid, ProjectBalanceAdapter.outstandingBalance(project))
 }
 
 private fun derivedBillingStatus(financials: List<DashboardProjectFinancials>): String = when {
@@ -362,17 +362,19 @@ fun Application.configureOperationsAdminRoutes() {
             get("/api/admin/dashboard/customers/{id}/transactions") {
                 val id = runCatching { UUID.fromString(call.parameters["id"]) }.getOrNull() ?: run { call.respondError(HttpStatusCode.BadRequest, "invalid_customer_id", "Invalid customer ID"); return@get }
                 if (CustomerRepository.findById(id) == null) { call.respondError(HttpStatusCode.NotFound, "customer_not_found", "Customer not found"); return@get }
+                val paymentRepository = call.application.get<PaymentDomainRepository>()
                 val transactions = CustomerRepository.findSites(id).flatMap { owned ->
-                    PaymentRepository.findByProjectId(owned.project.id).map { payment ->
-                        DashboardCustomerTransactionResponse(payment.id.toString(), owned.project.id.toString(), owned.project.name, owned.project.slug, payment.amount.toDouble(), payment.status, payment.gatewayStatus, payment.provider.name, payment.providerReference, payment.paidAt?.toString(), payment.createdAt.toString())
+                    paymentRepository.findByProjectId(owned.project.id).map { payment ->
+                        DashboardCustomerTransactionResponse(payment.id.toString(), owned.project.id.toString(), owned.project.name, owned.project.slug, payment.amount.toDouble(), payment.recordStatus, payment.status, payment.provider, payment.providerReference, payment.paidAt?.toString(), payment.createdAt?.toString().orEmpty())
                     }
                 }.sortedByDescending { it.createdAt }
                 call.respond(transactions)
             }
             get("/api/admin/dashboard/summary") {
                 val projects = ProjectRepository.findAll()
-                val payments = PaymentRepository.findAllFiltered(null, null, null, null, 10000, 0).first.map { it.payment }
-                val revenue = PaymentRepository.revenueTotals()
+                val paymentRepository = call.application.get<PaymentDomainRepository>()
+                val payments = paymentRepository.findAllFiltered(null, null, null, null, 10000, 0).first.map { it.payment }
+                val revenue = paymentRepository.revenueTotals()
                 val outbox = IntegrationOutboxRepository.summary()
                 val available = File(AppConfig.nginxSitesAvailablePath).listFiles()?.count { it.isFile && !it.name.startsWith(".") }?.toLong() ?: 0
                 val enabled = File(AppConfig.nginxSitesEnabledPath).listFiles()?.size?.toLong() ?: 0
@@ -500,7 +502,8 @@ fun Application.configureOperationsAdminRoutes() {
                     call.respondError(HttpStatusCode.BadRequest, "invalid_event_id", "Invalid payment event ID")
                     return@post
                 }
-                val event = PaymentEventRepository.findForReplay(id) ?: run {
+                val eventRepository = call.application.get<PaymentEventDomainRepository>()
+                val event = eventRepository.findForReplay(id) ?: run {
                     call.respondError(HttpStatusCode.NotFound, "payment_event_not_found", "Payment event not found")
                     return@post
                 }
@@ -513,7 +516,7 @@ fun Application.configureOperationsAdminRoutes() {
                     call.respondError(HttpStatusCode.UnprocessableEntity, "replay_failed", "Payment event replay failed integrity or processing checks")
                     return@post
                 }
-                PaymentEventRepository.markProcessed(id)
+                eventRepository.markProcessed(id)
                 call.respond(mapOf("status" to "replayed", "eventId" to id.toString()))
             }
 

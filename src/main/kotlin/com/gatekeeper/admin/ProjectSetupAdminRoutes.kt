@@ -706,9 +706,9 @@ private fun DeploymentJobRepository.ConfigurationSummary.toSetupResponse() = Pro
 )
 
 private fun projectOverviewFinancials(project: ProjectRepository.ProjectRecord): Triple<BigDecimal, BigDecimal, BigDecimal> {
-    val billed = com.gatekeeper.payments.ProjectBalanceService.originalCharge(project) +
-        com.gatekeeper.payments.ProjectBalanceService.additionalCharges(project) -
-        com.gatekeeper.payments.ProjectBalanceService.discounts(project)
-    val paid = com.gatekeeper.payments.ProjectBalanceService.successfulPayments(project)
-    return Triple(billed, paid, com.gatekeeper.payments.ProjectBalanceService.outstandingBalance(project))
+    val billed = com.gatekeeper.feature.payment.data.persistence.ProjectBalanceAdapter.originalCharge(project) +
+        com.gatekeeper.feature.payment.data.persistence.ProjectBalanceAdapter.additionalCharges(project) -
+        com.gatekeeper.feature.payment.data.persistence.ProjectBalanceAdapter.discounts(project)
+    val paid = com.gatekeeper.feature.payment.data.persistence.ProjectBalanceAdapter.successfulPayments(project)
+    return Triple(billed, paid, com.gatekeeper.feature.payment.data.persistence.ProjectBalanceAdapter.outstandingBalance(project))
 }

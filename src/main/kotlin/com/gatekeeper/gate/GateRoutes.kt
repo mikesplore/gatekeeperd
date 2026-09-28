@@ -3,6 +3,7 @@ package com.gatekeeper.gate
 import com.gatekeeper.api.InputValidators
 import com.gatekeeper.api.respondError
 import com.gatekeeper.db.repositories.ProjectRepository
+import com.gatekeeper.gate.GateApplicationService
 import com.gatekeeper.feature.payment.domain.usecase.InitiatePayment
 import com.gatekeeper.feature.payment.domain.usecase.VerifyPayment
 import io.ktor.http.*
@@ -71,7 +72,7 @@ fun Application.configureGateRoutes() {
     routing {
         get("/api/gate/check") {
             val slug = call.requireProjectSlug() ?: return@get
-            when (val result = GateService.check(slug)) {
+            when (val result = call.application.get<GateApplicationService>().check(slug)) {
                 is GateResult.Active -> call.respond(HttpStatusCode.OK, "")
                 is GateResult.Blocked -> call.respondBlocked(result)
                 is GateResult.Unknown -> call.respondError(
@@ -84,7 +85,7 @@ fun Application.configureGateRoutes() {
 
         get("/api/gate/auth") {
             val slug = call.requireProjectSlug() ?: return@get
-            when (GateService.check(slug)) {
+            when (call.application.get<GateApplicationService>().check(slug)) {
                 is GateResult.Active -> call.respond(HttpStatusCode.OK, "")
                 is GateResult.Blocked, is GateResult.Unknown -> call.respond(HttpStatusCode.Forbidden, "")
             }

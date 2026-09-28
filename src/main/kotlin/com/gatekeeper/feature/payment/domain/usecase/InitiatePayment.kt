@@ -24,7 +24,7 @@ class InitiatePayment(
         val initiated = gateway.initiate(
             InitiatePaymentCommand(project.id, project.slug, command.email ?: project.customerEmail, command.phone, amount, project.currency, command.callbackUrl)
         ).getOrThrow()
-        payments.create(project.id, gateway.provider, initiated.reference, amount, "pending")
+        payments.create(project.id, gateway.provider, initiated.reference, amount, "pending", authorizationUrl = initiated.authorizationUrl)
         PaymentInitiation(initiated.reference, initiated.authorizationUrl, amount)
     }
 

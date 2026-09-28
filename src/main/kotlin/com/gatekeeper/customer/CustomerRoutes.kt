@@ -3,7 +3,6 @@ package com.gatekeeper.customer
 import com.gatekeeper.api.InputValidators
 import com.gatekeeper.api.respondError
 import com.gatekeeper.config.AppConfig
-import com.gatekeeper.db.repositories.PaymentRepository
 import com.gatekeeper.db.repositories.ProjectRepository
 import com.gatekeeper.db.tables.SupportRequests
 import io.ktor.http.*
@@ -14,6 +13,7 @@ import io.ktor.server.routing.*
 import kotlinx.serialization.Serializable
 import org.jetbrains.exposed.sql.insert
 import org.jetbrains.exposed.sql.transactions.transaction
+import org.koin.ktor.ext.get
 
 @Serializable
 data class CustomerPaymentResponse(
@@ -82,11 +82,11 @@ fun Application.configureCustomerRoutes() {
         get("/api/customer/projects/{slug}/status") {
             val slug = call.parameters["slug"] ?: return@get call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing project slug")
             val project = ProjectRepository.findBySlug(slug) ?: return@get call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
-            val payments = PaymentRepository.findByProjectId(project.id).map { payment ->
+            val payments = call.application.get<CustomerApplicationService>().payments(project.id).map { payment ->
                 CustomerPaymentResponse(
-                    id = payment.id.toString(), reference = payment.paystackReference,
+                    id = payment.id.toString(), reference = payment.providerReference,
                     amount = payment.amount.toDouble(), currency = project.currency,
-                    status = payment.gatewayStatus, paidAt = payment.paidAt?.toString(),
+                    status = payment.status, paidAt = payment.paidAt?.toString(),
                     receiptUrl = "/api/customer/projects/$slug/payments/${payment.id}/receipt"
                 )
             }
@@ -105,17 +105,17 @@ fun Application.configureCustomerRoutes() {
             val paymentId = call.parameters["paymentId"]?.let { runCatching { java.util.UUID.fromString(it) }.getOrNull() }
                 ?: return@get call.respondError(HttpStatusCode.BadRequest, "invalid_payment_id", "Invalid payment ID")
             val project = ProjectRepository.findBySlug(slug) ?: return@get call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
-            val payment = PaymentRepository.findById(paymentId)?.takeIf { it.projectId == project.id }
+            val payment = call.application.get<CustomerApplicationService>().payment(paymentId)?.takeIf { it.projectId == project.id }
                 ?: return@get call.respondError(HttpStatusCode.NotFound, "payment_not_found", "Payment not found")
-            if (payment.gatewayStatus != "success") return@get call.respondError(HttpStatusCode.Conflict, "payment_not_complete", "A receipt is available after successful payment")
+            if (payment.status != "success") return@get call.respondError(HttpStatusCode.Conflict, "payment_not_complete", "A receipt is available after successful payment")
             call.respond(CustomerReceiptResponse(
-                receiptNumber = payment.paystackReference,
+                receiptNumber = payment.providerReference,
                 project = project.name,
                 domain = project.domain,
                 amount = payment.amount.toDouble(),
                 currency = project.currency,
                 paidAt = payment.paidAt?.toString(),
-                reference = payment.paystackReference
+                reference = payment.providerReference
             ))
         }
 

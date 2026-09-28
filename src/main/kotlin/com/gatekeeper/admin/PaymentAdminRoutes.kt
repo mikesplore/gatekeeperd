@@ -4,8 +4,6 @@ import com.gatekeeper.api.InputValidators
 import com.gatekeeper.api.dto.*
 import com.gatekeeper.api.respondError
 import com.gatekeeper.api.dto.PaginatedResponse
-import com.gatekeeper.db.repositories.PaymentRepository
-import com.gatekeeper.db.repositories.PaymentEventRepository
 import com.gatekeeper.db.repositories.ProjectRepository
 import io.ktor.http.*
 import io.ktor.server.application.*
@@ -21,6 +19,8 @@ import java.time.LocalDateTime
 import com.gatekeeper.feature.payment.domain.usecase.ApplyWebhookEvent
 import com.gatekeeper.feature.payment.domain.usecase.ReconcilePayments
 import com.gatekeeper.feature.payment.domain.repository.PaymentRepository as PaymentDomainRepository
+import com.gatekeeper.feature.payment.domain.model.PaymentWithProject
+import com.gatekeeper.feature.payment.domain.usecase.ListPaymentEvents
 import org.koin.ktor.ext.get
 import kotlinx.serialization.Serializable
 
@@ -44,7 +44,7 @@ fun Application.configurePaymentAdminRoutes() {
                 val limit = call.request.queryParameters["limit"]?.toIntOrNull()?.coerceIn(1, 500) ?: 100
                 val offset = call.request.queryParameters["offset"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0
 
-                val (rows, total) = PaymentRepository.findAllFiltered(status, projectSlug, from, to, limit, offset)
+                val (rows, total) = call.application.get<PaymentDomainRepository>().findAllFiltered(status, projectSlug, from, to, limit, offset)
                 call.respond(
                     PaymentsListResponse(
                         payments = rows.map { it.toAdminResponse() },
@@ -105,7 +105,8 @@ fun Application.configurePaymentAdminRoutes() {
                 if (provider != null && provider !in setOf("paystack", "mpesa")) {
                     return@get call.respondError(HttpStatusCode.BadRequest, "invalid_payment_provider", "Provider must be paystack or mpesa")
                 }
-                val events = PaymentEventRepository.findByStatus(status, limit, offset, provider).map { event ->
+                val page = call.application.get<ListPaymentEvents>()(status, provider, limit, offset)
+                val events = page.items.map { event ->
                         PaymentEventAdminResponse(
                             id = event.id.toString(),
                             dedupeKey = event.dedupeKey,
@@ -119,7 +120,7 @@ fun Application.configurePaymentAdminRoutes() {
                             processedAt = event.processedAt?.toString()
                         )
                     }
-                val total = PaymentEventRepository.countByStatus(status, provider)
+                val total = page.total
                 call.respond(PaginatedResponse(events, total, limit, offset, offset + events.size < total))
             }
 
@@ -130,10 +131,11 @@ fun Application.configurePaymentAdminRoutes() {
 
             get("/api/admin/revenue") {
                 val months = call.request.queryParameters["months"]?.toIntOrNull()?.coerceIn(1, 24) ?: 6
-                val (thisMonth, lastMonth) = PaymentRepository.revenueTotals()
-                val byMonth = PaymentRepository.revenueByMonth(months)
+                val payments = call.application.get<PaymentDomainRepository>()
+                val (thisMonth, lastMonth) = payments.revenueTotals()
+                val byMonth = payments.revenueByMonth(months)
                 val currency = ProjectRepository.findAll().firstOrNull()?.currency ?: "KES"
-                val counts = PaymentRepository.paymentCounts()
+                val counts = payments.paymentCounts()
                 call.respond(
                     RevenueReportResponse(
                         totalThisMonth = thisMonth.toDouble(),
@@ -151,19 +153,19 @@ fun Application.configurePaymentAdminRoutes() {
     }
 }
 
-private fun PaymentRepository.PaymentWithProject.toAdminResponse() = PaymentAdminResponse(
+private fun PaymentWithProject.toAdminResponse() = PaymentAdminResponse(
     id = payment.id.toString(),
     projectId = payment.projectId.toString(),
     projectName = projectName,
     projectSlug = projectSlug,
-    provider = payment.provider.name.lowercase(),
+    provider = payment.provider.lowercase(),
     providerReference = payment.providerReference,
-    paystackReference = payment.paystackReference,
+    paystackReference = payment.providerReference,
     amount = payment.amount.toDouble(),
-    gatewayStatus = payment.gatewayStatus,
+    gatewayStatus = payment.status,
     verifiedVia = payment.verifiedVia,
     paidAt = payment.paidAt?.toString(),
-    createdAt = payment.createdAt.toString()
+    createdAt = payment.createdAt?.toString().orEmpty()
 )
 
 private fun ProjectRepository.OverdueProject.toOverdueResponse() = OverdueProjectResponse(

@@ -8,4 +8,11 @@ data class ProjectBalance(
     val currency: String,
     val outstanding: BigDecimal,
     val paid: BigDecimal
-)
+) {
+    companion object {
+        fun calculate(projectId: UUID, currency: String, originalCharge: BigDecimal, adjustments: BigDecimal, discounts: BigDecimal, paid: BigDecimal): ProjectBalance {
+            val outstanding = (originalCharge + adjustments - discounts - paid).max(BigDecimal.ZERO)
+            return ProjectBalance(projectId, currency, outstanding, paid)
+        }
+    }
+}

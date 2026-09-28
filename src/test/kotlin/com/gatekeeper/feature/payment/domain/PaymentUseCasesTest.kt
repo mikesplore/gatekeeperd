@@ -5,6 +5,11 @@ import com.gatekeeper.feature.payment.domain.gateway.InitiatePaymentCommand
 import com.gatekeeper.feature.payment.domain.gateway.InitiatedPayment
 import com.gatekeeper.feature.payment.domain.gateway.VerifiedPayment
 import com.gatekeeper.feature.payment.domain.model.Payment
+import com.gatekeeper.feature.payment.domain.model.PaymentCounts
+import com.gatekeeper.feature.payment.domain.model.PaymentRevenueMonth
+import com.gatekeeper.feature.payment.domain.model.PaymentWithProject
+import com.gatekeeper.feature.payment.domain.model.PaymentEvent
+import com.gatekeeper.feature.payment.domain.model.PaymentEventReplay
 import com.gatekeeper.feature.payment.domain.repository.PaymentRepository
 import com.gatekeeper.feature.payment.domain.repository.PaymentEventRepository
 import com.gatekeeper.feature.payment.domain.usecase.ApplyWebhookEvent
@@ -17,6 +22,7 @@ import com.gatekeeper.feature.payment.domain.usecase.PaymentProjectPort
 import com.gatekeeper.feature.payment.domain.usecase.ProcessPaymentEvent
 import java.math.BigDecimal
 import java.time.LocalDateTime
+import java.time.LocalDate
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -112,7 +118,7 @@ class PaymentUseCasesTest {
         override fun findByProviderReference(provider: String, reference: String) = payment?.takeIf { it.provider == provider && it.providerReference == reference }
         override fun findById(id: UUID) = payment?.takeIf { it.id == id }
         override fun findByReference(reference: String) = payment?.takeIf { it.reference == reference }
-        override fun create(projectId: UUID, provider: String, reference: String, amount: BigDecimal, status: String, rawPayload: String?) =
+        override fun create(projectId: UUID, provider: String, reference: String, amount: BigDecimal, status: String, rawPayload: String?, authorizationUrl: String?) =
             (payment?.copy(projectId = projectId, provider = provider, reference = reference, providerReference = reference, amount = amount, status = status)
                 ?: Payment(UUID.randomUUID(), projectId, provider, reference, amount, status)).also { payment = it }
         override fun save(payment: Payment): Payment { this.payment = payment; return payment }
@@ -120,6 +126,13 @@ class PaymentUseCasesTest {
             payment = payment?.copy(status = status, amount = amount ?: payment!!.amount, paidAt = paidAt ?: payment!!.paidAt)
         }
         override fun pendingPayments(olderThanMinutes: Long) = listOfNotNull(payment?.takeIf { it.status == "pending" })
+        override fun findByProjectId(projectId: UUID) = listOfNotNull(payment?.takeIf { it.projectId == projectId })
+        override fun findByProjectIdPage(projectId: UUID, limit: Int, offset: Int) = findByProjectId(projectId).drop(offset).take(limit) to findByProjectId(projectId).size.toLong()
+        override fun findAllFiltered(status: String?, projectSlug: String?, from: LocalDate?, until: LocalDate?, limit: Int, offset: Int): Pair<List<PaymentWithProject>, Long> = emptyList<PaymentWithProject>() to 0L
+        override fun revenueTotals() = BigDecimal.ZERO to BigDecimal.ZERO
+        override fun revenueByMonth(months: Int): List<PaymentRevenueMonth> = emptyList()
+        override fun paymentCounts() = PaymentCounts(0, 0, 0, 0)
+        override fun latestPendingAuthorizationUrl(projectId: UUID): String? = null
     }
 
     private class FakePaymentEffects : PaymentEffects {
@@ -140,5 +153,7 @@ class PaymentUseCasesTest {
         }
         override fun markProcessed(id: UUID) { status = "processed" }
         override fun markFailed(id: UUID, error: String) { status = "failed" }
+        override fun findByStatus(status: String?, limit: Int, offset: Int, provider: String?) = emptyList<PaymentEvent>() to 0L
+        override fun findForReplay(id: UUID): PaymentEventReplay? = null
     }
 }

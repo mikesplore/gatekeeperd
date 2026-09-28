@@ -1,23 +1,25 @@
 package com.gatekeeper.gate
 
 import com.gatekeeper.config.AppConfig
-import com.gatekeeper.db.repositories.PaymentRepository
 import com.gatekeeper.db.repositories.ProjectRepository
+import com.gatekeeper.feature.payment.domain.repository.PaymentRepository as PaymentDomainRepository
 import com.gatekeeper.plugins.RedisService
 import com.gatekeeper.plugins.Metrics
 import org.slf4j.LoggerFactory
 
 private val logger = LoggerFactory.getLogger("com.gatekeeper.gate.GateService")
 
-object GateService {
+class GateService(private val payments: PaymentDomainRepository) {
 
-    private const val REDIS_KEY_PREFIX = "project:status:"
-    private const val REDIS_TTL_SECONDS = 60
+    companion object {
+        private const val REDIS_KEY_PREFIX = "project:status:"
+        private const val REDIS_TTL_SECONDS = 60
+    }
 
     private fun blockedResult(project: ProjectRepository.ProjectRecord): GateResult.Blocked =
         GateResult.Blocked(
             type = project.type,
-            paymentLink = PaymentRepository.findLatestPendingAuthorizationUrl(project.id),
+            paymentLink = payments.latestPendingAuthorizationUrl(project.id),
             projectName = project.name,
             paywall = PaywallInfo.from(project)
         )
