@@ -18,6 +18,7 @@ import com.github.dockerjava.api.model.AccessMode
 import com.github.dockerjava.core.DefaultDockerClientConfig
 import com.github.dockerjava.core.DockerClientBuilder
 import com.github.dockerjava.core.DockerClientConfig
+import com.github.dockerjava.httpclient5.ApacheDockerHttpClient
 import org.slf4j.LoggerFactory
 import com.gatekeeper.config.AppConfig
 import java.io.File
@@ -34,7 +35,13 @@ class DockerService(dockerSocketPath: String) {
             .withDockerHost(dockerSocketPath)
             .build()
 
-        client = DockerClientBuilder.getInstance(config).build()
+        val httpClient = ApacheDockerHttpClient.Builder()
+            .dockerHost(config.getDockerHost())
+            .sslConfig(config.getSSLConfig())
+            .build()
+        client = DockerClientBuilder.getInstance(config)
+            .withDockerHttpClient(httpClient)
+            .build()
         logger.info("Docker client initialized (socket: $dockerSocketPath)")
     }
 
