@@ -5,6 +5,7 @@ import com.gatekeeper.db.repositories.DeploymentJobRepository
 import com.gatekeeper.db.repositories.EnvironmentSetRepository
 import com.gatekeeper.db.repositories.ProjectRepository
 import com.gatekeeper.db.repositories.ServiceRepository
+import com.gatekeeper.db.tables.AccessBlockReason
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.auth.authenticate
 import io.ktor.server.auth.principal
@@ -17,13 +18,19 @@ import kotlinx.serialization.Serializable
 import java.util.UUID
 
 @Serializable
-data class ServiceAdminView(val id: String, val projectId: String, val name: String, val accessStatus: String, val blockReason: String?)
+data class ServiceAdminView(
+    val id: String, val projectId: String, val name: String, val accessStatus: String,
+    val blockReason: String?, val blockReasonCode: String? = null, val blockReasonNote: String? = null
+)
 
 @Serializable
 data class CreateServiceRequest(val name: String)
 
 @Serializable
-data class UpdateServiceRequest(val name: String? = null, val accessStatus: String? = null, val blockReason: String? = null)
+data class UpdateServiceRequest(
+    val name: String? = null, val accessStatus: String? = null, val blockReason: String? = null,
+    val blockReasonCode: String? = null, val blockReasonNote: String? = null
+)
 
 @Serializable
 data class EnvironmentVersionView(
@@ -120,8 +127,15 @@ fun Application.configureServiceAdminRoutes() {
                 if ((body.blockReason?.length ?: 0) > 500) {
                     return@patch call.respondError(HttpStatusCode.BadRequest, "invalid_block_reason", "blockReason must be at most 500 characters")
                 }
+                if ((body.blockReasonNote?.length ?: 0) > 500) {
+                    return@patch call.respondError(HttpStatusCode.BadRequest, "invalid_block_reason_note", "blockReasonNote must be at most 500 characters")
+                }
+                val blockReasonCode = body.blockReasonCode?.let { code ->
+                    AccessBlockReason.entries.firstOrNull { it.value == code }
+                        ?: return@patch call.respondError(HttpStatusCode.BadRequest, "invalid_block_reason_code", "Unsupported blockReasonCode")
+                }
                 val updated = runCatching {
-                    ServiceRepository.update(projectId, serviceId, name, body.accessStatus, body.blockReason)
+                    ServiceRepository.update(projectId, serviceId, name, body.accessStatus, body.blockReason, blockReasonCode, body.blockReasonNote)
                 }.getOrElse {
                     return@patch call.respondError(HttpStatusCode.Conflict, "service_update_conflict", "The service update conflicts with an existing service")
                 } ?: return@patch call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
@@ -252,7 +266,10 @@ private fun validEnvironmentValues(values: Map<String, String>) = values.all { (
     key.matches(Regex("[A-Za-z_][A-Za-z0-9_]*")) && !key.contains('=') && !value.contains('\u0000')
 }
 
-private fun ServiceRepository.ServiceRecord.toView() = ServiceAdminView(id.toString(), projectId.toString(), name, accessStatus, blockReason)
+private fun ServiceRepository.ServiceRecord.toView() = ServiceAdminView(
+    id.toString(), projectId.toString(), name, accessStatus, blockReason,
+    blockReasonCode?.value, blockReasonNote
+)
 private fun EnvironmentSetRepository.VersionMetadata.toView() = EnvironmentVersionView(id.toString(), version, environment, keys, createdAt.toString(), createdBy)
 private fun EnvironmentSetRepository.ActiveDeploymentInspection.toView() = ActiveDeploymentInspectionView(
     deploymentId.toString(), serviceId.toString(), environment, imageName, imageTag, imageDigest, commitSha,

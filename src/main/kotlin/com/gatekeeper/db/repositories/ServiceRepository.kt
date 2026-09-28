@@ -1,6 +1,7 @@
 package com.gatekeeper.db.repositories
 
 import com.gatekeeper.db.tables.Services
+import com.gatekeeper.db.tables.AccessBlockReason
 import com.gatekeeper.db.tables.DeploymentConfigurations
 import com.gatekeeper.db.tables.DeploymentExecutions
 import com.gatekeeper.db.tables.DeploymentJobs
@@ -24,10 +25,19 @@ object ServiceRepository {
         val projectId: UUID,
         val name: String,
         val accessStatus: String,
-        val blockReason: String?
+        val blockReason: String?,
+        val blockReasonCode: AccessBlockReason? = null,
+        val blockReasonNote: String? = null
     )
 
-    data class AccessRecord(val id: UUID, val accessStatus: String, val blockReason: String?)
+    data class AccessRecord(
+        val id: UUID,
+        val name: String,
+        val accessStatus: String,
+        val blockReason: String?,
+        val blockReasonCode: AccessBlockReason?,
+        val blockReasonNote: String?
+    )
 
     fun listByProjectId(projectId: UUID): List<ServiceRecord> = transaction {
         Services.selectAll().where { Services.projectId eq projectId }
@@ -56,7 +66,9 @@ object ServiceRepository {
         id: UUID,
         name: String? = null,
         accessStatus: String? = null,
-        blockReason: String? = null
+        blockReason: String? = null,
+        blockReasonCode: AccessBlockReason? = null,
+        blockReasonNote: String? = null
     ): ServiceRecord? {
         accessStatus?.let { require(it in setOf("active", "blocked", "manual_block")) { "Unsupported service access status" } }
         val updated = transaction {
@@ -66,8 +78,22 @@ object ServiceRepository {
             Services.update({ (Services.projectId eq projectId) and (Services.id eq id) }) {
                 name?.let { value -> it[Services.name] = value }
                 accessStatus?.let { value -> it[Services.accessStatus] = value }
-                if (accessStatus == "active") it[Services.blockReason] = null
-                else if (blockReason != null) it[Services.blockReason] = blockReason
+                if (accessStatus == "active") {
+                    it[Services.blockReason] = null
+                    it[Services.blockReasonCode] = null
+                    it[Services.blockReasonNote] = null
+                } else if (accessStatus != null && accessStatus != "active") {
+                    val reasonCode = blockReasonCode ?: AccessBlockReason.fromLegacy(blockReason, accessStatus)
+                        ?: AccessBlockReason.MANUAL_HOLD
+                    val note = blockReasonNote ?: AccessBlockReason.legacyNote(blockReason)
+                    it[Services.blockReason] = blockReason ?: reasonCode.value
+                    it[Services.blockReasonCode] = reasonCode
+                    it[Services.blockReasonNote] = note
+                } else {
+                    blockReasonCode?.let { value -> it[Services.blockReasonCode] = value }
+                    blockReasonNote?.let { value -> it[Services.blockReasonNote] = value }
+                    blockReason?.let { value -> it[Services.blockReason] = value }
+                }
             }
             Services.selectAll().where { Services.id eq existing[Services.id] }.single().let(::toRecord)
         }
@@ -95,13 +121,13 @@ object ServiceRepository {
 
     fun findAccessById(id: UUID): AccessRecord? = transaction {
         Services.selectAll().where { Services.id eq id }.singleOrNull()?.let {
-            AccessRecord(it[Services.id], it[Services.accessStatus], it[Services.blockReason])
+            AccessRecord(it[Services.id], it[Services.name], it[Services.accessStatus], it[Services.blockReason], it[Services.blockReasonCode], it[Services.blockReasonNote])
         }
     }
 
     private fun toRecord(row: org.jetbrains.exposed.sql.ResultRow) = ServiceRecord(
         row[Services.id], row[Services.projectId], row[Services.name],
-        row[Services.accessStatus], row[Services.blockReason]
+        row[Services.accessStatus], row[Services.blockReason], row[Services.blockReasonCode], row[Services.blockReasonNote]
     )
 
     fun updateAccessStatus(id: UUID, status: String, blockReason: String? = null): Boolean {
@@ -110,6 +136,8 @@ object ServiceRepository {
             Services.update({ Services.id eq id }) {
                 it[Services.accessStatus] = status
                 it[Services.blockReason] = if (status == "active") null else blockReason
+                it[Services.blockReasonCode] = if (status == "active") null else AccessBlockReason.fromLegacy(blockReason, status) ?: AccessBlockReason.MANUAL_HOLD
+                it[Services.blockReasonNote] = if (status == "active") null else AccessBlockReason.legacyNote(blockReason)
             }
         }
         if (updated > 0) {

@@ -6,8 +6,8 @@ Gate client apps behind nginx using gatekeeperd. nginx stays the reverse proxy; 
 
 | Endpoint | Used for | Response |
 |----------|----------|----------|
-| `/api/gate/auth?project={slug}` | nginx `auth_request` subrequest | **403** when blocked (empty body) |
-| `/api/gate/paywall?project={slug}` | Paywall page shown to clients | **402** HTML with amount, due date, Pay Now |
+| `/api/gate/auth?project={slug}&domain={domain}` | nginx `auth_request` subrequest | **403** when blocked (empty body) |
+| `/api/gate/paywall?project={slug}&domain={domain}` | Reason-specific block page shown to clients | **402** HTML; payment controls appear only for payment blocks |
 | `/api/gate/pay?project={slug}` | Client clicks Pay Now | Redirect to Paystack checkout |
 | `/api/gate/payment/callback?project={slug}` | Paystack return URL | Redirect to project domain |
 
@@ -66,7 +66,7 @@ server {
     # -------------------------------------------------------------------------
     location = /gatekeeper-auth-acw {
         internal;
-        proxy_pass http://127.0.0.1:8080/api/gate/auth?project=acw;
+        proxy_pass http://127.0.0.1:8080/api/gate/auth?project=acw&domain=acw.mikesplore.me;
 
         # Always force subrequest method to GET
         proxy_method GET;
@@ -104,7 +104,7 @@ server {
     # 4. Paywall Fallback Location
     # -------------------------------------------------------------------------
     location @gatekeeper_paywall_acw {
-        rewrite ^ /api/gate/paywall?project=acw break;
+        rewrite ^ /api/gate/paywall?project=acw&domain=acw.mikesplore.me break;
         proxy_pass http://127.0.0.1:8080;
 
         proxy_set_header Host $host;

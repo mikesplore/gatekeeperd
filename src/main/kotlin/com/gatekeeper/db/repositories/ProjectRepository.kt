@@ -3,6 +3,7 @@ package com.gatekeeper.db.repositories
 import com.gatekeeper.db.tables.AuditLog
 import com.gatekeeper.db.tables.ProjectStatus
 import com.gatekeeper.db.tables.ProjectType
+import com.gatekeeper.db.tables.AccessBlockReason
 import com.gatekeeper.db.tables.Projects
 import com.gatekeeper.db.tables.Customers
 import com.gatekeeper.plugins.RedisService
@@ -40,7 +41,9 @@ object ProjectRepository {
         val gracePeriodDays: Int,
         val createdAt: LocalDateTime,
         val updatedAt: LocalDateTime,
-        val customerId: UUID? = null
+        val customerId: UUID? = null,
+        val blockReasonCode: AccessBlockReason? = null,
+        val blockReasonNote: String? = null
     )
 
     fun findBySlug(slug: String, includeArchived: Boolean = false): ProjectRecord? {
@@ -184,13 +187,26 @@ object ProjectRepository {
         }
     }
 
-    fun updateStatus(id: UUID, newStatus: String, actor: String, reason: String?, blockReason: String? = null) {
+    fun updateStatus(
+        id: UUID,
+        newStatus: String,
+        actor: String,
+        reason: String?,
+        blockReason: String? = null,
+        blockReasonCode: AccessBlockReason? = null,
+        blockReasonNote: String? = null
+    ) {
         val slug = transaction {
             val project = Projects.selectAll().where { Projects.id eq id }.singleOrNull()
                 ?: return@transaction null
             Projects.update({ Projects.id eq id }) {
                 it[Projects.status] = ProjectStatus.valueOf(newStatus.uppercase())
                 it[Projects.blockReason] = if (newStatus.equals("active", ignoreCase = true)) null else blockReason
+                val code = if (newStatus.equals("active", ignoreCase = true)) null
+                    else blockReasonCode ?: AccessBlockReason.fromLegacy(blockReason, newStatus)
+                it[Projects.blockReasonCode] = code
+                it[Projects.blockReasonNote] = if (newStatus.equals("active", ignoreCase = true)) null
+                    else blockReasonNote ?: AccessBlockReason.legacyNote(blockReason)
                 it[Projects.updatedAt] = LocalDateTime.now()
             }
             AuditLog.insert {
@@ -336,6 +352,9 @@ object ProjectRepository {
             Projects.update({ Projects.id eq id }) {
                 it[Projects.status] = ProjectStatus.valueOf(newStatus.uppercase())
                 it[Projects.blockReason] = if (newStatus.equals("active", ignoreCase = true)) null else blockReason
+                val code = if (newStatus.equals("active", ignoreCase = true)) null else AccessBlockReason.fromLegacy(blockReason, newStatus)
+                it[Projects.blockReasonCode] = code
+                it[Projects.blockReasonNote] = if (newStatus.equals("active", ignoreCase = true)) null else AccessBlockReason.legacyNote(blockReason)
                 it[Projects.updatedAt] = LocalDateTime.now()
             }
             project[Projects.slug]
@@ -350,6 +369,9 @@ object ProjectRepository {
             Projects.update({ Projects.id eq id }) {
                 it[Projects.status] = ProjectStatus.valueOf(newStatus.uppercase())
                 it[Projects.blockReason] = if (newStatus.equals("active", ignoreCase = true)) null else blockReason
+                val code = if (newStatus.equals("active", ignoreCase = true)) null else AccessBlockReason.fromLegacy(blockReason, newStatus)
+                it[Projects.blockReasonCode] = code
+                it[Projects.blockReasonNote] = if (newStatus.equals("active", ignoreCase = true)) null else AccessBlockReason.legacyNote(blockReason)
                 it[Projects.dueDate] = null
                 it[Projects.updatedAt] = LocalDateTime.now()
             }
@@ -365,6 +387,9 @@ object ProjectRepository {
             Projects.update({ Projects.id eq id }) {
                 it[Projects.status] = ProjectStatus.valueOf(newStatus.uppercase())
                 it[Projects.blockReason] = if (newStatus.equals("active", ignoreCase = true)) null else blockReason
+                val code = if (newStatus.equals("active", ignoreCase = true)) null else AccessBlockReason.fromLegacy(blockReason, newStatus)
+                it[Projects.blockReasonCode] = code
+                it[Projects.blockReasonNote] = if (newStatus.equals("active", ignoreCase = true)) null else AccessBlockReason.legacyNote(blockReason)
                 it[Projects.dueDate] = dueDate
                 it[Projects.updatedAt] = LocalDateTime.now()
             }
@@ -412,6 +437,8 @@ object ProjectRepository {
         gracePeriodDays = this[Projects.gracePeriodDays],
         createdAt = this[Projects.createdAt],
         updatedAt = this[Projects.updatedAt],
-        customerId = this[Projects.customerId]
+        customerId = this[Projects.customerId],
+        blockReasonCode = this[Projects.blockReasonCode],
+        blockReasonNote = this[Projects.blockReasonNote]
     )
 }

@@ -6,6 +6,6 @@ class GateApplicationService(
     private val projects: ProjectQueryRepository,
     private val gate: GateService
 ) {
-    fun check(slug: String): GateResult = gate.check(slug)
+    fun check(slug: String, domain: String? = null): GateResult = gate.check(slug, domain)
     fun findProject(slug: String) = projects.findGateTargetBySlug(slug)?.project
 }

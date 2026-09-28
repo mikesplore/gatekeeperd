@@ -144,7 +144,7 @@ object SiteRepository {
     }
 
     fun findByDomain(domain: String): SiteRecord? = transaction {
-        val row = Sites.selectAll().where { Sites.domain eq domain }.singleOrNull() ?: return@transaction null
+        val row = Sites.selectAll().where { Sites.domain.lowerCase() eq domain.lowercase() }.singleOrNull() ?: return@transaction null
         val projectId = row[Sites.projectId]
         val projectSlug = Projects.selectAll().where { Projects.id eq projectId }.singleOrNull()?.get(Projects.slug)
         val serviceId = row[Sites.serviceId]

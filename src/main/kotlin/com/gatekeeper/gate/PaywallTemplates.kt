@@ -4,6 +4,7 @@ import com.gatekeeper.api.PaymentRequiredResponse
 import com.gatekeeper.api.paymentRequiredResponse
 import com.gatekeeper.config.AppConfig
 import com.gatekeeper.feature.payment.domain.model.PaymentMethodAvailability
+import com.gatekeeper.db.tables.AccessBlockReason
 import java.math.BigDecimal
 import java.util.Base64
 import java.time.format.DateTimeFormatter
@@ -13,7 +14,7 @@ object PaywallTemplates {
     private val dateFormatter = DateTimeFormatter.ofPattern("MMMM d, yyyy")
     private val illustrationDataUri: String = loadIllustrationDataUri()
 
-    fun htmlPaywall(info: PaywallInfo, payEnabled: Boolean, paymentMethods: PaymentMethodAvailability): String {
+    fun htmlBlockWall(info: PaywallInfo, payEnabled: Boolean, paymentMethods: PaymentMethodAvailability): String {
         val amountLabel = formatAmount(info.amountDue, info.currency)
         val amountValue = info.amountDue?.stripTrailingZeros()?.toPlainString().orEmpty()
         val dueLabel = info.dueDate?.format(dateFormatter)
@@ -22,11 +23,40 @@ object PaywallTemplates {
         val mpesaAvailable = paymentMethods.mpesa
         val paystackAvailable = paymentMethods.paystack
         val defaultPaymentMethod = if (paystackAvailable) "paystack" else "mpesa"
-        val illustrationBlock = if (illustrationDataUri.isNotBlank()) {
+        val scope = if (info.reasonSource == "project") "this project" else "this service"
+        val presentation = when (info.blockReasonCode) {
+            AccessBlockReason.PAYMENT -> BlockPresentation(
+                "Payment required",
+                "Access is paused because $scope has an outstanding payment.",
+                "Payment required for ${info.name}"
+            )
+            AccessBlockReason.MANUAL_HOLD -> BlockPresentation(
+                "Access temporarily paused",
+                "An administrator has temporarily paused access to $scope.",
+                "Access paused for ${info.name}"
+            )
+            AccessBlockReason.ABUSE_TOS -> BlockPresentation(
+                "Access restricted",
+                "Access to $scope has been restricted. Contact support for assistance.",
+                "Access restricted for ${info.name}"
+            )
+            AccessBlockReason.SUSPENDED_BY_REQUEST -> BlockPresentation(
+                "Service suspended",
+                "$scope has been suspended at the account holder’s request.",
+                "Service suspended for ${info.name}"
+            )
+            AccessBlockReason.OTHER -> BlockPresentation(
+                "Access unavailable",
+                "Access to $scope is currently unavailable. Contact support for assistance.",
+                "Access unavailable for ${info.name}"
+            )
+        }
+        val illustrationBlock = if (info.blockReasonCode == AccessBlockReason.PAYMENT && illustrationDataUri.isNotBlank()) {
             """<img src="$illustrationDataUri" alt="Payment illustration" class="illustration">"""
         } else {
-            """<div class="illustration-fallback">Payment</div>"""
+            """<div class="illustration-fallback">${escapeHtml(presentation.heading)}</div>"""
         }
+        val paymentBlock = info.blockReasonCode == AccessBlockReason.PAYMENT
         val payDisabledReason = when {
             !paystackAvailable && !mpesaAvailable ->
                 "Online payment is not configured yet. Please contact support."
@@ -36,10 +66,10 @@ object PaywallTemplates {
             AppConfig.publicBaseUrl.isBlank() -> "Payment callback URL is not configured on the server."
             else -> null
         }
-        val showPayButton = payEnabled && payDisabledReason == null
+        val showPayButton = paymentBlock && payEnabled && payDisabledReason == null
 
         return pageShell(
-            title = "Payment required for ${escapeHtml(info.name)}",
+            title = escapeHtml(presentation.title),
             body = """
     <main class="page">
         <section class="card">
@@ -47,12 +77,14 @@ object PaywallTemplates {
                 $illustrationBlock
             </div>
             <div class="content">
-                <p class="eyebrow">Payment required</p>
+                <p class="eyebrow">${escapeHtml(presentation.heading)}</p>
                 <h1>${escapeHtml(info.name)}</h1>
                 <p class="domain">${escapeHtml(info.domain)}</p>
-                <p class="summary">
-                    Please complete the payment to restore access to this project.
-                </p>
+                ${info.serviceName?.let { "<p class=\"domain\">Service: ${escapeHtml(it)}</p>" }.orEmpty()}
+                <p class="domain">Reason set at: ${if (info.reasonSource == "project") "project" else "service"} level</p>
+                <p class="summary">${escapeHtml(presentation.summary)}</p>
+                ${info.blockReasonNote?.takeIf { it.isNotBlank() }?.let { "<p class=\"helper\">${escapeHtml(it)}</p>" }.orEmpty()}
+                ${if (paymentBlock) """
                 <div class="amount">
                     <span class="label">Amount due</span>
                     <strong>$amountLabel</strong>
@@ -82,6 +114,11 @@ object PaywallTemplates {
                 <p class="footer">
                     Contact <a href="mailto:${escapeHtml(AppConfig.supportContactEmail)}">${escapeHtml(AppConfig.supportContactEmail)}</a>
                 </p>
+                """ else """
+                <p class="footer">
+                    Contact <a href="mailto:${escapeHtml(AppConfig.supportContactEmail)}">${escapeHtml(AppConfig.supportContactEmail)}</a> for assistance.
+                </p>
+                """}
             </div>
         </section>
     </main>
@@ -91,6 +128,8 @@ object PaywallTemplates {
 
     fun jsonBlocked(paywall: PaywallInfo?): PaymentRequiredResponse =
         paymentRequiredResponse(paywall)
+
+    private data class BlockPresentation(val heading: String, val summary: String, val title: String)
 
     private fun pageShell(title: String, body: String): String = """
 <!DOCTYPE html>

@@ -18,6 +18,7 @@ import com.gatekeeper.db.repositories.ProjectRepository
 import com.gatekeeper.db.repositories.CustomerRepository
 import com.gatekeeper.db.repositories.ProjectAdjustmentRepository
 import com.gatekeeper.db.tables.AdjustmentType
+import com.gatekeeper.db.tables.AccessBlockReason
 import com.gatekeeper.integrations.ScribedIntegrationClient
 import com.gatekeeper.docker.ContainerCreatePlanResult
 import com.gatekeeper.docker.DockerService
@@ -106,7 +107,11 @@ data class ProjectAdjustmentResponse(
 data class CreateProjectInvoiceRequest(val description: String)
 
 @Serializable
-data class StatusChangeRequest(val reason: String)
+data class StatusChangeRequest(
+    val reason: String,
+    val blockReasonCode: String? = null,
+    val blockReasonNote: String? = null
+)
 
 @Serializable
 data class TransferProjectRequest(
@@ -586,6 +591,17 @@ fun Application.configureProjectAdminRoutes() {
                     call.respondError(HttpStatusCode.BadRequest, "invalid_request", "A non-empty reason is required")
                     return@post
                 }
+                if ((body.blockReasonNote?.length ?: reason.length) > 500) {
+                    call.respondError(HttpStatusCode.BadRequest, "invalid_block_reason_note", "blockReasonNote must be at most 500 characters")
+                    return@post
+                }
+                val blockReasonCode = body.blockReasonCode?.let { code ->
+                    AccessBlockReason.entries.firstOrNull { it.value == code }
+                        ?: run {
+                            call.respondError(HttpStatusCode.BadRequest, "invalid_block_reason_code", "Unsupported blockReasonCode")
+                            return@post
+                        }
+                } ?: AccessBlockReason.MANUAL_HOLD
 
                 val project = ProjectRepository.findBySlug(slug)
                 if (project == null) {
@@ -596,7 +612,12 @@ fun Application.configureProjectAdminRoutes() {
                 val principal = call.principal<JWTPrincipal>()
                 val actor = principal?.payload?.subject ?: "unknown"
 
-                ProjectRepository.updateStatus(project.id, "manual_block", actor, reason, blockReason = "manual")
+                ProjectRepository.updateStatus(
+                    project.id, "manual_block", actor, reason,
+                    blockReason = blockReasonCode.value,
+                    blockReasonCode = blockReasonCode,
+                    blockReasonNote = body.blockReasonNote?.takeIf { it.isNotBlank() } ?: reason
+                )
                 ProjectRepository.invalidateCache(slug)
                 ScribedIntegrationClient.notifySuspension(project.copy(status = "manual_block", blockReason = "manual"), "manual_block: $reason")
 

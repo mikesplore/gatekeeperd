@@ -35,7 +35,11 @@ data class PaymentRequiredResponse(
     val amount_due: String = "",
     val currency: String = "",
     val due_date: String = "",
-    val contact: String = "support@gatekeeper.local"
+    val contact: String = "support@gatekeeper.local",
+    val block_reason: String = "",
+    val reason_source: String = "",
+    val reason_note: String? = null,
+    val service: String = ""
 )
 
 private val timestampFormatter = DateTimeFormatter.ISO_LOCAL_DATE_TIME
@@ -51,7 +55,14 @@ fun errorResponse(error: String, message: String): ErrorResponse = ErrorResponse
 fun paymentRequiredResponse(paywall: com.gatekeeper.gate.PaywallInfo?): PaymentRequiredResponse {
     val dateFormatter = DateTimeFormatter.ISO_LOCAL_DATE
     return PaymentRequiredResponse(
-        message = "Access to this API is suspended pending payment.",
+        message = when (paywall?.blockReasonCode) {
+            com.gatekeeper.db.tables.AccessBlockReason.PAYMENT -> "Access is suspended pending payment."
+            com.gatekeeper.db.tables.AccessBlockReason.MANUAL_HOLD -> "Access has been temporarily paused."
+            com.gatekeeper.db.tables.AccessBlockReason.ABUSE_TOS -> "Access has been restricted."
+            com.gatekeeper.db.tables.AccessBlockReason.SUSPENDED_BY_REQUEST -> "This service has been suspended by request."
+            com.gatekeeper.db.tables.AccessBlockReason.OTHER -> "Access is currently unavailable."
+            null -> "Access is currently unavailable."
+        },
         timestamp = currentErrorTimestamp(),
         pay_url = paywall?.let { "/api/gate/pay?project=${it.slug}" }.orEmpty(),
         project = paywall?.name.orEmpty(),
@@ -59,7 +70,11 @@ fun paymentRequiredResponse(paywall: com.gatekeeper.gate.PaywallInfo?): PaymentR
         amount_due = paywall?.amountDue?.stripTrailingZeros()?.toPlainString().orEmpty(),
         currency = paywall?.currency.orEmpty(),
         due_date = paywall?.dueDate?.format(dateFormatter).orEmpty(),
-        contact = com.gatekeeper.config.AppConfig.supportContactEmail
+        contact = com.gatekeeper.config.AppConfig.supportContactEmail,
+        block_reason = paywall?.blockReasonCode?.value.orEmpty(),
+        reason_source = paywall?.reasonSource.orEmpty(),
+        reason_note = paywall?.blockReasonNote,
+        service = paywall?.serviceName.orEmpty()
     )
 }
 
