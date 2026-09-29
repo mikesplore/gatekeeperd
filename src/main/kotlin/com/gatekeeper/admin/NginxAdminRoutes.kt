@@ -479,8 +479,8 @@ fun Application.configureNginxAdminRoutes() {
                 call.respond(
                     NginxStatusResponse(
                         enabled = enabled,
-                        configPath = "$sitesAvailablePath/$slug",
-                        enabledPath = "$sitesEnabledPath/$slug",
+                        configPath = "${AppConfig.nginxSitesAvailablePath}/$slug",
+                        enabledPath = "${AppConfig.nginxSitesEnabledPath}/$slug",
                         port = SiteRepository.findByProjectId(project.id)?.serviceId?.let { DeploymentUpstreamResolver.resolve(it, "production")?.port },
                         sslEnabled = resolvedCert != null,
                         certificateDomain = resolvedCert?.certificateDomain,
