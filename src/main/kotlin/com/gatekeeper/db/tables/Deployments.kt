@@ -34,6 +34,7 @@ object Deployments : Table("deployments") {
     val buildingAt = datetime("building_at").nullable()
     val startingAt = datetime("starting_at").nullable()
     val healthCheckingAt = datetime("health_checking_at").nullable()
+    val readyAt = datetime("ready_at").nullable()
     val activeAt = datetime("active_at").nullable()
     val supersededAt = datetime("superseded_at").nullable()
     val failedAt = datetime("failed_at").nullable()
@@ -47,6 +48,6 @@ object Deployments : Table("deployments") {
 
 enum class DeploymentStatus(val value: String) {
     QUEUED("queued"), BUILDING("building"), STARTING("starting"),
-    HEALTH_CHECKING("health-checking"), ACTIVE("active"), SUPERSEDED("superseded"),
+    HEALTH_CHECKING("health-checking"), READY("ready"), ACTIVE("active"), SUPERSEDED("superseded"),
     FAILED("failed"), CANCELLED("cancelled"), ROLLED_BACK("rolled-back")
 }

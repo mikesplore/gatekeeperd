@@ -1220,6 +1220,7 @@ object DeploymentJobRepository {
             status == "failed" -> DeploymentStatus.FAILED
             step == "starting_container" -> DeploymentStatus.STARTING
             step == "health_checking" -> DeploymentStatus.HEALTH_CHECKING
+            step == "readiness_succeeded" -> DeploymentStatus.READY
             step in setOf("cloning", "checked_out", "building", "pushing", "pulling") -> DeploymentStatus.BUILDING
             else -> null
         }

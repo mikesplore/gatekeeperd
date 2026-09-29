@@ -169,7 +169,7 @@ object DeploymentWorker {
                 DeploymentJobRepository.update(
                     job.id,
                     step = "readiness_succeeded",
-                    log = "Candidate passed readiness checks ($selectedProbe); resolved application container port ${resolvedContainerPort ?: "none"}. Deployment remains health-checking until cutover"
+                    log = "Candidate passed readiness checks ($selectedProbe); resolved application container port ${resolvedContainerPort ?: "none"}. Container is ready; gateway cutover is a separate step"
                 )
                 AuditRepository.write(null, "deployment_readiness_succeeded", "deployment-worker", "job=${job.id} repository=${job.repository ?: "prebuilt-image"} commit=${commit ?: "not-applicable"}")
                 cutover(job.copy(containerPort = resolvedContainerPort), docker) { rollback -> routeRollback = rollback }

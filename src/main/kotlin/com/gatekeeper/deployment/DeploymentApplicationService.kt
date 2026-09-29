@@ -25,7 +25,8 @@ object DeploymentApplicationService {
         DeploymentStatus.QUEUED to setOf(DeploymentStatus.BUILDING, DeploymentStatus.CANCELLED),
         DeploymentStatus.BUILDING to setOf(DeploymentStatus.STARTING, DeploymentStatus.FAILED, DeploymentStatus.CANCELLED),
         DeploymentStatus.STARTING to setOf(DeploymentStatus.HEALTH_CHECKING, DeploymentStatus.FAILED, DeploymentStatus.CANCELLED),
-        DeploymentStatus.HEALTH_CHECKING to setOf(DeploymentStatus.QUEUED, DeploymentStatus.ACTIVE, DeploymentStatus.FAILED, DeploymentStatus.CANCELLED),
+        DeploymentStatus.HEALTH_CHECKING to setOf(DeploymentStatus.QUEUED, DeploymentStatus.READY, DeploymentStatus.ACTIVE, DeploymentStatus.FAILED, DeploymentStatus.CANCELLED),
+        DeploymentStatus.READY to setOf(DeploymentStatus.ACTIVE, DeploymentStatus.FAILED),
         DeploymentStatus.ACTIVE to setOf(DeploymentStatus.SUPERSEDED, DeploymentStatus.ROLLED_BACK),
         DeploymentStatus.SUPERSEDED to setOf(DeploymentStatus.ACTIVE, DeploymentStatus.ROLLED_BACK),
         DeploymentStatus.FAILED to setOf(DeploymentStatus.QUEUED),
@@ -95,12 +96,13 @@ object DeploymentApplicationService {
             it[Deployments.executionId] = executionId
             it[Deployments.secretSetId] = secretSetId
             it[Deployments.secretSetVersion] = secretSetVersion
-            it[status] = DeploymentStatus.HEALTH_CHECKING
+            it[status] = DeploymentStatus.READY
             it[Deployments.runtimeContainerName] = containerName
             it[Deployments.runtimeHostPort] = hostPort
             it[Deployments.runtimePortsJson] = kotlinx.serialization.json.Json.encodeToString(portMappings.mapKeys { entry -> entry.key.toString() })
             it[Deployments.triggerSource] = triggerSource
             it[healthCheckingAt] = now
+            it[readyAt] = now
             it[createdAt] = now
             it[updatedAt] = now
         }
@@ -457,7 +459,10 @@ object DeploymentApplicationService {
     /** Promote only after the external gateway has accepted the candidate and old runtime cleanup succeeded. */
     fun activateAfterCutover(id: UUID, replacesDeploymentId: UUID?): Boolean = transaction {
         val row = Deployments.selectAll().where { Deployments.id eq id }.singleOrNull() ?: return@transaction false
-        check(row[Deployments.status] == DeploymentStatus.HEALTH_CHECKING) { "Deployment $id is not health-checking" }
+        val currentStatus = row[Deployments.status]
+        check(currentStatus == DeploymentStatus.READY || currentStatus == DeploymentStatus.HEALTH_CHECKING) {
+            "Deployment $id is not ready for activation"
+        }
         val projectId = row[Deployments.projectId] ?: error("Deployment has no project_id")
         val serviceId = row[Deployments.serviceId] ?: error("Deployment has no service_id")
         val environment = row[Deployments.environment]
@@ -476,7 +481,7 @@ object DeploymentApplicationService {
             }
             check(updated == 1) { "Unable to supersede previous deployment $oldId" }
         }
-        val updated = Deployments.update({ (Deployments.id eq id) and (Deployments.status eq DeploymentStatus.HEALTH_CHECKING) }) {
+        val updated = Deployments.update({ (Deployments.id eq id) and (Deployments.status eq currentStatus) }) {
             it[status] = DeploymentStatus.ACTIVE
             it[activeAt] = now
             it[Deployments.replacesDeploymentId] = previousId
@@ -542,6 +547,7 @@ object DeploymentApplicationService {
                 DeploymentStatus.BUILDING -> it[buildingAt] = now
                 DeploymentStatus.STARTING -> it[startingAt] = now
                 DeploymentStatus.HEALTH_CHECKING -> it[healthCheckingAt] = now
+                DeploymentStatus.READY -> it[readyAt] = now
                 DeploymentStatus.ACTIVE -> {
                     it[activeAt] = now
                     effectiveReplacementId?.let { value -> it[Deployments.replacesDeploymentId] = value }
