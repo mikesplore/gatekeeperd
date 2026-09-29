@@ -5,6 +5,7 @@ import com.gatekeeper.db.tables.ProjectStatus
 import com.gatekeeper.db.tables.ProjectType
 import com.gatekeeper.db.tables.AccessBlockReason
 import com.gatekeeper.db.tables.Projects
+import com.gatekeeper.db.tables.Services
 import com.gatekeeper.db.tables.Customers
 import com.gatekeeper.plugins.RedisService
 import org.jetbrains.exposed.sql.*
@@ -131,6 +132,14 @@ object ProjectRepository {
                 it[Projects.serviceMode] = serviceMode
                 it[Projects.lifecycleStatus] = lifecycleStatus
                 it[Projects.customerId] = customerId
+            }
+            // Every project has a stable default service, including projects created
+            // after the service identity migration's one-time backfill.
+            Services.insert {
+                it[Services.projectId] = id
+                it[Services.name] = "default"
+                it[Services.accessStatus] = "active"
+                it[Services.blockReason] = null
             }
             AuditLog.insert {
                 it[AuditLog.projectId] = id

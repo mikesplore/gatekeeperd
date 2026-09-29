@@ -421,7 +421,7 @@ fun Application.configureProjectSetupAdminRoutes() {
                 val serviceId = call.request.queryParameters["serviceId"]?.let { raw ->
                     runCatching { UUID.fromString(raw) }.getOrNull()
                         ?: return@get call.respondError(HttpStatusCode.BadRequest, "invalid_service_id", "Service ID is invalid")
-                } ?: DeploymentJobRepository.defaultServiceIdForProject(projectId)
+                } ?: ServiceRepository.getOrCreateDefault(projectId).id
                 if (ServiceRepository.findByProjectAndId(projectId, serviceId) == null) {
                     return@get call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
                 }
@@ -681,6 +681,7 @@ fun Application.configureProjectSetupAdminRoutes() {
                 val slug = call.parameters["slug"] ?: return@get call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing project slug")
                 val project = ProjectRepository.findBySlug(slug)
                     ?: return@get call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
+                ServiceRepository.getOrCreateDefault(project.id)
                 val config = DeploymentJobRepository.configurationSummary(project.id)
                 val site = SiteRepository.findByProjectId(project.id)
                 val serviceId = site?.serviceId ?: DeploymentJobRepository.defaultServiceIdForProject(project.id)

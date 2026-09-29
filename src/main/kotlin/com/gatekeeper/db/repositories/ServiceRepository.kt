@@ -13,6 +13,7 @@ import com.gatekeeper.plugins.RedisService
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
 import org.jetbrains.exposed.sql.and
 import org.jetbrains.exposed.sql.insert
+import org.jetbrains.exposed.sql.insertIgnore
 import org.jetbrains.exposed.sql.selectAll
 import org.jetbrains.exposed.sql.transactions.transaction
 import org.jetbrains.exposed.sql.update
@@ -52,6 +53,19 @@ object ServiceRepository {
     fun findByProjectAndId(projectId: UUID, id: UUID): ServiceRecord? = transaction {
         Services.selectAll().where { (Services.projectId eq projectId) and (Services.id eq id) }
             .singleOrNull()?.let(::toRecord)
+    }
+
+    /** Returns the project's default service, repairing legacy projects missing the row. */
+    fun getOrCreateDefault(projectId: UUID): ServiceRecord = transaction {
+        Services.insertIgnore {
+            it[Services.projectId] = projectId
+            it[Services.name] = "default"
+            it[Services.accessStatus] = "active"
+            it[Services.blockReason] = null
+        }
+        Services.selectAll().where {
+            (Services.projectId eq projectId) and (Services.name eq "default")
+        }.single().let(::toRecord)
     }
 
     fun create(projectId: UUID, name: String): ServiceRecord = transaction {
