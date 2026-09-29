@@ -62,12 +62,12 @@ object DeploymentJobRepository {
         }
     }
 
-    fun registryCredentialForDeployment(id: UUID): RegistryCredentialRecord? {
+    fun registryCredentialForDeployment(id: UUID): RegistryCredentialRecord? = transaction {
         val credentialId = DeploymentExecutions.selectAll().where { DeploymentExecutions.id eq id }
             .singleOrNull()?.get(DeploymentExecutions.registryCredentialId)
-        val job = DeploymentJobs.selectAll().where { DeploymentJobs.id eq id }.singleOrNull() ?: return null
+        val job = DeploymentJobs.selectAll().where { DeploymentJobs.id eq id }.singleOrNull() ?: return@transaction null
         val registry = job[DeploymentJobs.registry]
-        return if (credentialId != null) {
+        if (credentialId != null) {
             val selected = RegistryCredentialRepository.findByCredentialId(credentialId)
                 ?: error("Selected registry credential no longer exists")
             require(selected.registry == registry) { "Selected registry credential does not match deployment registry" }
