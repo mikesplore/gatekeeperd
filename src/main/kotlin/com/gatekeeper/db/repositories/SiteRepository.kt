@@ -235,7 +235,8 @@ object SiteRepository {
         }
         val projectSlug = Projects.selectAll().where { Projects.id eq projectId }.singleOrNull()?.get(Projects.slug)
             ?: error("Project not found")
-        val fileSlug = model.slug.takeIf { it != projectSlug } ?: "$projectSlug-${model.domain.toSiteSlugSuffix()}"
+        val fileSlug = if (isDefaultService(serviceId)) projectSlug
+            else model.slug.takeIf { it != projectSlug } ?: "$projectSlug-${model.domain.toSiteSlugSuffix()}"
         Sites.insert {
             it[Sites.id] = id
             it[Sites.projectId] = projectId

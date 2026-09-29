@@ -613,12 +613,13 @@ Requires `{"confirm":true}`. Creates a timestamped backup, preserves the config 
 This is a separate confirmed step and only accepts an already-disabled manual config. It creates another timestamped backup, deletes the config from `sites-available`, and verifies `nginx -t`; if validation fails, it restores the source file.
 
 ### GET /api/admin/nginx/wizard/context/{slug}
-Fetch project nginx state, the active deployment's resolved upstream host/port and runtime health, and certificate options. `configuredPort` is the Docker-published host port nginx should use, not the container port. If a site has not been saved yet, the default service's active deployment is still used for resolution.
+Fetch nginx state for a project's selected service, its active deployment's resolved upstream host/port and runtime health, and certificate options. Pass `serviceId` as a query parameter; when omitted, the default service is used. `configuredPort` is the Docker-published host port nginx should use, not the container port. If the service has no saved site/domain, the project domain is used.
 
 **Response:**
 ```json
 {
   "slug": "acw",
+  "serviceId": "b0ee7a11-1a47-4fcb-9325-4e6c704f0311",
   "domain": "acw.example.com",
   "nginxEnabled": false,
   "resolvedUpstreamHost": "127.0.0.1",
@@ -658,11 +659,12 @@ Check if a project has an nginx site configured and enabled, and whether SSL is 
 - `port` comes from the active deployment runtime record for Docker-discovery sites.
 
 ### POST /api/admin/nginx/enable/{slug}
-Generate and enable an nginx site config for a project. Validates that the project's container is running before creating the config.
+Generate and enable an nginx site config for a project's selected service. Validates that the service's active deployment container is running before creating the config. `serviceId` is optional and defaults to the project's default service.
 
 **Request:**
 ```json
 {
+  "serviceId": "b0ee7a11-1a47-4fcb-9325-4e6c704f0311",
   "port": 9921,
   "upstreamScheme": "http",
   "certificateDomain": "example.com",
