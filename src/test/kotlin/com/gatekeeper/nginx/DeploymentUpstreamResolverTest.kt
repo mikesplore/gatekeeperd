@@ -24,6 +24,18 @@ class DeploymentUpstreamResolverTest {
     }
 
     @Test
+    fun `docker site can target a ready candidate while activation is pending`() {
+        val readyCandidate = DeploymentUpstreamResolver.RuntimeTarget(
+            serviceId, "production", true, "ready-service-container", 9002, mapOf(9002 to 32923)
+        )
+
+        assertEquals(
+            DeploymentUpstreamResolver.Target("127.0.0.1", 32923, "ready-service-container"),
+            DeploymentUpstreamResolver.resolve(serviceId, "production", dockerSite, readyCandidate)
+        )
+    }
+
+    @Test
     fun `explicit port target is returned unchanged without an active deployment`() {
         val explicitSite = DeploymentUpstreamResolver.SiteTarget(UpstreamMode.EXPLICIT_PORT, "10.0.0.8", 9000)
 

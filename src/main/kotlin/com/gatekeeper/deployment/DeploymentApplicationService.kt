@@ -432,6 +432,31 @@ object DeploymentApplicationService {
         )
     }
 
+    /** Runtime the gateway may target: keep the active deployment preferred, but allow a ready candidate before its worker cutover completes. */
+    fun gatewayDeploymentRuntime(serviceId: UUID, environment: String): ActiveDeploymentRuntime? = transaction {
+        val active = Deployments.selectAll().where {
+            (Deployments.serviceId eq serviceId) and (Deployments.environment eq environment) and
+                (Deployments.status eq DeploymentStatus.ACTIVE)
+        }.singleOrNull()
+        val row = active ?: Deployments.selectAll().where {
+            (Deployments.serviceId eq serviceId) and (Deployments.environment eq environment) and
+                (Deployments.status eq DeploymentStatus.READY)
+        }.maxByOrNull { it[Deployments.createdAt] } ?: return@transaction null
+        val execution = com.gatekeeper.db.tables.DeploymentExecutions.selectAll()
+            .where { com.gatekeeper.db.tables.DeploymentExecutions.id eq row[Deployments.executionId] }
+            .singleOrNull()
+        val publishedPorts = runCatching {
+            kotlinx.serialization.json.Json.decodeFromString<Map<String, Int>>(row[Deployments.runtimePortsJson])
+                .mapKeys { it.key.toInt() }
+        }.getOrDefault(emptyMap())
+        ActiveDeploymentRuntime(
+            row[Deployments.id], row[Deployments.projectId] ?: error("Gateway runtime has no project_id"),
+            row[Deployments.environment], row[Deployments.status], row[Deployments.runtimeContainerName],
+            execution?.get(com.gatekeeper.db.tables.DeploymentExecutions.containerPort), publishedPorts,
+            row[Deployments.serviceId] ?: error("Gateway runtime has no service_id")
+        )
+    }
+
     data class RollbackArtifact(val image: String, val commitSha: String?)
 
     fun rollbackTargetId(id: UUID): UUID? = transaction {

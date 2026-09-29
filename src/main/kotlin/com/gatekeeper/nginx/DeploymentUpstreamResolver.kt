@@ -10,7 +10,7 @@ object DeploymentUpstreamResolver {
     data class Target(val host: String, val port: Int, val containerName: String? = null)
     data class SiteTarget(val mode: UpstreamMode, val host: String, val explicitPort: Int?)
     data class RuntimeTarget(
-        val serviceId: UUID?, val environment: String, val active: Boolean,
+        val serviceId: UUID?, val environment: String, val usable: Boolean,
         val containerName: String?, val containerPort: Int?, val publishedPorts: Map<Int, Int>
     )
 
@@ -21,7 +21,7 @@ object DeploymentUpstreamResolver {
         activeRuntime: RuntimeTarget?
     ): Target? {
         val runtime = activeRuntime?.takeIf {
-            it.serviceId == serviceId && it.environment == environment && it.active
+            it.serviceId == serviceId && it.environment == environment && it.usable
         }
         if (runtime == null && site.mode == UpstreamMode.EXPLICIT_PORT) {
             val port = site.explicitPort?.takeIf { it in 1..65535 } ?: return null
@@ -49,7 +49,7 @@ object DeploymentUpstreamResolver {
         activeRuntime?.let {
             RuntimeTarget(
                 it.serviceId, it.environment,
-                it.status == com.gatekeeper.db.tables.DeploymentStatus.ACTIVE,
+                it.status in setOf(com.gatekeeper.db.tables.DeploymentStatus.ACTIVE, com.gatekeeper.db.tables.DeploymentStatus.READY),
                 it.containerName, it.containerPort, it.publishedPorts
             )
         }
@@ -57,7 +57,7 @@ object DeploymentUpstreamResolver {
 
     fun resolve(serviceId: UUID, environment: String): Target? {
         val site = SiteRepository.findByServiceId(serviceId) ?: return null
-        val runtime = DeploymentApplicationService.activeDeploymentRuntime(serviceId, environment)
+        val runtime = DeploymentApplicationService.gatewayDeploymentRuntime(serviceId, environment)
         return resolve(serviceId, environment, site, runtime)
     }
 
@@ -65,7 +65,7 @@ object DeploymentUpstreamResolver {
     fun resolveProjectDefault(projectId: UUID, environment: String): Target? {
         val site = SiteRepository.findByProjectId(projectId) ?: return null
         val serviceId = site.serviceId ?: return null
-        val runtime = DeploymentApplicationService.activeDeploymentRuntime(serviceId, environment)
+        val runtime = DeploymentApplicationService.gatewayDeploymentRuntime(serviceId, environment)
         return resolve(serviceId, environment, site, runtime)
     }
 }
