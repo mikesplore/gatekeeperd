@@ -246,6 +246,7 @@ object DeploymentApplicationService {
         val secretSetVersion: Int?,
         val canRollback: Boolean,
         val canRedeploy: Boolean,
+        val canCancel: Boolean,
         val configurationId: UUID
     )
 
@@ -263,6 +264,8 @@ object DeploymentApplicationService {
                 .singleOrNull() ?: return@mapNotNull null
             val status = deployment[Deployments.status]
             val currentStep = execution[com.gatekeeper.db.tables.DeploymentExecutions.currentStep]
+            val canCancel = status in setOf(DeploymentStatus.QUEUED, DeploymentStatus.BUILDING, DeploymentStatus.STARTING, DeploymentStatus.HEALTH_CHECKING) &&
+                currentStep !in setOf("readiness_succeeded", "cutover_in_progress")
             val healthResult = when {
                 currentStep == "readiness_succeeded" || currentStep == "cutover_in_progress" ||
                     status == DeploymentStatus.ACTIVE || status == DeploymentStatus.SUPERSEDED || status == DeploymentStatus.ROLLED_BACK -> "passed"
@@ -290,6 +293,7 @@ object DeploymentApplicationService {
                 canRollback,
                 status == DeploymentStatus.ACTIVE ||
                     status == DeploymentStatus.FAILED && latestDeploymentByService[deployment[Deployments.serviceId]] == targetId,
+                canCancel,
                 deployment[Deployments.configurationId]
             )
         }
@@ -313,6 +317,8 @@ object DeploymentApplicationService {
             val environment = deployment[Deployments.environment]
             val status = deployment[Deployments.status]
             val currentStep = execution[com.gatekeeper.db.tables.DeploymentExecutions.currentStep]
+            val canCancel = status in setOf(DeploymentStatus.QUEUED, DeploymentStatus.BUILDING, DeploymentStatus.STARTING, DeploymentStatus.HEALTH_CHECKING) &&
+                currentStep !in setOf("readiness_succeeded", "cutover_in_progress")
             val health = when {
                 currentStep == "readiness_succeeded" || currentStep == "cutover_in_progress" ||
                     status == DeploymentStatus.ACTIVE || status == DeploymentStatus.SUPERSEDED || status == DeploymentStatus.ROLLED_BACK -> "passed"
@@ -337,6 +343,7 @@ object DeploymentApplicationService {
                 status == DeploymentStatus.SUPERSEDED && hasActive,
                 status == DeploymentStatus.ACTIVE ||
                     status == DeploymentStatus.FAILED && latestDeploymentByService[deployment[Deployments.serviceId] to environment] == deployment[Deployments.id],
+                canCancel,
                 deployment[Deployments.configurationId]
             )
             project[Projects.slug] to entry

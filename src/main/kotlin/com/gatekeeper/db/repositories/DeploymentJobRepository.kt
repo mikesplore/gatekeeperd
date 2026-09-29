@@ -737,10 +737,20 @@ object DeploymentJobRepository {
             .firstOrNull()?.toRecord()
     }
     fun cancel(id: UUID): Boolean = transaction {
-        val changed = DeploymentJobs.update({ (DeploymentJobs.id eq id) and (DeploymentJobs.status inList listOf("queued", "running", "awaiting_build", "awaiting_container")) }) {
+        val deployment = com.gatekeeper.db.tables.Deployments.selectAll()
+            .where { com.gatekeeper.db.tables.Deployments.id eq id }.singleOrNull() ?: return@transaction false
+        val deploymentStatus = deployment[com.gatekeeper.db.tables.Deployments.status]
+        if (deploymentStatus !in setOf(DeploymentStatus.QUEUED, DeploymentStatus.BUILDING, DeploymentStatus.STARTING, DeploymentStatus.HEALTH_CHECKING)) {
+            return@transaction false
+        }
+        val changed = DeploymentJobs.update({
+            (DeploymentJobs.id eq id) and
+                (DeploymentJobs.status inList listOf("queued", "running", "awaiting_build", "awaiting_container")) and
+                (DeploymentJobs.currentStep notInList listOf("readiness_succeeded", "cutover_in_progress"))
+        }) {
             it[status] = "cancelled"; it[currentStep] = "cancelled"; it[completedAt] = LocalDateTime.now(); it[cancelledAt] = LocalDateTime.now(); it[updatedAt] = LocalDateTime.now()
         } > 0
-        if (changed) DeploymentApplicationService.transition(id, DeploymentStatus.CANCELLED)
+        if (changed) check(DeploymentApplicationService.transition(id, DeploymentStatus.CANCELLED)) { "Deployment $id could not be cancelled" }
         if (changed) DeploymentExecutions.update({ DeploymentExecutions.id eq id }) {
             it[status] = "cancelled"; it[currentStep] = "cancelled"; it[completedAt] = LocalDateTime.now(); it[cancelledAt] = LocalDateTime.now(); it[updatedAt] = LocalDateTime.now()
         }

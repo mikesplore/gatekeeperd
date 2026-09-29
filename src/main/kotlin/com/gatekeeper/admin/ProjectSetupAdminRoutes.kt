@@ -157,6 +157,9 @@ data class ProjectSetupSourceRuntimeResponse(val configurationId: String, val en
 data class ProjectSetupDeployResponse(val deploymentId: String, val status: String = "queued")
 
 @Serializable
+data class ProjectSetupCancelResponse(val deploymentId: String, val status: String = "cancelled")
+
+@Serializable
 data class ProjectOverviewAccessLifecycle(
     val accessStatus: String,
     val blockReason: String?,
@@ -287,7 +290,8 @@ data class AdminDeploymentHistoryItem(
     val credentialSetVersion: Int?,
     val secretSetId: String?,
     val secretSetVersion: Int?,
-    val canRedeploy: Boolean
+    val canRedeploy: Boolean,
+    val canCancel: Boolean
 )
 
 @Serializable
@@ -373,7 +377,7 @@ fun Application.configureProjectSetupAdminRoutes() {
                                 healthCheckResult = item.healthCheckResult, failureReason = item.failureReason,
                                 credentialSetId = item.credentialSetId?.toString(), credentialSetVersion = item.credentialSetVersion,
                                 secretSetId = item.secretSetId?.toString(), secretSetVersion = item.secretSetVersion,
-                                canRedeploy = item.canRedeploy
+                                canRedeploy = item.canRedeploy, canCancel = item.canCancel
                             )
                         },
                         total = total,
@@ -743,7 +747,7 @@ fun Application.configureProjectSetupAdminRoutes() {
                         item.activeAt?.toString(), item.healthCheckResult, item.failureReason,
                         item.credentialSetId?.toString(), item.credentialSetVersion,
                         item.secretSetId?.toString(), item.secretSetVersion, item.configurationId.toString(),
-                        buildList { if (item.canRollback) add("rollback"); if (item.canRedeploy) add("redeploy") }
+                        buildList { if (item.canRollback) add("rollback"); if (item.canRedeploy) add("redeploy"); if (item.canCancel) add("cancel") }
                     )
                 }
                     call.respond(ProjectDeploymentHistoryResponse(project.id.toString(), environment, items))
@@ -761,6 +765,22 @@ fun Application.configureProjectSetupAdminRoutes() {
                 val deploymentId = DeploymentJobRepository.redeployConfiguration(item.configurationId)
                     ?: return@post call.respondError(HttpStatusCode.Conflict, "redeploy_unavailable", "Deployment configuration could not be queued")
                 call.respond(HttpStatusCode.Accepted, ProjectSetupDeployResponse(deploymentId.toString()))
+            }
+
+            post("/api/admin/projects/{slug}/deployments/{id}/cancel") {
+                val slug = call.parameters["slug"] ?: return@post call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing project slug")
+                val project = ProjectRepository.findBySlug(slug)
+                    ?: return@post call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
+                val id = call.parameters["id"]?.let { runCatching { UUID.fromString(it) }.getOrNull() }
+                    ?: return@post call.respondError(HttpStatusCode.BadRequest, "invalid_deployment_id", "Invalid deployment ID")
+                val environment = call.request.queryParameters["environment"]?.trim()?.takeIf(String::isNotEmpty) ?: "production"
+                val item = DeploymentApplicationService.deploymentHistory(project.id, environment).firstOrNull { it.id == id }
+                    ?: return@post call.respondError(HttpStatusCode.NotFound, "deployment_not_found", "Deployment not found for project")
+                if (!item.canCancel) return@post call.respondError(HttpStatusCode.Conflict, "deployment_cancel_unavailable", "Deployment is no longer in a cancellable state")
+                if (!DeploymentWorker.cancel(id)) return@post call.respondError(HttpStatusCode.Conflict, "deployment_cancel_unavailable", "Deployment could not be cancelled because its state changed")
+                val actor = call.principal<io.ktor.server.auth.jwt.JWTPrincipal>()?.payload?.subject ?: "admin"
+                AuditRepository.write(project.id, "deployment_cancelled", actor, "deployment=$id")
+                call.respond(ProjectSetupCancelResponse(id.toString()))
             }
 
             post("/api/admin/projects/{slug}/deployments/{id}/rollback") {

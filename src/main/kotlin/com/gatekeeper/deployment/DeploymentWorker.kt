@@ -23,6 +23,7 @@ import java.net.Socket
 import java.net.URL
 import java.net.HttpURLConnection
 import java.util.UUID
+import java.util.concurrent.TimeUnit
 import kotlin.time.Duration.Companion.milliseconds
 
 object DeploymentWorker {
@@ -344,6 +345,7 @@ object DeploymentWorker {
     }
 
     private fun runCommand(id: UUID, directory: Path, command: List<String>, githubToken: String = "") {
+        ensureNotCancelled(id)
         val builder = ProcessBuilder(command).directory(directory.toFile()).redirectErrorStream(true)
         if (githubToken.isNotBlank()) {
             builder.environment()["GIT_CONFIG_COUNT"] = "1"
@@ -351,21 +353,35 @@ object DeploymentWorker {
             builder.environment()["GIT_CONFIG_VALUE_0"] = "AUTHORIZATION: bearer $githubToken"
         }
         val process = builder.start()
-        process.inputStream.bufferedReader().useLines { lines ->
-            lines.forEach { line ->
-                DeploymentJobRepository.update(id, log = SecretValueCipher.redact(line, listOf(githubToken)))
+        val outputThread = Thread({
+            process.inputStream.bufferedReader().useLines { lines ->
+                lines.forEach { line ->
+                    DeploymentJobRepository.update(id, log = SecretValueCipher.redact(line, listOf(githubToken)))
+                }
             }
+        }, "deployment-output-${id}").apply { isDaemon = true; start() }
+        try {
+            while (!process.waitFor(250, TimeUnit.MILLISECONDS)) ensureNotCancelled(id)
+            outputThread.join()
+            ensureNotCancelled(id)
+            if (process.exitValue() != 0) error("Command failed: ${command.first()}")
+        } catch (cancelled: CancellationException) {
+            process.destroy()
+            if (!process.waitFor(2, TimeUnit.SECONDS)) process.destroyForcibly()
+            outputThread.join(1_000)
+            throw cancelled
         }
-        if (process.waitFor() != 0) error("Command failed: ${command.first()}")
     }
 
     private fun dockerLogin(id: UUID, registry: String, username: String, password: String) {
+        ensureNotCancelled(id)
         val host = if (registry == "docker.io") "https://index.docker.io/v1/" else registry
         val process = ProcessBuilder("docker", "login", host, "--username", username, "--password-stdin")
             .redirectErrorStream(true).start()
         process.outputStream.bufferedWriter().use { it.write(password); it.newLine() }
         process.inputStream.bufferedReader().readText()
         if (process.waitFor() != 0) error("Docker registry authentication failed for $registry")
+        ensureNotCancelled(id)
         DeploymentJobRepository.update(id, "registry_authenticated", "Authenticated to registry $registry")
     }
 
