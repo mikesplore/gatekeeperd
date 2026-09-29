@@ -91,6 +91,8 @@ data class BulkProjectResult(val slug: String, val status: String, val message: 
 
 @Serializable data class DashboardSitesPageResponse(val sites: List<DashboardSiteResponse>, val total: Long, val limit: Int, val offset: Int, val hasMore: Boolean)
 
+@Serializable data class DashboardSiteDeleteResponse(val deleted: Boolean, val slug: String)
+
 @Serializable data class DashboardCustomerResponse(
     val id: String, val name: String, val contactEmail: String? = null, val contactPhone: String? = null,
     val billingStatus: String, val projectCount: Int, val siteCount: Int = projectCount,
@@ -285,7 +287,7 @@ fun Application.configureOperationsAdminRoutes() {
                 val nginx = NginxService()
                 if (!nginx.removeProject(slug)) { call.respondError(HttpStatusCode.InternalServerError, "nginx_cleanup_failed", "Unable to remove nginx artifacts"); return@delete }
                 (SiteRepository.findByProjectSlug(slug) ?: SiteRepository.findByDomain(slug))?.let { SiteRepository.deleteById(it.id) }
-                call.respond(mapOf("deleted" to true, "slug" to slug))
+                call.respond(DashboardSiteDeleteResponse(deleted = true, slug = slug))
             }
             get("/api/admin/dashboard/dead-configs") {
                 val offset = call.request.queryParameters["offset"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0
