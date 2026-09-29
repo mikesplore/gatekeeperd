@@ -597,7 +597,7 @@ After candidate readiness, the worker switches a managed nginx site's upstream t
 These endpoints manage nginx site configurations for client projects. They require `nginx` CLI and `systemctl` access on the host.
 
 ### GET /api/admin/nginx/configs
-Lists the actual files found in `sites-available` and `sites-enabled`, including their filename, parsed domains, availability/enabled state, Gatekeeperd identity markers, database tracking status, and orphan status. This surfaces files that remain after a site record has been removed.
+Lists the actual files found in `sites-available` and `sites-enabled`, including their filename, parsed server names and listen ports, availability/enabled state, Gatekeeperd identity markers, database tracking status, and orphan status. Each config is classified as `gatekeeper_managed` or `manual`; files matching `GATEKEEPERD_SELF_DOMAIN` are classified internally as `self` and omitted from admin results and actions.
 
 ### GET /api/admin/nginx/wizard/context/{slug}
 Fetch project nginx state, the active deployment's resolved upstream host/port and runtime health, and certificate options. `configuredPort` is the Docker-published host port nginx should use, not the container port. If a site has not been saved yet, the default service's active deployment is still used for resolution.

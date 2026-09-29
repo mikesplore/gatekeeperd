@@ -1,6 +1,7 @@
 package com.gatekeeper.nginx
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.SerialName
 
 @Serializable
 data class NginxEnableRequest(
@@ -46,9 +47,26 @@ data class NginxConfigInspection(
 )
 
 @Serializable
+enum class NginxConfigClassification {
+    @SerialName("self") SELF,
+    @SerialName("gatekeeper_managed") GATEKEEPER_MANAGED,
+    @SerialName("manual") MANUAL
+}
+
+@Serializable
+data class ClassifiedNginxConfig(
+    val filename: String,
+    val serverNames: List<String>,
+    val listenPorts: List<Int>,
+    val classification: NginxConfigClassification
+)
+
+@Serializable
 data class NginxConfigArtifact(
     val filename: String,
     val domains: List<String> = emptyList(),
+    val listenPorts: List<Int> = emptyList(),
+    val classification: NginxConfigClassification = NginxConfigClassification.MANUAL,
     val available: Boolean,
     val enabled: Boolean,
     val managed: Boolean,

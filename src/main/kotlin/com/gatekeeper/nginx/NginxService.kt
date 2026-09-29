@@ -109,15 +109,14 @@ class NginxService(
             if (isExcluded(available ?: File(availableDir, filename), enabled)) return@mapNotNull null
             val content = runCatching { (available ?: enabled.takeIf { it.exists() || Files.isSymbolicLink(it.toPath()) })?.readText().orEmpty() }
                 .getOrDefault("")
+            val classified = classifyConfig(filename, content)
+            if (classified.classification == NginxConfigClassification.SELF) return@mapNotNull null
             val identity = parseSiteIdentityMarker(content)
             val projectId = identity.projectId
             val siteId = identity.siteId
             val serviceId = Regex("(?m)^# gatekeeperd:service_id:([0-9a-fA-F-]{36})\\s*$")
                 .find(content)?.groupValues?.get(1)?.let { runCatching { java.util.UUID.fromString(it) }.getOrNull() }
-            val domains = Regex("(?m)^\\s*server_name\\s+([^;]+);")
-                .findAll(content).flatMap { it.groupValues[1].split(Regex("\\s+")) }
-                .filter { it.isNotBlank() && it != "_" }
-                .distinct().toList()
+            val domains = classified.serverNames
             val tracked = sites.any { site ->
                 siteId == site.id ||
                     projectId != null && projectId == site.projectId && (
@@ -128,6 +127,8 @@ class NginxService(
             NginxConfigArtifact(
                 filename = filename,
                 domains = domains,
+                listenPorts = classified.listenPorts,
+                classification = classified.classification,
                 available = available != null,
                 enabled = enabled.exists() || Files.isSymbolicLink(enabled.toPath()),
                 managed = identity.present,
@@ -138,6 +139,42 @@ class NginxService(
                 siteId = siteId?.toString()
             )
         }
+    }
+
+    /** Reads every non-backup file in sites-available and classifies it without mutating it. */
+    fun classifyAvailableConfigs(): List<ClassifiedNginxConfig> =
+        File(sitesAvailablePath).listFiles()
+            .orEmpty()
+            .filter { it.isFile && !it.name.startsWith(".") && !it.name.contains(".bak-") }
+            .sortedBy { it.name }
+            .mapNotNull { file ->
+                runCatching { classifyConfig(file.name, file.readText()) }.getOrNull()
+            }
+
+    private fun classifyConfig(filename: String, content: String): ClassifiedNginxConfig {
+        val serverNames = Regex("(?m)^\\s*server_name\\s+([^;]+);")
+            .findAll(content)
+            .flatMap { it.groupValues[1].split(Regex("\\s+")) }
+            .map { it.trim() }
+            .filter { it.isNotBlank() && it != "_" }
+            .distinct()
+            .toList()
+        val listenPorts = Regex("(?m)^\\s*listen\\s+([^;]+);")
+            .findAll(content)
+            .mapNotNull { match ->
+                val address = match.groupValues[1].trim().split(Regex("\\s+")).firstOrNull().orEmpty()
+                Regex("(?:^|:)(\\d+)$").find(address)?.groupValues?.get(1)?.toIntOrNull()
+            }
+            .filter { it in 1..65535 }
+            .distinct()
+            .sorted()
+            .toList()
+        val classification = when {
+            selfDomainExclusion.excludesConfig(content) -> NginxConfigClassification.SELF
+            parseSiteIdentityMarker(content).present -> NginxConfigClassification.GATEKEEPER_MANAGED
+            else -> NginxConfigClassification.MANUAL
+        }
+        return ClassifiedNginxConfig(filename, serverNames, listenPorts, classification)
     }
 
     fun removeSiteArtifacts(site: SiteRepository.SiteRecord): Boolean {
