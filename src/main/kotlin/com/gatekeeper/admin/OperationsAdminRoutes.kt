@@ -92,6 +92,7 @@ data class BulkProjectResult(val slug: String, val status: String, val message: 
 @Serializable data class DashboardSitesPageResponse(val sites: List<DashboardSiteResponse>, val total: Long, val limit: Int, val offset: Int, val hasMore: Boolean)
 
 @Serializable data class DashboardSiteDeleteResponse(val deleted: Boolean, val slug: String)
+@Serializable data class NginxConfigArtifactBackupResponse(val filename: String, val backup: String? = null)
 
 @Serializable data class DashboardCustomerResponse(
     val id: String, val name: String, val contactEmail: String? = null, val contactPhone: String? = null,
@@ -285,26 +286,47 @@ fun Application.configureOperationsAdminRoutes() {
             delete("/api/admin/dashboard/sites/{slug}") {
                 val slug = call.parameters["slug"] ?: run { call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing slug"); return@delete }
                 val nginx = NginxService()
-                if (!nginx.removeProject(slug)) { call.respondError(HttpStatusCode.InternalServerError, "nginx_cleanup_failed", "Unable to remove nginx artifacts"); return@delete }
-                (SiteRepository.findByProjectSlug(slug) ?: SiteRepository.findByDomain(slug))?.let { SiteRepository.deleteById(it.id) }
+                val site = SiteRepository.findByProjectSlug(slug) ?: SiteRepository.findByDomain(slug)
+                val removed = site?.let(nginx::removeSiteArtifacts) ?: nginx.removeProject(slug)
+                if (!removed) { call.respondError(HttpStatusCode.InternalServerError, "nginx_cleanup_failed", "Unable to remove nginx artifacts"); return@delete }
+                if (!nginx.reloadNginx()) { call.respondError(HttpStatusCode.InternalServerError, "nginx_reload_failed", "Nginx artifacts were removed but the active configuration could not be reloaded"); return@delete }
+                site?.let { SiteRepository.deleteById(it.id) }
                 call.respond(DashboardSiteDeleteResponse(deleted = true, slug = slug))
             }
+            get("/api/admin/nginx/configs") {
+                call.respond(NginxService().listConfigArtifacts())
+            }
             get("/api/admin/dashboard/dead-configs") {
-                val offset = call.request.queryParameters["offset"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0
-                val limit = call.request.queryParameters["limit"]?.toIntOrNull()?.coerceIn(1, 500) ?: 100
-                val page = SiteRepository.findAll().filter { it.reconciliationStatus == ReconciliationStatus.DEAD_CONFIG }.drop(offset).take(limit)
-                call.respond(withDashboardDocker(page) { docker -> page.map { dashboardSite(it, docker) } })
+                call.respond(NginxService().listConfigArtifacts().filter { it.orphaned })
             }
             delete("/api/admin/dashboard/dead-configs/{filename}") {
                 val filename = call.parameters["filename"] ?: run { call.respondError(HttpStatusCode.BadRequest, "missing_filename", "Missing filename"); return@delete }
                 if (filename != File(filename).name || !filename.matches(Regex("[A-Za-z0-9][A-Za-z0-9_.-]*"))) { call.respondError(HttpStatusCode.BadRequest, "invalid_filename", "Invalid config filename"); return@delete }
                 val body = runCatching { call.receive<DashboardConfirmationRequest>() }.getOrElse { call.respondError(HttpStatusCode.BadRequest, "confirmation_required", "Request body must contain confirm=true"); return@delete }
                 if (!body.confirm) { call.respondError(HttpStatusCode.Conflict, "confirmation_required", "Set confirm=true to move this dead config to backup"); return@delete }
+                val nginx = NginxService()
+                val artifact = nginx.listConfigArtifacts().firstOrNull { it.filename == filename }
+                    ?: run { call.respondError(HttpStatusCode.NotFound, "config_not_found", "Nginx config not found"); return@delete }
+                if (!artifact.orphaned) { call.respondError(HttpStatusCode.Conflict, "config_not_orphaned", "Only orphaned managed configs can be removed here"); return@delete }
                 val source = File(AppConfig.nginxSitesAvailablePath, filename)
-                if (!source.isFile) { call.respondError(HttpStatusCode.NotFound, "config_not_found", "Dead config not found"); return@delete }
-                val backup = File(source.parentFile, "$filename.bak-${System.currentTimeMillis()}")
-                java.nio.file.Files.move(source.toPath(), backup.toPath())
-                call.respond(mapOf("backedUp" to true, "backup" to backup.name))
+                val enabled = File(AppConfig.nginxSitesEnabledPath, filename)
+                val enabledWasLink = java.nio.file.Files.isSymbolicLink(enabled.toPath())
+                val enabledWasActive = artifact.enabled
+                val enabledTarget = if (enabledWasLink) runCatching { java.nio.file.Files.readSymbolicLink(enabled.toPath()) }.getOrNull() else null
+                val backup = if (source.isFile) File(source.parentFile, "$filename.bak-${System.currentTimeMillis()}") else null
+                if (backup != null) java.nio.file.Files.move(source.toPath(), backup.toPath())
+                java.nio.file.Files.deleteIfExists(enabled.toPath())
+                if (enabledWasActive && !nginx.reloadNginx()) {
+                    if (backup != null && backup.exists()) java.nio.file.Files.move(backup.toPath(), source.toPath())
+                    when {
+                        enabledWasLink && enabledTarget != null -> java.nio.file.Files.createSymbolicLink(enabled.toPath(), enabledTarget)
+                        enabledWasActive && source.isFile -> java.nio.file.Files.copy(source.toPath(), enabled.toPath())
+                    }
+                    nginx.reloadNginx()
+                    call.respondError(HttpStatusCode.InternalServerError, "nginx_reload_failed", "Unable to reload nginx after removing the orphaned config; the config was restored")
+                    return@delete
+                }
+                call.respond(NginxConfigArtifactBackupResponse(filename, backup?.name))
             }
             post("/api/admin/dashboard/customers") {
                 val body = runCatching { call.receive<DashboardCustomerCreateRequest>() }.getOrElse { call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid customer body"); return@post }

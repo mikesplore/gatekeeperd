@@ -85,6 +85,64 @@ class NginxService(
         )
     }
 
+    fun listConfigArtifacts(sites: List<SiteRepository.SiteRecord> = SiteRepository.findAll()): List<NginxConfigArtifact> {
+        val availableDir = File(sitesAvailablePath)
+        val enabledDir = File(sitesEnabledPath)
+        val filenames = (availableDir.listFiles().orEmpty().toList() + enabledDir.listFiles().orEmpty().toList())
+            .filter { it.isFile || Files.isSymbolicLink(it.toPath()) }
+            .map { it.name }
+            .filterNot { it.startsWith(".") || it.contains(".bak-") }
+            .distinct()
+            .sorted()
+
+        return filenames.map { filename ->
+            val available = File(availableDir, filename).takeIf { it.isFile }
+            val enabled = File(enabledDir, filename)
+            val content = runCatching { (available ?: enabled.takeIf { it.exists() || Files.isSymbolicLink(it.toPath()) })?.readText().orEmpty() }
+                .getOrDefault("")
+            val identity = parseSiteIdentityMarker(content)
+            val projectId = identity.projectId
+            val siteId = identity.siteId
+            val serviceId = Regex("(?m)^# gatekeeperd:service_id:([0-9a-fA-F-]{36})\\s*$")
+                .find(content)?.groupValues?.get(1)?.let { runCatching { java.util.UUID.fromString(it) }.getOrNull() }
+            val domains = Regex("(?m)^\\s*server_name\\s+([^;]+);")
+                .findAll(content).flatMap { it.groupValues[1].split(Regex("\\s+")) }
+                .filter { it.isNotBlank() && it != "_" }
+                .distinct().toList()
+            val tracked = sites.any { site ->
+                siteId == site.id ||
+                    projectId != null && projectId == site.projectId && (
+                        serviceId != null && serviceId == site.serviceId ||
+                            serviceId == null && domains.any { it.equals(site.domain, ignoreCase = true) }
+                        )
+            }
+            NginxConfigArtifact(
+                filename = filename,
+                domains = domains,
+                available = available != null,
+                enabled = enabled.exists() || Files.isSymbolicLink(enabled.toPath()),
+                managed = identity.present,
+                tracked = tracked,
+                orphaned = identity.present && !tracked,
+                projectId = projectId?.toString(),
+                serviceId = serviceId?.toString(),
+                siteId = siteId?.toString()
+            )
+        }
+    }
+
+    fun removeSiteArtifacts(site: SiteRepository.SiteRecord): Boolean {
+        val matches = listConfigArtifacts(listOf(site)).filter { artifact ->
+            artifact.siteId == site.id.toString() ||
+                artifact.projectId == site.projectId.toString() && (
+                    artifact.serviceId == site.serviceId?.toString() ||
+                        artifact.serviceId == null && artifact.domains.any { it.equals(site.domain, ignoreCase = true) }
+                    )
+        }.map { it.filename }.toMutableSet()
+        site.projectSlug?.let(matches::add)
+        return matches.all(::removeProject)
+    }
+
     fun restoreSiteConfiguration(slug: String, previousConfig: String): Boolean = enableProject(slug, previousConfig)
 
     private fun sha256(value: String): String = MessageDigest.getInstance("SHA-256")
@@ -587,6 +645,7 @@ class NginxService(
             if (availableFile.exists()) {
                 availableFile.delete()
             }
+            File(sitesAvailablePath, ".$slug.gatekeeperd.sha256").delete()
 
             logger.info("Removed nginx site: $slug")
             true

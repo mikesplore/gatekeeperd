@@ -596,6 +596,9 @@ After candidate readiness, the worker switches a managed nginx site's upstream t
 
 These endpoints manage nginx site configurations for client projects. They require `nginx` CLI and `systemctl` access on the host.
 
+### GET /api/admin/nginx/configs
+Lists the actual files found in `sites-available` and `sites-enabled`, including their filename, parsed domains, availability/enabled state, Gatekeeperd identity markers, database tracking status, and orphan status. This surfaces files that remain after a site record has been removed.
+
 ### GET /api/admin/nginx/wizard/context/{slug}
 Fetch project nginx state, the active deployment's resolved upstream host/port and runtime health, and certificate options. `configuredPort` is the Docker-published host port nginx should use, not the container port. If a site has not been saved yet, the default service's active deployment is still used for resolution.
 
@@ -1278,7 +1281,7 @@ Dashboard write operations are also available to authenticated administrators:
 
 - `PATCH /api/admin/dashboard/sites/{slug}` updates desired Site render fields and activates the generated configuration through nginx validation and reload.
 - `DELETE /api/admin/dashboard/sites/{slug}` removes the Site record and its deployed nginx artifacts.
-- `DELETE /api/admin/dashboard/dead-configs/{filename}` requires `{"confirm":true}` and moves the orphaned file to a timestamped backup.
+- `DELETE /api/admin/dashboard/dead-configs/{filename}` requires `{"confirm":true}`, moves the orphaned file to a timestamped backup, removes its enabled link, and reloads nginx. If reload fails, the file and link are restored.
 - `POST /api/admin/dashboard/customers` creates a customer. A nonblank contact email is unique case-insensitively; attempts to reuse it return `409 customer_exists`.
 - Admin user create/update operations enforce case-insensitive email uniqueness and return `409 user_exists` when the email belongs to another user.
 - `PATCH /api/admin/dashboard/projects/{id}` assigns or clears `customerId`.

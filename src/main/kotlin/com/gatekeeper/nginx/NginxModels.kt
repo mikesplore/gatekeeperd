@@ -46,6 +46,20 @@ data class NginxConfigInspection(
 )
 
 @Serializable
+data class NginxConfigArtifact(
+    val filename: String,
+    val domains: List<String> = emptyList(),
+    val available: Boolean,
+    val enabled: Boolean,
+    val managed: Boolean,
+    val tracked: Boolean,
+    val orphaned: Boolean,
+    val projectId: String? = null,
+    val serviceId: String? = null,
+    val siteId: String? = null
+)
+
+@Serializable
 data class NginxConfigBlock(
     val type: String,
     val header: String,

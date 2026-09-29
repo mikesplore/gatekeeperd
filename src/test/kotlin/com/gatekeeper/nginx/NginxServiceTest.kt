@@ -16,6 +16,7 @@ import com.gatekeeper.db.tables.ReconciliationStatus
 import com.gatekeeper.db.tables.TlsMode
 import com.gatekeeper.db.tables.UpstreamMode
 import java.time.LocalDateTime
+import java.util.UUID
 
 class NginxServiceTest {
 
@@ -666,5 +667,32 @@ class NginxServiceTest {
         val manual = service.inspectSite("manual")
         assertTrue(manual.manual)
         assertFailsWith<IllegalArgumentException> { service.previewBlockUpdate("manual", 0, "server {}") }
+    }
+
+    @Test
+    fun `lists orphaned enabled nginx files by their actual filename`() {
+        val root = Files.createTempDirectory("gk-nginx-artifacts").toFile()
+        val available = File(root, "available").apply { mkdirs() }
+        val enabled = File(root, "enabled").apply { mkdirs() }
+        val service = NginxService(available.absolutePath, enabled.absolutePath, 8080, root.absolutePath,
+            nginxTestRunner = { NginxTestResult(true, 0, "", "now") }, nginxReloadRunner = { true })
+        val projectId = UUID.randomUUID()
+        val serviceId = UUID.randomUUID()
+        val content = service.generateNginxConfig(
+            slug = "bubblesbath-carwash", domain = "payment.example.com", appPort = 32768,
+            upstreamScheme = "http", sslEnabled = false, projectId = projectId, serviceId = serviceId
+        )
+        File(available, "acw-api").writeText(content)
+        Files.createSymbolicLink(File(enabled, "acw-api").toPath(), File(available, "acw-api").toPath())
+
+        val artifact = service.listConfigArtifacts(emptyList()).single()
+        assertEquals("acw-api", artifact.filename)
+        assertEquals(listOf("payment.example.com"), artifact.domains)
+        assertTrue(artifact.available)
+        assertTrue(artifact.enabled)
+        assertTrue(artifact.managed)
+        assertTrue(artifact.orphaned)
+        assertEquals(projectId.toString(), artifact.projectId)
+        assertEquals(serviceId.toString(), artifact.serviceId)
     }
 }
