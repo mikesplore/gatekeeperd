@@ -286,7 +286,8 @@ data class AdminDeploymentHistoryItem(
     val credentialSetId: String?,
     val credentialSetVersion: Int?,
     val secretSetId: String?,
-    val secretSetVersion: Int?
+    val secretSetVersion: Int?,
+    val canRedeploy: Boolean
 )
 
 @Serializable
@@ -371,7 +372,8 @@ fun Application.configureProjectSetupAdminRoutes() {
                                 status = item.status, createdAt = item.createdAt.toString(), activeAt = item.activeAt?.toString(),
                                 healthCheckResult = item.healthCheckResult, failureReason = item.failureReason,
                                 credentialSetId = item.credentialSetId?.toString(), credentialSetVersion = item.credentialSetVersion,
-                                secretSetId = item.secretSetId?.toString(), secretSetVersion = item.secretSetVersion
+                                secretSetId = item.secretSetId?.toString(), secretSetVersion = item.secretSetVersion,
+                                canRedeploy = item.canRedeploy
                             )
                         },
                         total = total,

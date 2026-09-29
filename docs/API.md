@@ -584,7 +584,7 @@ Registry credentials are managed through `GET /api/admin/registries`, `PUT /api/
 Deployment administration is JWT-protected:
 
 - Configure and deploy through `/api/admin/project-setup/projects/{projectId}/source-runtime` and `/deploy`. Projects and configurations are bound by required `project_id`; the project slug is not used to resolve deployment ownership.
-- `GET /api/admin/deployment-history` returns paginated canonical deployment history across projects. `GET /api/admin/projects/{slug}/deployments/history` returns one project's history and supported actions. These responses expose only credential/secret version references.
+- `GET /api/admin/deployment-history` returns paginated canonical deployment history across projects and marks active or latest-failed deployments as redeployable. `GET /api/admin/projects/{slug}/deployments/history` returns one project's history and supported actions. These responses expose only credential/secret version references.
 - Redeploy and rollback use `/api/admin/projects/{slug}/deployments/{id}/redeploy` and `/rollback`. Rollback creates a new canonical deployment with an explicit prior-deployment reference.
 - `GET /api/admin/deployments/reconciliation` compares canonical active deployment records with their Docker runtime and managed nginx target. It reports drift only and takes no corrective actions.
 - The job-based global deployment endpoints and configuration-ID update/redeploy routes were removed. The worker queue remains internal.

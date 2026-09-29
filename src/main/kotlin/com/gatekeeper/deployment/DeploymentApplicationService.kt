@@ -299,6 +299,11 @@ object DeploymentApplicationService {
         val rows = Deployments.selectAll()
             .orderBy(Deployments.createdAt to org.jetbrains.exposed.sql.SortOrder.DESC)
         val total = rows.count()
+        val latestDeploymentByService = Deployments.selectAll().toList()
+            .groupBy { it[Deployments.serviceId] to it[Deployments.environment] }
+            .mapValues { (_, serviceDeployments) ->
+                serviceDeployments.maxByOrNull { it[Deployments.createdAt] }?.get(Deployments.id)
+            }
         val page = rows.limit(limit, offset.toLong()).mapNotNull { deployment ->
             val projectId = deployment[Deployments.projectId] ?: error("Deployment has no project_id")
             val project = Projects.selectAll().where { Projects.id eq projectId }.singleOrNull() ?: return@mapNotNull null
@@ -329,7 +334,9 @@ object DeploymentApplicationService {
                 deployment[Deployments.credentialSetId], deployment[Deployments.credentialSetVersion],
                 deployment[Deployments.secretSetId] ?: execution[com.gatekeeper.db.tables.DeploymentExecutions.secretSetId],
                 deployment[Deployments.secretSetVersion] ?: execution[com.gatekeeper.db.tables.DeploymentExecutions.secretSetVersion],
-                status == DeploymentStatus.SUPERSEDED && hasActive, status == DeploymentStatus.ACTIVE,
+                status == DeploymentStatus.SUPERSEDED && hasActive,
+                status == DeploymentStatus.ACTIVE ||
+                    status == DeploymentStatus.FAILED && latestDeploymentByService[deployment[Deployments.serviceId] to environment] == deployment[Deployments.id],
                 deployment[Deployments.configurationId]
             )
             project[Projects.slug] to entry
