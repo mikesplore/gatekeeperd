@@ -239,6 +239,17 @@ class DockerService(dockerSocketPath: String) {
         client.inspectImageCmd(imageRef).exec().repoDigests?.firstOrNull()
     }.getOrNull()
 
+    /** TCP ports declared by the image's Docker metadata (Dockerfile EXPOSE). */
+    fun imageExposedTcpPorts(imageRef: String): List<Int> = client.inspectImageCmd(imageRef).exec()
+        .config?.exposedPorts.orEmpty()
+        .asSequence()
+        .filter { it.protocol.toString().equals("tcp", ignoreCase = true) }
+        .map { it.port }
+        .filter { it in 1..65535 }
+        .distinct()
+        .sorted()
+        .toList()
+
     data class ImageInfo(val id: String, val tags: List<String>, val sizeBytes: Long)
 
     fun listImages(): List<ImageInfo> = client.listImagesCmd().withShowAll(true).exec().map { image ->

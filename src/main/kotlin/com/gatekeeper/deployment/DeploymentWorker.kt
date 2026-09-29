@@ -20,8 +20,6 @@ import java.nio.file.Path
 import java.util.concurrent.atomic.AtomicBoolean
 import java.net.InetSocketAddress
 import java.net.Socket
-import java.net.URL
-import java.net.HttpURLConnection
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 import kotlin.time.Duration.Companion.milliseconds
@@ -128,12 +126,18 @@ object DeploymentWorker {
                 DeploymentJobRepository.update(job.id, log = "Image digest: ${digest ?: "unavailable"}", imageDigest = digest)
                 if (job.network != "bridge" && job.createNetworkIfMissing) docker.createNetworkIfMissing(job.network)
                 candidateName = "deployment-${job.id}"
-                val readinessContainerPort = when (job.readinessType?.lowercase()) {
-                    "http" -> job.readinessTarget?.substringBefore('/')?.toIntOrNull() ?: job.containerPort
-                    "tcp" -> job.readinessTarget?.toIntOrNull() ?: job.containerPort
-                    else -> job.containerPort
-                }
-                val dynamicContainerPorts = (setOfNotNull(job.containerPort) + setOfNotNull(readinessContainerPort))
+                val imagePorts = docker.imageExposedTcpPorts(image)
+                val dynamicContainerPorts = imagePorts.ifEmpty { listOfNotNull(job.containerPort) }.toSet()
+                DeploymentJobRepository.update(
+                    job.id,
+                    log = if (imagePorts.isNotEmpty()) {
+                        "Docker image declares TCP port(s): ${imagePorts.joinToString()}; these override saved wizard port values"
+                    } else if (job.containerPort != null) {
+                        "Docker image declares no TCP ports; using saved container port ${job.containerPort} as a fallback"
+                    } else {
+                        "Docker image declares no TCP ports; readiness will use container process state"
+                    }
+                )
                 val created = docker.createContainer(CreateContainerRequest(
                     name = candidateName,
                     image = image,
@@ -148,22 +152,27 @@ object DeploymentWorker {
                     created.ports.publishedHostPort(containerPort)
                         ?: error("Docker did not assign a host port for candidate container port $containerPort")
                 }
-                val candidateHostPort = job.containerPort?.let(candidatePortMappings::get)
-                    ?: candidatePortMappings[readinessContainerPort]
                 val selectedProbe = selectedReadiness(job, candidatePortMappings.isNotEmpty())
                 DeploymentJobRepository.update(job.id, step = "health_checking", log = "Waiting for candidate readiness using $selectedProbe probe")
-                if (!awaitHealthy(docker, candidateName, candidatePortMappings, job)) {
+                val readiness = awaitHealthy(docker, candidateName, candidatePortMappings, job)
+                if (readiness == null) {
                     docker.deleteContainer(candidateName)
                     candidateName = null
-                    error("Candidate container did not become healthy and reachable")
+                    error("Candidate container did not pass automatic readiness checks for port(s) ${dynamicContainerPorts.sorted().joinToString().ifBlank { "none declared" }}")
                 }
                 ensureNotCancelled(job.id)
-                check(DeploymentApplicationService.recordCandidateRuntime(job.id, candidateName, candidateHostPort, candidatePortMappings)) {
+                val resolvedContainerPort = readiness.containerPort ?: job.containerPort
+                val candidateHostPort = resolvedContainerPort?.let(candidatePortMappings::get)
+                check(DeploymentApplicationService.recordCandidateRuntime(job.id, candidateName, candidateHostPort, resolvedContainerPort, candidatePortMappings)) {
                     "Unable to persist candidate runtime for deployment ${job.id}"
                 }
-                DeploymentJobRepository.update(job.id, step = "readiness_succeeded", log = "Candidate passed readiness checks ($selectedProbe); deployment remains health-checking until cutover")
+                DeploymentJobRepository.update(
+                    job.id,
+                    step = "readiness_succeeded",
+                    log = "Candidate passed readiness checks ($selectedProbe); resolved application container port ${resolvedContainerPort ?: "none"}. Deployment remains health-checking until cutover"
+                )
                 AuditRepository.write(null, "deployment_readiness_succeeded", "deployment-worker", "job=${job.id} repository=${job.repository ?: "prebuilt-image"} commit=${commit ?: "not-applicable"}")
-                cutover(job, docker) { rollback -> routeRollback = rollback }
+                cutover(job.copy(containerPort = resolvedContainerPort), docker) { rollback -> routeRollback = rollback }
                 candidateName = null
             } finally { docker.close() }
         } catch (error: CancellationException) {
@@ -206,7 +215,7 @@ object DeploymentWorker {
             val siteService = NginxService.configured()
             val previousConfig = siteService.inspectSite(ownerSlug).content
             val containerPort = site.upstreamExplicitPort ?: job.containerPort
-                ?: error("Managed site has no upstream port and deployment has no container port")
+                ?: error("The image declares no TCP EXPOSE port, so Gatekeeperd could not infer an upstream for the managed site. Add the application's listening port to the image metadata with EXPOSE.")
             val hostPort = runtime.ports[containerPort]
                 ?: if (site.upstreamMode == com.gatekeeper.db.tables.UpstreamMode.EXPLICIT_PORT) runtime.hostPort
                     ?: error("Candidate runtime host port is missing")
@@ -285,46 +294,35 @@ object DeploymentWorker {
         if (DeploymentJobRepository.isCancelled(id)) throw CancellationException("Deployment cancelled")
     }
 
-    private fun awaitHealthy(docker: DockerService, name: String, portMappings: Map<Int, Int>, job: DeploymentJobRecord): Boolean {
+    private data class ReadinessResult(val containerPort: Int?)
+
+    private fun awaitHealthy(docker: DockerService, name: String, portMappings: Map<Int, Int>, job: DeploymentJobRecord): ReadinessResult? {
         val deadline = System.nanoTime() + job.readinessTimeoutSeconds * 1_000_000_000L
         val probe = selectedReadiness(job, portMappings.isNotEmpty())
         while (System.nanoTime() < deadline) {
             if (DeploymentJobRepository.isCancelled(job.id)) throw CancellationException("Deployment cancelled")
-            if (runCatching { readinessProbe(docker, name, portMappings, job, probe) }.getOrDefault(false)) return true
+            runCatching { readinessProbe(docker, name, portMappings, job, probe) }.getOrNull()?.let { return it }
             Thread.sleep(job.readinessIntervalSeconds * 1000L)
         }
-        return false
+        return null
     }
 
     private fun selectedReadiness(job: DeploymentJobRecord, hasPublishedPort: Boolean): String =
-        job.readinessType?.lowercase() ?: if (hasPublishedPort) "tcp" else "process"
+        when (job.readinessType?.lowercase()) {
+            "docker" -> "docker"
+            "process" -> "process"
+            else -> if (hasPublishedPort) "tcp (auto-detected)" else "process"
+        }
 
-    private fun readinessProbe(docker: DockerService, name: String, portMappings: Map<Int, Int>, job: DeploymentJobRecord, probe: String): Boolean {
-        if (docker.containerHealth(name) != "running") return false
+    private fun readinessProbe(docker: DockerService, name: String, portMappings: Map<Int, Int>, job: DeploymentJobRecord, probe: String): ReadinessResult? {
+        if (docker.containerHealth(name) != "running") return null
+        val openDeclaredPort = {
+            portMappings.entries.firstOrNull { (_, hostPort) -> tcpReachable(hostPort, job.readinessProbeTimeoutMillis) }?.key
+        }
         return when (probe) {
-            "docker" -> docker.dockerHealthStatus(name) == "healthy"
-            "http" -> {
-                val target = requireNotNull(job.readinessTarget) { "HTTP readiness target is required" }
-                val (containerPort, path) = target.split("/", limit = 2).let { parts ->
-                    val port = parts.first().toIntOrNull() ?: job.containerPort
-                        ?: error("HTTP readiness target must start with a container port")
-                    port to "/" + parts.getOrNull(1).orEmpty()
-                }
-                val probeHostPort = portMappings[containerPort] ?: error("No published candidate mapping for HTTP container port $containerPort")
-                val connection = (URL("http://127.0.0.1:$probeHostPort$path").openConnection() as HttpURLConnection).apply {
-                    connectTimeout = job.readinessProbeTimeoutMillis
-                    readTimeout = job.readinessProbeTimeoutMillis
-                    requestMethod = "GET"
-                }
-                try { connection.responseCode in 200..299 } finally { connection.disconnect() }
-            }
-            "tcp" -> {
-                val containerPort = job.readinessTarget?.toIntOrNull() ?: job.containerPort
-                    ?: error("TCP readiness requires a container port")
-                val hostPort = portMappings[containerPort] ?: error("No published candidate mapping for TCP container port $containerPort")
-                tcpReachable(hostPort, job.readinessProbeTimeoutMillis)
-            }
-            "process" -> true
+            "docker" -> if (docker.dockerHealthStatus(name) == "healthy") ReadinessResult(openDeclaredPort()) else null
+            "tcp (auto-detected)" -> openDeclaredPort()?.let(::ReadinessResult)
+            "process" -> ReadinessResult(openDeclaredPort() ?: portMappings.keys.firstOrNull())
             else -> error("Unsupported readiness type: $probe")
         }
     }

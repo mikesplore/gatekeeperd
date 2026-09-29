@@ -524,7 +524,7 @@ fun Application.configureProjectSetupAdminRoutes() {
                     ?: return@put call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid source/runtime configuration")
                 val normalizedRepository = body.repository?.trim()?.takeIf { it.isNotEmpty() }
                 if (!validSetupDeployment(body, normalizedRepository)) {
-                    return@put call.respondError(HttpStatusCode.BadRequest, "invalid_deployment_configuration", "GitHub repository, ref, registry, image, tag, environment, or port is invalid")
+                    return@put call.respondError(HttpStatusCode.BadRequest, "invalid_deployment_configuration", "GitHub repository, ref, registry, image, tag, environment, or optional container port is invalid")
                 }
                 if (body.secretEnv.isNotEmpty()) {
                     return@put call.respondError(HttpStatusCode.BadRequest, "secrets_use_credentials_step", "Send application secrets through the credentials step")
@@ -822,7 +822,8 @@ private fun validSetupDeployment(body: CreateDeploymentRequest, repository: Stri
         (repository == null || body.gitRef.matches(Regex("^[A-Za-z0-9._/-]+$"))) &&
         body.imageName.matches(Regex("^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*$")) &&
         body.registry.matches(Regex("^(docker\\.io|[A-Za-z0-9.-]+(:[0-9]{1,5})?)$")) &&
-        body.imageTag.matches(Regex("^[A-Za-z0-9_.-]+$")) && body.environment.isNotBlank() && body.containerPort != null && body.containerPort in 1..65535 &&
+        body.imageTag.matches(Regex("^[A-Za-z0-9_.-]+$")) && body.environment.isNotBlank() &&
+        (body.containerPort == null || body.containerPort in 1..65535) &&
         (body.env.keys + body.secretEnv.keys).all { it.matches(Regex("[A-Za-z_][A-Za-z0-9_]*")) } &&
         body.volumes.all { it.hostPath.isNotBlank() && it.containerPath.isNotBlank() } &&
         (body.hostPort == null || body.hostPort in 1..65535)

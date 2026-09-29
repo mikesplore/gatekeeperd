@@ -114,16 +114,36 @@ object DeploymentApplicationService {
         true
     }
 
-    fun recordCandidateRuntime(id: UUID, containerName: String, hostPort: Int?, portMappings: Map<Int, Int> = emptyMap()): Boolean = transaction {
+    fun recordCandidateRuntime(id: UUID, containerName: String, hostPort: Int?, containerPort: Int?, portMappings: Map<Int, Int> = emptyMap()): Boolean = transaction {
         require(containerName.isNotBlank()) { "Candidate container name must not be blank" }
         require(hostPort == null || hostPort in 1..65535) { "Candidate host port must be between 1 and 65535" }
+        require(containerPort == null || containerPort in 1..65535) { "Candidate container port must be between 1 and 65535" }
         require(portMappings.all { (containerPort, mappedHostPort) -> containerPort in 1..65535 && mappedHostPort in 1..65535 }) { "Candidate port mapping is invalid" }
-        Deployments.update({ (Deployments.id eq id) and (Deployments.status eq DeploymentStatus.HEALTH_CHECKING) }) {
+        val deployment = Deployments.selectAll().where {
+            (Deployments.id eq id) and (Deployments.status eq DeploymentStatus.HEALTH_CHECKING)
+        }.singleOrNull() ?: return@transaction false
+        val updated = Deployments.update({ (Deployments.id eq id) and (Deployments.status eq DeploymentStatus.HEALTH_CHECKING) }) {
             it[Deployments.runtimeContainerName] = containerName
             it[Deployments.runtimeHostPort] = hostPort
             it[Deployments.runtimePortsJson] = kotlinx.serialization.json.Json.encodeToString(portMappings.mapKeys { it.key.toString() })
             it[updatedAt] = LocalDateTime.now()
         } == 1
+        if (!updated) return@transaction false
+        if (containerPort != null) {
+            val executionId = deployment[Deployments.executionId]
+            com.gatekeeper.db.tables.DeploymentExecutions.update({ com.gatekeeper.db.tables.DeploymentExecutions.id eq executionId }) {
+                it[com.gatekeeper.db.tables.DeploymentExecutions.containerPort] = containerPort
+            }
+            val configurationId = deployment[Deployments.configurationId]
+            com.gatekeeper.db.tables.DeploymentConfigurations.update({ com.gatekeeper.db.tables.DeploymentConfigurations.id eq configurationId }) {
+                it[com.gatekeeper.db.tables.DeploymentConfigurations.containerPort] = containerPort
+                it[com.gatekeeper.db.tables.DeploymentConfigurations.updatedAt] = LocalDateTime.now()
+            }
+            com.gatekeeper.db.tables.DeploymentJobs.update({ com.gatekeeper.db.tables.DeploymentJobs.id eq id }) {
+                it[com.gatekeeper.db.tables.DeploymentJobs.containerPort] = containerPort
+            }
+        }
+        true
     }
 
     fun recordCredentialReference(id: UUID, credentialId: UUID, version: Int): Boolean = transaction {
