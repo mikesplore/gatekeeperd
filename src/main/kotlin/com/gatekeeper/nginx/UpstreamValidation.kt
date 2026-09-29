@@ -26,10 +26,9 @@ fun extractConfiguredContainerName(containerName: String): String? {
 }
 
 /**
- * `DockerService` currently exposes ports as a human string like:
- * - "9921->8080/tcp, 443->8443/tcp"
- *
- * We treat the left-hand side of `->` as the *host* port.
+ * Docker port strings may use `->` (for example, `0.0.0.0:32768->9921/tcp`)
+ * or the compact `host:container/protocol` format returned by DockerService
+ * (for example, `32768:9921/tcp`). In both formats, return the published host port.
  */
 fun parsePublishedHostPorts(portsField: String): Set<Int> {
     if (portsField.isBlank()) return emptySet()
@@ -38,10 +37,12 @@ fun parsePublishedHostPorts(portsField: String): Set<Int> {
         .split(",")
         .map { it.trim() }
         .mapNotNull { mapping ->
-            val parts = mapping.split("->", limit = 2)
-            if (parts.size != 2) return@mapNotNull null
-            val hostPortPart = parts[0].substringBefore("/").trim()
-            hostPortPart.toIntOrNull()
+            val hostPortPart = when {
+                "->" in mapping -> mapping.substringBefore("->").substringAfterLast(":")
+                ":" in mapping -> mapping.substringBefore("/").substringBeforeLast(":").substringAfterLast(":")
+                else -> return@mapNotNull null
+            }
+            hostPortPart.trim().toIntOrNull()
         }
         .toSet()
 }
