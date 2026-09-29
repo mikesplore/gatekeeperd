@@ -280,7 +280,7 @@ Create a Scribed invoice for a service that does not already have one. Accepts `
 
 #### GET, PUT /api/admin/projects/{projectId}/services/{serviceId}/environment?environment={name}
 
-GET returns version metadata and the desired configuration's service and shared set references, with key names only. PUT accepts `{ "environment": "production", "values": { "KEY": "value" }, "sharedEnvironmentSetId": "<uuid>", "sharedEnvironmentSetVersion": 2 }`; both shared-reference fields may be null to unpin shared variables. It writes an encrypted immutable service version, saves the selected shared-set pin, and queues that service's deployment in one transaction. Values are write-only; the response contains the service set/version and deployment IDs.
+GET returns version metadata and the desired configuration's service and shared set references, with key names only. PUT accepts `{ "environment": "production", "values": { "KEY": "value" }, "sharedEnvironmentSetId": "<uuid>", "sharedEnvironmentSetVersion": 2 }`; both shared-reference fields may be null to unpin shared variables. It writes an encrypted immutable service version. If a runtime configuration exists, the endpoint saves the selected shared-set pin and queues that service's deployment in one transaction. Without a runtime configuration, it saves the version without queuing a deployment; the next runtime configuration uses the latest saved service version. Shared-set pinning requires a runtime configuration. Values are write-only; the response contains the service set/version and an empty deployment ID list when nothing was queued.
 
 #### GET /api/admin/projects/{projectId}/services/{serviceId}/active-deployment?environment={name}
 

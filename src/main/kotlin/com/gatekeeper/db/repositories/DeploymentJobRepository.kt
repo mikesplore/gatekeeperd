@@ -139,7 +139,13 @@ object DeploymentJobRepository {
         val row = DeploymentConfigurations.selectAll().where {
             (DeploymentConfigurations.projectId eq projectId) and (DeploymentConfigurations.serviceId eq serviceId)
         }.toList().firstOrNull { (it[DeploymentConfigurations.environment] ?: "production") == environment }
-            ?: return@transaction null
+        if (row == null) {
+            check(sharedEnvironmentSetId == null) {
+                "Configure the service runtime before importing shared environment variables"
+            }
+            val serviceSet = createSecretSetVersion(projectId, environment, values, actor, serviceId)
+            return@transaction EnvironmentDeploymentResult(serviceSet.id, serviceSet.version, emptyList())
+        }
         check(Services.selectAll().where { (Services.id eq serviceId) and (Services.projectId eq projectId) }.count() == 1L) {
             "Service does not belong to project"
         }
@@ -420,7 +426,7 @@ object DeploymentJobRepository {
         val serviceEnvironment = request.env + request.secretEnv
         val secretSet = serviceEnvironment.takeIf { it.isNotEmpty() }?.let { values ->
             createSecretSetVersion(projectId, environment, values, "admin", serviceId)
-        }
+        } ?: latestServiceSecretSet(projectId, serviceId, environment)
         DeploymentConfigurations.insert {
             it[DeploymentConfigurations.id] = id
             it[repository] = request.repository; it[gitRef] = request.gitRef; it[registry] = request.registry
@@ -1025,6 +1031,15 @@ object DeploymentJobRepository {
         }
         return SecretSetReference(id, nextVersion)
     }
+
+    private fun latestServiceSecretSet(projectId: UUID, serviceId: UUID, environment: String): SecretSetReference? =
+        ProjectSecretSetVersions.selectAll().where {
+            (ProjectSecretSetVersions.projectId eq projectId) and
+                (ProjectSecretSetVersions.serviceId eq serviceId) and
+                (ProjectSecretSetVersions.environment eq environment)
+        }.maxByOrNull { it[ProjectSecretSetVersions.version] }?.let {
+            SecretSetReference(it[ProjectSecretSetVersions.id], it[ProjectSecretSetVersions.version])
+        }
 
     fun find(id: UUID): DeploymentJobRecord? = transaction {
         DeploymentJobs.selectAll().where { DeploymentJobs.id eq id }.singleOrNull()?.toRecord()
