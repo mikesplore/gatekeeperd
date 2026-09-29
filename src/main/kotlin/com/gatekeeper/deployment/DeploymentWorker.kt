@@ -125,7 +125,7 @@ object DeploymentWorker {
                 val digest = docker.imageDigest(image)
                 DeploymentJobRepository.update(job.id, log = "Image digest: ${digest ?: "unavailable"}", imageDigest = digest)
                 if (job.network != "bridge" && job.createNetworkIfMissing) docker.createNetworkIfMissing(job.network)
-                candidateName = "deployment-${job.id}"
+                candidateName = deploymentContainerName(job.serviceName, job.id)
                 val imagePorts = docker.imageExposedTcpPorts(image)
                 val dynamicContainerPorts = imagePorts.ifEmpty { listOfNotNull(job.containerPort) }.toSet()
                 DeploymentJobRepository.update(
@@ -197,6 +197,17 @@ object DeploymentWorker {
         } finally {
             workspace.toFile().deleteRecursively()
         }
+    }
+
+    private fun deploymentContainerName(serviceName: String, deploymentId: UUID): String {
+        val normalizedServiceName = serviceName.lowercase()
+            .replace(Regex("[^a-z0-9_.-]+"), "-")
+            .trim('-', '.', '_')
+            .ifBlank { "service" }
+            .take(48)
+            .trimEnd('-', '.', '_')
+            .ifBlank { "service" }
+        return "$normalizedServiceName-${deploymentId.toString().take(8)}"
     }
 
     private fun cutover(job: DeploymentJobRecord, docker: DockerService, onRouteRollback: ((() -> Boolean)?) -> Unit) {

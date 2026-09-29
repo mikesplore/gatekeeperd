@@ -36,7 +36,8 @@ data class DeploymentJobRecord(
     val readinessProbeTimeoutMillis: Int = 1000,
     val secretSetId: UUID? = null,
     val secretSetVersion: Int? = null,
-    val serviceId: UUID
+    val serviceId: UUID,
+    val serviceName: String = "default"
 )
 
 object DeploymentJobRepository {
@@ -1232,6 +1233,8 @@ object DeploymentJobRepository {
     private fun ResultRow.toRecord(includeSecretEnv: Boolean = true): DeploymentJobRecord {
         val id = this[DeploymentJobs.id]
         val execution = DeploymentExecutions.selectAll().where { DeploymentExecutions.id eq id }.singleOrNull()
+        val serviceId = this[DeploymentJobs.serviceId] ?: defaultServiceId(this[DeploymentJobs.projectId])
+        val serviceName = Services.selectAll().where { Services.id eq serviceId }.singleOrNull()?.get(Services.name) ?: "default"
         return DeploymentJobRecord(
         this[DeploymentJobs.id], this[DeploymentJobs.repository], this[DeploymentJobs.gitRef], this[DeploymentJobs.registry],
         this[DeploymentJobs.imageName], this[DeploymentJobs.imageTag], this[DeploymentJobs.hostPort], this[DeploymentJobs.containerPort], this[DeploymentJobs.network], this[DeploymentJobs.restartPolicy], runCatching { Json.decodeFromString<Map<String, String>>(this[DeploymentJobs.envJson]) }.getOrDefault(emptyMap()), if (includeSecretEnv) this[DeploymentJobs.secretEnvEncrypted]?.let { Json.decodeFromString<Map<String, String>>(SecretValueCipher.decrypt(it)) }.orEmpty() else emptyMap(), runCatching { Json.decodeFromString<List<VolumeMount>>(this[DeploymentJobs.volumesJson]) }.getOrDefault(emptyList()), this[DeploymentJobs.createNetworkIfMissing], this[DeploymentJobs.status], this[DeploymentJobs.currentStep],
@@ -1239,7 +1242,8 @@ object DeploymentJobRepository {
         this[DeploymentJobs.createdAt], this[DeploymentJobs.startedAt], this[DeploymentJobs.completedAt], this[DeploymentJobs.updatedAt], this[DeploymentJobs.projectId], this[DeploymentJobs.triggerSource], this[DeploymentJobs.environment],
         this[DeploymentJobs.readinessType], this[DeploymentJobs.readinessTarget], this[DeploymentJobs.readinessTimeoutSeconds], this[DeploymentJobs.readinessIntervalSeconds], this[DeploymentJobs.readinessProbeTimeoutMillis],
         execution?.get(DeploymentExecutions.secretSetId), execution?.get(DeploymentExecutions.secretSetVersion),
-        this[DeploymentJobs.serviceId] ?: defaultServiceId(this[DeploymentJobs.projectId])
+        serviceId,
+        serviceName
         )
     }
 
