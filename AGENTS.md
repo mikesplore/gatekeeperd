@@ -103,7 +103,7 @@ Use a concise imperative commit message that describes the completed change.
 - `docs/nginx-client-gating.md` documents client-site gating and the nginx `auth_request` setup.
 - `docs/nginx-reverse-proxy.md` documents exposing Gatekeeperd itself behind nginx/SSL.
 - `docs/staging-deployment.md` documents VPS/container deployment.
-- `docs/backend-development-plan.md` is historical planning material; prefer current source and the other docs when they disagree.
+- `docs/README.md` and `docs/API.md` describe the current project/service model and supported API. Treat source and these docs as authoritative; do not rely on removed historical phase plans.
 
 ## Change guidance
 

@@ -10,6 +10,10 @@ Gatekeeperd is a **Ktor-based payment gating engine** for client projects on a V
 
 Project access status is separate from `blockReason`, which records why access is blocked (for example `manual`, `overdue`, or `payment_reversed`). Projects also track `deploymentMode`, `serviceMode`, and `lifecycleStatus` independently so a project can move from developer-hosted development to client-hosted production without losing payment or audit history.
 
+### Current project and service model
+
+A project is the durable customer-ownership and project-level access boundary; billing records may be linked to the project or to an individual service. A project can contain multiple named services. Each service has its own desired runtime configuration, environment and deployment history, active deployment, and optional domain/site. Service access can be managed independently while a project-level access block still applies across the project. The deployment and gateway flows select a service explicitly; APIs that omit `serviceId` use the project's `default` service where documented. See [API.md](API.md) for the current contract.
+
 PostgreSQL stores projects, payments, audit log, and admin users. Redis caches gate status (60s TTL). Paystack handles checkout and payment confirmation.
 
 Database startup now records migrations in Flyway's `flyway_schema_history`. Fresh databases are created from the single current-state migration `V1___current_schema.sql`. Fresh databases use `DB_MIGRATION_BASELINE_VERSION=0`; existing databases must use their current schema version so the current-state migration is not replayed. Future schema changes should be added as versioned migrations.
@@ -268,17 +272,4 @@ Details: [staging-deployment.md](staging-deployment.md)
 | [nginx-client-gating.md](nginx-client-gating.md) | Gate client apps behind nginx |
 | [nginx-reverse-proxy.md](nginx-reverse-proxy.md) | Expose gatekeeperd API behind nginx + SSL |
 | [staging-deployment.md](staging-deployment.md) | VPS deploy workflow |
-| [backend-development-plan.md](backend-development-plan.md) | Original phased build plan (historical) |
-
----
-
-## Phase status
-
-| Phase | Description | Status |
-|-------|-------------|--------|
-| 0 | Project setup, deps, infra | ✅ Done |
-| 1 | Docker integration, admin container API | ✅ Done |
-| 2 | Gate core (check, Redis, paywall, FAIL_MODE) | ✅ Done |
-| 3 | DB schema, JWT auth, admin CRUD | ✅ Done |
-| 4 | Paystack, webhooks, auto-blocker | ✅ Done |
-| 5 | nginx gating, self-service paywall, input validation | ✅ Done |
+| [deployment-pipeline.md](deployment-pipeline.md) | Deployment lifecycle and runtime behavior |

@@ -291,4 +291,3 @@ The current tests cover server authentication scaffolding and Docker/nginx helpe
 - [nginx client gating](nginx-client-gating.md)
 - [nginx reverse proxy](nginx-reverse-proxy.md)
 - [Staging deployment](staging-deployment.md)
-- [Backend development plan](backend-development-plan.md) — historical planning reference
