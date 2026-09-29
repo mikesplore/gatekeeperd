@@ -299,6 +299,20 @@ class NginxServiceTest {
     }
 
     @Test
+    fun `deployment only updates an already enabled managed nginx site`() {
+        val base = NginxConfigInspection(
+            slug = "mtaaniwatch", configPath = "/sites-available/mtaaniwatch",
+            enabledPath = "/sites-enabled/mtaaniwatch", available = true, enabled = true,
+            isSymlink = true, managed = true
+        )
+
+        assertTrue(base.canDeploymentCutoverUpdateRoute())
+        assertFalse(base.copy(enabled = false).canDeploymentCutoverUpdateRoute())
+        assertFalse(base.copy(available = false).canDeploymentCutoverUpdateRoute())
+        assertFalse(base.copy(managed = false).canDeploymentCutoverUpdateRoute())
+    }
+
+    @Test
     fun `different slugs can activate concurrently without crossing files or backups`() {
         val root = Files.createTempDirectory("gk-nginx-concurrency").toFile()
         val available = File(root, "sites-available").apply { mkdirs() }

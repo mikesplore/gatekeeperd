@@ -10,6 +10,7 @@ import com.gatekeeper.docker.CreateContainerRequest
 import com.gatekeeper.docker.DockerService
 import com.gatekeeper.docker.DockerCleanupService
 import com.gatekeeper.nginx.NginxService
+import com.gatekeeper.nginx.canDeploymentCutoverUpdateRoute
 import com.gatekeeper.db.repositories.SiteRepository
 import com.gatekeeper.integrations.GitHubAppClient
 import com.gatekeeper.security.SecretValueCipher
@@ -218,25 +219,29 @@ object DeploymentWorker {
         val previousDeployment = DeploymentApplicationService.activeRuntime(job.serviceId, job.environment)
         val previousContainer = previousDeployment?.name
         val changesProductionRoute = job.environment == "production"
-        val hasManagedSite = changesProductionRoute && SiteRepository.existsForService(job.serviceId)
+        val site = if (changesProductionRoute) SiteRepository.findByServiceId(job.serviceId) else null
+        val siteOwnerSlug = site?.projectSlug
+        val siteService = if (site != null && siteOwnerSlug != null) NginxService.configured() else null
+        val existingSiteConfig = if (siteService != null && siteOwnerSlug != null) siteService.inspectSite(siteOwnerSlug) else null
+        val hasEnabledManagedSite = existingSiteConfig?.canDeploymentCutoverUpdateRoute() == true
         var rollbackRoute: (() -> Boolean)? = null
-        if (hasManagedSite) {
-            val site = SiteRepository.findByServiceId(job.serviceId) ?: error("Managed site record missing for service ${job.serviceId}")
-            val ownerSlug = site.projectSlug ?: error("Managed site nginx slug is unavailable for site ${site.id}")
-            val siteService = NginxService.configured()
-            val previousConfig = siteService.inspectSite(ownerSlug).content
-            val containerPort = site.upstreamExplicitPort ?: job.containerPort
+        if (hasEnabledManagedSite) {
+            val managedSite = requireNotNull(site)
+            val ownerSlug = requireNotNull(siteOwnerSlug)
+            val activeSiteService = requireNotNull(siteService)
+            val previousConfig = existingSiteConfig.content
+            val containerPort = managedSite.upstreamExplicitPort ?: job.containerPort
                 ?: error("The image declares no TCP EXPOSE port, so Gatekeeperd could not infer an upstream for the managed site. Add the application's listening port to the image metadata with EXPOSE.")
             val hostPort = runtime.ports[containerPort]
                 ?: if (site.upstreamMode == com.gatekeeper.db.tables.UpstreamMode.EXPLICIT_PORT) runtime.hostPort
                     ?: error("Candidate runtime host port is missing")
                 else error("Candidate does not publish managed site container port $containerPort")
-            check(siteService.switchDeploymentUpstream(job.serviceId, ownerSlug, "127.0.0.1", containerPort, hostPort)) {
+            check(activeSiteService.switchDeploymentUpstream(job.serviceId, ownerSlug, "127.0.0.1", containerPort, hostPort)) {
                 "Gateway/site upstream cutover failed; previous runtime remains active"
             }
             rollbackRoute = {
-                val restored = previousConfig?.let { siteService.restoreSiteConfiguration(ownerSlug, it) } ?: false
-                if (restored) SiteRepository.restoreDeploymentUpstreamForSite(site) != null else false
+                val restored = previousConfig?.let { activeSiteService.restoreSiteConfiguration(ownerSlug, it) } ?: false
+                if (restored) SiteRepository.restoreDeploymentUpstreamForSite(managedSite) != null else false
             }
             onRouteRollback(rollbackRoute)
         }
@@ -272,7 +277,12 @@ object DeploymentWorker {
             rollbackRoute?.let { runCatching(it).onFailure { rollbackError -> logger.error("Unable to restore previous gateway route", rollbackError) } }
             throw error
         }
-        DeploymentJobRepository.update(job.id, step = "active", log = "Gateway switched to candidate; previous runtime retired", status = "succeeded")
+        DeploymentJobRepository.update(
+            job.id,
+            step = "active",
+            log = if (hasEnabledManagedSite) "Gateway switched to candidate; previous runtime retired" else "Deployment activated; Nginx site creation/activation remains a separate action",
+            status = "succeeded"
+        )
         DeploymentApplicationService.rollbackTargetId(job.id)?.let { targetId ->
             AuditRepository.write(null, "deployment_rollback_activated", "deployment-worker", "deployment=${job.id} rolled_back_to=$targetId")
         }

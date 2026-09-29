@@ -167,7 +167,7 @@ The project setup flow creates a durable project using only its name and require
 4. **Save desired domain/gateway state**: `PUT /api/admin/project-setup/projects/{projectId}/domain-gateway`
 5. **Deploy explicitly**: `POST /api/admin/project-setup/projects/{projectId}/deploy`
 
-The dashboard can resume setup using `GET /api/admin/project-setup/projects/{projectId}`. Secret values are write-only. A saved gateway draft is activated only after deployment readiness and nginx validation succeed.
+The dashboard can resume setup using `GET /api/admin/project-setup/projects/{projectId}`. Secret values are write-only. Saving a gateway draft does not create or enable an Nginx site. Deployments activate independently unless an enabled managed Nginx site already exists; create or enable a new site separately after deployment, when its TLS certificate is ready.
 
 ### Nginx enable wizard
 
