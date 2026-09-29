@@ -65,8 +65,13 @@ data class ServiceEnvironmentMetadataView(
     val projectId: String, val serviceId: String, val environment: String,
     val configuredSetId: String?, val configuredSetVersion: Int?,
     val configuredSharedSetId: String?, val configuredSharedSetVersion: Int?,
-    val versions: List<EnvironmentVersionView>, val values: String = "write-only"
+    val versions: List<EnvironmentVersionView>,
+    val effectiveVariables: List<EnvironmentVariableView>,
+    val values: String = "write-only"
 )
+
+@Serializable
+data class EnvironmentVariableView(val key: String, val source: String)
 
 @Serializable
 data class EnvironmentWriteRequest(
@@ -259,7 +264,8 @@ fun Application.configureServiceAdminRoutes() {
                     projectId.toString(), serviceId.toString(), environment,
                     metadata.configuredSetId?.toString(), metadata.configuredSetVersion,
                     metadata.configuredSharedSetId?.toString(), metadata.configuredSharedSetVersion,
-                    metadata.versions.map { it.toView() }
+                    metadata.versions.map { it.toView() },
+                    metadata.effectiveVariables.map { EnvironmentVariableView(it.key, it.source) }
                 ))
             }
 
@@ -292,6 +298,29 @@ fun Application.configureServiceAdminRoutes() {
                 call.respond(HttpStatusCode.Accepted, EnvironmentWriteResponse(
                     result.setId.toString(), result.version, result.deploymentIds.map(UUID::toString)
                 ))
+            }
+
+            delete("/api/admin/projects/{projectId}/services/{serviceId}/environment/{key}") {
+                val (projectId, serviceId) = call.serviceCoordinates() ?: return@delete
+                if (ServiceRepository.findByProjectAndId(projectId, serviceId) == null) {
+                    return@delete call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
+                }
+                val key = call.parameters["key"]
+                    ?: return@delete call.respondError(HttpStatusCode.BadRequest, "invalid_environment_key", "Environment variable name is required")
+                if (!key.matches(Regex("[A-Za-z_][A-Za-z0-9_]*"))) {
+                    return@delete call.respondError(HttpStatusCode.BadRequest, "invalid_environment_key", "Environment variable name is invalid")
+                }
+                val rawEnvironment = call.request.queryParameters["environment"]
+                val environment = if (rawEnvironment == null) "production" else normalizeEnvironment(rawEnvironment)
+                    ?: return@delete call.respondError(HttpStatusCode.BadRequest, "invalid_environment", "Environment name is invalid")
+                val actor = call.principal<JWTPrincipal>()?.payload?.subject ?: "admin"
+                val result = runCatching {
+                    DeploymentJobRepository.deleteServiceEnvironmentVariable(projectId, serviceId, environment, key, actor)
+                }.getOrElse { error ->
+                    return@delete call.respondError(HttpStatusCode.Conflict, "service_environment_delete_failed", error.message ?: "Service environment variable could not be deleted")
+                }
+                val response = EnvironmentWriteResponse(result.setId.toString(), result.version, result.deploymentIds.map(UUID::toString))
+                call.respond(if (result.deploymentIds.isEmpty()) HttpStatusCode.OK else HttpStatusCode.Accepted, response)
             }
 
             get("/api/admin/projects/{projectId}/services/{serviceId}/active-deployment") {

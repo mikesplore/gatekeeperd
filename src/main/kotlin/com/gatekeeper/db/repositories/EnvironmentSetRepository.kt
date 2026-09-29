@@ -38,10 +38,12 @@ object EnvironmentSetRepository {
         val configuredSetId: UUID?,
         val configuredSetVersion: Int?,
         val configuredSharedSetId: UUID?,
-        val configuredSharedSetVersion: Int?
+        val configuredSharedSetVersion: Int?,
+        val effectiveVariables: List<EffectiveVariable>
     )
 
     data class FingerprintedVariable(val key: String, val source: String, val fingerprint: String)
+    data class EffectiveVariable(val key: String, val source: String)
 
     data class ActiveDeploymentInspection(
         val deploymentId: UUID,
@@ -98,12 +100,38 @@ object EnvironmentSetRepository {
         }.toList().filter { it[DeploymentConfigurations.environment] == environment }
             .sortedByDescending { it[DeploymentConfigurations.serviceId] == serviceId }
         val configured = configurations.firstOrNull()
+        val configuredServiceValues = when {
+            configured == null -> versionRows.maxByOrNull { it[ProjectSecretSetVersions.version] }?.let { row ->
+                Json.decodeFromString<Map<String, String>>(SecretValueCipher.decrypt(row[ProjectSecretSetVersions.encryptedPayload]))
+            }.orEmpty()
+            configured[DeploymentConfigurations.secretSetId] != null -> readServiceValues(
+                configured[DeploymentConfigurations.secretSetId], configured[DeploymentConfigurations.secretSetVersion],
+                projectId, configured[DeploymentConfigurations.serviceId], environment
+            )
+            else -> {
+                val legacySecrets = configured[DeploymentConfigurations.secretEnvEncrypted]?.let {
+                    Json.decodeFromString<Map<String, String>>(SecretValueCipher.decrypt(it))
+                }.orEmpty()
+                Json.decodeFromString<Map<String, String>>(configured[DeploymentConfigurations.envJson]) + legacySecrets
+            }
+        }
+        val configuredSharedValues = configured?.let {
+            readSharedValues(
+                it[DeploymentConfigurations.sharedEnvironmentSetId], it[DeploymentConfigurations.sharedEnvironmentSetVersion],
+                projectId, environment
+            )
+        }.orEmpty()
+        val effectiveSources = buildMap {
+            configuredSharedValues.keys.forEach { put(it, "project_shared") }
+            configuredServiceValues.keys.forEach { put(it, "service") }
+        }.map { (key, source) -> EffectiveVariable(key, source) }.sortedBy { it.key }
         ServiceMetadata(
             versions,
             configured?.get(DeploymentConfigurations.secretSetId),
             configured?.get(DeploymentConfigurations.secretSetVersion),
             configured?.get(DeploymentConfigurations.sharedEnvironmentSetId),
-            configured?.get(DeploymentConfigurations.sharedEnvironmentSetVersion)
+            configured?.get(DeploymentConfigurations.sharedEnvironmentSetVersion),
+            effectiveSources
         )
     }
 

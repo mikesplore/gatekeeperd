@@ -136,23 +136,39 @@ object DeploymentJobRepository {
         sharedEnvironmentSetVersion: Int? = null
     ): EnvironmentDeploymentResult? = transaction {
         requireEnvironment(environment)
+        val service = Services.selectAll().where {
+            (Services.projectId eq projectId) and (Services.id eq serviceId)
+        }.singleOrNull() ?: error("Service does not belong to project")
         val row = DeploymentConfigurations.selectAll().where {
-            (DeploymentConfigurations.projectId eq projectId) and (DeploymentConfigurations.serviceId eq serviceId)
+            (DeploymentConfigurations.projectId eq projectId) and
+                ((DeploymentConfigurations.serviceId eq serviceId) or
+                    (if (service[Services.isDefault]) DeploymentConfigurations.serviceId.isNull() else org.jetbrains.exposed.sql.Op.FALSE))
         }.toList().firstOrNull { (it[DeploymentConfigurations.environment] ?: "production") == environment }
+        val previousValues = if (row == null) {
+            latestServiceSecretSet(projectId, serviceId, environment)?.let(::serviceEnvironmentValues).orEmpty()
+        } else {
+            val setId = row[DeploymentConfigurations.secretSetId]
+            val setVersion = row[DeploymentConfigurations.secretSetVersion]
+            if (setId != null) serviceEnvironmentValues(SecretSetReference(setId, setVersion ?: error("Service environment version is missing")))
+            else {
+                val legacySecrets = row[DeploymentConfigurations.secretEnvEncrypted]?.let {
+                    Json.decodeFromString<Map<String, String>>(SecretValueCipher.decrypt(it))
+                }.orEmpty()
+                Json.decodeFromString<Map<String, String>>(row[DeploymentConfigurations.envJson]) + legacySecrets
+            }
+        }
+        val updatedValues = previousValues + values
         if (row == null) {
             check(sharedEnvironmentSetId == null) {
                 "Configure the service runtime before importing shared environment variables"
             }
-            val serviceSet = createSecretSetVersion(projectId, environment, values, actor, serviceId)
+            val serviceSet = createSecretSetVersion(projectId, environment, updatedValues, actor, serviceId)
             return@transaction EnvironmentDeploymentResult(serviceSet.id, serviceSet.version, emptyList())
-        }
-        check(Services.selectAll().where { (Services.id eq serviceId) and (Services.projectId eq projectId) }.count() == 1L) {
-            "Service does not belong to project"
         }
         val sharedSet = sharedEnvironmentSet(
             projectId, environment, sharedEnvironmentSetId, sharedEnvironmentSetVersion
         )
-        val serviceSet = createSecretSetVersion(projectId, environment, values, actor, serviceId)
+        val serviceSet = createSecretSetVersion(projectId, environment, updatedValues, actor, serviceId)
         DeploymentConfigurations.update({ DeploymentConfigurations.id eq row[DeploymentConfigurations.id] }) {
             it[DeploymentConfigurations.serviceId] = serviceId
             it[DeploymentConfigurations.registry] = registry ?: row[DeploymentConfigurations.registry]
@@ -171,6 +187,63 @@ object DeploymentJobRepository {
         }
         val updated = DeploymentConfigurations.selectAll().where { DeploymentConfigurations.id eq row[DeploymentConfigurations.id] }.single()
         val request = requestFromConfiguration(updated, "service_environment_update", serviceId)
+        val deploymentId = create(request, serviceSet)
+        EnvironmentDeploymentResult(serviceSet.id, serviceSet.version, listOf(deploymentId))
+    }
+
+    /** Removes one service-owned key while preserving the other encrypted keys and queuing a deployment when configured. */
+    fun deleteServiceEnvironmentVariable(
+        projectId: UUID,
+        serviceId: UUID,
+        environment: String,
+        key: String,
+        actor: String
+    ): EnvironmentDeploymentResult = transaction {
+        requireEnvironment(environment)
+        val service = Services.selectAll().where {
+            (Services.id eq serviceId) and (Services.projectId eq projectId)
+        }.singleOrNull() ?: error("Service does not belong to project")
+        val row = DeploymentConfigurations.selectAll().where {
+            (DeploymentConfigurations.projectId eq projectId) and
+                ((DeploymentConfigurations.serviceId eq serviceId) or
+                    (if (service[Services.isDefault]) DeploymentConfigurations.serviceId.isNull() else org.jetbrains.exposed.sql.Op.FALSE))
+        }.toList().firstOrNull { (it[DeploymentConfigurations.environment] ?: "production") == environment }
+        val currentValues = if (row == null) {
+            val currentSet = latestServiceSecretSet(projectId, serviceId, environment)
+                ?: error("Service environment variable $key was not found")
+            serviceEnvironmentValues(currentSet)
+        } else {
+            val setId = row[DeploymentConfigurations.secretSetId]
+            val setVersion = row[DeploymentConfigurations.secretSetVersion]
+            if (setId != null) serviceEnvironmentValues(SecretSetReference(setId, setVersion ?: error("Service environment version is missing")))
+            else {
+                val legacySecrets = row[DeploymentConfigurations.secretEnvEncrypted]?.let {
+                    Json.decodeFromString<Map<String, String>>(SecretValueCipher.decrypt(it))
+                }.orEmpty()
+                Json.decodeFromString<Map<String, String>>(row[DeploymentConfigurations.envJson]) + legacySecrets
+            }
+        }
+        check(key in currentValues) { "Service environment variable $key was not found; shared variables are managed in project settings" }
+        val updatedValues = currentValues - key
+        val serviceSet = createSecretSetVersion(projectId, environment, updatedValues, actor, serviceId)
+        if (row == null) return@transaction EnvironmentDeploymentResult(serviceSet.id, serviceSet.version, emptyList())
+
+        DeploymentConfigurations.update({ DeploymentConfigurations.id eq row[DeploymentConfigurations.id] }) {
+            it[DeploymentConfigurations.serviceId] = serviceId
+            it[DeploymentConfigurations.secretSetId] = serviceSet.id
+            it[DeploymentConfigurations.secretSetVersion] = serviceSet.version
+            it[DeploymentConfigurations.envJson] = "{}"
+            it[DeploymentConfigurations.secretEnvEncrypted] = null
+            it[DeploymentConfigurations.updatedAt] = LocalDateTime.now()
+        }
+        DeploymentJobs.update({ DeploymentJobs.id eq row[DeploymentConfigurations.id] }) {
+            it[DeploymentJobs.serviceId] = serviceId
+            it[DeploymentJobs.updatedAt] = LocalDateTime.now()
+        }
+        val updated = DeploymentConfigurations.selectAll().where {
+            DeploymentConfigurations.id eq row[DeploymentConfigurations.id]
+        }.single()
+        val request = requestFromConfiguration(updated, "service_environment_delete", serviceId)
         val deploymentId = create(request, serviceSet)
         EnvironmentDeploymentResult(serviceSet.id, serviceSet.version, listOf(deploymentId))
     }
@@ -423,7 +496,9 @@ object DeploymentJobRepository {
         val sharedSet = sharedEnvironmentSet(
             projectId, environment, request.sharedEnvironmentSetId?.let(UUID::fromString), request.sharedEnvironmentSetVersion
         )
-        val serviceEnvironment = request.env + request.secretEnv
+        val stagedServiceEnvironment = latestServiceSecretSet(projectId, serviceId, environment)
+            ?.let(::serviceEnvironmentValues).orEmpty()
+        val serviceEnvironment = stagedServiceEnvironment + request.env + request.secretEnv
         val secretSet = serviceEnvironment.takeIf { it.isNotEmpty() }?.let { values ->
             createSecretSetVersion(projectId, environment, values, "admin", serviceId)
         } ?: latestServiceSecretSet(projectId, serviceId, environment)
@@ -592,7 +667,7 @@ object DeploymentJobRepository {
         }
         val environmentValuesChanged = request.env != null || request.secretEnv != null || environmentChanged
         val newServiceValues = when {
-            request.env != null -> request.env + (request.secretEnv ?: emptyMap())
+            request.env != null -> currentServiceValues + request.env + (request.secretEnv ?: emptyMap())
             request.secretEnv != null -> currentServiceValues + request.secretEnv
             else -> currentServiceValues
         }
@@ -1024,10 +1099,16 @@ object DeploymentJobRepository {
         serviceId: UUID = defaultServiceId(projectId)
     ): SecretSetReference {
         check(SecretValueCipher.isConfigured()) { "Deployment secret encryption is not configured" }
+        val isDefaultService = Services.selectAll().where {
+            (Services.id eq serviceId) and (Services.projectId eq projectId)
+        }.singleOrNull()?.get(Services.isDefault) == true
         val nextVersion = (ProjectSecretSetVersions.selectAll().where {
-            (ProjectSecretSetVersions.serviceId eq serviceId) and
+            (ProjectSecretSetVersions.projectId eq projectId) and
                 (ProjectSecretSetVersions.environment eq environment)
-        }.map { it[ProjectSecretSetVersions.version] }.maxOrNull() ?: 0) + 1
+        }.toList().filter {
+            it[ProjectSecretSetVersions.serviceId] == serviceId ||
+                (isDefaultService && it[ProjectSecretSetVersions.serviceId] == null)
+        }.maxOfOrNull { it[ProjectSecretSetVersions.version] } ?: 0) + 1
         val id = UUID.randomUUID()
         ProjectSecretSetVersions.insert {
             it[ProjectSecretSetVersions.id] = id
@@ -1042,14 +1123,20 @@ object DeploymentJobRepository {
         return SecretSetReference(id, nextVersion)
     }
 
-    private fun latestServiceSecretSet(projectId: UUID, serviceId: UUID, environment: String): SecretSetReference? =
-        ProjectSecretSetVersions.selectAll().where {
+    private fun latestServiceSecretSet(projectId: UUID, serviceId: UUID, environment: String): SecretSetReference? {
+        val isDefaultService = Services.selectAll().where {
+            (Services.id eq serviceId) and (Services.projectId eq projectId)
+        }.singleOrNull()?.get(Services.isDefault) == true
+        return ProjectSecretSetVersions.selectAll().where {
             (ProjectSecretSetVersions.projectId eq projectId) and
-                (ProjectSecretSetVersions.serviceId eq serviceId) and
                 (ProjectSecretSetVersions.environment eq environment)
+        }.toList().filter {
+            it[ProjectSecretSetVersions.serviceId] == serviceId ||
+                (isDefaultService && it[ProjectSecretSetVersions.serviceId] == null)
         }.maxByOrNull { it[ProjectSecretSetVersions.version] }?.let {
             SecretSetReference(it[ProjectSecretSetVersions.id], it[ProjectSecretSetVersions.version])
         }
+    }
 
     fun find(id: UUID): DeploymentJobRecord? = transaction {
         DeploymentJobs.selectAll().where { DeploymentJobs.id eq id }.singleOrNull()?.toRecord()
