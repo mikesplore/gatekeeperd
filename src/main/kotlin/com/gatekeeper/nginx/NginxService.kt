@@ -141,15 +141,90 @@ class NginxService(
         }
     }
 
-    /** Reads every non-backup file in sites-available and classifies it without mutating it. */
+    /** Reads all non-backup sites-available files plus enabled-only files and classifies them without mutation. */
     fun classifyAvailableConfigs(): List<ClassifiedNginxConfig> =
-        File(sitesAvailablePath).listFiles()
-            .orEmpty()
-            .filter { it.isFile && !it.name.startsWith(".") && !it.name.contains(".bak-") }
+        (listConfigFiles(File(sitesAvailablePath)) + listConfigFiles(File(sitesEnabledPath)))
+            .filter { it.isFile || Files.isSymbolicLink(it.toPath()) }
+            .distinctBy { it.name }
+            .filterNot { it.name.startsWith(".") || it.name.contains(".bak-") }
             .sortedBy { it.name }
-            .mapNotNull { file ->
-                runCatching { classifyConfig(file.name, file.readText()) }.getOrNull()
+            .mapNotNull { listedFile ->
+                val availableFile = File(sitesAvailablePath, listedFile.name).takeIf { it.isFile }
+                val enabledFile = File(sitesEnabledPath, listedFile.name).takeIf { it.isFile || Files.isSymbolicLink(it.toPath()) }
+                val source = availableFile ?: enabledFile ?: return@mapNotNull null
+                val content = try {
+                    source.readText()
+                } catch (error: Exception) {
+                    throw IllegalStateException("Unable to inspect nginx config '${source.name}'", error)
+                }
+                val enabledContent = if (enabledFile != null && enabledFile.absolutePath != source.absolutePath) {
+                    try { enabledFile.readText() } catch (error: Exception) {
+                        throw IllegalStateException("Unable to inspect enabled nginx config '${enabledFile.name}'", error)
+                    }
+                } else null
+                val classification = classifyConfig(listedFile.name, content)
+                if (enabledContent == null) classification else {
+                    val enabledClassification = classifyConfig(listedFile.name, enabledContent)
+                    classification.copy(
+                        serverNames = (classification.serverNames + enabledClassification.serverNames).distinct(),
+                        listenPorts = (classification.listenPorts + enabledClassification.listenPorts).distinct().sorted(),
+                        projectId = classification.projectId ?: enabledClassification.projectId,
+                        serviceId = classification.serviceId ?: enabledClassification.serviceId,
+                        siteId = classification.siteId ?: enabledClassification.siteId,
+                        classification = when {
+                            classification.classification == NginxConfigClassification.SELF || enabledClassification.classification == NginxConfigClassification.SELF -> NginxConfigClassification.SELF
+                            classification.classification == NginxConfigClassification.GATEKEEPER_MANAGED || enabledClassification.classification == NginxConfigClassification.GATEKEEPER_MANAGED -> NginxConfigClassification.GATEKEEPER_MANAGED
+                            else -> NginxConfigClassification.MANUAL
+                        }
+                    )
+                }
             }
+
+    private fun listConfigFiles(directory: File): List<File> {
+        if (!directory.exists()) return emptyList()
+        require(directory.isDirectory) { "Nginx config path '${directory.absolutePath}' is not a directory" }
+        return directory.listFiles()?.toList()
+            ?: error("Unable to list nginx config directory '${directory.absolutePath}'")
+    }
+
+    fun findDomainConflicts(configContent: String, targetFilename: String): List<NginxDomainConflict> {
+        val candidate = classifyConfig(targetFilename, configContent)
+        val candidatePorts = candidate.listenPorts
+        if (candidate.classification == NginxConfigClassification.SELF) {
+            return listOf(NginxDomainConflict(
+                filename = null,
+                classification = NginxConfigClassification.SELF,
+                domains = candidate.serverNames,
+                listenPorts = candidate.listenPorts,
+                matchingDomains = candidate.serverNames.filter(selfDomainExclusion::excludesDomain),
+                matchingPorts = candidatePorts,
+                linkedToRequestingSite = false
+            ))
+        }
+
+        return classifyAvailableConfigs().mapNotNull { existing ->
+            val linked = candidate.siteId != null && candidate.siteId == existing.siteId
+            if (existing.filename == targetFilename && linked &&
+                existing.classification == NginxConfigClassification.GATEKEEPER_MANAGED) return@mapNotNull null
+
+            val matchingPorts = candidatePorts.intersect(existing.listenPorts.toSet()).sorted()
+            if (matchingPorts.isEmpty()) return@mapNotNull null
+            val matchingDomains = candidate.serverNames.filter { candidateName ->
+                existing.serverNames.any { existingName -> serverNamePatternsOverlap(candidateName, existingName) }
+            }.distinct()
+            if (matchingDomains.isEmpty()) return@mapNotNull null
+
+            NginxDomainConflict(
+                filename = existing.filename,
+                classification = existing.classification,
+                domains = existing.serverNames,
+                listenPorts = existing.listenPorts,
+                matchingDomains = matchingDomains,
+                matchingPorts = matchingPorts,
+                linkedToRequestingSite = linked
+            )
+        }.sortedBy { it.filename }
+    }
 
     private fun classifyConfig(filename: String, content: String): ClassifiedNginxConfig {
         val serverNames = Regex("(?m)^\\s*server_name\\s+([^;]+);")
@@ -159,8 +234,8 @@ class NginxService(
             .filter { it.isNotBlank() && it != "_" }
             .distinct()
             .toList()
-        val listenPorts = Regex("(?m)^\\s*listen\\s+([^;]+);")
-            .findAll(content)
+        val listenDirectives = Regex("(?m)^\\s*listen\\s+([^;]+);").findAll(content).toList()
+        val parsedListenPorts = listenDirectives
             .mapNotNull { match ->
                 val address = match.groupValues[1].trim().split(Regex("\\s+")).firstOrNull().orEmpty()
                 Regex("(?:^|:)(\\d+)$").find(address)?.groupValues?.get(1)?.toIntOrNull()
@@ -169,12 +244,46 @@ class NginxService(
             .distinct()
             .sorted()
             .toList()
+        val listenPorts = if (listenDirectives.isEmpty()) listOf(80) else parsedListenPorts
+        val identity = parseSiteIdentityMarker(content)
+        val serviceId = Regex("(?m)^# gatekeeperd:service_id:([0-9a-fA-F-]{36})\\s*$")
+            .find(content)?.groupValues?.get(1)?.let { runCatching { java.util.UUID.fromString(it) }.getOrNull() }
         val classification = when {
             selfDomainExclusion.excludesConfig(content) -> NginxConfigClassification.SELF
-            parseSiteIdentityMarker(content).present -> NginxConfigClassification.GATEKEEPER_MANAGED
+            identity.present -> NginxConfigClassification.GATEKEEPER_MANAGED
             else -> NginxConfigClassification.MANUAL
         }
-        return ClassifiedNginxConfig(filename, serverNames, listenPorts, classification)
+        return ClassifiedNginxConfig(
+            filename = filename,
+            serverNames = serverNames,
+            listenPorts = listenPorts,
+            classification = classification,
+            projectId = identity.projectId?.toString(),
+            serviceId = serviceId?.toString(),
+            siteId = identity.siteId?.toString()
+        )
+    }
+
+    private fun serverNamePatternsOverlap(first: String, second: String): Boolean {
+        val a = first.trim().trimEnd('.').lowercase()
+        val b = second.trim().trimEnd('.').lowercase()
+        if (a.startsWith("~") || b.startsWith("~")) return true
+        if (serverNamePatternMatches(a, b) || serverNamePatternMatches(b, a)) return true
+        val aWildcardBase = a.removePrefix("*.").removePrefix(".")
+        val bWildcardBase = b.removePrefix("*.").removePrefix(".")
+        val aWildcard = a.startsWith("*.") || a.startsWith(".")
+        val bWildcard = b.startsWith("*.") || b.startsWith(".")
+        return aWildcard && bWildcard && (
+            aWildcardBase == bWildcardBase ||
+                aWildcardBase.endsWith(".$bWildcardBase") ||
+                bWildcardBase.endsWith(".$aWildcardBase")
+            )
+    }
+
+    private fun serverNamePatternMatches(pattern: String, hostname: String): Boolean = when {
+        pattern.startsWith("*.") -> hostname.endsWith(pattern.removePrefix("*").let { ".$it" })
+        pattern.startsWith(".") -> hostname == pattern.removePrefix(".") || hostname.endsWith(pattern)
+        else -> pattern == hostname
     }
 
     fun removeSiteArtifacts(site: SiteRepository.SiteRecord): Boolean {
@@ -533,12 +642,13 @@ class NginxService(
     }
 
     fun enableProject(slug: String, configContent: String): Boolean {
-        if (selfDomainExclusion.excludesConfig(configContent)) {
-            logger.warn("Refusing to manage nginx site $slug because it claims a Gatekeeperd self domain")
-            return false
-        }
-        return DistributedLock.withLock("nginx-site:$slug") {
+        return DistributedLock.withLock("nginx-domain-configs") {
           try {
+            val conflicts = findDomainConflicts(configContent, slug)
+            if (conflicts.isNotEmpty()) {
+                logger.warn("Refusing to enable nginx site $slug because it conflicts with ${conflicts.joinToString { it.filename ?: "Gatekeeperd self domain" }}")
+                return@withLock false
+            }
             val availableFile = File("$sitesAvailablePath/$slug")
             val enabledFile = File("$sitesEnabledPath/$slug")
             if (isExcluded(availableFile, enabledFile)) {

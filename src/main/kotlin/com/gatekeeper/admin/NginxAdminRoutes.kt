@@ -435,6 +435,14 @@ fun Application.configureNginxAdminRoutes() {
                             sslCertificatePath = plan.resolvedCertificate?.certificatePath,
                             sslCertificateKeyPath = plan.resolvedCertificate?.privateKeyPath
                         )
+                        val conflicts = runCatching { nginxService.findDomainConflicts(config, slug) }.getOrElse { error ->
+                            call.respondError(HttpStatusCode.InternalServerError, "nginx_config_scan_failed", error.message ?: "Unable to inspect existing nginx configs")
+                            return@post
+                        }
+                        if (conflicts.isNotEmpty()) {
+                            call.respondNginxDomainConflicts(conflicts)
+                            return@post
+                        }
 
                         call.respond(
                             NginxEnableResponse(
@@ -645,8 +653,21 @@ fun Application.configureNginxAdminRoutes() {
                 }
 
                 val enabledSlug = siteToPersist?.slug ?: slug
+                val conflicts = runCatching { nginxService.findDomainConflicts(config, enabledSlug) }.getOrElse { error ->
+                    call.respondError(HttpStatusCode.InternalServerError, "nginx_config_scan_failed", error.message ?: "Unable to inspect existing nginx configs")
+                    return@post
+                }
+                if (conflicts.isNotEmpty()) {
+                    call.respondNginxDomainConflicts(conflicts)
+                    return@post
+                }
                 val enabled = nginxService.enableProject(enabledSlug, config)
                 if (!enabled) {
+                    val racedConflicts = runCatching { nginxService.findDomainConflicts(config, enabledSlug) }.getOrNull().orEmpty()
+                    if (racedConflicts.isNotEmpty()) {
+                        call.respondNginxDomainConflicts(racedConflicts)
+                        return@post
+                    }
                     call.respondError(
                         HttpStatusCode.UnprocessableEntity,
                         "nginx_error",

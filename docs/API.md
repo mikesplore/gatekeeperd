@@ -684,6 +684,7 @@ Generate and enable an nginx site config for a project. Validates that the proje
 - If Docker is unavailable or the project doesn't encode a container name, Gatekeeper falls back to a fast TCP connect probe on `127.0.0.1:{port}`.
 - Creates a file in `sites-available/{slug}` and a symlink in `sites-enabled/{slug}`.
 - Runs `nginx -t` and `systemctl reload nginx`. If reload fails, the site is disabled and an error is returned.
+- Before validation or creation, scans all available and enabled nginx config files for overlapping `server_name` patterns on a shared listen port. HTTP `409` errors identify an existing manual config (`nginx_manual_config_conflict`), an unlinked Gatekeeper config (`nginx_stale_managed_config_conflict`), an already linked Gatekeeper config (`nginx_managed_config_conflict`), or a protected self-domain conflict (`nginx_self_domain_conflict`). The response `data.conflicts` lists the filename, classification, domains, and overlapping ports.
 - The generated config follows the standard gatekeeperd pattern with `auth_request`, paywall named location, and `/api/gate/` bypass.
 - The upstream protocol defaults to HTTP. Use `upstreamScheme: "https"` only when the application itself serves HTTPS.
 

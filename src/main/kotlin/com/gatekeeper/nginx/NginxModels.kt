@@ -58,7 +58,21 @@ data class ClassifiedNginxConfig(
     val filename: String,
     val serverNames: List<String>,
     val listenPorts: List<Int>,
-    val classification: NginxConfigClassification
+    val classification: NginxConfigClassification,
+    val projectId: String? = null,
+    val serviceId: String? = null,
+    val siteId: String? = null
+)
+
+@Serializable
+data class NginxDomainConflict(
+    val filename: String?,
+    val classification: NginxConfigClassification,
+    val domains: List<String>,
+    val listenPorts: List<Int>,
+    val matchingDomains: List<String>,
+    val matchingPorts: List<Int>,
+    val linkedToRequestingSite: Boolean
 )
 
 @Serializable

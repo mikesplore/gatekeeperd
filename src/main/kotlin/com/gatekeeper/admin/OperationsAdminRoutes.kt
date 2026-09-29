@@ -285,7 +285,23 @@ fun Application.configureOperationsAdminRoutes() {
                     gateEnabled = updated.gateEnabled, bypassPaths = updated.bypassPaths
                 ))
                 val siteSlug = updated.projectSlug ?: slug
-                if (!nginx.enableProject(siteSlug, config)) { call.respondError(HttpStatusCode.UnprocessableEntity, "nginx_error", "Validation or activation failed; previous configuration was preserved"); return@patch }
+                val conflicts = runCatching { nginx.findDomainConflicts(config, siteSlug) }.getOrElse { error ->
+                    call.respondError(HttpStatusCode.InternalServerError, "nginx_config_scan_failed", error.message ?: "Unable to inspect existing nginx configs")
+                    return@patch
+                }
+                if (conflicts.isNotEmpty()) {
+                    call.respondNginxDomainConflicts(conflicts)
+                    return@patch
+                }
+                if (!nginx.enableProject(siteSlug, config)) {
+                    val racedConflicts = runCatching { nginx.findDomainConflicts(config, siteSlug) }.getOrNull().orEmpty()
+                    if (racedConflicts.isNotEmpty()) {
+                        call.respondNginxDomainConflicts(racedConflicts)
+                        return@patch
+                    }
+                    call.respondError(HttpStatusCode.UnprocessableEntity, "nginx_error", "Validation or activation failed; previous configuration was preserved")
+                    return@patch
+                }
                 val responseSite = SiteRepository.findByProjectSlug(siteSlug) ?: SiteRepository.findByDomain(siteSlug) ?: updated
                 call.respond(withDashboardDocker(listOf(responseSite)) { docker -> dashboardSite(responseSite, docker) })
             }
