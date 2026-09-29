@@ -18,7 +18,7 @@ import org.jetbrains.exposed.sql.transactions.transaction
 import java.time.LocalDateTime
 import java.util.UUID
 
-/** Environment metadata readers. Plaintext values are decrypted only in memory and never returned. */
+/** Environment metadata readers. Values are returned only for the authenticated service editor response. */
 object EnvironmentSetRepository {
     data class VersionMetadata(
         val id: UUID,
@@ -33,17 +33,9 @@ object EnvironmentSetRepository {
         val latest: VersionMetadata? get() = versions.maxByOrNull { it.version }
     }
 
-    data class ServiceMetadata(
-        val versions: List<VersionMetadata>,
-        val configuredSetId: UUID?,
-        val configuredSetVersion: Int?,
-        val configuredSharedSetId: UUID?,
-        val configuredSharedSetVersion: Int?,
-        val effectiveVariables: List<EffectiveVariable>
-    )
+    data class ServiceMetadata(val effectiveValues: Map<String, String>)
 
     data class FingerprintedVariable(val key: String, val source: String, val fingerprint: String)
-    data class EffectiveVariable(val key: String, val source: String)
 
     data class ActiveDeploymentInspection(
         val deploymentId: UUID,
@@ -87,13 +79,6 @@ object EnvironmentSetRepository {
             it[ProjectSecretSetVersions.serviceId] == serviceId ||
                 (service[Services.isDefault] && it[ProjectSecretSetVersions.serviceId] == null)
         }
-        val versions = versionRows.map { row ->
-            metadata(
-                row[ProjectSecretSetVersions.id], row[ProjectSecretSetVersions.version],
-                row[ProjectSecretSetVersions.environment], row[ProjectSecretSetVersions.encryptedPayload],
-                row[ProjectSecretSetVersions.createdAt], row[ProjectSecretSetVersions.createdBy]
-            )
-        }.sortedByDescending { it.version }
         val configurations = DeploymentConfigurations.selectAll().where {
             (DeploymentConfigurations.projectId eq projectId) and
                 ((DeploymentConfigurations.serviceId eq serviceId) or DeploymentConfigurations.serviceId.isNull())
@@ -121,18 +106,7 @@ object EnvironmentSetRepository {
                 projectId, environment
             )
         }.orEmpty()
-        val effectiveSources = buildMap {
-            configuredSharedValues.keys.forEach { put(it, "project_shared") }
-            configuredServiceValues.keys.forEach { put(it, "service") }
-        }.map { (key, source) -> EffectiveVariable(key, source) }.sortedBy { it.key }
-        ServiceMetadata(
-            versions,
-            configured?.get(DeploymentConfigurations.secretSetId),
-            configured?.get(DeploymentConfigurations.secretSetVersion),
-            configured?.get(DeploymentConfigurations.sharedEnvironmentSetId),
-            configured?.get(DeploymentConfigurations.sharedEnvironmentSetVersion),
-            effectiveSources
-        )
+        ServiceMetadata(configuredSharedValues + configuredServiceValues)
     }
 
     fun activeDeployment(serviceId: UUID, environment: String): ActiveDeploymentInspection? = transaction {

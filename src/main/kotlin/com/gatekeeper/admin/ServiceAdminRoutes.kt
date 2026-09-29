@@ -7,8 +7,6 @@ import com.gatekeeper.db.repositories.ProjectRepository
 import com.gatekeeper.db.repositories.ServiceRepository
 import com.gatekeeper.db.repositories.ProjectAdjustmentRepository
 import com.gatekeeper.db.repositories.AuditRepository
-import com.gatekeeper.config.AppConfig
-import com.gatekeeper.docker.DockerService
 import com.gatekeeper.db.tables.AdjustmentType
 import com.gatekeeper.db.tables.AccessBlockReason
 import com.gatekeeper.integrations.ScribedIntegrationClient
@@ -65,27 +63,21 @@ data class SharedEnvironmentMetadataView(
 @Serializable
 data class ServiceEnvironmentMetadataView(
     val projectId: String, val serviceId: String, val environment: String,
-    val configuredSetId: String?, val configuredSetVersion: Int?,
-    val configuredSharedSetId: String?, val configuredSharedSetVersion: Int?,
-    val versions: List<EnvironmentVersionView>,
-    val effectiveVariables: List<EnvironmentVariableView>,
-    val values: String = "write-only"
+    val effectiveValues: Map<String, String>
 )
-
-@Serializable
-data class EnvironmentVariableView(val key: String, val source: String)
 
 @Serializable
 data class EnvironmentWriteRequest(
     val environment: String = "production",
     val values: Map<String, String>,
+    val replaceExisting: Boolean = false,
     val sharedEnvironmentSetId: String? = null,
     val sharedEnvironmentSetVersion: Int? = null
 )
 
 @Serializable
 data class EnvironmentWriteResponse(
-    val setId: String, val version: Int, val deploymentIds: List<String>, val values: String = "write-only"
+    val deploymentIds: List<String>
 )
 
 @Serializable
@@ -97,13 +89,8 @@ data class ActiveDeploymentInspectionView(
     val imageName: String, val imageTag: String, val imageDigest: String?, val commitSha: String?, val activeAt: String?,
     val sharedSetId: String?, val sharedSetVersion: Int?, val serviceSetId: String?, val serviceSetVersion: Int?,
     val variables: List<FingerprintedEnvironmentVariableView>,
-    val runtimeVariables: List<RuntimeEnvironmentVariableView>? = null,
-    val runtimeEnvironmentStatus: String = "unavailable",
     val fingerprintAlgorithm: String = "HMAC-SHA-256"
 )
-
-@Serializable
-data class RuntimeEnvironmentVariableView(val key: String, val value: String)
 
 fun Application.configureServiceAdminRoutes() {
     routing {
@@ -268,11 +255,7 @@ fun Application.configureServiceAdminRoutes() {
                     ?: return@get call.respondError(HttpStatusCode.BadRequest, "invalid_environment", "Environment name is invalid")
                 val metadata = EnvironmentSetRepository.serviceMetadata(projectId, serviceId, environment)!!
                 call.respond(ServiceEnvironmentMetadataView(
-                    projectId.toString(), serviceId.toString(), environment,
-                    metadata.configuredSetId?.toString(), metadata.configuredSetVersion,
-                    metadata.configuredSharedSetId?.toString(), metadata.configuredSharedSetVersion,
-                    metadata.versions.map { it.toView() },
-                    metadata.effectiveVariables.map { EnvironmentVariableView(it.key, it.source) }
+                    projectId.toString(), serviceId.toString(), environment, metadata.effectiveValues
                 ))
             }
 
@@ -296,6 +279,7 @@ fun Application.configureServiceAdminRoutes() {
                     }
                     DeploymentJobRepository.updateServiceEnvironmentAndDeploy(
                         projectId, serviceId, environment, body.values, actor,
+                        replaceExisting = body.replaceExisting,
                         sharedEnvironmentSetId = sharedId,
                         sharedEnvironmentSetVersion = body.sharedEnvironmentSetVersion
                     )
@@ -303,31 +287,8 @@ fun Application.configureServiceAdminRoutes() {
                     return@put call.respondError(HttpStatusCode.Conflict, "service_environment_update_failed", error.message ?: "Service environment could not be saved")
                 } ?: return@put call.respondError(HttpStatusCode.Conflict, "source_runtime_required", "Save this service's source/runtime configuration before editing its environment")
                 call.respond(HttpStatusCode.Accepted, EnvironmentWriteResponse(
-                    result.setId.toString(), result.version, result.deploymentIds.map(UUID::toString)
+                    result.deploymentIds.map(UUID::toString)
                 ))
-            }
-
-            delete("/api/admin/projects/{projectId}/services/{serviceId}/environment/{key}") {
-                val (projectId, serviceId) = call.serviceCoordinates() ?: return@delete
-                if (ServiceRepository.findByProjectAndId(projectId, serviceId) == null) {
-                    return@delete call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
-                }
-                val key = call.parameters["key"]
-                    ?: return@delete call.respondError(HttpStatusCode.BadRequest, "invalid_environment_key", "Environment variable name is required")
-                if (!key.matches(Regex("[A-Za-z_][A-Za-z0-9_]*"))) {
-                    return@delete call.respondError(HttpStatusCode.BadRequest, "invalid_environment_key", "Environment variable name is invalid")
-                }
-                val rawEnvironment = call.request.queryParameters["environment"]
-                val environment = if (rawEnvironment == null) "production" else normalizeEnvironment(rawEnvironment)
-                    ?: return@delete call.respondError(HttpStatusCode.BadRequest, "invalid_environment", "Environment name is invalid")
-                val actor = call.principal<JWTPrincipal>()?.payload?.subject ?: "admin"
-                val result = runCatching {
-                    DeploymentJobRepository.deleteServiceEnvironmentVariable(projectId, serviceId, environment, key, actor)
-                }.getOrElse { error ->
-                    return@delete call.respondError(HttpStatusCode.Conflict, "service_environment_delete_failed", error.message ?: "Service environment variable could not be deleted")
-                }
-                val response = EnvironmentWriteResponse(result.setId.toString(), result.version, result.deploymentIds.map(UUID::toString))
-                call.respond(if (result.deploymentIds.isEmpty()) HttpStatusCode.OK else HttpStatusCode.Accepted, response)
             }
 
             get("/api/admin/projects/{projectId}/services/{serviceId}/active-deployment") {
@@ -340,20 +301,7 @@ fun Application.configureServiceAdminRoutes() {
                     ?: return@get call.respondError(HttpStatusCode.BadRequest, "invalid_environment", "Environment name is invalid")
                 val active = EnvironmentSetRepository.activeDeployment(serviceId, environment)
                     ?: return@get call.respondError(HttpStatusCode.NotFound, "active_deployment_not_found", "No active deployment exists for this service and environment")
-                val dockerEnvironment = active.containerName?.let { containerName ->
-                    runCatching {
-                        val docker = DockerService(AppConfig.dockerSocket)
-                        try { docker.containerEnvironment(containerName) } finally { docker.close() }
-                    }
-                }
-                call.respond(active.toView().copy(
-                    runtimeVariables = dockerEnvironment?.getOrNull()?.map { (key, value) -> RuntimeEnvironmentVariableView(key, value) },
-                    runtimeEnvironmentStatus = when {
-                        active.containerName == null -> "container_not_recorded"
-                        dockerEnvironment?.isSuccess == true -> "available"
-                        else -> "unavailable"
-                    }
-                ))
+                call.respond(active.toView())
             }
         }
     }

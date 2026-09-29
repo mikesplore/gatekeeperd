@@ -95,15 +95,6 @@ class DockerService(dockerSocketPath: String) {
         }
     }
 
-    /** Returns the environment configured on the container, including values, for authorized admin diagnostics. */
-    fun containerEnvironment(containerNameOrId: String): Map<String, String> {
-        val inspect = client.inspectContainerCmd(containerNameOrId).exec()
-        return inspect.config?.env.orEmpty().mapNotNull { entry ->
-            val separator = entry.indexOf('=')
-            if (separator <= 0) null else entry.substring(0, separator) to entry.substring(separator + 1)
-        }.toMap().toSortedMap()
-    }
-
     /** Runtime details for explicit project adoption. Environment values stay inside the service. */
     data class AdoptionDetails(
         val id: String,
