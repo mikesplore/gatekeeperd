@@ -7,6 +7,8 @@ import com.gatekeeper.db.repositories.ProjectRepository
 import com.gatekeeper.db.repositories.ServiceRepository
 import com.gatekeeper.db.repositories.ProjectAdjustmentRepository
 import com.gatekeeper.db.repositories.AuditRepository
+import com.gatekeeper.config.AppConfig
+import com.gatekeeper.docker.DockerService
 import com.gatekeeper.db.tables.AdjustmentType
 import com.gatekeeper.db.tables.AccessBlockReason
 import com.gatekeeper.integrations.ScribedIntegrationClient
@@ -95,8 +97,13 @@ data class ActiveDeploymentInspectionView(
     val imageName: String, val imageTag: String, val imageDigest: String?, val commitSha: String?, val activeAt: String?,
     val sharedSetId: String?, val sharedSetVersion: Int?, val serviceSetId: String?, val serviceSetVersion: Int?,
     val variables: List<FingerprintedEnvironmentVariableView>,
+    val runtimeVariables: List<RuntimeEnvironmentVariableView>? = null,
+    val runtimeEnvironmentStatus: String = "unavailable",
     val fingerprintAlgorithm: String = "HMAC-SHA-256"
 )
+
+@Serializable
+data class RuntimeEnvironmentVariableView(val key: String, val value: String)
 
 fun Application.configureServiceAdminRoutes() {
     routing {
@@ -333,7 +340,20 @@ fun Application.configureServiceAdminRoutes() {
                     ?: return@get call.respondError(HttpStatusCode.BadRequest, "invalid_environment", "Environment name is invalid")
                 val active = EnvironmentSetRepository.activeDeployment(serviceId, environment)
                     ?: return@get call.respondError(HttpStatusCode.NotFound, "active_deployment_not_found", "No active deployment exists for this service and environment")
-                call.respond(active.toView())
+                val dockerEnvironment = active.containerName?.let { containerName ->
+                    runCatching {
+                        val docker = DockerService(AppConfig.dockerSocket)
+                        try { docker.containerEnvironment(containerName) } finally { docker.close() }
+                    }
+                }
+                call.respond(active.toView().copy(
+                    runtimeVariables = dockerEnvironment?.getOrNull()?.map { (key, value) -> RuntimeEnvironmentVariableView(key, value) },
+                    runtimeEnvironmentStatus = when {
+                        active.containerName == null -> "container_not_recorded"
+                        dockerEnvironment?.isSuccess == true -> "available"
+                        else -> "unavailable"
+                    }
+                ))
             }
         }
     }
