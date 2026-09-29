@@ -163,7 +163,7 @@ internal fun hasRenderAffectingNginxParameters(body: NginxEnableRequest): Boolea
 private fun computeNginxEnablePlan(
     slug: String,
     projectDomain: String,
-    activeRuntimeName: String?,
+    activeRuntimeTarget: DeploymentUpstreamResolver.Target?,
     request: NginxEnableRequest,
     nginxService: NginxService,
     dockerService: DockerService?
@@ -173,7 +173,7 @@ private fun computeNginxEnablePlan(
         return NginxPlanResult.Err(HttpStatusCode.BadRequest, "invalid_request", "port must be between 1 and 65535")
     }
 
-    val configuredContainerName = activeRuntimeName?.takeIf(String::isNotBlank)
+    val configuredContainerName = activeRuntimeTarget?.containerName?.takeIf(String::isNotBlank)
     val dockerPublishedHostPorts = run {
         if (dockerService == null || configuredContainerName == null) return@run null
         val health = dockerService.containerHealth(configuredContainerName)
@@ -188,7 +188,8 @@ private fun computeNginxEnablePlan(
         parsePublishedHostPorts(info?.ports.orEmpty())
     }
 
-    val appPort = explicitPort ?: dockerPublishedHostPorts?.singleOrNull()
+    val appPort = explicitPort ?: activeRuntimeTarget?.port?.takeIf { it in 1..65535 }
+        ?: dockerPublishedHostPorts?.singleOrNull()
 
     if (appPort == null) {
         if (dockerPublishedHostPorts != null) {
@@ -197,9 +198,9 @@ private fun computeNginxEnablePlan(
                 "missing_port",
                 when {
                     dockerPublishedHostPorts.isEmpty() ->
-                        "Could not infer the active deployment upstream port. Provide 'port' in the request body or configure a deployment runtime."
+                        "Could not infer the active deployment upstream port from the active runtime. Ensure the deployment exposes and publishes its application port."
                     else ->
-                        "Multiple published host ports detected. Provide 'port' in the request body or configure the deployment container port."
+                        "Multiple published host ports were found, but the active deployment does not identify which one serves the application. Redeploy it so Gatekeeperd can record the application port."
                 },
                 buildJsonObject {
                     put("resolvedUpstream", JsonPrimitive(configuredContainerName.orEmpty()))
@@ -211,7 +212,7 @@ private fun computeNginxEnablePlan(
         return NginxPlanResult.Err(
             HttpStatusCode.BadRequest,
             "missing_port",
-                "Provide a valid port in the request body, or configure an active deployment runtime for port inference."
+            "Could not resolve a published application port from the active deployment. Deploy or attach a service with a published application port first."
         )
     }
 
@@ -411,7 +412,7 @@ fun Application.configureNginxAdminRoutes() {
                 when (val result = computeNginxEnablePlan(
                     slug = slug,
                     projectDomain = project.domain,
-                    activeRuntimeName = activeDefaultRuntime(project.id)?.containerName,
+                    activeRuntimeTarget = resolvedDefaultRuntimeTarget(project.id),
                     request = body,
                     nginxService = nginxService,
                     dockerService = dockerService
@@ -608,7 +609,7 @@ fun Application.configureNginxAdminRoutes() {
                     val plan = when (val result = computeNginxEnablePlan(
                     slug = slug,
                     projectDomain = project.domain,
-                        activeRuntimeName = activeDefaultRuntime(project.id)?.containerName,
+                        activeRuntimeTarget = resolvedDefaultRuntimeTarget(project.id),
                     request = body,
                     nginxService = nginxService,
                     dockerService = dockerService
