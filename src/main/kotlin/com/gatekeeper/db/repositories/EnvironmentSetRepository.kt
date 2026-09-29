@@ -39,6 +39,7 @@ object EnvironmentSetRepository {
 
     data class ActiveDeploymentInspection(
         val deploymentId: UUID,
+        val status: String,
         val containerName: String?,
         val serviceId: UUID,
         val environment: String,
@@ -109,11 +110,28 @@ object EnvironmentSetRepository {
         ServiceMetadata(configuredSharedValues + configuredServiceValues)
     }
 
-    fun activeDeployment(serviceId: UUID, environment: String): ActiveDeploymentInspection? = transaction {
-        val deployment = Deployments.selectAll().where {
+    fun activeDeployment(serviceId: UUID, environment: String): ActiveDeploymentInspection? =
+        deploymentInspection(serviceId, environment, includeReadyCandidate = false)
+
+    fun runtimeDeployment(serviceId: UUID, environment: String): ActiveDeploymentInspection? =
+        deploymentInspection(serviceId, environment, includeReadyCandidate = true)
+
+    private fun deploymentInspection(
+        serviceId: UUID,
+        environment: String,
+        includeReadyCandidate: Boolean
+    ): ActiveDeploymentInspection? = transaction {
+        val active = Deployments.selectAll().where {
             (Deployments.serviceId eq serviceId) and (Deployments.environment eq environment) and
                 (Deployments.status eq DeploymentStatus.ACTIVE)
-        }.singleOrNull() ?: return@transaction null
+        }.singleOrNull()
+        val deployment = active ?: if (includeReadyCandidate) {
+            Deployments.selectAll().where {
+                (Deployments.serviceId eq serviceId) and (Deployments.environment eq environment) and
+                    (Deployments.status eq DeploymentStatus.READY)
+            }.maxByOrNull { it[Deployments.createdAt] }
+        } else null
+        deployment ?: return@transaction null
         val execution = DeploymentExecutions.selectAll().where {
             DeploymentExecutions.id eq deployment[Deployments.executionId]
         }.singleOrNull() ?: return@transaction null
@@ -146,7 +164,7 @@ object EnvironmentSetRepository {
             FingerprintedVariable(key, source, SecretValueCipher.fingerprint("$key\u0000$value"))
         }
         ActiveDeploymentInspection(
-            deployment[Deployments.id], deployment[Deployments.runtimeContainerName], serviceId, environment,
+            deployment[Deployments.id], deployment[Deployments.status].value, deployment[Deployments.runtimeContainerName], serviceId, environment,
             execution[DeploymentExecutions.imageName], execution[DeploymentExecutions.imageTag],
             execution[DeploymentExecutions.imageDigest], execution[DeploymentExecutions.commitSha],
             deployment[Deployments.activeAt], sharedSetId, sharedVersion, serviceSetId, serviceVersion, variables

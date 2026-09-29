@@ -286,6 +286,10 @@ GET returns `{ "effectiveValues": { "KEY": "value" } }` with the currently confi
 
 Returns the active deployment's container name, image/commit metadata, and its shared/service environment version references. Each resolved environment key includes its source (`project_shared` or `service`) and an HMAC-SHA-256 fingerprint of the key/value pair. No active deployment returns `404 active_deployment_not_found`.
 
+#### GET /api/admin/projects/{projectId}/services/{serviceId}/runtime?environment={name}
+
+Returns the active runtime, or the latest ready candidate when no active deployment exists. The response includes its deployment `status`, container name, image/commit metadata, and shared/service environment version references. A ready candidate has passed container readiness but is not active until any configured gateway cutover succeeds. Environment keys are represented only by their source and HMAC-SHA-256 fingerprint. No active or ready runtime returns `404 runtime_not_found`.
+
 #### PUT /api/admin/project-setup/projects/{projectId}/domain-gateway
 
 Save a service's domain and desired gateway settings before a runtime exists. Accepts `domain`, `tlsMode` (`http_only`, `https`, or `https_http2`), `gateEnabled`, and optional `serviceId` (omitted selects `default`). This stores a site draft attached to that service; the worker activates/renders it only after a candidate for that service passes readiness and gateway validation. Site records are service-owned and multiple domains can belong to one project.

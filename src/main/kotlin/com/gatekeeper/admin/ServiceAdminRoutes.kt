@@ -85,7 +85,7 @@ data class FingerprintedEnvironmentVariableView(val key: String, val source: Str
 
 @Serializable
 data class ActiveDeploymentInspectionView(
-    val deploymentId: String, val containerName: String?, val serviceId: String, val environment: String,
+    val deploymentId: String, val status: String, val containerName: String?, val serviceId: String, val environment: String,
     val imageName: String, val imageTag: String, val imageDigest: String?, val commitSha: String?, val activeAt: String?,
     val sharedSetId: String?, val sharedSetVersion: Int?, val serviceSetId: String?, val serviceSetVersion: Int?,
     val variables: List<FingerprintedEnvironmentVariableView>,
@@ -303,6 +303,19 @@ fun Application.configureServiceAdminRoutes() {
                     ?: return@get call.respondError(HttpStatusCode.NotFound, "active_deployment_not_found", "No active deployment exists for this service and environment")
                 call.respond(active.toView())
             }
+
+            get("/api/admin/projects/{projectId}/services/{serviceId}/runtime") {
+                val (projectId, serviceId) = call.serviceCoordinates() ?: return@get
+                if (ServiceRepository.findByProjectAndId(projectId, serviceId) == null) {
+                    return@get call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
+                }
+                val rawEnvironment = call.request.queryParameters["environment"]
+                val environment = if (rawEnvironment == null) "production" else normalizeEnvironment(rawEnvironment)
+                    ?: return@get call.respondError(HttpStatusCode.BadRequest, "invalid_environment", "Environment name is invalid")
+                val runtime = EnvironmentSetRepository.runtimeDeployment(serviceId, environment)
+                    ?: return@get call.respondError(HttpStatusCode.NotFound, "runtime_not_found", "No active or ready deployment runtime exists for this service and environment")
+                call.respond(runtime.toView())
+            }
         }
     }
 }
@@ -349,7 +362,7 @@ private fun ServiceRepository.ServiceRecord.toView() = ServiceAdminView(
 )
 private fun EnvironmentSetRepository.VersionMetadata.toView() = EnvironmentVersionView(id.toString(), version, environment, keys, createdAt.toString(), createdBy)
 private fun EnvironmentSetRepository.ActiveDeploymentInspection.toView() = ActiveDeploymentInspectionView(
-    deploymentId.toString(), containerName, serviceId.toString(), environment, imageName, imageTag, imageDigest, commitSha,
+    deploymentId.toString(), status, containerName, serviceId.toString(), environment, imageName, imageTag, imageDigest, commitSha,
     activeAt?.toString(), sharedSetId?.toString(), sharedSetVersion, serviceSetId?.toString(), serviceSetVersion,
     variables.map { FingerprintedEnvironmentVariableView(it.key, it.source, it.fingerprint) }
 )
