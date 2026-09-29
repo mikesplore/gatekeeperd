@@ -288,7 +288,7 @@ Returns the active deployment's container name, image/commit metadata, and its s
 
 #### GET /api/admin/projects/{projectId}/services/{serviceId}/runtime?environment={name}
 
-Returns the active runtime, or the latest ready candidate when no active deployment exists. The response includes its deployment `status`, container name, image/commit metadata, and shared/service environment version references. A ready candidate has passed container readiness but is not active until any configured gateway cutover succeeds. Environment keys are represented only by their source and HMAC-SHA-256 fingerprint. No active or ready runtime returns `404 runtime_not_found`.
+Returns the active runtime, or the latest ready candidate when no active deployment exists. The response includes its deployment `status`, container name, published port mappings (`containerPort` to `hostPort`), image/commit metadata, and shared/service environment version references. Port mappings come from the recorded deployment runtime so the UI can show them with the runtime response instead of making a later Docker lookup. A ready candidate has passed container readiness but is not active until any configured gateway cutover succeeds. Environment keys are represented only by their source and HMAC-SHA-256 fingerprint. No active or ready runtime returns `404 runtime_not_found`.
 
 #### PUT /api/admin/project-setup/projects/{projectId}/domain-gateway
 

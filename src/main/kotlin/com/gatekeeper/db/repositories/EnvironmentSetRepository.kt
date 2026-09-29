@@ -41,6 +41,7 @@ object EnvironmentSetRepository {
         val deploymentId: UUID,
         val status: String,
         val containerName: String?,
+        val publishedPorts: Map<Int, Int>,
         val serviceId: UUID,
         val environment: String,
         val imageName: String,
@@ -163,8 +164,15 @@ object EnvironmentSetRepository {
             val source = storedSources[key] ?: if (key in effectiveServiceValues) "service" else "project_shared"
             FingerprintedVariable(key, source, SecretValueCipher.fingerprint("$key\u0000$value"))
         }
+        val containerPort = execution[DeploymentExecutions.containerPort]
+        val hostPort = deployment[Deployments.runtimeHostPort]
+        val publishedPorts = runCatching {
+            Json.decodeFromString<Map<String, Int>>(deployment[Deployments.runtimePortsJson]).mapKeys { it.key.toInt() }
+        }.getOrDefault(emptyMap()).ifEmpty {
+            if (containerPort != null && hostPort != null) mapOf(containerPort to hostPort) else emptyMap()
+        }
         ActiveDeploymentInspection(
-            deployment[Deployments.id], deployment[Deployments.status].value, deployment[Deployments.runtimeContainerName], serviceId, environment,
+            deployment[Deployments.id], deployment[Deployments.status].value, deployment[Deployments.runtimeContainerName], publishedPorts, serviceId, environment,
             execution[DeploymentExecutions.imageName], execution[DeploymentExecutions.imageTag],
             execution[DeploymentExecutions.imageDigest], execution[DeploymentExecutions.commitSha],
             deployment[Deployments.activeAt], sharedSetId, sharedVersion, serviceSetId, serviceVersion, variables
