@@ -73,7 +73,7 @@ data class NginxDisableResponse(
 data class NginxWizardContextResponse(
     val slug: String,
     val serviceId: String? = null,
-    val domain: String,
+    val domain: String? = null,
     val nginxEnabled: Boolean,
     val resolvedUpstreamHost: String? = null,
     val configuredPort: Int? = null,
@@ -380,10 +380,10 @@ fun Application.configureNginxAdminRoutes() {
                 }.getOrNull()
 
                 val installedCerts = nginxService.listInstalledCertificates().map { it.certificateDomain }.sorted()
-                val domain = site?.domain ?: project.domain
-                val siteSlug = site?.projectSlug ?: nginxSiteSlug(slug, selectedService.isDefault, domain)
-                val nginxEnabled = nginxService.listConfigArtifacts().any { it.filename == siteSlug && it.available && it.enabled }
-                val resolvedCert = nginxService.resolveCertificateForDomain(domain)
+                val domain = selectedService.domain
+                val siteSlug = domain?.let { site?.projectSlug ?: nginxSiteSlug(slug, selectedService.isDefault, it) }
+                val nginxEnabled = siteSlug?.let { name -> nginxService.listConfigArtifacts().any { it.filename == name && it.available && it.enabled } } ?: false
+                val resolvedCert = domain?.let(nginxService::resolveCertificateForDomain)
 
                 call.respond(
                     NginxWizardContextResponse(
@@ -432,11 +432,16 @@ fun Application.configureNginxAdminRoutes() {
                     return@post
                 }
                 val site = SiteRepository.findByProjectIdAndServiceId(project.id, selectedServiceId)
-                val siteSlug = site?.projectSlug ?: nginxSiteSlug(slug, service.isDefault, site?.domain ?: project.domain)
+                val serviceDomain = service.domain
+                if (serviceDomain == null) {
+                    call.respondError(HttpStatusCode.BadRequest, "service_domain_required", "Configure a domain for this service before creating its Nginx site")
+                    return@post
+                }
+                val siteSlug = site?.projectSlug ?: nginxSiteSlug(slug, service.isDefault, serviceDomain)
 
                 when (val result = computeNginxEnablePlan(
                     slug = siteSlug,
-                    projectDomain = site?.domain ?: project.domain,
+                    projectDomain = serviceDomain,
                     activeRuntimeTarget = DeploymentUpstreamResolver.resolve(selectedServiceId, "production"),
                     request = body,
                     nginxService = nginxService,
@@ -461,7 +466,7 @@ fun Application.configureNginxAdminRoutes() {
                             sslCertificatePath = plan.resolvedCertificate?.certificatePath,
                             sslCertificateKeyPath = plan.resolvedCertificate?.privateKeyPath
                         )
-                        val conflicts = runCatching { nginxService.findDomainConflicts(config, slug) }.getOrElse { error ->
+                        val conflicts = runCatching { nginxService.findDomainConflicts(config, siteSlug) }.getOrElse { error ->
                             call.respondError(HttpStatusCode.InternalServerError, "nginx_config_scan_failed", error.message ?: "Unable to inspect existing nginx configs")
                             return@post
                         }
@@ -499,8 +504,11 @@ fun Application.configureNginxAdminRoutes() {
 
                 val enabled = nginxService.listConfigArtifacts().any { it.filename == slug && it.available && it.enabled }
 
-                val resolvedCert = nginxService.resolveCertificateForDomain(project.domain)
-                val expiry = nginxService.certificateExpiry(resolvedCert?.certificateDomain ?: project.domain)
+                val service = ServiceRepository.listByProjectId(project.id).firstOrNull { it.isDefault }
+                val site = service?.let { SiteRepository.findByProjectIdAndServiceId(project.id, it.id) }
+                val domain = ServiceRepository.findDefaultDomain(project.id)
+                val resolvedCert = domain?.let(nginxService::resolveCertificateForDomain)
+                val expiry = resolvedCert?.certificateDomain?.let(nginxService::certificateExpiry)
 
                 call.respond(
                     NginxStatusResponse(
@@ -510,7 +518,7 @@ fun Application.configureNginxAdminRoutes() {
                         port = DeploymentUpstreamResolver.resolveProjectDefault(project.id, "production")?.port,
                         sslEnabled = resolvedCert != null,
                         certificateDomain = resolvedCert?.certificateDomain,
-                        domain = project.domain,
+                        domain = domain,
                         certificateExpiresAt = expiry?.first,
                         certificateDaysRemaining = expiry?.second
                     )
@@ -615,7 +623,12 @@ fun Application.configureNginxAdminRoutes() {
                     return@post
                 }
                 val site = SiteRepository.findByProjectIdAndServiceId(project.id, serviceId)
-                val siteSlug = site?.projectSlug ?: nginxSiteSlug(slug, service.isDefault, site?.domain ?: project.domain)
+                val serviceDomain = service.domain
+                if (serviceDomain == null) {
+                    call.respondError(HttpStatusCode.BadRequest, "service_domain_required", "Configure a domain for this service before creating its Nginx site")
+                    return@post
+                }
+                val siteSlug = site?.projectSlug ?: nginxSiteSlug(slug, service.isDefault, serviceDomain)
                 val renderAffectingRequest = hasRenderAffectingNginxParameters(body)
                 if (site != null && renderAffectingRequest) {
                     call.respondError(
@@ -630,7 +643,7 @@ fun Application.configureNginxAdminRoutes() {
                 val responseSslEnabled: Boolean
                 val responseCertificateDomain: String?
                 var siteToPersist: NginxSiteRenderModel? = null
-                val config = if (site != null) {
+                val config = if (site != null && site.domain == serviceDomain) {
                     runCatching { renderModelFromSite(site.projectSlug ?: siteSlug, site, nginxService) }
                         .getOrElse {
                             call.respondError(HttpStatusCode.UnprocessableEntity, "site_configuration_invalid", it.message ?: "Stored Site configuration is invalid")
@@ -645,7 +658,7 @@ fun Application.configureNginxAdminRoutes() {
                 } else {
                     val plan = when (val result = computeNginxEnablePlan(
                         slug = siteSlug,
-                        projectDomain = site?.domain ?: project.domain,
+                        projectDomain = serviceDomain,
                         activeRuntimeTarget = DeploymentUpstreamResolver.resolve(serviceId, "production"),
                     request = body,
                     nginxService = nginxService,
@@ -721,8 +734,25 @@ fun Application.configureNginxAdminRoutes() {
                     return@post
                 }
 
-                siteToPersist?.let { model ->
-                    runCatching { SiteRepository.create(project.id, model.copy(slug = enabledSlug)) }
+                if (siteToPersist != null) {
+                    val model = siteToPersist!!
+                    val persisted = runCatching {
+                        if (site == null) SiteRepository.create(project.id, model.copy(slug = enabledSlug))
+                        else SiteRepository.updateDashboard(site.id, SiteRepository.SiteDashboardUpdate(
+                            domain = model.domain,
+                            upstreamHost = model.upstreamHost,
+                            upstreamMode = model.upstreamMode,
+                            upstreamExplicitPort = model.appPort,
+                            tlsMode = when (model.tlsMode) {
+                                TlsRenderMode.HTTP_ONLY -> TlsMode.HTTP_ONLY
+                                TlsRenderMode.HTTPS -> TlsMode.HTTPS
+                                TlsRenderMode.HTTPS_HTTP2 -> TlsMode.HTTPS_HTTP2
+                            },
+                            certMode = model.certMode,
+                            certExplicitPath = model.certificatePath,
+                            gateEnabled = true
+                        ))
+                    }
                         .onFailure { error ->
                             logger.error("Nginx site enabled but database registration failed for project $slug", error)
                             nginxService.removeProject(enabledSlug)
@@ -734,6 +764,12 @@ fun Application.configureNginxAdminRoutes() {
                             )
                             return@post
                         }
+                    if (persisted.getOrNull() == null) {
+                        nginxService.removeProject(enabledSlug)
+                        nginxService.reloadNginx()
+                        call.respondError(HttpStatusCode.InternalServerError, "site_registration_failed", "Nginx site was enabled but could not be registered in the dashboard")
+                        return@post
+                    }
                 }
 
                 logger.info("Nginx enabled for project: $slug")

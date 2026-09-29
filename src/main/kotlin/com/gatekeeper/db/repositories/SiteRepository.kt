@@ -25,52 +25,6 @@ import kotlinx.serialization.encodeToString
 import com.gatekeeper.nginx.DEFAULT_GATEKEEPER_BYPASS_PATHS
 
 object SiteRepository {
-    fun saveSetupDraft(
-        projectId: UUID,
-        domain: String,
-        tlsMode: TlsMode,
-        gateEnabled: Boolean,
-        certMode: CertMode = CertMode.AUTO_RESOLVE,
-        serviceId: UUID? = null
-    ): SiteRecord = transaction {
-        val ownerServiceId = serviceId ?: defaultServiceId(projectId)
-        check(Services.selectAll().where { (Services.id eq ownerServiceId) and (Services.projectId eq projectId) }.count() == 1L) {
-            "Service does not belong to project"
-        }
-        val current = Sites.selectAll().where { Sites.serviceId eq ownerServiceId }.singleOrNull()
-        if (current == null) {
-            Sites.insert {
-                it[Sites.id] = UUID.randomUUID()
-                it[Sites.projectId] = projectId
-                it[Sites.serviceId] = ownerServiceId
-                it[Sites.domain] = domain
-                it[Sites.upstreamHost] = "127.0.0.1"
-                it[Sites.upstreamMode] = UpstreamMode.DOCKER_DISCOVERY
-                it[Sites.upstreamExplicitPort] = null
-                it[Sites.tlsMode] = tlsMode
-                it[Sites.certMode] = certMode
-                it[Sites.certExplicitPath] = null
-                it[Sites.gateEnabled] = gateEnabled
-                it[Sites.reconciliationStatus] = ReconciliationStatus.DISABLED
-            }
-        } else {
-            val changed = current[Sites.domain] != domain || current[Sites.tlsMode] != tlsMode ||
-                current[Sites.certMode] != certMode || current[Sites.gateEnabled] != gateEnabled
-            if (changed) {
-                Sites.update({ Sites.id eq current[Sites.id] }) {
-                    it[Sites.domain] = domain
-                    it[Sites.tlsMode] = tlsMode
-                    it[Sites.certMode] = certMode
-                    it[Sites.gateEnabled] = gateEnabled
-                    it[Sites.configVersion] = current[Sites.configVersion] + 1
-                    it[Sites.reconciliationStatus] = ReconciliationStatus.DRIFTED
-                    it[Sites.updatedAt] = LocalDateTime.now()
-                }
-            }
-        }
-        Sites.selectAll().where { Sites.serviceId eq ownerServiceId }.single().toRecord()
-    }
-
     private fun defaultServiceId(projectId: UUID): UUID = Services.selectAll().where {
         (Services.projectId eq projectId) and (Services.isDefault eq true)
     }.singleOrNull()?.get(Services.id) ?: error("Default service not found for project $projectId")
@@ -255,6 +209,7 @@ object SiteRepository {
             it[Sites.gateEnabled] = model.gateEnabled
             it[Sites.bypassPaths] = Json.encodeToString(model.bypassPaths)
         }
+        Services.update({ Services.id eq serviceId }) { it[Services.domain] = model.domain }
         findById(id)!!.copy(projectSlug = fileSlug)
     }
 
@@ -282,6 +237,11 @@ object SiteRepository {
             update.bypassPaths?.let { value -> it[Sites.bypassPaths] = Json.encodeToString(value) }
             it[Sites.configVersion] = currentVersion + 1
             it[Sites.updatedAt] = LocalDateTime.now()
+        }
+        if (update.domain != null) {
+            current[Sites.serviceId]?.let { serviceId ->
+                Services.update({ Services.id eq serviceId }) { it[Services.domain] = newDomain }
+            }
         }
         val row = Sites.selectAll().where { Sites.id eq id }.singleOrNull() ?: return@transaction null
         val projectSlug = Projects.selectAll().where { Projects.id eq row[Sites.projectId] }.singleOrNull()?.get(Projects.slug)

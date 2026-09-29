@@ -292,7 +292,7 @@ Returns the active runtime, or the latest ready candidate when no active deploym
 
 #### PUT /api/admin/project-setup/projects/{projectId}/domain-gateway
 
-Save a service's domain and desired gateway settings before a runtime exists. Accepts `domain`, `tlsMode` (`http_only`, `https`, or `https_http2`), `gateEnabled`, and optional `serviceId` (omitted selects `default`). This stores a site draft attached to that service; it does not create or enable an Nginx file. Deployments only update an already enabled managed site. Create or enable a new site separately through Nginx administration after a runtime is active. Site records are service-owned and multiple domains can belong to one project.
+Save only the service's domain before or after a runtime exists. Accepts `domain` and optional `serviceId` (omitted selects `default`). This updates the service record only; it does not create, update, or enable an Nginx Site record or file. Create or enable the Nginx site separately through Nginx administration after a runtime is active. Site records are service-owned and multiple domains can belong to one project.
 
 #### POST /api/admin/project-setup/projects/{projectId}/deploy?serviceId={uuid}
 
@@ -300,7 +300,7 @@ Queue a deployment from the saved desired configuration. `serviceId` is optional
 
 ### GET /api/admin/projects/{slug}/overview
 
-Returns sectioned project state: `accessLifecycle`, `desiredConfiguration`, `currentDeployment`, `domainsGateway`, and `customerBilling`. The current runtime and upstream come from the canonical active deployment and Phase 3 resolver, not `projects.container_name`. `runtimeHealth` is inspected from the active deployment's persisted runtime container. Secret and credential values are never included; only version references are returned.
+Returns sectioned project state: `accessLifecycle`, `desiredConfiguration`, `currentDeployment`, `domainsGateway`, and `customerBilling`. `domainsGateway.domain` is the selected default service's saved domain and may be null; it is not inferred from the legacy project domain. The current runtime and upstream come from the canonical active deployment and Phase 3 resolver, not `projects.container_name`. `runtimeHealth` is inspected from the active deployment's persisted runtime container. Secret and credential values are never included; only version references are returned.
 
 ### GET /api/admin/projects/{slug}/deployments/history
 
@@ -613,14 +613,14 @@ Requires `{"confirm":true}`. Creates a timestamped backup, preserves the config 
 This is a separate confirmed step and only accepts an already-disabled manual config. It creates another timestamped backup, deletes the config from `sites-available`, and verifies `nginx -t`; if validation fails, it restores the source file.
 
 ### GET /api/admin/nginx/wizard/context/{slug}
-Fetch nginx state for a project's selected service, its active deployment's resolved upstream host/port and runtime health, and certificate options. Pass `serviceId` as a query parameter; when omitted, the default service is used. `configuredPort` is the Docker-published host port nginx should use, not the container port. If the service has no saved site/domain, the project domain is used.
+Fetch nginx state for a project's selected service, its active deployment's resolved upstream host/port and runtime health, and certificate options. Pass `serviceId` as a query parameter; when omitted, the default service is used. `configuredPort` is the Docker-published host port nginx should use, not the container port. `domain` is null when the selected service has no saved gateway domain; Gatekeeper does not substitute the project domain.
 
 **Response:**
 ```json
 {
   "slug": "acw",
   "serviceId": "b0ee7a11-1a47-4fcb-9325-4e6c704f0311",
-  "domain": "acw.example.com",
+  "domain": null,
   "nginxEnabled": false,
   "resolvedUpstreamHost": "127.0.0.1",
   "configuredPort": 32768,
@@ -632,6 +632,8 @@ Fetch nginx state for a project's selected service, its active deployment's reso
 
 ### POST /api/admin/nginx/wizard/validate/{slug}
 Wizard helper: validate nginx enable inputs and return a config preview without applying changes.
+
+The selected service must have a saved gateway domain. Otherwise the request returns `service_domain_required`.
 
 **Request:** same as `POST /api/admin/nginx/enable/{slug}`
 

@@ -28,7 +28,8 @@ import java.math.BigDecimal
 data class ServiceAdminView(
     val id: String, val projectId: String, val name: String, val accessStatus: String,
     val isDefault: Boolean,
-    val blockReason: String?, val blockReasonCode: String? = null, val blockReasonNote: String? = null
+    val blockReason: String?, val blockReasonCode: String? = null, val blockReasonNote: String? = null,
+    val domain: String? = null
 )
 
 @Serializable
@@ -359,7 +360,7 @@ private fun validEnvironmentValues(values: Map<String, String>) = values.all { (
 
 private fun ServiceRepository.ServiceRecord.toView() = ServiceAdminView(
     id.toString(), projectId.toString(), name, accessStatus, isDefault, blockReason,
-    blockReasonCode?.value, blockReasonNote
+    blockReasonCode?.value, blockReasonNote, domain
 )
 private fun EnvironmentSetRepository.VersionMetadata.toView() = EnvironmentVersionView(id.toString(), version, environment, keys, createdAt.toString(), createdBy)
 private fun EnvironmentSetRepository.ActiveDeploymentInspection.toView() = ActiveDeploymentInspectionView(

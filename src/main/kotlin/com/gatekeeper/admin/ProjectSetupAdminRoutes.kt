@@ -4,8 +4,6 @@ import com.gatekeeper.api.InputValidators
 import com.gatekeeper.api.respondError
 import com.gatekeeper.config.AppConfig
 import com.gatekeeper.db.repositories.*
-import com.gatekeeper.db.tables.CertMode
-import com.gatekeeper.db.tables.TlsMode
 import com.gatekeeper.deployment.*
 import com.gatekeeper.docker.DockerService
 import com.gatekeeper.nginx.DeploymentUpstreamResolver
@@ -100,16 +98,12 @@ data class ProjectEnvironmentDeployResponse(
 @Serializable
 data class ProjectSetupGatewayRequest(
     val domain: String,
-    val tlsMode: String = "https",
-    val gateEnabled: Boolean = true,
     val serviceId: String? = null
 )
 
 @Serializable
 data class ProjectSetupGatewayResponse(
     val domain: String,
-    val tlsMode: String,
-    val gateEnabled: Boolean,
     val status: String
 )
 
@@ -207,7 +201,7 @@ data class ProjectOverviewCurrentDeployment(
 @Serializable
 data class ProjectOverviewGateway(
     val siteId: String?,
-    val domain: String,
+    val domain: String?,
     val configured: Boolean,
     val tlsMode: String?,
     val gateEnabled: Boolean?,
@@ -433,13 +427,13 @@ fun Application.configureProjectSetupAdminRoutes() {
                 }
                 val config = DeploymentJobRepository.configurationSummaryForService(projectId, serviceId)
                 val credential = config?.registryCredentialId?.let(ProviderCredentialRepository::findMetadata)
-                val site = SiteRepository.findByProjectIdAndServiceId(projectId, serviceId)
+                val service = ServiceRepository.findByProjectAndId(projectId, serviceId)
                 val active = DeploymentApplicationService.activeDeploymentSummaryForService(serviceId, "production")
                 val latest = DeploymentApplicationService.latestDeploymentStateForService(serviceId, "production")
                 call.respond(ProjectSetupStatusResponse(
                     projectId.toString(), project.slug, project.name, project.domain,
                     config?.toSetupResponse(), credential != null, credential?.version,
-                    site?.let { ProjectSetupGatewayResponse(it.domain, it.tlsMode.value, it.gateEnabled, it.reconciliationStatus.value) },
+                    service?.domain?.let { ProjectSetupGatewayResponse(it, "domain_saved") },
                     active?.id?.toString(), active?.status, latest?.first?.toString(), latest?.second
                 ))
             }
@@ -636,19 +630,14 @@ fun Application.configureProjectSetupAdminRoutes() {
                 val domain = runCatching { requireValidHostname(body.domain) }.getOrElse {
                     return@put call.respondError(HttpStatusCode.BadRequest, "invalid_domain", it.message ?: "Domain is invalid")
                 }
-                val tls = TlsMode.entries.firstOrNull { it.value == body.tlsMode.lowercase() }
-                    ?: return@put call.respondError(HttpStatusCode.BadRequest, "invalid_tls_mode", "tlsMode must be http_only, https, or https_http2")
                 val serviceId = body.serviceId?.let { raw -> runCatching { UUID.fromString(raw) }.getOrNull() }
                     ?: if (body.serviceId == null) DeploymentJobRepository.defaultServiceIdForProject(projectId)
                     else return@put call.respondError(HttpStatusCode.BadRequest, "invalid_service_id", "Service ID is invalid")
                 val service = ServiceRepository.findByProjectAndId(projectId, serviceId)
                     ?: return@put call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
-                if (service.isDefault) ProjectRepository.update(
-                    slug = project.slug, name = null, domain = domain, type = null,
-                    amountDue = null, currency = null, dueDate = null, gracePeriodDays = null
-                ) ?: return@put call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
-                val site = SiteRepository.saveSetupDraft(projectId, domain, tls, body.gateEnabled, CertMode.AUTO_RESOLVE, serviceId)
-                call.respond(ProjectSetupGatewayResponse(site.domain, site.tlsMode.value, site.gateEnabled, site.reconciliationStatus.value))
+                val updated = ServiceRepository.updateDomain(projectId, serviceId, domain)
+                    ?: return@put call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
+                call.respond(ProjectSetupGatewayResponse(updated.domain ?: domain, "domain_saved"))
             }
 
             post("/api/admin/project-setup/projects/{projectId}/deploy") {
@@ -698,8 +687,9 @@ fun Application.configureProjectSetupAdminRoutes() {
                     ?: return@get call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
                 ServiceRepository.getOrCreateDefault(project.id)
                 val config = DeploymentJobRepository.configurationSummary(project.id)
-                val site = SiteRepository.findByProjectId(project.id)
-                val serviceId = site?.serviceId ?: DeploymentJobRepository.defaultServiceIdForProject(project.id)
+                val serviceId = DeploymentJobRepository.defaultServiceIdForProject(project.id)
+                val site = SiteRepository.findByProjectIdAndServiceId(project.id, serviceId)
+                val service = ServiceRepository.findByProjectAndId(project.id, serviceId)
                 val active = DeploymentApplicationService.activeDeploymentSummaryForService(serviceId, "production")
                 val dockerHealth = active?.containerName?.let { name ->
                     runCatching {
@@ -726,9 +716,10 @@ fun Application.configureProjectSetupAdminRoutes() {
                         active?.secretSetVersion
                     ),
                     ProjectOverviewGateway(
-                        site?.id?.toString(), site?.domain ?: project.domain,
-                        site != null, site?.tlsMode?.value,
-                        site?.gateEnabled, site?.reconciliationStatus?.value, upstream?.host, upstream?.port
+                        site?.id?.toString(), service?.domain,
+                        site != null && site.domain == service?.domain, site?.tlsMode?.value,
+                        site?.gateEnabled?.takeIf { site.domain == service?.domain },
+                        site?.reconciliationStatus?.value?.takeIf { site.domain == service?.domain }, upstream?.host, upstream?.port
                     ),
                     ProjectOverviewCustomerBilling(
                         project.customerId?.toString(), project.customerName, project.customerEmail,

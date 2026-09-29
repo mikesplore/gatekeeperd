@@ -26,6 +26,7 @@ object ServiceRepository {
         val id: UUID,
         val projectId: UUID,
         val name: String,
+        val domain: String?,
         val isDefault: Boolean,
         val accessStatus: String,
         val blockReason: String?,
@@ -54,6 +55,21 @@ object ServiceRepository {
     fun findByProjectAndId(projectId: UUID, id: UUID): ServiceRecord? = transaction {
         Services.selectAll().where { (Services.projectId eq projectId) and (Services.id eq id) }
             .singleOrNull()?.let(::toRecord)
+    }
+
+    fun updateDomain(projectId: UUID, id: UUID, domain: String): ServiceRecord? = transaction {
+        val updated = Services.update({ (Services.projectId eq projectId) and (Services.id eq id) }) {
+            it[Services.domain] = domain
+        }
+        if (updated == 0) return@transaction null
+        Services.selectAll().where { (Services.projectId eq projectId) and (Services.id eq id) }
+            .singleOrNull()?.let(::toRecord)
+    }
+
+    fun findDefaultDomain(projectId: UUID): String? = transaction {
+        Services.selectAll().where {
+            (Services.projectId eq projectId) and (Services.isDefault eq true)
+        }.singleOrNull()?.get(Services.domain)
     }
 
     /** Returns the project's default service, repairing legacy projects missing the row. */
@@ -149,7 +165,7 @@ object ServiceRepository {
     }
 
     private fun toRecord(row: org.jetbrains.exposed.sql.ResultRow) = ServiceRecord(
-        row[Services.id], row[Services.projectId], row[Services.name], row[Services.isDefault],
+        row[Services.id], row[Services.projectId], row[Services.name], row[Services.domain], row[Services.isDefault],
         row[Services.accessStatus], row[Services.blockReason], row[Services.blockReasonCode], row[Services.blockReasonNote]
     )
 
