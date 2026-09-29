@@ -11,6 +11,7 @@ import com.gatekeeper.db.repositories.CustomerRepository
 import com.gatekeeper.db.repositories.CertificateRepository
 import com.gatekeeper.docker.DockerService
 import com.gatekeeper.nginx.NginxService
+import com.gatekeeper.nginx.NginxSelfDomainExclusion
 import com.gatekeeper.nginx.NginxSiteRenderModel
 import com.gatekeeper.nginx.requireCertificatePath
 import com.gatekeeper.nginx.requireValidHostname
@@ -161,13 +162,18 @@ private fun dashboardSite(site: SiteRepository.SiteRecord, dockerService: Docker
     val project = ProjectRepository.findById(site.projectId)
     val customer = project?.customerId?.let(CustomerRepository::findById)
     val slug = site.projectSlug ?: site.projectId.toString()
+    val availableFile = File(AppConfig.nginxSitesAvailablePath, slug)
+    val enabledFile = File(AppConfig.nginxSitesEnabledPath, slug)
+    val selfDomainConfig = NginxSelfDomainExclusion(AppConfig.gatekeeperdSelfDomains).let { exclusion ->
+        exclusion.excludesFile(availableFile) || exclusion.excludesFile(enabledFile)
+    }
     val resolved = site.serviceId?.let { DeploymentUpstreamResolver.resolve(it, "production") }
     return DashboardSiteResponse(
         slug, site.projectId.toString(), customer?.id?.toString(), customer?.name, site.domain,
         site.reconciliationStatus.value,
         site.lastNginxError, site.lastDockerError, site.configVersion,
-        File(AppConfig.nginxSitesAvailablePath, slug).isFile,
-        java.nio.file.Files.isSymbolicLink(File(AppConfig.nginxSitesEnabledPath, slug).toPath()),
+        !selfDomainConfig && availableFile.isFile,
+        !selfDomainConfig && java.nio.file.Files.isSymbolicLink(enabledFile.toPath()),
         resolved?.host ?: site.upstreamHost, site.upstreamMode.value, resolved?.port ?: site.upstreamExplicitPort,
         if (site.upstreamMode == com.gatekeeper.db.tables.UpstreamMode.DOCKER_DISCOVERY) {
             val name = resolved?.containerName
@@ -235,7 +241,7 @@ fun Application.configureOperationsAdminRoutes() {
                 val slug = call.parameters["slug"] ?: run { call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing slug"); return@get }
                 val site = SiteRepository.findByProjectSlug(slug) ?: SiteRepository.findByDomain(slug)
                     ?: run { call.respondError(HttpStatusCode.NotFound, "site_not_found", "Site not found"); return@get }
-                val nginx = NginxService()
+                val nginx = NginxService.configured()
                 val siteSlug = site.projectSlug ?: slug
                 val inspection = nginx.inspectSite(siteSlug)
                 val cert = nginx.resolveCertificateForDomain(site.domain)
@@ -260,7 +266,7 @@ fun Application.configureOperationsAdminRoutes() {
                     )
                 }.getOrElse { call.respondError(HttpStatusCode.BadRequest, "invalid_site_update", it.message ?: "Invalid site update"); return@patch }
                 val updated = SiteRepository.updateDashboard(site.id, update) ?: run { call.respondError(HttpStatusCode.NotFound, "site_not_found", "Site not found"); return@patch }
-                val nginx = NginxService()
+                val nginx = NginxService.configured()
                 val resolved = if (updated.upstreamMode == com.gatekeeper.db.tables.UpstreamMode.DOCKER_DISCOVERY) updated.serviceId?.let { DeploymentUpstreamResolver.resolve(it, "production") } else null
                 val port = (if (updated.upstreamMode == com.gatekeeper.db.tables.UpstreamMode.EXPLICIT_PORT) updated.upstreamExplicitPort else resolved?.port)
                     ?: run { call.respondError(HttpStatusCode.UnprocessableEntity, "site_configuration_invalid", "No active deployment runtime is available"); return@patch }
@@ -285,7 +291,7 @@ fun Application.configureOperationsAdminRoutes() {
             }
             delete("/api/admin/dashboard/sites/{slug}") {
                 val slug = call.parameters["slug"] ?: run { call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing slug"); return@delete }
-                val nginx = NginxService()
+                val nginx = NginxService.configured()
                 val site = SiteRepository.findByProjectSlug(slug) ?: SiteRepository.findByDomain(slug)
                 val removed = site?.let(nginx::removeSiteArtifacts) ?: nginx.removeProject(slug)
                 if (!removed) { call.respondError(HttpStatusCode.InternalServerError, "nginx_cleanup_failed", "Unable to remove nginx artifacts"); return@delete }
@@ -294,17 +300,17 @@ fun Application.configureOperationsAdminRoutes() {
                 call.respond(DashboardSiteDeleteResponse(deleted = true, slug = slug))
             }
             get("/api/admin/nginx/configs") {
-                call.respond(NginxService().listConfigArtifacts())
+                call.respond(NginxService.configured().listConfigArtifacts())
             }
             get("/api/admin/dashboard/dead-configs") {
-                call.respond(NginxService().listConfigArtifacts().filter { it.orphaned })
+                call.respond(NginxService.configured().listConfigArtifacts().filter { it.orphaned })
             }
             delete("/api/admin/dashboard/dead-configs/{filename}") {
                 val filename = call.parameters["filename"] ?: run { call.respondError(HttpStatusCode.BadRequest, "missing_filename", "Missing filename"); return@delete }
                 if (filename != File(filename).name || !filename.matches(Regex("[A-Za-z0-9][A-Za-z0-9_.-]*"))) { call.respondError(HttpStatusCode.BadRequest, "invalid_filename", "Invalid config filename"); return@delete }
                 val body = runCatching { call.receive<DashboardConfirmationRequest>() }.getOrElse { call.respondError(HttpStatusCode.BadRequest, "confirmation_required", "Request body must contain confirm=true"); return@delete }
                 if (!body.confirm) { call.respondError(HttpStatusCode.Conflict, "confirmation_required", "Set confirm=true to move this dead config to backup"); return@delete }
-                val nginx = NginxService()
+                val nginx = NginxService.configured()
                 val artifact = nginx.listConfigArtifacts().firstOrNull { it.filename == filename }
                     ?: run { call.respondError(HttpStatusCode.NotFound, "config_not_found", "Nginx config not found"); return@delete }
                 if (!artifact.orphaned) { call.respondError(HttpStatusCode.Conflict, "config_not_orphaned", "Only orphaned managed configs can be removed here"); return@delete }
@@ -408,9 +414,12 @@ fun Application.configureOperationsAdminRoutes() {
                 val projects = ProjectRepository.findAll()
                 val paymentDashboard = call.application.get<GetPaymentDashboardData>()()
                 val outbox = IntegrationOutboxRepository.summary()
-                val available = File(AppConfig.nginxSitesAvailablePath).listFiles()?.count { it.isFile && !it.name.startsWith(".") }?.toLong() ?: 0
-                val enabled = File(AppConfig.nginxSitesEnabledPath).listFiles()?.size?.toLong() ?: 0
-                val siteCounts = SiteRepository.findAll().groupingBy { it.reconciliationStatus.value }.eachCount().mapValues { it.value.toLong() }
+                val nginxArtifacts = NginxService.configured().listConfigArtifacts()
+                val available = nginxArtifacts.count { it.available }.toLong()
+                val enabled = nginxArtifacts.count { it.enabled }.toLong()
+                val selfDomains = AppConfig.gatekeeperdSelfDomains.toSet()
+                val siteCounts = SiteRepository.findAll().filterNot { it.domain.lowercase().trimEnd('.') in selfDomains }
+                    .groupingBy { it.reconciliationStatus.value }.eachCount().mapValues { it.value.toLong() }
                 val now = LocalDateTime.now()
                 val certificateAlerts = CertificateRepository.findAll().flatMap { certificate ->
                     buildList {
@@ -481,9 +490,8 @@ fun Application.configureOperationsAdminRoutes() {
                         try { service.containerHealth(name) } finally { service.close() }
                     }.getOrNull()
                 }
-                val nginx = NginxService()
-                val nginxEnabled = File("${AppConfig.nginxSitesAvailablePath}/$slug").exists() &&
-                    File("${AppConfig.nginxSitesEnabledPath}/$slug").exists()
+                val nginx = NginxService.configured()
+                val nginxEnabled = nginx.listConfigArtifacts().any { it.filename == slug && it.available && it.enabled }
                 val certificateInstalled = nginx.isCertificateInstalled(project.domain)
                 val ready = project.status == "active" && active != null && (containerHealth == null || containerHealth == "running")
                 call.respond(

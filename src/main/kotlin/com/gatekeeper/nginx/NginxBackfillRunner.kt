@@ -11,7 +11,7 @@ import java.io.File
 /** Manual production entry point. Call only after database and Docker are available. */
 object NginxBackfillRunner {
     fun run(sitesAvailablePath: String = AppConfig.nginxSitesAvailablePath, dryRun: Boolean = false): NginxBackfillReport {
-        val nginx = NginxService()
+        val nginx = NginxService.configured()
         val docker = runCatching { DockerService(AppConfig.dockerSocket) }.getOrNull()
         try {
             val report = NginxSiteBackfill(
@@ -48,7 +48,8 @@ object NginxBackfillRunner {
                 },
                 deleteSite = { project -> SiteRepository.deleteByProjectId(project.id) },
                 dryRun = dryRun,
-                log = ::println
+                log = ::println,
+                selfDomainExclusion = NginxSelfDomainExclusion(AppConfig.gatekeeperdSelfDomains)
             ).run()
             if (report.failedDiff.isNotEmpty()) {
                 report.failedDiff.forEach { (slug, diff) -> println("$slug: $diff") }

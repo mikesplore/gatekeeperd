@@ -470,7 +470,7 @@ fun Application.configureProjectSetupAdminRoutes() {
                         return@post call.respondError(HttpStatusCode.Conflict, "container_adoption_failed", error.message ?: "Container could not be adopted")
                     }
                 val site = SiteRepository.findByServiceId(adopted.serviceId)
-                val nginx = if (site != null) NginxService() else null
+                val nginx = if (site != null) NginxService.configured() else null
                 val siteSlug = site?.projectSlug ?: project.slug
                 val previous = DeploymentApplicationService.activeDeploymentSummaryForService(adopted.serviceId, "production")
                 val previousConfig = if (site != null) runCatching { nginx?.inspectSite(siteSlug)?.content }.getOrNull() else null

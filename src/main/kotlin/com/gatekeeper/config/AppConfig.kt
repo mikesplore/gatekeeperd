@@ -112,6 +112,17 @@ object AppConfig {
     val nginxSitesAvailablePath: String = optionalSetting("NGINX_SITES_AVAILABLE", "/etc/nginx/sites-available")
     val nginxSitesEnabledPath: String = optionalSetting("NGINX_SITES_ENABLED", "/etc/nginx/sites-enabled")
     val nginxSslCertPath: String = optionalSetting("NGINX_SSL_CERT_PATH", "/etc/letsencrypt/live")
+    /** Comma-separated hostnames owned by Gatekeeperd's own deployment; never manage their nginx files. */
+    val gatekeeperdSelfDomains: List<String> = requiredSetting("GATEKEEPERD_SELF_DOMAIN")
+        .split(",")
+        .map { it.trim().trimEnd('.').lowercase() }
+        .also { domains ->
+            require(domains.isNotEmpty() && domains.all { domain ->
+                domain.isNotBlank() && domain.length <= 253 && domain.split('.').all { label ->
+                    label.matches(Regex("[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"))
+                }
+            }) { "GATEKEEPERD_SELF_DOMAIN must contain one or more comma-separated hostnames" }
+        }
 
     // Business Logic
     val defaultGracePeriodDays: Int = optionalSetting("DEFAULT_GRACE_PERIOD_DAYS", "3").toInt()

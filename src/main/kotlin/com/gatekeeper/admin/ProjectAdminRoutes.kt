@@ -555,7 +555,7 @@ fun Application.configureProjectAdminRoutes() {
                 }
 
                 runCatching {
-                    val nginx = NginxService()
+                    val nginx = NginxService.configured()
                     val removed = nginx.removeProject(slug)
                     if (!removed) {
                         logger.warn("Project archived but nginx cleanup failed for slug=$slug (removeProject returned false)")

@@ -14,10 +14,11 @@ data class NginxBackfillReport(
     val migrated: List<String>,
     val skippedNoProject: List<String>,
     val failedDiff: Map<String, String>,
-    val skippedExistingSite: List<String> = emptyList()
+    val skippedExistingSite: List<String> = emptyList(),
+    val skippedSelfDomain: List<String> = emptyList()
 ) {
     val migratedCount get() = migrated.size
-    val skippedCount get() = skippedNoProject.size + skippedExistingSite.size
+    val skippedCount get() = skippedNoProject.size + skippedExistingSite.size + skippedSelfDomain.size
     val failedCount get() = failedDiff.size
 }
 
@@ -34,12 +35,14 @@ class NginxSiteBackfill(
     private val log: (String) -> Unit = {},
     private val findProjectById: (java.util.UUID) -> BackfillProject? = { null },
     private val siteExists: (java.util.UUID, String) -> Boolean = { _, _ -> false },
-    private val serviceIdForProject: (java.util.UUID) -> java.util.UUID? = { null }
+    private val serviceIdForProject: (java.util.UUID) -> java.util.UUID? = { null },
+    private val selfDomainExclusion: NginxSelfDomainExclusion = NginxSelfDomainExclusion(emptyList())
 ) {
     fun run(): NginxBackfillReport {
         val migrated = mutableListOf<String>()
         val skipped = mutableListOf<String>()
         val skippedExisting = mutableListOf<String>()
+        val skippedSelfDomain = mutableListOf<String>()
         val failed = linkedMapOf<String, String>()
 
         sitesAvailable.listFiles { file -> file.isFile && !file.name.startsWith(".") && !file.name.contains(".bak-") }
@@ -49,6 +52,11 @@ class NginxSiteBackfill(
                 val original = runCatching { file.readText() }.getOrElse { error ->
                     failed[file.name] = error.message ?: error::class.simpleName.orEmpty()
                     log("FAILED ${file.name}: ${failed[file.name]}")
+                    return@forEach
+                }
+                if (selfDomainExclusion.excludesConfig(original)) {
+                    skippedSelfDomain += file.name
+                    log("SKIPPED ${file.name}: configured Gatekeeperd self domain is excluded")
                     return@forEach
                 }
                 val identity = parseSiteProjectIdentityMarker(original)
@@ -112,8 +120,8 @@ class NginxSiteBackfill(
                     log("FAILED ${project.slug}: ${failed[project.slug]}")
                 }
             }
-        log("SUMMARY migrated=${migrated.size} skipped=${skipped.size + skippedExisting.size} failed=${failed.size}")
-        return NginxBackfillReport(migrated, skipped, failed, skippedExisting)
+        log("SUMMARY migrated=${migrated.size} skipped=${skipped.size + skippedExisting.size + skippedSelfDomain.size} failed=${failed.size}")
+        return NginxBackfillReport(migrated, skipped, failed, skippedExisting, skippedSelfDomain)
     }
 
     private data class Extracted(val port: Int, val domain: String, val tlsMode: TlsRenderMode, val certPath: String?, val keyPath: String?)

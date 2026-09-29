@@ -202,7 +202,7 @@ object DeploymentWorker {
         if (hasManagedSite) {
             val site = SiteRepository.findByServiceId(job.serviceId) ?: error("Managed site record missing for service ${job.serviceId}")
             val ownerSlug = site.projectSlug ?: error("Managed site nginx slug is unavailable for site ${site.id}")
-            val siteService = NginxService()
+            val siteService = NginxService.configured()
             val previousConfig = siteService.inspectSite(ownerSlug).content
             val containerPort = site.upstreamExplicitPort ?: job.containerPort
                 ?: error("Managed site has no upstream port and deployment has no container port")

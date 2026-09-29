@@ -329,7 +329,7 @@ private fun computeNginxEnablePlan(
 }
 
 fun Application.configureNginxAdminRoutes() {
-    val nginxService = NginxService()
+    val nginxService = NginxService.configured()
     val dockerService: DockerService? = try {
         DockerService(AppConfig.dockerSocket)
     } catch (e: Exception) {
@@ -357,13 +357,7 @@ fun Application.configureNginxAdminRoutes() {
                     return@get
                 }
 
-                val sitesAvailablePath = AppConfig.nginxSitesAvailablePath
-                val sitesEnabledPath = AppConfig.nginxSitesEnabledPath
-                val nginxEnabled = run {
-                    val available = java.io.File("$sitesAvailablePath/$slug").exists()
-                    val enabledLink = java.io.File("$sitesEnabledPath/$slug").exists()
-                    available && enabledLink
-                }
+                val nginxEnabled = nginxService.listConfigArtifacts().any { it.filename == slug && it.available && it.enabled }
 
                 val site = SiteRepository.findByProjectId(project.id)
                 val activeRuntime = activeDefaultRuntime(project.id)
@@ -469,13 +463,7 @@ fun Application.configureNginxAdminRoutes() {
                     return@get
                 }
 
-                val sitesAvailablePath = AppConfig.nginxSitesAvailablePath
-                val sitesEnabledPath = AppConfig.nginxSitesEnabledPath
-                val enabled = run {
-                    val available = java.io.File("$sitesAvailablePath/$slug").exists()
-                    val enabledLink = java.io.File("$sitesEnabledPath/$slug").exists()
-                    available && enabledLink
-                }
+                val enabled = nginxService.listConfigArtifacts().any { it.filename == slug && it.available && it.enabled }
 
                 val resolvedCert = nginxService.resolveCertificateForDomain(project.domain)
                 val expiry = nginxService.certificateExpiry(resolvedCert?.certificateDomain ?: project.domain)

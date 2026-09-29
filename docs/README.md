@@ -217,6 +217,7 @@ Copy [.env.example](../.env.example) to `.env`. Required vars have no safe defau
 | `MPESA_ENVIRONMENT` | Payments | `sandbox` or `production` |
 | `MPESA_CALLBACK_URL` | Payments | Public `/api/mpesa/callback` URL |
 | `GATEKEEPER_PUBLIC_URL` | Payments | Public HTTPS base URL, e.g. `https://gateapi.example.com` |
+| `GATEKEEPERD_SELF_DOMAIN` | Yes | Comma-separated bare hostname(s) for Gatekeeperd's own nginx vhost(s); protected from client-site reconciliation and cleanup |
 | `SCRIBED_CALLBACK_URL` | Integrations | Scribed base URL for suspension callbacks |
 | `SCRIBED_INTEGRATION_SECRET` | Integrations | Shared `X-Gatekeeper-Secret` value |
 

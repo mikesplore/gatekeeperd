@@ -1,5 +1,6 @@
 package com.gatekeeper.nginx
 
+import com.gatekeeper.config.AppConfig
 import com.gatekeeper.db.repositories.SiteRepository
 import com.gatekeeper.db.tables.ReconciliationStatus
 import com.gatekeeper.db.tables.UpstreamMode
@@ -31,7 +32,8 @@ class NginxReconciliationService(
     private val nginxTest: () -> String?,
     private val persist: (SiteRepository.SiteRecord, NginxReconciliationResult) -> Unit = { site, result ->
         SiteRepository.updateReconciliation(site.id, result.status, result.nginxError, result.dockerError)
-    }
+    },
+    private val selfDomainExclusion: NginxSelfDomainExclusion = NginxSelfDomainExclusion(AppConfig.gatekeeperdSelfDomains)
 ) {
     companion object {
         /** Docker-backed check used by production reconciliation wiring and integration tests. */
@@ -81,9 +83,11 @@ class NginxReconciliationService(
     fun reconcile(): NginxReconciliationReport = getSiteStatuses()
 
     private fun evaluateAll(): NginxReconciliationReport {
-        val sites = listSites()
+        val sites = listSites().filterNot { selfDomainExclusion.excludesDomain(it.domain) }
         val sitesBySiteId = sites.associateBy { it.id }
-        val fileNames = (siteFiles(sitesAvailablePath) + siteFiles(sitesEnabledPath)).toSet()
+        val fileNames = (siteFiles(sitesAvailablePath) + siteFiles(sitesEnabledPath))
+            .toSet()
+            .filterNot(::isExcludedConfig)
         val resolvedFiles = fileNames.associateWith { fileName ->
             val marker = siteIdentityMarker(fileName)
             when {
@@ -149,6 +153,10 @@ class NginxReconciliationService(
         val content = runCatching { file.readText() }.getOrDefault("")
         return parseSiteIdentityMarker(content)
     }
+
+    private fun isExcludedConfig(fileName: String): Boolean =
+        selfDomainExclusion.excludesFile(File(sitesAvailablePath, fileName)) ||
+            selfDomainExclusion.excludesFile(File(sitesEnabledPath, fileName))
 
     private fun referencesSite(output: String, file: File): Boolean =
         output.contains(file.absolutePath) || output.contains(file.name)

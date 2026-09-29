@@ -56,12 +56,20 @@ class NginxService(
     private val gatekeeperPort: Int = 8080,
     private val sslCertPath: String = AppConfig.nginxSslCertPath,
     private val nginxTestRunner: () -> NginxTestResult = ::runNginxTestCommand,
-    private val nginxReloadRunner: () -> Boolean = ::runNginxReloadCommand
+    private val nginxReloadRunner: () -> Boolean = ::runNginxReloadCommand,
+    private val selfDomainExclusion: NginxSelfDomainExclusion = NginxSelfDomainExclusion(emptyList())
 ) {
+    companion object {
+        fun configured(): NginxService = NginxService(
+            selfDomainExclusion = NginxSelfDomainExclusion(AppConfig.gatekeeperdSelfDomains)
+        )
+    }
+
     fun inspectSite(slug: String): NginxConfigInspection {
         require(slug.matches(Regex("[a-zA-Z0-9][a-zA-Z0-9_-]*"))) { "Invalid nginx site name" }
         val availableFile = File(sitesAvailablePath, slug)
         val enabledFile = File(sitesEnabledPath, slug)
+        require(!isExcluded(availableFile, enabledFile)) { "This nginx config serves Gatekeeperd and is excluded from site management" }
         val content = availableFile.takeIf { it.isFile }?.readText()
         val actualHash = content?.let(::sha256)
         val hashFile = File(sitesAvailablePath, ".$slug.gatekeeperd.sha256")
@@ -95,9 +103,10 @@ class NginxService(
             .distinct()
             .sorted()
 
-        return filenames.map { filename ->
+        return filenames.mapNotNull { filename ->
             val available = File(availableDir, filename).takeIf { it.isFile }
             val enabled = File(enabledDir, filename)
+            if (isExcluded(available ?: File(availableDir, filename), enabled)) return@mapNotNull null
             val content = runCatching { (available ?: enabled.takeIf { it.exists() || Files.isSymbolicLink(it.toPath()) })?.readText().orEmpty() }
                 .getOrDefault("")
             val identity = parseSiteIdentityMarker(content)
@@ -219,6 +228,7 @@ class NginxService(
 
     fun listBackups(slug: String): List<NginxBackup> {
         require(slug.matches(Regex("[a-zA-Z0-9][a-zA-Z0-9_-]*"))) { "Invalid nginx site name" }
+        require(!isExcluded(File(sitesAvailablePath, slug), File(sitesEnabledPath, slug))) { "This nginx config serves Gatekeeperd and is excluded from site management" }
         return File(sitesAvailablePath).listFiles { file -> file.name.startsWith("$slug.bak-") }
             ?.sortedByDescending { it.lastModified() }
             ?.map { NginxBackup(it.name, Instant.ofEpochMilli(it.lastModified()).toString(), it.length()) }
@@ -231,6 +241,9 @@ class NginxService(
         require(backup.isFile) { "Backup does not exist" }
         val target = File(sitesAvailablePath, slug)
         val enabledFile = File(sitesEnabledPath, slug)
+        require(!isExcluded(target, enabledFile) && !selfDomainExclusion.excludesFile(backup)) {
+            "This nginx config serves Gatekeeperd and is excluded from site management"
+        }
         val stagedFile = File(sitesAvailablePath, ".${slug}.staged")
         Files.copy(backup.toPath(), stagedFile.toPath(), StandardCopyOption.REPLACE_EXISTING)
         val validation = testNginxConfigWithStagedSite(slug, stagedFile)
@@ -483,10 +496,18 @@ class NginxService(
     }
 
     fun enableProject(slug: String, configContent: String): Boolean {
+        if (selfDomainExclusion.excludesConfig(configContent)) {
+            logger.warn("Refusing to manage nginx site $slug because it claims a Gatekeeperd self domain")
+            return false
+        }
         return DistributedLock.withLock("nginx-site:$slug") {
           try {
             val availableFile = File("$sitesAvailablePath/$slug")
             val enabledFile = File("$sitesEnabledPath/$slug")
+            if (isExcluded(availableFile, enabledFile)) {
+                logger.warn("Refusing to manage nginx site $slug because its existing config serves Gatekeeperd")
+                return@withLock false
+            }
             availableFile.parentFile?.mkdirs()
             enabledFile.parentFile?.mkdirs()
 
@@ -623,6 +644,10 @@ class NginxService(
     fun disableProject(slug: String): Boolean {
         return DistributedLock.withLock("nginx-site:$slug") { try {
             val enabledFile = File("$sitesEnabledPath/$slug")
+            if (isExcluded(File(sitesAvailablePath, slug), enabledFile)) {
+                logger.warn("Refusing to disable nginx site $slug because it serves Gatekeeperd")
+                return@withLock false
+            }
             if (enabledFile.exists()) {
                 enabledFile.delete()
                 logger.info("Disabled nginx site: $slug")
@@ -638,6 +663,10 @@ class NginxService(
         return DistributedLock.withLock("nginx-site:$slug") { try {
             val availableFile = File("$sitesAvailablePath/$slug")
             val enabledFile = File("$sitesEnabledPath/$slug")
+            if (isExcluded(availableFile, enabledFile)) {
+                logger.warn("Refusing to remove nginx site $slug because it serves Gatekeeperd")
+                return@withLock false
+            }
 
             if (enabledFile.exists()) {
                 enabledFile.delete()
@@ -674,6 +703,8 @@ class NginxService(
             false
         }
     }
+
+    private fun isExcluded(vararg files: File): Boolean = files.any(selfDomainExclusion::excludesFile)
 
     fun isCertbotAvailable(): Boolean {
         return try {
@@ -742,6 +773,10 @@ class NginxService(
 
     fun removeCertificate(domain: String): Boolean {
         requireValidHostname(domain)
+        if (selfDomainExclusion.excludesDomain(domain)) {
+            logger.warn("Refusing to remove certificate $domain because it covers a Gatekeeperd self domain")
+            return false
+        }
         if (!isCertbotAvailable()) {
             logger.warn("Certbot is not installed, skipping certificate removal for $domain")
             return true

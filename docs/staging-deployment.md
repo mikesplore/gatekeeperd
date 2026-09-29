@@ -147,6 +147,11 @@ PAYSTACK_PUBLIC_KEY=pk_live_xxx
 DOCKER_SOCKET=unix:///var/run/docker.sock
 GATEKEEPER_INTERNAL_NETWORK=gatekeeper-internal
 
+# Required: hostname(s) serving Gatekeeperd itself through nginx.
+# Add aliases as comma-separated bare hostnames; these vhosts are excluded from
+# Gatekeeperd's site discovery, reconciliation, edits, and cleanup.
+GATEKEEPERD_SELF_DOMAIN=gateapi.example.com
+
 # Configuration
 DEFAULT_GRACE_PERIOD_DAYS=3
 FAIL_MODE=open

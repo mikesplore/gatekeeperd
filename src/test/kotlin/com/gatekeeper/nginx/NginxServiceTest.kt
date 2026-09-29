@@ -526,7 +526,8 @@ class NginxServiceTest {
             renderExpected = { site -> if (site.projectSlug == "drifted") "expected" else File(available, site.projectSlug!!).readText() },
             dockerCheck = { if (it.projectSlug == "docker") "container is not running" else null },
             nginxTest = { "/etc/nginx/sites-available/error: syntax error" },
-            persist = { _, _ -> }
+            persist = { _, _ -> },
+            selfDomainExclusion = NginxSelfDomainExclusion(emptyList())
         ).reconcile()
 
         val states = report.results.associate { it.slug to it.status }
@@ -559,7 +560,8 @@ class NginxServiceTest {
         Files.createSymbolicLink(File(enabled, oldSlugFile.name).toPath(), oldSlugFile.toPath())
 
         val report = NginxReconciliationService(
-            available, enabled, { listOf(site) }, { config }, { null }, { null }, persist = { _, _ -> }
+            available, enabled, { listOf(site) }, { config }, { null }, { null }, persist = { _, _ -> },
+            selfDomainExclusion = NginxSelfDomainExclusion(emptyList())
         ).reconcile()
 
         assertEquals("old-slug", report.results.single().slug)
@@ -586,7 +588,8 @@ class NginxServiceTest {
         Files.createSymbolicLink(File(enabled, markedFile.name).toPath(), markedFile.toPath())
 
         val report = NginxReconciliationService(
-            available, enabled, { listOf(site) }, { "unused" }, { null }, { null }, persist = { _, _ -> }
+            available, enabled, { listOf(site) }, { "unused" }, { null }, { null }, persist = { _, _ -> },
+            selfDomainExclusion = NginxSelfDomainExclusion(emptyList())
         ).reconcile()
 
         assertEquals(listOf("reused-slug"), report.orphanedFiles)
@@ -617,7 +620,8 @@ class NginxServiceTest {
             available, enabled, { listOf(site) }, { config },
             { dockerChecks++; "container stopped" },
             { nginxChecks++; if (nginxChecks == 1) "/etc/nginx/sites-available/faulty: syntax error" else null },
-            persist = { _, result -> persisted += result }
+            persist = { _, result -> persisted += result },
+            selfDomainExclusion = NginxSelfDomainExclusion(emptyList())
         )
 
         val first = service.getSiteStatuses()

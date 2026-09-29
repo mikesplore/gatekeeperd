@@ -57,7 +57,7 @@ private val applicationModule = module {
     single { CustomerApplicationService(get<ProjectQueryRepository>(), get(), get(), get<SupportRequestRepository>()) }
     single { GateService(get<ProjectQueryRepository>(), get<GetLatestPaymentLink>(), get()) }
     single { GateApplicationService(get<ProjectQueryRepository>(), get<GateService>()) }
-    single { NginxService() }
+    single { NginxService.configured() }
     single { NginxAdminService(get()) }
     single<PaymentDomainRepository> { ExposedPaymentRepository() }
     single { ProjectBalanceAdapter(get<PaymentDomainRepository>()) }
