@@ -713,7 +713,8 @@ fun Application.configureProjectSetupAdminRoutes() {
                         active?.createdAt?.toString(), active?.activeAt?.toString(), active?.imageName, active?.imageTag,
                         active?.imageDigest, active?.commitSha, dockerHealth,
                         upstream?.host, upstream?.port, active?.credentialSetId?.toString(), active?.credentialSetVersion,
-                        active?.secretSetId?.toString(), active?.secretSetVersion
+                        active?.secretSetId?.toString(),
+                        active?.secretSetVersion
                     ),
                     ProjectOverviewGateway(
                         site?.id?.toString(), site?.domain ?: project.domain,
