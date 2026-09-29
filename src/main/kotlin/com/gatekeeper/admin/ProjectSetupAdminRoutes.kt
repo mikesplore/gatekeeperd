@@ -628,7 +628,7 @@ fun Application.configureProjectSetupAdminRoutes() {
                     else return@put call.respondError(HttpStatusCode.BadRequest, "invalid_service_id", "Service ID is invalid")
                 val service = ServiceRepository.findByProjectAndId(projectId, serviceId)
                     ?: return@put call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
-                if (service.name == "default") ProjectRepository.update(
+                if (service.isDefault) ProjectRepository.update(
                     slug = project.slug, name = null, domain = domain, type = null,
                     amountDue = null, currency = null, dueDate = null, gracePeriodDays = null
                 ) ?: return@put call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")

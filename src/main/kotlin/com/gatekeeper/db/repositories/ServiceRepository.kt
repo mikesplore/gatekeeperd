@@ -26,6 +26,7 @@ object ServiceRepository {
         val id: UUID,
         val projectId: UUID,
         val name: String,
+        val isDefault: Boolean,
         val accessStatus: String,
         val blockReason: String?,
         val blockReasonCode: AccessBlockReason? = null,
@@ -60,11 +61,12 @@ object ServiceRepository {
         Services.insertIgnore {
             it[Services.projectId] = projectId
             it[Services.name] = "default"
+            it[Services.isDefault] = true
             it[Services.accessStatus] = "active"
             it[Services.blockReason] = null
         }
         Services.selectAll().where {
-            (Services.projectId eq projectId) and (Services.name eq "default")
+            (Services.projectId eq projectId) and (Services.isDefault eq true)
         }.single().let(::toRecord)
     }
 
@@ -74,6 +76,7 @@ object ServiceRepository {
             it[Services.id] = id
             it[Services.projectId] = projectId
             it[Services.name] = name
+            it[Services.isDefault] = false
             it[Services.accessStatus] = "active"
             it[Services.blockReason] = null
         }
@@ -127,7 +130,7 @@ object ServiceRepository {
         val service = Services.selectAll().where {
             (Services.projectId eq projectId) and (Services.id eq id)
         }.singleOrNull() ?: return@transaction false
-        if (service[Services.name] == "default") return@transaction false
+        if (service[Services.isDefault]) return@transaction false
         val inUse = DeploymentConfigurations.selectAll().where { DeploymentConfigurations.serviceId eq id }.count() > 0L ||
             DeploymentExecutions.selectAll().where { DeploymentExecutions.serviceId eq id }.count() > 0L ||
             DeploymentJobs.selectAll().where { DeploymentJobs.serviceId eq id }.count() > 0L ||
@@ -146,7 +149,7 @@ object ServiceRepository {
     }
 
     private fun toRecord(row: org.jetbrains.exposed.sql.ResultRow) = ServiceRecord(
-        row[Services.id], row[Services.projectId], row[Services.name],
+        row[Services.id], row[Services.projectId], row[Services.name], row[Services.isDefault],
         row[Services.accessStatus], row[Services.blockReason], row[Services.blockReasonCode], row[Services.blockReasonNote]
     )
 

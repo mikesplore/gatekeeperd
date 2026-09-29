@@ -7,6 +7,7 @@ object Services : Table("services") {
     val id = uuid("id").autoGenerate()
     val projectId = reference("project_id", Projects.id)
     val name = text("name")
+    val isDefault = bool("is_default").default(false)
     val accessStatus = text("access_status").default("active")
     val blockReason = text("block_reason").nullable()
     val blockReasonCode = customEnumeration(

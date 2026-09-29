@@ -268,7 +268,7 @@ List project services or create one with `{ "name": "frontend" }`. Names may con
 
 #### GET, PATCH, DELETE /api/admin/projects/{projectId}/services/{serviceId}
 
-Read, update, or delete a service. PATCH accepts `name`, `accessStatus` (`active`, `blocked`, or `manual_block`), and the compatibility `blockReason` text. Structured blocks accept `blockReasonCode` (`payment`, `manual_hold`, `abuse_tos`, `suspended_by_request`, or `other`) and optional `blockReasonNote`. Responses include these reason fields. Setting access to `active` clears the reason and note. The default service cannot be renamed or deleted. Services with deployment, environment, or site history cannot be deleted.
+Read, update, or delete a service. PATCH accepts `name`, `accessStatus` (`active`, `blocked`, or `manual_block`), and the compatibility `blockReason` text. Structured blocks accept `blockReasonCode` (`payment`, `manual_hold`, `abuse_tos`, `suspended_by_request`, or `other`) and optional `blockReasonNote`. Responses include these reason fields and `isDefault`. Setting access to `active` clears the reason and note. The default service may be renamed but cannot be deleted; its identity and linked runtime data remain unchanged. Services with deployment, environment, or site history cannot be deleted.
 
 #### POST /api/admin/projects/{projectId}/services/{serviceId}/adjustments
 

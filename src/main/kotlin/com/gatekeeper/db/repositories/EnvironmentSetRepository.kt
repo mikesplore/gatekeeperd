@@ -83,7 +83,7 @@ object EnvironmentSetRepository {
                 (ProjectSecretSetVersions.environment eq environment)
         }.toList().filter {
             it[ProjectSecretSetVersions.serviceId] == serviceId ||
-                (service[Services.name] == "default" && it[ProjectSecretSetVersions.serviceId] == null)
+                (service[Services.isDefault] && it[ProjectSecretSetVersions.serviceId] == null)
         }
         val versions = versionRows.map { row ->
             metadata(

@@ -27,6 +27,7 @@ import java.math.BigDecimal
 @Serializable
 data class ServiceAdminView(
     val id: String, val projectId: String, val name: String, val accessStatus: String,
+    val isDefault: Boolean,
     val blockReason: String?, val blockReasonCode: String? = null, val blockReasonNote: String? = null
 )
 
@@ -194,8 +195,8 @@ fun Application.configureServiceAdminRoutes() {
                 val body = runCatching { call.receive<UpdateServiceRequest>() }.getOrNull()
                     ?: return@patch call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid service update")
                 val name = body.name?.trim()
-                if (name != null && (!validServiceName(name) || name.equals("default", ignoreCase = true) != current.name.equals("default", ignoreCase = true))) {
-                    return@patch call.respondError(HttpStatusCode.BadRequest, "invalid_service_name", "Service name is invalid or the default service was renamed")
+                if (name != null && (!validServiceName(name) || (!current.isDefault && name.equals("default", ignoreCase = true)))) {
+                    return@patch call.respondError(HttpStatusCode.BadRequest, "invalid_service_name", "Service name is invalid or reserved")
                 }
                 if (body.accessStatus != null && body.accessStatus !in setOf("active", "blocked", "manual_block")) {
                     return@patch call.respondError(HttpStatusCode.BadRequest, "invalid_access_status", "accessStatus must be active, blocked, or manual_block")
@@ -222,7 +223,7 @@ fun Application.configureServiceAdminRoutes() {
                 val (projectId, serviceId) = call.serviceCoordinates() ?: return@delete
                 val current = ServiceRepository.findByProjectAndId(projectId, serviceId)
                     ?: return@delete call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
-                if (current.name == "default") {
+                if (current.isDefault) {
                     return@delete call.respondError(HttpStatusCode.Conflict, "default_service_required", "The default service cannot be deleted")
                 }
                 if (!ServiceRepository.delete(projectId, serviceId)) {
@@ -346,7 +347,7 @@ private fun validEnvironmentValues(values: Map<String, String>) = values.all { (
 }
 
 private fun ServiceRepository.ServiceRecord.toView() = ServiceAdminView(
-    id.toString(), projectId.toString(), name, accessStatus, blockReason,
+    id.toString(), projectId.toString(), name, accessStatus, isDefault, blockReason,
     blockReasonCode?.value, blockReasonNote
 )
 private fun EnvironmentSetRepository.VersionMetadata.toView() = EnvironmentVersionView(id.toString(), version, environment, keys, createdAt.toString(), createdBy)

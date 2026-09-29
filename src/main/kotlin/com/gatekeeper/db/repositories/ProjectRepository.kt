@@ -138,6 +138,7 @@ object ProjectRepository {
             Services.insert {
                 it[Services.projectId] = id
                 it[Services.name] = "default"
+                it[Services.isDefault] = true
                 it[Services.accessStatus] = "active"
                 it[Services.blockReason] = null
             }

@@ -18,7 +18,7 @@ import java.util.UUID
 /** The only writer of canonical deployment lifecycle state. */
 object DeploymentApplicationService {
     private fun defaultServiceId(projectId: UUID): UUID = Services.selectAll().where {
-        (Services.projectId eq projectId) and (Services.name eq "default")
+        (Services.projectId eq projectId) and (Services.isDefault eq true)
     }.singleOrNull()?.get(Services.id) ?: error("Default service not found for project $projectId")
 
     private val allowedTransitions = mapOf(
