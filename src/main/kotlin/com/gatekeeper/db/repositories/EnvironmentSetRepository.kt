@@ -7,6 +7,7 @@ import com.gatekeeper.db.tables.Deployments
 import com.gatekeeper.db.tables.ProjectSecretSetVersions
 import com.gatekeeper.db.tables.ProjectSharedEnvironmentVersions
 import com.gatekeeper.db.tables.Services
+import com.gatekeeper.deployment.PublishedPorts
 import com.gatekeeper.security.SecretValueCipher
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.decodeFromString
@@ -166,11 +167,10 @@ object EnvironmentSetRepository {
         }
         val containerPort = execution[DeploymentExecutions.containerPort]
         val hostPort = deployment[Deployments.runtimeHostPort]
-        val publishedPorts = runCatching {
+        val recordedPorts = runCatching {
             Json.decodeFromString<Map<String, Int>>(deployment[Deployments.runtimePortsJson]).mapKeys { it.key.toInt() }
-        }.getOrDefault(emptyMap()).ifEmpty {
-            if (containerPort != null && hostPort != null) mapOf(containerPort to hostPort) else emptyMap()
-        }
+        }.getOrDefault(emptyMap())
+        val publishedPorts = PublishedPorts.normalize(recordedPorts, containerPort, hostPort)
         ActiveDeploymentInspection(
             deployment[Deployments.id], deployment[Deployments.status].value, deployment[Deployments.runtimeContainerName], publishedPorts, serviceId, environment,
             execution[DeploymentExecutions.imageName], execution[DeploymentExecutions.imageTag],

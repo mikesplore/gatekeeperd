@@ -421,10 +421,11 @@ object DeploymentApplicationService {
         val containerPort = com.gatekeeper.db.tables.DeploymentExecutions.selectAll()
             .where { com.gatekeeper.db.tables.DeploymentExecutions.id eq row[Deployments.executionId] }
             .singleOrNull()?.get(com.gatekeeper.db.tables.DeploymentExecutions.containerPort)
-        val publishedPorts = runCatching {
+        val recordedPorts = runCatching {
             kotlinx.serialization.json.Json.decodeFromString<Map<String, Int>>(row[Deployments.runtimePortsJson])
                 .mapKeys { it.key.toInt() }
         }.getOrDefault(emptyMap())
+        val publishedPorts = PublishedPorts.normalize(recordedPorts, containerPort, row[Deployments.runtimeHostPort])
         ActiveDeploymentRuntime(
             row[Deployments.id], row[Deployments.projectId] ?: error("Active deployment has no project_id"),
             row[Deployments.environment], row[Deployments.status], row[Deployments.runtimeContainerName], containerPort, publishedPorts,
@@ -445,14 +446,16 @@ object DeploymentApplicationService {
         val execution = com.gatekeeper.db.tables.DeploymentExecutions.selectAll()
             .where { com.gatekeeper.db.tables.DeploymentExecutions.id eq row[Deployments.executionId] }
             .singleOrNull()
-        val publishedPorts = runCatching {
+        val containerPort = execution?.get(com.gatekeeper.db.tables.DeploymentExecutions.containerPort)
+        val recordedPorts = runCatching {
             kotlinx.serialization.json.Json.decodeFromString<Map<String, Int>>(row[Deployments.runtimePortsJson])
                 .mapKeys { it.key.toInt() }
         }.getOrDefault(emptyMap())
+        val publishedPorts = PublishedPorts.normalize(recordedPorts, containerPort, row[Deployments.runtimeHostPort])
         ActiveDeploymentRuntime(
             row[Deployments.id], row[Deployments.projectId] ?: error("Gateway runtime has no project_id"),
             row[Deployments.environment], row[Deployments.status], row[Deployments.runtimeContainerName],
-            execution?.get(com.gatekeeper.db.tables.DeploymentExecutions.containerPort), publishedPorts,
+            containerPort, publishedPorts,
             row[Deployments.serviceId] ?: error("Gateway runtime has no service_id")
         )
     }

@@ -707,7 +707,7 @@ fun Application.configureProjectSetupAdminRoutes() {
                         try { docker.containerHealth(name) } finally { docker.close() }
                     }.getOrDefault("unknown")
                 } ?: "not_deployed"
-                val upstream = site?.serviceId?.let { DeploymentUpstreamResolver.resolve(it, "production") }
+                val upstream = DeploymentUpstreamResolver.resolve(serviceId, "production")
                 val financials = projectOverviewFinancials(project, call.application.get<ProjectBalanceAdapter>())
                 call.respond(ProjectOverviewResponse(
                     project.id.toString(), project.slug, project.name, project.type,

@@ -24,6 +24,18 @@ class DeploymentUpstreamResolverTest {
     }
 
     @Test
+    fun `service runtime resolves port without a saved nginx site`() {
+        val runtime = DeploymentUpstreamResolver.RuntimeTarget(
+            serviceId, "production", true, "mtaaniwatch-container", 9002, mapOf(9002 to 32940)
+        )
+
+        assertEquals(
+            DeploymentUpstreamResolver.Target("127.0.0.1", 32940, "mtaaniwatch-container"),
+            DeploymentUpstreamResolver.resolveRuntime(serviceId, "production", runtime)
+        )
+    }
+
+    @Test
     fun `docker site can target a ready candidate while activation is pending`() {
         val readyCandidate = DeploymentUpstreamResolver.RuntimeTarget(
             serviceId, "production", true, "ready-service-container", 9002, mapOf(9002 to 32923)
