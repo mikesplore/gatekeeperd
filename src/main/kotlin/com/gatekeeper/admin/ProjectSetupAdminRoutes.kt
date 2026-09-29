@@ -321,7 +321,7 @@ data class AdoptableContainerView(
 )
 
 @Serializable
-data class AdoptContainerRequest(val containerId: String, val containerPort: Int)
+data class AdoptContainerRequest(val containerId: String, val containerPort: Int, val serviceId: String? = null)
 
 @Serializable
 data class AdoptContainerResponse(
@@ -453,6 +453,15 @@ fun Application.configureProjectSetupAdminRoutes() {
                 if (request.containerId.isBlank() || request.containerPort !in 1..65535) {
                     return@post call.respondError(HttpStatusCode.BadRequest, "invalid_container", "Container and a valid published port are required")
                 }
+                val serviceId = request.serviceId?.let { raw ->
+                    runCatching { UUID.fromString(raw) }.getOrNull()
+                        ?: return@post call.respondError(HttpStatusCode.BadRequest, "invalid_service", "Service ID is invalid")
+                } ?: runCatching { ServiceRepository.getOrCreateDefault(projectId).id }.getOrElse {
+                    return@post call.respondError(HttpStatusCode.NotFound, "service_not_found", "Project has no service to attach this container to")
+                }
+                if (ServiceRepository.findByProjectAndId(projectId, serviceId) == null) {
+                    return@post call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
+                }
                 val docker = runCatching { DockerService(AppConfig.dockerSocket) }.getOrElse {
                     return@post call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is unavailable")
                 }
@@ -471,7 +480,7 @@ fun Application.configureProjectSetupAdminRoutes() {
                     return@post call.respondError(HttpStatusCode.Conflict, "container_port_unreachable", "The container's published port is not reachable from this server")
                 }
                 val actor = call.principal<io.ktor.server.auth.jwt.JWTPrincipal>()?.payload?.subject ?: "admin"
-                val adopted = runCatching { DeploymentJobRepository.createAdoptedRuntime(projectId, details, request.containerPort, actor) }
+                val adopted = runCatching { DeploymentJobRepository.createAdoptedRuntime(projectId, serviceId, details, request.containerPort, actor) }
                     .getOrElse { error ->
                         return@post call.respondError(HttpStatusCode.Conflict, "container_adoption_failed", error.message ?: "Container could not be adopted")
                     }

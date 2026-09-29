@@ -482,6 +482,7 @@ object DeploymentJobRepository {
     /** Records an existing running container as an immutable deployment snapshot; its environment is encrypted at rest. */
     fun createAdoptedRuntime(
         projectId: UUID,
+        serviceId: UUID,
         container: com.gatekeeper.docker.DockerService.AdoptionDetails,
         containerPort: Int,
         actor: String
@@ -489,18 +490,20 @@ object DeploymentJobRepository {
         require(container.environment.keys.all { it.matches(Regex("[A-Za-z_][A-Za-z0-9_]*")) }) { "Container has invalid environment variable names" }
         if (container.environment.isNotEmpty()) check(SecretValueCipher.isConfigured()) { "Secret encryption must be configured to adopt a container with environment variables" }
         val environment = "production"
-        val serviceId = defaultServiceId(projectId)
+        require(Services.selectAll().where { (Services.id eq serviceId) and (Services.projectId eq projectId) }.count() == 1L) {
+            "Service does not belong to project"
+        }
         val (registry, imageName, imageTag) = splitImageReference(container.image)
-        val configurationId = configurationIdForProject(projectId, environment) ?: createConfiguration(
+        val configurationId = configurationIdForService(projectId, serviceId, environment) ?: createConfiguration(
             projectId,
             com.gatekeeper.deployment.CreateDeploymentRequest(
                 registry = registry, imageName = imageName, imageTag = imageTag,
                 containerPort = containerPort, network = container.networks.firstOrNull() ?: "bridge",
-                restartPolicy = container.restartPolicy, projectId = projectId.toString(), environment = environment,
+                restartPolicy = container.restartPolicy, projectId = projectId.toString(), serviceId = serviceId.toString(), environment = environment,
                 triggerSource = "container_adoption", volumes = container.volumes
             )
         )
-        val secretSet = container.environment.takeIf { it.isNotEmpty() }?.let { createSecretSetVersion(projectId, environment, it, actor) }
+        val secretSet = container.environment.takeIf { it.isNotEmpty() }?.let { createSecretSetVersion(projectId, environment, it, actor, serviceId) }
         val id = UUID.randomUUID()
         DeploymentConfigurations.update({ DeploymentConfigurations.id eq configurationId }) {
             it[DeploymentConfigurations.serviceId] = serviceId
