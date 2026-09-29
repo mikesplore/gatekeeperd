@@ -111,7 +111,7 @@ fun Application.configureServiceAdminRoutes() {
                 val body = runCatching { call.receive<CreateServiceRequest>() }.getOrNull()
                     ?: return@post call.respondError(HttpStatusCode.BadRequest, "invalid_request", "A service name is required")
                 val name = body.name.trim()
-                if (!validServiceName(name) || name == "default") {
+                if (!validServiceName(name) || name.equals("default", ignoreCase = true)) {
                     return@post call.respondError(HttpStatusCode.BadRequest, "invalid_service_name", "Service name is invalid or reserved")
                 }
                 val service = runCatching { ServiceRepository.create(projectId, name) }.getOrElse {
@@ -194,7 +194,7 @@ fun Application.configureServiceAdminRoutes() {
                 val body = runCatching { call.receive<UpdateServiceRequest>() }.getOrNull()
                     ?: return@patch call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid service update")
                 val name = body.name?.trim()
-                if (name != null && (!validServiceName(name) || name == "default" && current.name != "default" || current.name == "default" && name != "default")) {
+                if (name != null && (!validServiceName(name) || name.equals("default", ignoreCase = true) != current.name.equals("default", ignoreCase = true))) {
                     return@patch call.respondError(HttpStatusCode.BadRequest, "invalid_service_name", "Service name is invalid or the default service was renamed")
                 }
                 if (body.accessStatus != null && body.accessStatus !in setOf("active", "blocked", "manual_block")) {
@@ -336,7 +336,10 @@ private suspend fun ApplicationCall.serviceCoordinates(): Pair<UUID, UUID>? {
     return projectId to serviceId
 }
 
-private fun validServiceName(value: String) = value.length in 1..63 && value.matches(Regex("^[a-z][a-z0-9_-]*$"))
+private fun validServiceName(value: String) = value.length in 1..63 &&
+    value.first().isLetterOrDigit() &&
+    value.all { it.isLetterOrDigit() || it == ' ' || it == '-' || it == '_' || it == '.' } &&
+    value.last().isLetterOrDigit()
 private fun normalizeEnvironment(value: String) = value.trim().lowercase().takeIf { it.matches(Regex("^[a-z][a-z0-9_-]{0,31}$")) }
 private fun validEnvironmentValues(values: Map<String, String>) = values.all { (key, value) ->
     key.matches(Regex("[A-Za-z_][A-Za-z0-9_]*")) && !key.contains('=') && !value.contains('\u0000')

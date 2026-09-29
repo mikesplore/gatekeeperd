@@ -264,7 +264,7 @@ Returns shared environment version metadata: latest version, IDs, version number
 
 #### GET, POST /api/admin/projects/{projectId}/services
 
-List project services or create one with `{ "name": "frontend" }`. Service names are unique within a project; `default` is reserved. Responses include service access status and block reason.
+List project services or create one with `{ "name": "frontend" }`. Names may contain letters, digits, spaces, hyphens, underscores, and periods (1–63 characters); they must start and end with a letter or digit. Names are unique within a project; `default` is reserved case-insensitively. Responses include service access status and block reason.
 
 #### GET, PATCH, DELETE /api/admin/projects/{projectId}/services/{serviceId}
 
