@@ -100,7 +100,7 @@ data class ProjectEnvironmentDeployResponse(
 @Serializable
 data class ProjectSetupGatewayRequest(
     val domain: String,
-    val tlsMode: String = "http_only",
+    val tlsMode: String = "https",
     val gateEnabled: Boolean = true,
     val serviceId: String? = null
 )

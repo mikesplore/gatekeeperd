@@ -597,7 +597,7 @@ After candidate readiness, the worker switches a managed nginx site's upstream t
 These endpoints manage nginx site configurations for client projects. They require `nginx` CLI and `systemctl` access on the host.
 
 ### GET /api/admin/nginx/wizard/context/{slug}
-Fetch project nginx state, the active deployment's resolved upstream host/port and runtime health, and certificate options.
+Fetch project nginx state, the active deployment's resolved upstream host/port and runtime health, and certificate options. `configuredPort` is the Docker-published host port nginx should use, not the container port. If a site has not been saved yet, the default service's active deployment is still used for resolution.
 
 **Response:**
 ```json
@@ -606,7 +606,7 @@ Fetch project nginx state, the active deployment's resolved upstream host/port a
   "domain": "acw.example.com",
   "nginxEnabled": false,
   "resolvedUpstreamHost": "127.0.0.1",
-  "configuredPort": 9921,
+  "configuredPort": 32768,
   "runtimeHealth": "running",
   "installedCertificates": ["example.com"],
   "resolvedCertificateDomain": "example.com"
@@ -657,11 +657,11 @@ Generate and enable an nginx site config for a project. Validates that the proje
 ```
 
 - `port` is optional when the project has an active deployment with a resolvable runtime port.
-- `upstreamScheme` is optional. If omitted, Gatekeeper infers `https` for port `443` and `http` for other ports.
+- `upstreamScheme` is optional. If omitted, Gatekeeper uses HTTP between nginx and the app; public TLS terminates at nginx.
 - `certificateDomain` is optional. If provided, it selects an installed certificate under `/etc/letsencrypt/live/{certificateDomain}/`.
 - `sslCertificatePath` and `sslCertificateKeyPath` are optional. If both are provided, they override all other certificate selection.
 - If no certificate selection is provided, Gatekeeper tries to reuse an installed certificate for the project's `domain` or its parent domains (e.g. reuse `example.com` for `acw.example.com`).
-- `requireSsl` is optional. If `true`, the request fails when no certificate is found. If `false` (default), the site is enabled without SSL (port 80) when no certificate is found.
+- `requireSsl` is optional. If `true` (the wizard default), the request fails when no certificate is found. If `false`, the site is enabled without SSL (port 80) when no certificate is found.
 
 **Response:**
 ```json
@@ -677,12 +677,12 @@ Generate and enable an nginx site config for a project. Validates that the proje
 
 **Notes:**
 - Validates that the project's Docker container is running before creating the config (works even when gatekeeperd runs in Docker).
-- If Docker reports published ports for the container, Gatekeeper also checks that the expected upstream host port is published.
+- If Docker reports published ports for the container, Gatekeeper checks the expected upstream host port against the published host side of the mapping (for example, `32768` in `32768:9921/tcp`). The application protocol defaults to HTTP; public TLS terminates at nginx.
 - If Docker is unavailable or the project doesn't encode a container name, Gatekeeper falls back to a fast TCP connect probe on `127.0.0.1:{port}`.
 - Creates a file in `sites-available/{slug}` and a symlink in `sites-enabled/{slug}`.
 - Runs `nginx -t` and `systemctl reload nginx`. If reload fails, the site is disabled and an error is returned.
 - The generated config follows the standard gatekeeperd pattern with `auth_request`, paywall named location, and `/api/gate/` bypass.
-- If the upstream app listens on `443`, the generated config uses `proxy_pass https://127.0.0.1:443` unless `upstreamScheme` overrides it.
+- The upstream protocol defaults to HTTP. Use `upstreamScheme: "https"` only when the application itself serves HTTPS.
 
 ### POST /api/admin/nginx/disable/{slug}
 Disable (unlink) an nginx site without removing the config file.

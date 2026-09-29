@@ -46,6 +46,20 @@ import org.slf4j.LoggerFactory
 
 private val logger = LoggerFactory.getLogger("com.gatekeeper.admin.NginxAdminRoutes")
 
+private fun activeDefaultRuntime(projectId: java.util.UUID) = runCatching {
+    val serviceId = SiteRepository.findDefaultServiceId(projectId)
+    DeploymentApplicationService.activeDeploymentRuntime(serviceId, "production")
+}.getOrNull()
+
+private fun resolvedDefaultRuntimeTarget(projectId: java.util.UUID): DeploymentUpstreamResolver.Target? {
+    val runtime = activeDefaultRuntime(projectId) ?: return null
+    val containerPort = runtime.containerPort?.takeIf { it in 1..65535 }
+        ?: runtime.publishedPorts.keys.singleOrNull()?.takeIf { it in 1..65535 }
+        ?: return null
+    val hostPort = runtime.publishedPorts[containerPort]?.takeIf { it in 1..65535 } ?: return null
+    return DeploymentUpstreamResolver.Target("127.0.0.1", hostPort, runtime.containerName)
+}
+
 @Serializable
 data class NginxEnableResponse(
     val success: Boolean,
@@ -129,7 +143,8 @@ private fun renderModelFromSite(
         domain = site.domain,
         upstreamHost = upstreamHost,
         appPort = port,
-        upstreamScheme = if (tls == TlsRenderMode.HTTP_ONLY) "http" else "https",
+        // Public TLS terminates at nginx; application containers normally speak HTTP.
+        upstreamScheme = "http",
         tlsMode = tls,
         certificatePath = certificate?.certificatePath,
         certificateKeyPath = certificate?.privateKeyPath,
@@ -219,8 +234,7 @@ private fun computeNginxEnablePlan(
         }
     }
 
-    val upstreamScheme = request.upstreamScheme?.trim()?.lowercase()?.takeIf { it.isNotBlank() }
-        ?: if (appPort == 443) "https" else "http"
+    val upstreamScheme = request.upstreamScheme?.trim()?.lowercase()?.takeIf { it.isNotBlank() } ?: "http"
     if (upstreamScheme !in listOf("http", "https")) {
         return NginxPlanResult.Err(HttpStatusCode.BadRequest, "invalid_request", "upstreamScheme must be 'http' or 'https'")
     }
@@ -234,7 +248,7 @@ private fun computeNginxEnablePlan(
 
     val explicitCertPath = request.sslCertificatePath?.trim()?.takeIf { it.isNotBlank() }
     val explicitKeyPath = request.sslCertificateKeyPath?.trim()?.takeIf { it.isNotBlank() }
-    val requireSsl = request.requireSsl ?: false
+    val requireSsl = request.requireSsl ?: true
 
     if ((explicitCertPath == null) != (explicitKeyPath == null)) {
         return NginxPlanResult.Err(
@@ -352,8 +366,9 @@ fun Application.configureNginxAdminRoutes() {
                 }
 
                 val site = SiteRepository.findByProjectId(project.id)
-                val activeRuntime = site?.serviceId?.let { DeploymentApplicationService.activeDeploymentRuntime(it, "production") }
+                val activeRuntime = activeDefaultRuntime(project.id)
                 val resolvedTarget = site?.serviceId?.let { DeploymentUpstreamResolver.resolve(it, "production") }
+                    ?: resolvedDefaultRuntimeTarget(project.id)
                 val configuredPort = resolvedTarget?.port
 
                 val dockerHealth = runCatching {
@@ -362,12 +377,13 @@ fun Application.configureNginxAdminRoutes() {
                 }.getOrNull()
 
                 val installedCerts = nginxService.listInstalledCertificates().map { it.certificateDomain }.sorted()
-                val resolvedCert = nginxService.resolveCertificateForDomain(project.domain)
+                val domain = site?.domain ?: project.domain
+                val resolvedCert = nginxService.resolveCertificateForDomain(domain)
 
                 call.respond(
                     NginxWizardContextResponse(
                         slug = slug,
-                        domain = project.domain,
+                        domain = domain,
                         nginxEnabled = nginxEnabled,
                         resolvedUpstreamHost = resolvedTarget?.host,
                         configuredPort = configuredPort,
@@ -401,7 +417,7 @@ fun Application.configureNginxAdminRoutes() {
                 when (val result = computeNginxEnablePlan(
                     slug = slug,
                     projectDomain = project.domain,
-                    activeRuntimeName = SiteRepository.findByProjectId(project.id)?.serviceId?.let { DeploymentApplicationService.activeDeploymentRuntime(it, "production")?.containerName },
+                    activeRuntimeName = activeDefaultRuntime(project.id)?.containerName,
                     request = body,
                     nginxService = nginxService,
                     dockerService = dockerService
@@ -596,7 +612,7 @@ fun Application.configureNginxAdminRoutes() {
                     val plan = when (val result = computeNginxEnablePlan(
                     slug = slug,
                     projectDomain = project.domain,
-                    activeRuntimeName = SiteRepository.findByProjectId(project.id)?.serviceId?.let { DeploymentApplicationService.activeDeploymentRuntime(it, "production")?.containerName },
+                        activeRuntimeName = activeDefaultRuntime(project.id)?.containerName,
                     request = body,
                     nginxService = nginxService,
                     dockerService = dockerService
