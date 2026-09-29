@@ -302,13 +302,14 @@ fun Application.configureOperationsAdminRoutes() {
                     call.respondNginxDomainConflicts(conflicts)
                     return@patch
                 }
-                if (!nginx.enableProject(siteSlug, config)) {
+                val activation = nginx.enableProjectDetailed(siteSlug, config)
+                if (!activation.success) {
                     val racedConflicts = runCatching { nginx.findDomainConflicts(config, siteSlug) }.getOrNull().orEmpty()
                     if (racedConflicts.isNotEmpty()) {
                         call.respondNginxDomainConflicts(racedConflicts)
                         return@patch
                     }
-                    call.respondError(HttpStatusCode.UnprocessableEntity, "nginx_error", "Validation or activation failed; previous configuration was preserved")
+                    call.respondError(HttpStatusCode.UnprocessableEntity, "nginx_error", activation.message ?: "Validation or activation failed; previous configuration was preserved")
                     return@patch
                 }
                 val responseSite = SiteRepository.findByProjectSlug(siteSlug) ?: SiteRepository.findByDomain(siteSlug) ?: updated

@@ -207,7 +207,9 @@ class NginxServiceTest {
             nginxReloadRunner = { reloadCalls++; true }
         )
 
-        assertFalse(service.enableProject(slug, "candidate-runtime-upstream"))
+        val activation = service.enableProjectDetailed(slug, "candidate-runtime-upstream")
+        assertFalse(activation.success)
+        assertContains(activation.message.orEmpty(), "candidate config invalid")
 
         assertEquals(1, validationCalls)
         assertEquals(0, reloadCalls)

@@ -21,6 +21,8 @@ import com.gatekeeper.db.tables.UpstreamMode
 
 private val logger = LoggerFactory.getLogger("com.gatekeeper.nginx.NginxService")
 
+data class NginxSiteActivationResult(val success: Boolean, val message: String? = null)
+
 private fun runNginxTestCommand(): NginxTestResult {
     return try {
         val process = ProcessBuilder("sudo", "-n", "/usr/sbin/nginx", "-t").redirectErrorStream(true).start()
@@ -750,18 +752,23 @@ class NginxService(
     }
 
     fun enableProject(slug: String, configContent: String): Boolean {
+        return enableProjectDetailed(slug, configContent).success
+    }
+
+    fun enableProjectDetailed(slug: String, configContent: String): NginxSiteActivationResult {
         return DistributedLock.withLock("nginx-domain-configs") {
           try {
             val conflicts = findDomainConflicts(configContent, slug)
             if (conflicts.isNotEmpty()) {
+                val message = "Nginx domain conflict: ${conflicts.joinToString { it.filename ?: "Gatekeeperd self domain" }}"
                 logger.warn("Refusing to enable nginx site $slug because it conflicts with ${conflicts.joinToString { it.filename ?: "Gatekeeperd self domain" }}")
-                return@withLock false
+                return@withLock NginxSiteActivationResult(false, message)
             }
             val availableFile = File("$sitesAvailablePath/$slug")
             val enabledFile = File("$sitesEnabledPath/$slug")
             if (isExcluded(availableFile, enabledFile)) {
                 logger.warn("Refusing to manage nginx site $slug because its existing config serves Gatekeeperd")
-                return@withLock false
+                return@withLock NginxSiteActivationResult(false, "This config is excluded from Gatekeeperd management")
             }
             availableFile.parentFile?.mkdirs()
             enabledFile.parentFile?.mkdirs()
@@ -772,10 +779,12 @@ class NginxService(
 
             // Validate the staged site through nginx's normal include tree while
             // leaving the live site and its enabled link untouched.
-            if (!testNginxConfigWithStagedSite(slug, stagedFile).valid) {
+            val validation = testNginxConfigWithStagedSite(slug, stagedFile)
+            if (!validation.valid) {
                 Files.deleteIfExists(stagedFile.toPath())
-                logger.error("Nginx validation failed for staged site $slug; live configuration was not changed")
-                return@withLock false
+                val detail = validation.output.trim().take(3000).ifBlank { "nginx -t exited with code ${validation.exitCode}" }
+                logger.error("Nginx validation failed for staged site $slug (exit {}): {}", validation.exitCode, detail)
+                return@withLock NginxSiteActivationResult(false, "nginx -t failed: $detail")
             }
 
             val backup = if (availableFile.isFile) {
@@ -796,13 +805,13 @@ class NginxService(
                     restoreActivatedSite(availableFile, enabledFile, backup)
                     reloadNginx()
                     logger.error("Nginx reload failed for $slug; previous configuration was restored")
-                    return@withLock false
+                    return@withLock NginxSiteActivationResult(false, "Nginx reload failed after validation; the previous configuration was restored")
                 }
             } catch (e: Exception) {
                 restoreActivatedSite(availableFile, enabledFile, backup)
                 runCatching { reloadNginx() }
                 logger.error("Failed to activate nginx site $slug; previous configuration was restored", e)
-                return@withLock false
+                return@withLock NginxSiteActivationResult(false, "Nginx activation failed and the previous configuration was restored: ${e.message ?: "unknown error"}")
             } finally {
                 Files.deleteIfExists(stagedFile.toPath())
             }
@@ -811,10 +820,10 @@ class NginxService(
             // tracking always reflects the exact bytes now on disk.
             recordManagedVersion(slug, availableFile.readText())
             logger.info("Enabled nginx site: $slug")
-            true
+            NginxSiteActivationResult(true)
           } catch (e: Exception) {
             logger.error("Failed to enable nginx site: $slug", e)
-            false
+            NginxSiteActivationResult(false, "Failed to enable Nginx site: ${e.message ?: "unknown error"}")
           }
         }
     }
