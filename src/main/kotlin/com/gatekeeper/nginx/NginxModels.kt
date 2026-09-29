@@ -92,6 +92,21 @@ data class NginxConfigArtifact(
 )
 
 @Serializable
+data class NginxManualConfigDetail(
+    val filename: String,
+    val domains: List<String>,
+    val listenPorts: List<Int>,
+    val available: Boolean,
+    val enabled: Boolean,
+    val content: String
+)
+
+data class NginxManualConfigDisableResult(
+    val backup: String,
+    val matchingManagedConfigs: List<String>
+)
+
+@Serializable
 data class NginxConfigBlock(
     val type: String,
     val header: String,

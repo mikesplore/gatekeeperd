@@ -141,6 +141,114 @@ class NginxService(
         }
     }
 
+    fun inspectManualConfig(filename: String): NginxManualConfigDetail {
+        require(isSafeConfigFilename(filename)) { "Invalid nginx config filename" }
+        val available = File(sitesAvailablePath, filename)
+        val enabled = File(sitesEnabledPath, filename)
+        require(!isExcluded(available, enabled)) { "This nginx config serves Gatekeeperd and is excluded from site management" }
+        val source = available.takeIf { it.isFile } ?: enabled.takeIf { it.isFile || Files.isSymbolicLink(it.toPath()) }
+            ?: throw IllegalArgumentException("Nginx config not found")
+        val content = source.readText()
+        require(classifyConfig(filename, content).classification == NginxConfigClassification.MANUAL) {
+            "Only unmarked manual nginx configs can be inspected here"
+        }
+        val classified = classifyConfig(filename, content)
+        return NginxManualConfigDetail(filename, classified.serverNames, classified.listenPorts,
+            available.isFile, enabled.exists() || Files.isSymbolicLink(enabled.toPath()), content)
+    }
+
+    fun disableManualConfig(filename: String): NginxManualConfigDisableResult {
+        require(isSafeConfigFilename(filename)) { "Invalid nginx config filename" }
+        val detail = inspectManualConfig(filename)
+        require(detail.enabled) { "Manual nginx config is already disabled" }
+        val available = File(sitesAvailablePath, filename)
+        val availableWasPresent = available.isFile
+        val enabled = File(sitesEnabledPath, filename)
+        val wasSymlink = Files.isSymbolicLink(enabled.toPath())
+        val linkTarget = if (wasSymlink) Files.readSymbolicLink(enabled.toPath()) else null
+        val backup = File(available.parentFile, "$filename.bak-${Instant.now().toEpochMilli()}")
+        if (!availableWasPresent) Files.writeString(available.toPath(), detail.content)
+        Files.copy(available.toPath(), backup.toPath())
+        Files.deleteIfExists(enabled.toPath())
+
+        val validation = testNginxConfigDetailed()
+        if (!validation.valid) {
+            restoreEnabledManualConfig(available, enabled, wasSymlink, linkTarget)
+            if (!availableWasPresent) Files.deleteIfExists(available.toPath())
+            throw IllegalStateException("nginx -t failed after disabling '$filename'; the enabled config was restored: ${validation.output}")
+        }
+        if (!nginxReloadRunner()) {
+            restoreEnabledManualConfig(available, enabled, wasSymlink, linkTarget)
+            if (!availableWasPresent) Files.deleteIfExists(available.toPath())
+            runCatching { reloadNginx() }
+            throw IllegalStateException("Nginx reload failed after disabling '$filename'; the enabled config was restored")
+        }
+
+        val afterDisable = listConfigArtifacts()
+        val matchingManaged = afterDisable.filter { artifact ->
+            artifact.classification == NginxConfigClassification.GATEKEEPER_MANAGED && artifact.tracked && artifact.enabled &&
+                domainsOverlap(detail.domains, artifact.domains) && portsOverlap(detail.listenPorts, artifact.listenPorts)
+        }
+        if (matchingManaged.isNotEmpty()) {
+            val competing = afterDisable.filter { artifact ->
+                artifact.filename != filename && artifact.enabled &&
+                    domainsOverlap(detail.domains, artifact.domains) && portsOverlap(detail.listenPorts, artifact.listenPorts) &&
+                    !(artifact.classification == NginxConfigClassification.GATEKEEPER_MANAGED && artifact.tracked && matchingManaged.any { it.filename == artifact.filename })
+            }
+            if (competing.isNotEmpty()) {
+                restoreEnabledManualConfig(available, enabled, wasSymlink, linkTarget)
+                if (!availableWasPresent) Files.deleteIfExists(available.toPath())
+                runCatching { reloadNginx() }
+                throw IllegalStateException("The domain also matches enabled configs (${competing.joinToString { it.filename }}); the manual config was restored because traffic could not be verified to reach the intended Gatekeeper-managed site")
+            }
+        }
+        return NginxManualConfigDisableResult(backup.name, matchingManaged.map { it.filename })
+    }
+
+    fun deleteDisabledManualConfig(filename: String): String {
+        require(isSafeConfigFilename(filename)) { "Invalid nginx config filename" }
+        val detail = inspectManualConfig(filename)
+        require(!detail.enabled) { "Disable the manual nginx config before deleting it" }
+        val available = File(sitesAvailablePath, filename)
+        require(available.isFile) { "Manual nginx config is not present in sites-available" }
+
+        val backup = File(available.parentFile, "$filename.bak-${Instant.now().toEpochMilli()}")
+        Files.copy(available.toPath(), backup.toPath())
+        Files.delete(available.toPath())
+        val validation = testNginxConfigDetailed()
+        if (!validation.valid) {
+            Files.copy(backup.toPath(), available.toPath())
+            throw IllegalStateException("nginx -t failed after deleting '$filename'; the config was restored from backup: ${validation.output}")
+        }
+        return backup.name
+    }
+
+    private fun restoreEnabledManualConfig(available: File, enabled: File, wasSymlink: Boolean, linkTarget: java.nio.file.Path?) {
+        if (wasSymlink && linkTarget != null) Files.createSymbolicLink(enabled.toPath(), linkTarget)
+        else if (available.isFile) Files.copy(available.toPath(), enabled.toPath())
+    }
+
+    private fun isSafeConfigFilename(filename: String): Boolean =
+        filename == File(filename).name && filename.matches(Regex("[A-Za-z0-9][A-Za-z0-9_.-]*"))
+
+    private fun normalizeServerName(name: String): String = name.trim().trimEnd('.').lowercase()
+
+    private fun domainsOverlap(first: List<String>, second: List<String>): Boolean = first.any { left ->
+        second.any { right -> serverNamesMayMatch(normalizeServerName(left), normalizeServerName(right)) }
+    }
+
+    private fun serverNamesMayMatch(first: String, second: String): Boolean = when {
+        first == second -> true
+        first.startsWith("*.") -> second.endsWith(first.removePrefix("*")) || second.startsWith("*.") && first == second
+        second.startsWith("*.") -> first.endsWith(second.removePrefix("*"))
+        first.startsWith(".") -> second == first.removePrefix(".") || second.endsWith(first)
+        second.startsWith(".") -> first == second.removePrefix(".") || first.endsWith(second)
+        else -> false
+    }
+
+    private fun portsOverlap(first: List<Int>, second: List<Int>): Boolean =
+        first.isEmpty() || second.isEmpty() || first.any { it in second }
+
     /** Reads all non-backup sites-available files plus enabled-only files and classifies them without mutation. */
     fun classifyAvailableConfigs(): List<ClassifiedNginxConfig> =
         (listConfigFiles(File(sitesAvailablePath)) + listConfigFiles(File(sitesEnabledPath)))

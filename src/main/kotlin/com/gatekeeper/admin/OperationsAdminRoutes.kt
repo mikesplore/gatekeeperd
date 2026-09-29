@@ -94,6 +94,15 @@ data class BulkProjectResult(val slug: String, val status: String, val message: 
 
 @Serializable data class DashboardSiteDeleteResponse(val deleted: Boolean, val slug: String)
 @Serializable data class NginxConfigArtifactBackupResponse(val filename: String, val backup: String? = null)
+@Serializable data class NginxManualConfigActionResponse(
+    val filename: String,
+    val backup: String,
+    val disabled: Boolean = false,
+    val deleted: Boolean = false,
+    val nginxTestPassed: Boolean = true,
+    val reloaded: Boolean = false,
+    val resolvedManagedConfigs: List<String> = emptyList()
+)
 
 @Serializable data class DashboardCustomerResponse(
     val id: String, val name: String, val contactEmail: String? = null, val contactPhone: String? = null,
@@ -317,6 +326,49 @@ fun Application.configureOperationsAdminRoutes() {
             }
             get("/api/admin/nginx/configs") {
                 call.respond(NginxService.configured().listConfigArtifacts())
+            }
+            get("/api/admin/nginx/manual-configs/{filename}") {
+                val filename = call.parameters["filename"] ?: run { call.respondError(HttpStatusCode.BadRequest, "missing_filename", "Missing filename"); return@get }
+                val detail = runCatching { NginxService.configured().inspectManualConfig(filename) }.getOrElse { error ->
+                    val message = error.message ?: "Unable to inspect nginx config"
+                    val status = if (message.contains("not found", ignoreCase = true)) HttpStatusCode.NotFound else HttpStatusCode.Conflict
+                    call.respondError(status, "manual_config_unavailable", message)
+                    return@get
+                }
+                call.respond(detail)
+            }
+            post("/api/admin/nginx/manual-configs/{filename}/disable") {
+                val filename = call.parameters["filename"] ?: run { call.respondError(HttpStatusCode.BadRequest, "missing_filename", "Missing filename"); return@post }
+                val body = runCatching { call.receive<DashboardConfirmationRequest>() }.getOrElse { call.respondError(HttpStatusCode.BadRequest, "confirmation_required", "Request body must contain confirm=true"); return@post }
+                if (!body.confirm) { call.respondError(HttpStatusCode.Conflict, "confirmation_required", "Set confirm=true to back up and disable this manual config"); return@post }
+                val nginx = NginxService.configured()
+                val artifact = nginx.listConfigArtifacts().firstOrNull { it.filename == filename }
+                    ?: run { call.respondError(HttpStatusCode.NotFound, "config_not_found", "Nginx config not found"); return@post }
+                if (artifact.classification != com.gatekeeper.nginx.NginxConfigClassification.MANUAL) { call.respondError(HttpStatusCode.Conflict, "config_not_manual", "Only unmarked manual configs can be disabled here"); return@post }
+                if (!artifact.enabled) { call.respondError(HttpStatusCode.Conflict, "config_already_disabled", "This manual config is already disabled"); return@post }
+                val backup = runCatching { nginx.disableManualConfig(filename) }.getOrElse { error ->
+                    call.respondError(HttpStatusCode.UnprocessableEntity, "manual_config_disable_failed", error.message ?: "Unable to disable manual config")
+                    return@post
+                }
+                call.respond(NginxManualConfigActionResponse(filename, backup.backup, disabled = true, reloaded = true, resolvedManagedConfigs = backup.matchingManagedConfigs))
+            }
+            delete("/api/admin/nginx/manual-configs/{filename}") {
+                val filename = call.parameters["filename"] ?: run { call.respondError(HttpStatusCode.BadRequest, "missing_filename", "Missing filename"); return@delete }
+                val body = runCatching { call.receive<DashboardConfirmationRequest>() }.getOrElse { call.respondError(HttpStatusCode.BadRequest, "confirmation_required", "Request body must contain confirm=true"); return@delete }
+                if (!body.confirm) { call.respondError(HttpStatusCode.Conflict, "confirmation_required", "Set confirm=true to permanently delete this disabled manual config"); return@delete }
+                val nginx = NginxService.configured()
+                val detail = runCatching { nginx.inspectManualConfig(filename) }.getOrElse { error ->
+                    val message = error.message ?: "Unable to inspect nginx config"
+                    val status = if (message.contains("not found", ignoreCase = true)) HttpStatusCode.NotFound else HttpStatusCode.Conflict
+                    call.respondError(status, "manual_config_unavailable", message)
+                    return@delete
+                }
+                if (detail.enabled) { call.respondError(HttpStatusCode.Conflict, "manual_config_still_enabled", "Disable the manual config before deleting it"); return@delete }
+                val backup = runCatching { nginx.deleteDisabledManualConfig(filename) }.getOrElse { error ->
+                    call.respondError(HttpStatusCode.UnprocessableEntity, "manual_config_delete_failed", error.message ?: "Unable to delete manual config")
+                    return@delete
+                }
+                call.respond(NginxManualConfigActionResponse(filename, backup, deleted = true))
             }
             get("/api/admin/dashboard/dead-configs") {
                 call.respond(NginxService.configured().listConfigArtifacts().filter { it.orphaned })

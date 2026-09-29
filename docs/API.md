@@ -599,6 +599,15 @@ These endpoints manage nginx site configurations for client projects. They requi
 ### GET /api/admin/nginx/configs
 Lists the actual files found in `sites-available` and `sites-enabled`, including their filename, parsed server names and listen ports, availability/enabled state, Gatekeeperd identity markers, database tracking status, and orphan status. Each config is classified as `gatekeeper_managed` or `manual`; files matching `GATEKEEPERD_SELF_DOMAIN` are classified internally as `self` and omitted from admin results and actions.
 
+### GET /api/admin/nginx/manual-configs/{filename}
+Returns a manual config's parsed domains/ports, availability and enabled state, and full file contents for review. Gatekeeper-managed configs and the excluded self-domain are rejected.
+
+### POST /api/admin/nginx/manual-configs/{filename}/disable
+Requires `{"confirm":true}`. Creates a timestamped backup, preserves the config in `sites-available`, removes its `sites-enabled` entry, runs `nginx -t`, and reloads nginx. On validation/reload failure it restores the enabled entry. The response identifies any enabled, tracked Gatekeeper configs that match the manual config's domains and listen ports; if another enabled config competes for that route, the manual config is restored and the request fails.
+
+### DELETE /api/admin/nginx/manual-configs/{filename}
+This is a separate confirmed step and only accepts an already-disabled manual config. It creates another timestamped backup, deletes the config from `sites-available`, and verifies `nginx -t`; if validation fails, it restores the source file.
+
 ### GET /api/admin/nginx/wizard/context/{slug}
 Fetch project nginx state, the active deployment's resolved upstream host/port and runtime health, and certificate options. `configuredPort` is the Docker-published host port nginx should use, not the container port. If a site has not been saved yet, the default service's active deployment is still used for resolution.
 
@@ -1283,6 +1292,7 @@ Dashboard write operations are also available to authenticated administrators:
 - `PATCH /api/admin/dashboard/sites/{slug}` updates desired Site render fields and activates the generated configuration through nginx validation and reload.
 - `DELETE /api/admin/dashboard/sites/{slug}` removes the Site record and its deployed nginx artifacts.
 - `DELETE /api/admin/dashboard/dead-configs/{filename}` requires `{"confirm":true}`, moves the orphaned file to a timestamped backup, removes its enabled link, and reloads nginx. If reload fails, the file and link are restored.
+- Unmarked configs use the separate `/api/admin/nginx/manual-configs/{filename}` review, `/disable` and `DELETE` flow above; they are never removed through the orphan cleanup endpoint.
 - `POST /api/admin/dashboard/customers` creates a customer. A nonblank contact email is unique case-insensitively; attempts to reuse it return `409 customer_exists`.
 - Admin user create/update operations enforce case-insensitive email uniqueness and return `409 user_exists` when the email belongs to another user.
 - `PATCH /api/admin/dashboard/projects/{id}` assigns or clears `customerId`.
