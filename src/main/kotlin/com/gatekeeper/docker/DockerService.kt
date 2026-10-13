@@ -50,6 +50,7 @@ internal fun <Handle, Result> createContainerWithCleanup(
                 remove(ownedContainer)
             } catch (cleanupFailure: Throwable) {
                 if (cleanupFailure !== failure) failure.addSuppressed(cleanupFailure)
+                logger.warn("Could not remove container created by failed operation", cleanupFailure)
             }
         }
         throw failure
