@@ -554,14 +554,14 @@ object DeploymentWorker {
     private data class ReadinessResult(val containerPort: Int?)
 
     private fun awaitHealthy(docker: DockerService, name: String, portMappings: Map<Int, Int>, job: DeploymentJobRecord): ReadinessResult? {
-        val deadline = System.nanoTime() + job.readinessTimeoutSeconds * 1_000_000_000L
         val probe = selectedReadiness(job, portMappings.isNotEmpty())
-        while (System.nanoTime() < deadline) {
-            ensureNotCancelled(job.id, requireNotNull(job.claimToken))
-            runCatching { readinessProbe(docker, name, portMappings, job, probe) }.getOrNull()?.let { return it }
-            Thread.sleep(job.readinessIntervalSeconds * 1000L)
-        }
-        return null
+        return DeploymentReadiness.await(
+            timeoutNanos = job.readinessTimeoutSeconds * 1_000_000_000L,
+            intervalMillis = job.readinessIntervalSeconds * 1000L,
+            checkCancelled = { ensureNotCancelled(job.id, requireNotNull(job.claimToken)) },
+            probe = { readinessProbe(docker, name, portMappings, job, probe) },
+            pause = { intervalMillis -> Thread.sleep(intervalMillis) }
+        )
     }
 
     private fun selectedReadiness(job: DeploymentJobRecord, hasPublishedPort: Boolean): String =

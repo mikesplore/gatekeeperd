@@ -21,8 +21,13 @@ class PreviousRuntimeRecoveryTest {
 
     private class FakeRoute(var config: String = "candidate-route") : RuntimeRestoreRouteBoundary {
         var restores = 0
+        var failNext = false
         override fun restore(previousNginxConfig: String): Boolean {
             restores++
+            if (failNext) {
+                failNext = false
+                return false
+            }
             config = previousNginxConfig
             return true
         }
@@ -114,6 +119,27 @@ class PreviousRuntimeRecoveryTest {
         assertEquals("restored", state.history.last().first)
         assertEquals(1, docker.containers.size)
         assertEquals("previous-route", route.config)
+    }
+
+    @Test
+    fun `nginx restoration failure retains recovery state and repeated recovery completes`() {
+        val docker = FakeDocker()
+        val route = FakeRoute().apply { failNext = true }
+        val state = FakeState()
+
+        assertFailsWith<PreviousRuntimeRestorationException> {
+            PreviousRuntimeRecovery.restore(plan(), "previous-route", docker, route, state, emptyList())
+        }
+
+        assertEquals("candidate-route", route.config)
+        assertEquals("restore_failed", state.history.last().first)
+        assertEquals(1, docker.containers.size)
+
+        PreviousRuntimeRecovery.restore(plan(), "previous-route", docker, route, state, emptyList())
+
+        assertEquals("previous-route", route.config)
+        assertEquals("restored", state.history.last().first)
+        assertEquals(1, docker.containers.size)
     }
 
     @Test
