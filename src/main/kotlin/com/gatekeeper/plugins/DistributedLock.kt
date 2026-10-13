@@ -15,6 +15,16 @@ object DistributedLock {
         return DatabaseFactory.withAdvisoryLock(key, block)
     }
 
+    /** Returns null when another worker currently holds the key instead of waiting. */
+    fun <T> tryWithLock(key: String, block: () -> T): T? {
+        if (!DatabaseFactory.isInitialized()) {
+            val lock = localLocks.computeIfAbsent(key) { ReentrantLock() }
+            if (!lock.tryLock()) return null
+            return try { block() } finally { lock.unlock() }
+        }
+        return DatabaseFactory.tryWithAdvisoryLock(key, block)
+    }
+
     internal fun lockId(key: String): Long {
         val digest = MessageDigest.getInstance("SHA-256").digest(key.toByteArray(StandardCharsets.UTF_8))
         return java.nio.ByteBuffer.wrap(digest, 0, Long.SIZE_BYTES).long

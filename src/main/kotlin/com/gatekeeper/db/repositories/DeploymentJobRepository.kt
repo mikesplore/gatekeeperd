@@ -37,7 +37,8 @@ data class DeploymentJobRecord(
     val secretSetId: UUID? = null,
     val secretSetVersion: Int? = null,
     val serviceId: UUID,
-    val serviceName: String = "default"
+    val serviceName: String = "default",
+    val claimToken: UUID? = null
 )
 
 object DeploymentJobRepository {
@@ -775,7 +776,7 @@ object DeploymentJobRepository {
                 (DeploymentJobs.status inList listOf("queued", "running", "awaiting_build", "awaiting_container")) and
                 (DeploymentJobs.currentStep notInList listOf("readiness_succeeded", "cutover_in_progress"))
         }) {
-            it[status] = "cancelled"; it[currentStep] = "cancelled"; it[completedAt] = LocalDateTime.now(); it[cancelledAt] = LocalDateTime.now(); it[updatedAt] = LocalDateTime.now()
+            it[status] = "cancelled"; it[currentStep] = "cancelled"; it[completedAt] = LocalDateTime.now(); it[cancelledAt] = LocalDateTime.now(); it[updatedAt] = LocalDateTime.now(); it[DeploymentJobs.claimToken] = null
         } > 0
         if (changed) check(DeploymentApplicationService.transition(id, DeploymentStatus.CANCELLED)) { "Deployment $id could not be cancelled" }
         if (changed) DeploymentExecutions.update({ DeploymentExecutions.id eq id }) {
@@ -1145,18 +1146,17 @@ object DeploymentJobRepository {
         resolveEnvironmentForExecution(executionId).values
 
     fun claimNext(): DeploymentJobRecord? = transaction {
-        val row = DeploymentJobs.selectAll().where {
-            (DeploymentJobs.status eq "queued") or
-                ((DeploymentJobs.status eq "running") and
-                    (DeploymentJobs.currentStep inList listOf("readiness_succeeded", "cutover_in_progress")) and
-                    (DeploymentJobs.updatedAt less LocalDateTime.now().minusSeconds(30)))
-        }
+        val row = DeploymentJobs.selectAll().where { DeploymentJobs.status eq "queued" }
             .orderBy(DeploymentJobs.createdAt to SortOrder.ASC).limit(1).singleOrNull() ?: return@transaction null
         val now = LocalDateTime.now()
+        val claimToken = UUID.randomUUID()
         val isReadyForCutover = row[DeploymentJobs.currentStep] in setOf("readiness_succeeded", "cutover_in_progress")
-        DeploymentJobs.update({ DeploymentJobs.id eq row[DeploymentJobs.id] }) {
-            it[status] = "running"; it[currentStep] = if (isReadyForCutover) "cutover_in_progress" else "building"; it[startedAt] = now; it[updatedAt] = now
+        val claimed = DeploymentJobs.update({
+            (DeploymentJobs.id eq row[DeploymentJobs.id]) and (DeploymentJobs.status eq "queued")
+        }) {
+            it[status] = "running"; it[currentStep] = if (isReadyForCutover) "cutover_in_progress" else "building"; it[startedAt] = now; it[updatedAt] = now; it[DeploymentJobs.claimToken] = claimToken
         }
+        if (claimed == 0) return@transaction null
         DeploymentExecutions.update({ DeploymentExecutions.id eq row[DeploymentJobs.id] }) {
             it[status] = "running"; it[currentStep] = if (isReadyForCutover) "cutover_in_progress" else "building"; it[startedAt] = now; it[updatedAt] = now
         }
@@ -1165,27 +1165,88 @@ object DeploymentJobRepository {
             .singleOrNull()?.toRecord(includeSecretEnv = false)
     }
 
-    fun recoverStale(maxAgeMinutes: Long): Int = transaction {
-        val cutoff = LocalDateTime.now().minusMinutes(maxAgeMinutes)
+    data class StaleJobLockKey(val id: UUID, val serviceId: UUID, val environment: String, val claimToken: UUID?)
+
+    fun staleRunningJobs(cutoff: LocalDateTime): List<StaleJobLockKey> = transaction {
+        DeploymentJobs.selectAll().where {
+            (DeploymentJobs.status eq "running") and (DeploymentJobs.updatedAt less cutoff)
+        }.map { row ->
+            StaleJobLockKey(
+                row[DeploymentJobs.id],
+                row[DeploymentJobs.serviceId] ?: defaultServiceId(row[DeploymentJobs.projectId]),
+                row[DeploymentJobs.environment],
+                row[DeploymentJobs.claimToken]
+            )
+        }
+    }
+
+    /** Rechecks the captured owner and stale timestamp after the caller holds the service lock. */
+    fun recoverStale(job: StaleJobLockKey, cutoff: LocalDateTime, recoveredAt: LocalDateTime, reason: String): Boolean = transaction {
+        val current = DeploymentJobs.selectAll().where { DeploymentJobs.id eq job.id }.singleOrNull() ?: return@transaction false
+        if (current[DeploymentJobs.claimToken] != job.claimToken) return@transaction false
+        val readyForCutover = current[DeploymentJobs.currentStep] in setOf("readiness_succeeded", "cutover_in_progress")
+        val step = if (readyForCutover) "readiness_succeeded" else "recovered"
         val changed = DeploymentJobs.update({
-            (DeploymentJobs.status eq "running") and
-                (DeploymentJobs.currentStep notInList listOf("readiness_succeeded", "cutover_in_progress")) and
+            (DeploymentJobs.id eq job.id) and (DeploymentJobs.status eq "running") and
                 (DeploymentJobs.updatedAt less cutoff)
         }) {
-            it[status] = "queued"; it[currentStep] = "recovered"; it[errorMessage] = "Recovered after worker restart or timeout"; it[updatedAt] = LocalDateTime.now()
+            it[status] = "queued"; it[currentStep] = step; it[errorMessage] = reason
+            it[logs] = current[DeploymentJobs.logs] + "$reason\n"
+            it[claimToken] = null; it[updatedAt] = recoveredAt
         }
-        DeploymentExecutions.update({ (DeploymentExecutions.status eq "running") and (DeploymentExecutions.updatedAt less cutoff) }) {
-            it[status] = "queued"; it[currentStep] = "recovered"; it[errorMessage] = "Recovered after worker restart or timeout"; it[updatedAt] = LocalDateTime.now()
+        if (changed == 0) return@transaction false
+        DeploymentExecutions.update({ DeploymentExecutions.id eq job.id }) {
+            it[status] = "queued"; it[currentStep] = step; it[errorMessage] = reason
+            it[logs] = (DeploymentExecutions.selectAll().where { DeploymentExecutions.id eq job.id }.singleOrNull()?.get(DeploymentExecutions.logs).orEmpty()) + "$reason\n"
+            it[updatedAt] = recoveredAt
         }
-        changed
+        true
+    }
+
+    /** Safely returns a claim to the queue after an exception that escaped normal handling. */
+    fun releaseClaim(id: UUID, claimToken: UUID, reason: String): Boolean = transaction {
+        val current = DeploymentJobs.selectAll().where { DeploymentJobs.id eq id }.singleOrNull() ?: return@transaction false
+        val secrets = runCatching { resolveEnvironmentForExecution(id).values.values }.getOrElse {
+            current[DeploymentJobs.secretEnvEncrypted]?.let { encoded ->
+                Json.decodeFromString<Map<String, String>>(SecretValueCipher.decrypt(encoded)).values
+            }.orEmpty()
+        }
+        val safeReason = SecretValueCipher.redact(reason, secrets)
+        val readyForCutover = current[DeploymentJobs.currentStep] in setOf("readiness_succeeded", "cutover_in_progress")
+        val step = if (readyForCutover) "readiness_succeeded" else "recovered"
+        val now = LocalDateTime.now()
+        val changed = DeploymentJobs.update({
+            (DeploymentJobs.id eq id) and (DeploymentJobs.status eq "running") and
+                (DeploymentJobs.claimToken eq claimToken)
+        }) {
+            it[status] = "queued"; it[currentStep] = step; it[errorMessage] = safeReason
+            it[logs] = current[DeploymentJobs.logs] + "Worker attempt released for recovery: $safeReason\n"
+            it[DeploymentJobs.claimToken] = null; it[updatedAt] = now
+        }
+        if (changed == 0) return@transaction false
+        DeploymentExecutions.update({ DeploymentExecutions.id eq id }) {
+            it[status] = "queued"; it[currentStep] = step; it[errorMessage] = safeReason
+            it[logs] = (DeploymentExecutions.selectAll().where { DeploymentExecutions.id eq id }.singleOrNull()?.get(DeploymentExecutions.logs).orEmpty()) + "Worker attempt released for recovery: $safeReason\n"
+            it[updatedAt] = now
+        }
+        true
+    }
+
+    fun ownsClaim(id: UUID, claimToken: UUID): Boolean = transaction {
+        DeploymentJobs.selectAll().where {
+            (DeploymentJobs.id eq id) and (DeploymentJobs.status eq "running") and
+                (DeploymentJobs.claimToken eq claimToken)
+        }.count() == 1L
     }
 
     fun isCancelled(id: UUID): Boolean = transaction {
         DeploymentJobs.selectAll().where { DeploymentJobs.id eq id }.singleOrNull()?.get(DeploymentJobs.status) == "cancelled"
     }
 
-    fun update(id: UUID, step: String? = null, log: String? = null, commitSha: String? = null, imageDigest: String? = null, status: String? = null, error: String? = null) = transaction {
-        val existing = DeploymentJobs.selectAll().where { DeploymentJobs.id eq id }.singleOrNull() ?: return@transaction
+    fun update(id: UUID, claimToken: UUID, step: String? = null, log: String? = null, commitSha: String? = null, imageDigest: String? = null, status: String? = null, error: String? = null) = transaction {
+        val existing = DeploymentJobs.selectAll().where {
+            (DeploymentJobs.id eq id) and (DeploymentJobs.status eq "running") and (DeploymentJobs.claimToken eq claimToken)
+        }.singleOrNull() ?: return@transaction
         // Use the private queue snapshot for log/error redaction while the worker processes this job.
         val deploymentSecrets = runCatching { resolveEnvironmentForExecution(id).values.values }.getOrElse {
             existing[DeploymentJobs.secretEnvEncrypted]?.let { encoded ->
@@ -1193,7 +1254,9 @@ object DeploymentJobRepository {
             }.orEmpty()
         }
         val redactedError = error?.let { SecretValueCipher.redact(it, deploymentSecrets) }
-        DeploymentJobs.update({ DeploymentJobs.id eq id }) {
+        val changed = DeploymentJobs.update({
+            (DeploymentJobs.id eq id) and (DeploymentJobs.status eq "running") and (DeploymentJobs.claimToken eq claimToken)
+        }) {
             step?.let { value -> it[currentStep] = value }
             log?.let { value -> it[logs] = existing[DeploymentJobs.logs] + SecretValueCipher.redact(value,
                 deploymentSecrets
@@ -1205,6 +1268,7 @@ object DeploymentJobRepository {
             if (status == "succeeded" || status == "failed") it[completedAt] = LocalDateTime.now()
             it[updatedAt] = LocalDateTime.now()
         }
+        if (changed == 0) return@transaction
         DeploymentExecutions.update({ DeploymentExecutions.id eq id }) {
             step?.let { value -> it[currentStep] = value }
             log?.let { value -> it[logs] = (DeploymentExecutions.selectAll().where { DeploymentExecutions.id eq id }.singleOrNull()?.get(DeploymentExecutions.logs).orEmpty()) + SecretValueCipher.redact(value,
@@ -1245,7 +1309,8 @@ object DeploymentJobRepository {
         this[DeploymentJobs.readinessType], this[DeploymentJobs.readinessTarget], this[DeploymentJobs.readinessTimeoutSeconds], this[DeploymentJobs.readinessIntervalSeconds], this[DeploymentJobs.readinessProbeTimeoutMillis],
         execution?.get(DeploymentExecutions.secretSetId), execution?.get(DeploymentExecutions.secretSetVersion),
         serviceId,
-        serviceName
+        serviceName,
+        this[DeploymentJobs.claimToken]
         )
     }
 

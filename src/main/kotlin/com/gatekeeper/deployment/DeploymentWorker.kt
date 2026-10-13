@@ -22,6 +22,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.util.UUID
+import java.time.LocalDateTime
 import java.util.concurrent.TimeUnit
 import kotlin.time.Duration.Companion.milliseconds
 
@@ -32,8 +33,13 @@ object DeploymentWorker {
     fun start(scope: CoroutineScope) {
         if (!started.compareAndSet(false, true)) return
         scope.launch(Dispatchers.IO) {
-            DeploymentJobRepository.recoverStale(AppConfig.deploymentStaleMinutes)
+            var nextRecoveryAt = Long.MIN_VALUE
             while (isActive) {
+                if (System.nanoTime() >= nextRecoveryAt) {
+                    runCatching { recoverStaleJobs() }
+                        .onFailure { logger.error("Stale deployment recovery failed", it) }
+                    nextRecoveryAt = System.nanoTime() + TimeUnit.MINUTES.toNanos(1)
+                }
                 runCatching { processNext() }.onFailure { logger.error("Deployment worker cycle failed", it) }
                 delay(1000.milliseconds)
             }
@@ -42,9 +48,40 @@ object DeploymentWorker {
 
     private suspend fun processNext() {
         val job = DeploymentJobRepository.claimNext() ?: return
-        DistributedLock.withLock("deployment-service:${job.serviceId}:${job.environment}") {
-            runBlocking { processClaimedJob(job) }
-        }
+        val claimToken = requireNotNull(job.claimToken) { "Claim token missing for deployment ${job.id}" }
+        DeploymentJobRecovery.executeClaimed(
+            RecoverableDeploymentJob(job.id, job.serviceId, job.environment, claimToken),
+            withLock = { key, block -> DistributedLock.withLock(key, block) },
+            ownsClaim = { DeploymentJobRepository.ownsClaim(job.id, claimToken) },
+            process = { runBlocking { processClaimedJob(job) } },
+            release = { error ->
+                DeploymentJobRepository.releaseClaim(
+                    job.id,
+                    claimToken,
+                    "Deployment worker attempt interrupted: ${error.message ?: error::class.simpleName}"
+                )
+            }
+        )
+    }
+
+    private fun recoverStaleJobs() {
+        val cutoff = LocalDateTime.now().minusMinutes(AppConfig.deploymentStaleMinutes)
+        val staleJobs = DeploymentJobRepository.staleRunningJobs(cutoff)
+        DeploymentJobRecovery.recoverStale(
+            staleJobs.map { RecoverableDeploymentJob(it.id, it.serviceId, it.environment, it.claimToken) },
+            cutoff,
+            LocalDateTime.now(),
+            tryWithLock = { key, block -> DistributedLock.tryWithLock(key, block) },
+            recover = { recoverable, staleBefore, recoveredAt ->
+                val current = staleJobs.first { it.id == recoverable.id }
+                DeploymentJobRepository.recoverStale(
+                    current,
+                    staleBefore,
+                    recoveredAt,
+                    "Recovered abandoned deployment after ${AppConfig.deploymentStaleMinutes} minutes without progress"
+                )
+            }
+        )
     }
 
     private suspend fun processClaimedJob(job: DeploymentJobRecord) {
@@ -53,10 +90,12 @@ object DeploymentWorker {
             var routeRollback: (() -> Boolean)? = null
             try {
                 cutover(job, docker) { rollback -> routeRollback = rollback }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
             } catch (error: Exception) {
                 val routeRestored = routeRollback?.let { runCatching(it).getOrDefault(false) } ?: true
                 if (!routeRestored) logger.error("Deployment {} failed after gateway cutover; candidate retained because gateway restoration failed", job.id)
-                DeploymentJobRepository.update(job.id, step = "readiness_succeeded", log = "Cutover attempt failed; ready candidate retained for retry: ${error.message}")
+                update(job, step = "readiness_succeeded", log = "Cutover attempt failed; ready candidate retained for retry: ${error.message}")
                 AuditRepository.write(null, "deployment_cutover_failed", "deployment-worker", "job=${job.id} error=${error.message}")
             } finally {
                 docker.close()
@@ -82,28 +121,28 @@ object DeploymentWorker {
             } finally {
                 cleanupDocker.close()
             }
-            ensureNotCancelled(job.id)
+            ensureNotCancelled(job.id, requireNotNull(job.claimToken))
             val rollbackArtifact = DeploymentApplicationService.rollbackArtifact(job.id)
             val commit: String?
             val image: String
             if (rollbackArtifact != null) {
                 commit = rollbackArtifact.commitSha
                 image = rollbackArtifact.image
-                DeploymentJobRepository.update(job.id, "pulling", "Pulling rollback artifact $image", commitSha = commit)
+                update(job, "pulling", "Pulling rollback artifact $image", commitSha = commit)
             } else if (job.repository.isNullOrBlank()) {
                 commit = null
                 image = registryImage(job.registry, job.imageName, job.imageTag)
-                DeploymentJobRepository.update(job.id, "pulling", "Using prebuilt registry image $image")
+                update(job, "pulling", "Using prebuilt registry image $image")
             } else {
                 val repository = job.repository
-                DeploymentJobRepository.update(job.id, "cloning", "Cloning $repository@${job.gitRef}")
+                update(job, "cloning", "Cloning $repository@${job.gitRef}")
                 val githubToken = runCatching { GitHubAppClient.installationToken() }.getOrElse {
                     logger.info("GitHub App is not connected; attempting public repository clone for {}", repository)
                     ""
                 }
                 val cloneCommand = listOf("git", "clone", "--depth", "1", "--branch", job.gitRef, "https://github.com/$repository.git", workspace.toString())
                 try {
-                    runCommand(job.id, workspace, cloneCommand, githubToken)
+                    runCommand(job.id, requireNotNull(job.claimToken), workspace, cloneCommand, githubToken)
                 } catch (error: Exception) {
                     if (githubToken.isBlank()) throw error
                     logger.info("Authenticated clone unavailable for {}; retrying as public repository", repository)
@@ -111,37 +150,37 @@ object DeploymentWorker {
                     withContext(Dispatchers.IO) {
                         Files.createDirectories(workspace)
                     }
-                    runCommand(job.id, workspace, cloneCommand)
+                    runCommand(job.id, requireNotNull(job.claimToken), workspace, cloneCommand)
                 }
                 commit = commandOutput(workspace, listOf("git", "rev-parse", "HEAD")).trim()
-                DeploymentJobRepository.update(job.id, "checked_out", "Repository checked out", commitSha = commit)
+                update(job, "checked_out", "Repository checked out", commitSha = commit)
                 image = registryImage(job.registry, job.imageName, job.imageTag)
             }
             DeploymentJobRepository.registryCredentialForDeployment(job.id)?.let { credential ->
-                dockerLogin(job.id, job.registry, credential.username, credential.password)
+                dockerLogin(job.id, requireNotNull(job.claimToken), job.registry, credential.username, credential.password)
             }
             if (rollbackArtifact == null && !job.repository.isNullOrBlank()) {
-                DeploymentJobRepository.update(job.id, "building", "Building $image")
-                runCommand(job.id, workspace, listOf("docker", "build", "--tag", image, workspace.toString()))
-                DeploymentJobRepository.update(job.id, "pushing", "Pushing $image")
-                runCommand(job.id, workspace, listOf("docker", "push", image))
+                update(job, "building", "Building $image")
+                runCommand(job.id, requireNotNull(job.claimToken), workspace, listOf("docker", "build", "--tag", image, workspace.toString()))
+                update(job, "pushing", "Pushing $image")
+                runCommand(job.id, requireNotNull(job.claimToken), workspace, listOf("docker", "push", image))
             }
-            DeploymentJobRepository.update(job.id, "pulling", "Pulling $image on the deployment host")
-            runCommand(job.id, workspace, listOf("docker", "pull", image))
-            DeploymentJobRepository.update(job.id, "starting_container", "Starting application container")
-            ensureNotCancelled(job.id)
+            update(job, "pulling", "Pulling $image on the deployment host")
+            runCommand(job.id, requireNotNull(job.claimToken), workspace, listOf("docker", "pull", image))
+            update(job, "starting_container", "Starting application container")
+            ensureNotCancelled(job.id, requireNotNull(job.claimToken))
             val docker = DockerService(AppConfig.dockerSocket)
             try {
                 val digest = docker.imageDigest(image)
                 val immutableImageReference = docker.immutableImageReference(image)
                     ?: error("Docker could not determine an immutable image identity for deployment recovery")
-                DeploymentJobRepository.update(job.id, log = "Image digest: ${digest ?: "unavailable"}", imageDigest = digest)
+                update(job, log = "Image digest: ${digest ?: "unavailable"}", imageDigest = digest)
                 if (job.network != "bridge" && job.createNetworkIfMissing) docker.createNetworkIfMissing(job.network)
                 candidateName = deterministicCandidateName
                 val imagePorts = docker.imageExposedTcpPorts(image)
                 val dynamicContainerPorts = imagePorts.ifEmpty { listOfNotNull(job.containerPort) }.toSet()
-                DeploymentJobRepository.update(
-                    job.id,
+                update(
+                    job,
                     log = if (imagePorts.isNotEmpty()) {
                         "Docker image declares TCP port(s): ${imagePorts.joinToString()}; these override saved wizard port values"
                     } else if (job.containerPort != null) {
@@ -165,14 +204,14 @@ object DeploymentWorker {
                         ?: error("Docker did not assign a host port for candidate container port $containerPort")
                 }
                 val selectedProbe = selectedReadiness(job, candidatePortMappings.isNotEmpty())
-                DeploymentJobRepository.update(job.id, step = "health_checking", log = "Waiting for candidate readiness using $selectedProbe probe")
+                update(job, step = "health_checking", log = "Waiting for candidate readiness using $selectedProbe probe")
                 val readiness = awaitHealthy(docker, candidateName, candidatePortMappings, job)
                 if (readiness == null) {
                     docker.deleteContainer(candidateName)
                     candidateName = null
                     error("Candidate container did not pass automatic readiness checks for port(s) ${dynamicContainerPorts.sorted().joinToString().ifBlank { "none declared" }}")
                 }
-                ensureNotCancelled(job.id)
+                ensureNotCancelled(job.id, requireNotNull(job.claimToken))
                 val resolvedContainerPort = readiness.containerPort ?: job.containerPort
                 val candidateHostPort = resolvedContainerPort?.let(candidatePortMappings::get)
                 check(DeploymentApplicationService.recordCandidateRuntime(
@@ -181,8 +220,8 @@ object DeploymentWorker {
                 )) {
                     "Unable to persist candidate runtime for deployment ${job.id}"
                 }
-                DeploymentJobRepository.update(
-                    job.id,
+                update(
+                    job,
                     step = "readiness_succeeded",
                     log = "Candidate passed readiness checks ($selectedProbe); resolved application container port ${resolvedContainerPort ?: "none"}. Container is ready; gateway cutover is a separate step"
                 )
@@ -192,7 +231,11 @@ object DeploymentWorker {
             } finally { docker.close() }
         } catch (error: CancellationException) {
             candidateName?.let { name -> runCatching { val cleanupDocker = DockerService(AppConfig.dockerSocket); cleanupDocker.deleteContainer(name); cleanupDocker.close() } }
-            logger.info("Deployment {} cancelled", job.id)
+            if (DeploymentJobRepository.isCancelled(job.id)) {
+                logger.info("Deployment {} cancelled", job.id)
+            } else {
+                throw error
+            }
         } catch (error: Exception) {
             val candidateIsReady = DeploymentJobRepository.find(job.id)?.currentStep in setOf("readiness_succeeded", "cutover_in_progress")
             val routeRestored = routeRollback?.let { rollback -> runCatching(rollback).getOrDefault(false) } ?: true
@@ -201,13 +244,13 @@ object DeploymentWorker {
                 throw error
             }
             if (candidateIsReady) {
-                DeploymentJobRepository.update(job.id, step = "readiness_succeeded", log = "Cutover attempt failed; ready candidate retained for retry: ${error.message}")
+                update(job, step = "readiness_succeeded", log = "Cutover attempt failed; ready candidate retained for retry: ${error.message}")
             }
             if (routeRestored && !candidateIsReady) candidateName?.let { name -> runCatching { val cleanupDocker = DockerService(AppConfig.dockerSocket); cleanupDocker.deleteContainer(name); cleanupDocker.close() } }
             else logger.error("Deployment {} failed after gateway cutover; candidate runtime retained because gateway restoration failed", job.id)
             if (!DeploymentJobRepository.isCancelled(job.id) && !candidateIsReady) {
                 AuditRepository.write(null, "deployment_failed", "deployment-worker", "job=${job.id} error=${error.message}")
-                DeploymentJobRepository.update(job.id, "failed", error.message ?: "Deployment failed", status = "failed", error = error.message ?: "Deployment failed")
+                update(job, "failed", error.message ?: "Deployment failed", status = "failed", error = error.message ?: "Deployment failed")
             }
         } finally {
             workspace.toFile().deleteRecursively()
@@ -229,7 +272,7 @@ object DeploymentWorker {
         var durableState = DeploymentApplicationService.cutoverRecovery(job.id)
             ?: error("Cutover state is missing for deployment ${job.id}")
         if (durableState.state == "activated") {
-            DeploymentJobRepository.update(job.id, step = "active", log = "Deployment activation recovered", status = "succeeded")
+            update(job, step = "active", log = "Deployment activation recovered", status = "succeeded")
             return
         }
         val runtime = DeploymentApplicationService.candidateRuntime(job.id)
@@ -345,8 +388,8 @@ object DeploymentWorker {
                 )
             }
         )
-        DeploymentJobRepository.update(
-            job.id,
+        update(
+            job,
             step = "active",
             log = if (hasEnabledManagedSite) "Gateway switched to candidate; previous runtime retired" else "Deployment activated; Nginx site creation/activation remains a separate action",
             status = "succeeded"
@@ -442,6 +485,27 @@ object DeploymentWorker {
             .getOrNull()
     }
 
+    private fun update(
+        job: DeploymentJobRecord,
+        step: String? = null,
+        log: String? = null,
+        commitSha: String? = null,
+        imageDigest: String? = null,
+        status: String? = null,
+        error: String? = null
+    ) {
+        DeploymentJobRepository.update(
+            job.id,
+            requireNotNull(job.claimToken) { "Claim token missing for deployment ${job.id}" },
+            step,
+            log,
+            commitSha,
+            imageDigest,
+            status,
+            error
+        )
+    }
+
     fun cancel(id: UUID): Boolean {
         val changed = DeploymentJobRepository.cancel(id)
         if (changed) {
@@ -456,8 +520,10 @@ object DeploymentWorker {
         return changed
     }
 
-    private fun ensureNotCancelled(id: UUID) {
-        if (DeploymentJobRepository.isCancelled(id)) throw CancellationException("Deployment cancelled")
+    private fun ensureNotCancelled(id: UUID, claimToken: UUID) {
+        if (!DeploymentJobRepository.ownsClaim(id, claimToken)) {
+            throw CancellationException("Deployment was cancelled or this worker no longer owns its claim")
+        }
     }
 
     private data class ReadinessResult(val containerPort: Int?)
@@ -466,7 +532,7 @@ object DeploymentWorker {
         val deadline = System.nanoTime() + job.readinessTimeoutSeconds * 1_000_000_000L
         val probe = selectedReadiness(job, portMappings.isNotEmpty())
         while (System.nanoTime() < deadline) {
-            if (DeploymentJobRepository.isCancelled(job.id)) throw CancellationException("Deployment cancelled")
+            ensureNotCancelled(job.id, requireNotNull(job.claimToken))
             runCatching { readinessProbe(docker, name, portMappings, job, probe) }.getOrNull()?.let { return it }
             Thread.sleep(job.readinessIntervalSeconds * 1000L)
         }
@@ -508,8 +574,8 @@ object DeploymentWorker {
         return if (host.isBlank() || host == "docker.io") "$name:$tag" else "$host/$name:$tag"
     }
 
-    private fun runCommand(id: UUID, directory: Path, command: List<String>, githubToken: String = "") {
-        ensureNotCancelled(id)
+    private fun runCommand(id: UUID, claimToken: UUID, directory: Path, command: List<String>, githubToken: String = "") {
+        ensureNotCancelled(id, claimToken)
         val builder = ProcessBuilder(command).directory(directory.toFile()).redirectErrorStream(true)
         if (githubToken.isNotBlank()) {
             builder.environment()["GIT_CONFIG_COUNT"] = "1"
@@ -520,14 +586,14 @@ object DeploymentWorker {
         val outputThread = Thread({
             process.inputStream.bufferedReader().useLines { lines ->
                 lines.forEach { line ->
-                    DeploymentJobRepository.update(id, log = SecretValueCipher.redact(line, listOf(githubToken)))
+                    DeploymentJobRepository.update(id, claimToken, log = SecretValueCipher.redact(line, listOf(githubToken)))
                 }
             }
         }, "deployment-output-${id}").apply { isDaemon = true; start() }
         try {
-            while (!process.waitFor(250, TimeUnit.MILLISECONDS)) ensureNotCancelled(id)
+            while (!process.waitFor(250, TimeUnit.MILLISECONDS)) ensureNotCancelled(id, claimToken)
             outputThread.join()
-            ensureNotCancelled(id)
+            ensureNotCancelled(id, claimToken)
             if (process.exitValue() != 0) error("Command failed: ${command.first()}")
         } catch (cancelled: CancellationException) {
             process.destroy()
@@ -537,16 +603,16 @@ object DeploymentWorker {
         }
     }
 
-    private fun dockerLogin(id: UUID, registry: String, username: String, password: String) {
-        ensureNotCancelled(id)
+    private fun dockerLogin(id: UUID, claimToken: UUID, registry: String, username: String, password: String) {
+        ensureNotCancelled(id, claimToken)
         val host = if (registry == "docker.io") "https://index.docker.io/v1/" else registry
         val process = ProcessBuilder("docker", "login", host, "--username", username, "--password-stdin")
             .redirectErrorStream(true).start()
         process.outputStream.bufferedWriter().use { it.write(password); it.newLine() }
         process.inputStream.bufferedReader().readText()
         if (process.waitFor() != 0) error("Docker registry authentication failed for $registry")
-        ensureNotCancelled(id)
-        DeploymentJobRepository.update(id, "registry_authenticated", "Authenticated to registry $registry")
+        ensureNotCancelled(id, claimToken)
+        DeploymentJobRepository.update(id, claimToken, "registry_authenticated", "Authenticated to registry $registry")
     }
 
     private fun commandOutput(directory: Path, command: List<String>): String = ProcessBuilder(command).directory(directory.toFile()).start().let { process ->

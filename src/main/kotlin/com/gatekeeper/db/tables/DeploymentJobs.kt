@@ -35,6 +35,7 @@ object DeploymentJobs : Table("deployment_jobs") {
     val readinessProbeTimeoutMillis = integer("readiness_probe_timeout_millis").default(1000)
     val triggerSource = text("trigger_source").default("manual")
     val errorMessage = text("error_message").nullable()
+    val claimToken = uuid("claim_token").nullable()
     val createdAt = datetime("created_at").defaultExpression(CurrentDateTime)
     val startedAt = datetime("started_at").nullable()
     val completedAt = datetime("completed_at").nullable()

@@ -64,6 +64,30 @@ object DatabaseFactory {
         }
     }
 
+    fun <T> tryWithAdvisoryLock(key: String, block: () -> T): T? {
+        return dataSource.connection.use { connection ->
+            connection.autoCommit = false
+            val lockId = DistributedLock.lockId(key)
+            val acquired = connection.prepareStatement("SELECT pg_try_advisory_lock(?)").use { statement ->
+                statement.setLong(1, lockId)
+                statement.executeQuery().use { result -> result.next() && result.getBoolean(1) }
+            }
+            if (!acquired) {
+                connection.rollback()
+                return@use null
+            }
+            try {
+                block()
+            } finally {
+                connection.prepareStatement("SELECT pg_advisory_unlock(?)").use { statement ->
+                    statement.setLong(1, lockId)
+                    statement.execute()
+                }
+                connection.commit()
+            }
+        }
+    }
+
     fun migrationsHealthy(): Boolean = runCatching {
         dataSource.connection.use { connection ->
             connection.prepareStatement("SELECT 1 FROM flyway_schema_history LIMIT 1").use { it.executeQuery().next() }
