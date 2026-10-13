@@ -368,7 +368,13 @@ fun Application.configureAuthRoutes() {
                     call.respondError(HttpStatusCode.Unauthorized, "invalid_token", "Token cannot be revoked")
                     return@post
                 }
-                RedisService.set("auth:revoked:$jti", "1", ttlSeconds.toInt())
+                try {
+                    RedisService.setRequired("auth:revoked:$jti", "1", ttlSeconds.toInt())
+                } catch (_: Exception) {
+                    logger.warn("Unable to persist logout token revocation")
+                    call.respondError(HttpStatusCode.ServiceUnavailable, "revocation_unavailable", "Logout is temporarily unavailable")
+                    return@post
+                }
                 call.respond(mapOf("status" to "logged_out"))
             }
 

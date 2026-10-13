@@ -32,6 +32,12 @@ object RedisService {
         } }
     }
 
+    /** Unlike optional cache reads, security decisions must distinguish an absent key from Redis being unavailable. */
+    fun getRequired(key: String): String? {
+        val activePool = pool ?: throw RedisUnavailableException()
+        return Telemetry.blockingSpan("redis.get") { activePool.resource.use { jedis -> jedis.get(key) } }
+    }
+
     fun isHealthy(): Boolean {
         return try {
             pool?.resource?.use { jedis -> jedis.ping() == "PONG" } ?: false
@@ -42,6 +48,14 @@ object RedisService {
 
     fun set(key: String, value: String, ttlSeconds: Int = 60) {
         Telemetry.blockingSpan("redis.set") { pool?.resource?.use { jedis ->
+            jedis.setex(key, ttlSeconds.toLong(), value)
+        } }
+    }
+
+    /** Unlike optional cache writes, revocation writes must fail if Redis is not initialized. */
+    fun setRequired(key: String, value: String, ttlSeconds: Int) {
+        val activePool = pool ?: throw RedisUnavailableException()
+        Telemetry.blockingSpan("redis.set") { activePool.resource.use { jedis ->
             jedis.setex(key, ttlSeconds.toLong(), value)
         } }
     }
@@ -65,6 +79,8 @@ object RedisService {
         logger.info("Redis connection pool closed")
     }
 }
+
+class RedisUnavailableException : RuntimeException("Redis is unavailable")
 
 fun Application.configureRedis() {
     RedisService.init(AppConfig.redisHost, AppConfig.redisPort)

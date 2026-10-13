@@ -11,7 +11,17 @@ import io.ktor.server.auth.*
 import io.ktor.server.auth.jwt.*
 import io.ktor.server.plugins.cors.routing.*
 import io.ktor.server.plugins.defaultheaders.*
+import io.ktor.util.AttributeKey
 import java.util.*
+
+internal enum class JwtRevocationStatus {
+    CONFIRMED_NOT_REVOKED,
+    REVOKED,
+    INVALID,
+    UNAVAILABLE
+}
+
+private val revocationUnavailableKey = AttributeKey<Boolean>("jwt-revocation-unavailable")
 
 object JwtConfig {
     private val logger = LoggerFactory.getLogger("com.gatekeeper.plugins.JwtConfig")
@@ -30,12 +40,56 @@ object JwtConfig {
             .sign(algorithm)
     }
 
-    fun isRevoked(jti: String?): Boolean {
-        return jti.isNullOrBlank() || try {
-            RedisService.get("auth:revoked:$jti") != null
-        } catch (e: Exception) {
-            logger.warn("Token revocation check unavailable: ${e.message}")
-            false
+    internal fun revocationStatus(
+        jti: String?,
+        lookup: (String) -> String? = RedisService::getRequired
+    ): JwtRevocationStatus {
+        if (jti.isNullOrBlank()) return JwtRevocationStatus.INVALID
+        return try {
+            if (lookup("auth:revoked:$jti") != null) JwtRevocationStatus.REVOKED
+            else JwtRevocationStatus.CONFIRMED_NOT_REVOKED
+        } catch (_: Exception) {
+            // Do not log exception text: client libraries may include connection or credential details.
+            logger.warn("Token revocation check unavailable")
+            JwtRevocationStatus.UNAVAILABLE
+        }
+    }
+}
+
+internal fun io.ktor.server.auth.AuthenticationConfig.configureAdminJwt(
+    algorithm: Algorithm,
+    audience: String,
+    issuer: String,
+    revocationLookup: (String) -> String?
+) {
+    jwt("auth-jwt") {
+        realm = "gatekeeperd"
+        verifier(
+            JWT
+                .require(algorithm)
+                .withAudience(audience)
+                .withIssuer(issuer)
+                .build()
+        )
+        validate { credential ->
+            val role = credential.payload.getClaim("role").asString()
+            if (!credential.payload.audience.contains(audience) || role != "admin") return@validate null
+
+            when (JwtConfig.revocationStatus(credential.payload.id, revocationLookup)) {
+                JwtRevocationStatus.CONFIRMED_NOT_REVOKED -> JWTPrincipal(credential.payload)
+                JwtRevocationStatus.REVOKED, JwtRevocationStatus.INVALID -> null
+                JwtRevocationStatus.UNAVAILABLE -> {
+                    attributes.put(revocationUnavailableKey, true)
+                    null
+                }
+            }
+        }
+        challenge { _, _ ->
+            if (call.attributes.getOrNull(revocationUnavailableKey) == true) {
+                call.respondError(HttpStatusCode.ServiceUnavailable, "revocation_check_unavailable", "Authentication is temporarily unavailable")
+            } else {
+                call.respondError(HttpStatusCode.Unauthorized, "unauthorized", "Authentication required")
+            }
         }
     }
 }
@@ -64,27 +118,11 @@ fun Application.configureSecurity() {
     }
 
     authentication {
-        jwt("auth-jwt") {
-            realm = "gatekeeperd"
-            verifier(
-                JWT
-                    .require(JwtConfig.algorithm)
-                    .withAudience(AppConfig.jwtAudience)
-                    .withIssuer(AppConfig.jwtIssuer)
-                    .build()
-            )
-            validate { credential ->
-                val role = credential.payload.getClaim("role").asString()
-                if (credential.payload.audience.contains(AppConfig.jwtAudience) &&
-                    role == "admin" &&
-                    !JwtConfig.isRevoked(credential.payload.id)
-                ) {
-                    JWTPrincipal(credential.payload)
-                } else null
-            }
-            challenge { _, _ ->
-                call.respondError(HttpStatusCode.Unauthorized, "unauthorized", "Authentication required")
-            }
-        }
+        configureAdminJwt(
+            JwtConfig.algorithm,
+            AppConfig.jwtAudience,
+            AppConfig.jwtIssuer,
+            RedisService::getRequired
+        )
     }
 }
