@@ -27,6 +27,35 @@ import com.github.dockerjava.api.async.ResultCallback
 
 private val logger = LoggerFactory.getLogger("com.gatekeeper.docker.DockerService")
 
+internal data class CreatedContainer(val id: String, val info: ContainerInfo)
+
+/** Cleans up only after create returned an identity for the resource this operation owns. */
+internal fun <Handle, Result> createContainerWithCleanup(
+    beforeCreate: () -> Unit = {},
+    create: () -> Handle,
+    start: (Handle) -> Unit,
+    inspect: (Handle) -> Result,
+    remove: (Handle) -> Unit
+): Result {
+    beforeCreate()
+    var created: Handle? = null
+    try {
+        created = create()
+        start(created)
+        return inspect(created)
+    } catch (failure: Throwable) {
+        val ownedContainer = created
+        if (ownedContainer != null) {
+            try {
+                remove(ownedContainer)
+            } catch (cleanupFailure: Throwable) {
+                if (cleanupFailure !== failure) failure.addSuppressed(cleanupFailure)
+            }
+        }
+        throw failure
+    }
+}
+
 class DockerService(dockerSocketPath: String) {
     private val client: DockerClient
 
@@ -56,43 +85,45 @@ class DockerService(dockerSocketPath: String) {
 
     fun getContainer(containerNameOrId: String): ContainerInfo? {
         return try {
-            val containers = client.listContainersCmd()
-                .withShowAll(true)
-                .exec()
-
-            containers.firstOrNull { container ->
-                container.id.startsWith(containerNameOrId) ||
-                        container.names.any { name -> name.removePrefix("/") == containerNameOrId }
-            }?.let { container ->
-                val base = toContainerInfo(container)
-                val inspected = client.inspectContainerCmd(container.id).exec()
-                base.copy(
-                    networks = inspected.networkSettings?.networks?.keys?.sorted().orEmpty(),
-                    volumes = inspected.mounts?.mapNotNull { mount ->
-                        val source = mount.source ?: return@mapNotNull null
-                        val destination = mount.destination?.path ?: return@mapNotNull null
-                        VolumeMount(source, destination, mount.mode?.contains("ro") == true, mount.getName())
-                    }.orEmpty(),
-                    restartPolicy = inspected.hostConfig?.restartPolicy?.name ?: "unknown",
-                    imageId = inspected.imageId,
-                    command = inspected.path,
-                    entrypoint = inspected.config?.entrypoint?.toList().orEmpty(),
-                    workingDirectory = inspected.config?.workingDir,
-                    user = inspected.config?.user,
-                    environmentKeys = inspected.config?.env?.mapNotNull { it.substringBefore('=', "").takeIf(String::isNotBlank) }?.sorted().orEmpty(),
-                    labels = inspected.config?.labels.orEmpty(),
-                    restartCount = inspected.restartCount ?: 0,
-                    oomKilled = inspected.state?.oomKilled == true,
-                    health = inspected.state?.health?.status,
-                    ipAddresses = inspected.networkSettings?.networks?.mapNotNull { (network, details) ->
-                        details.ipAddress?.takeIf(String::isNotBlank)?.let { network to it }
-                    }?.toMap().orEmpty()
-                )
-            }
+            inspectContainer(containerNameOrId)
         } catch (e: Exception) {
             logger.error("Error getting container $containerNameOrId", e)
             null
         }
+    }
+
+    private fun inspectContainer(containerNameOrId: String): ContainerInfo? {
+        val container = client.listContainersCmd()
+            .withShowAll(true)
+            .exec()
+            .firstOrNull { listed ->
+                listed.id.startsWith(containerNameOrId) ||
+                    listed.names.orEmpty().any { name -> name.removePrefix("/") == containerNameOrId }
+            } ?: return null
+        val base = toContainerInfo(container)
+        val inspected = client.inspectContainerCmd(container.id).exec()
+        return base.copy(
+            networks = inspected.networkSettings?.networks?.keys?.sorted().orEmpty(),
+            volumes = inspected.mounts?.mapNotNull { mount ->
+                val source = mount.source ?: return@mapNotNull null
+                val destination = mount.destination?.path ?: return@mapNotNull null
+                VolumeMount(source, destination, mount.mode?.contains("ro") == true, mount.getName())
+            }.orEmpty(),
+            restartPolicy = inspected.hostConfig?.restartPolicy?.name ?: "unknown",
+            imageId = inspected.imageId,
+            command = inspected.path,
+            entrypoint = inspected.config?.entrypoint?.toList().orEmpty(),
+            workingDirectory = inspected.config?.workingDir,
+            user = inspected.config?.user,
+            environmentKeys = inspected.config?.env?.mapNotNull { it.substringBefore('=', "").takeIf(String::isNotBlank) }?.sorted().orEmpty(),
+            labels = inspected.config?.labels.orEmpty(),
+            restartCount = inspected.restartCount ?: 0,
+            oomKilled = inspected.state?.oomKilled == true,
+            health = inspected.state?.health?.status,
+            ipAddresses = inspected.networkSettings?.networks?.mapNotNull { (network, details) ->
+                details.ipAddress?.takeIf(String::isNotBlank)?.let { network to it }
+            }?.toMap().orEmpty()
+        )
     }
 
     /** Force-removes an exactly named container if present; Docker/list failures propagate. */
@@ -526,7 +557,9 @@ class DockerService(dockerSocketPath: String) {
         null
     }
 
-    fun createContainer(request: CreateContainerRequest): ContainerInfo {
+    fun createContainer(request: CreateContainerRequest): ContainerInfo = createContainerTracked(request).info
+
+    internal fun createContainerTracked(request: CreateContainerRequest): CreatedContainer {
         enforceSecurityPolicy(request)
         if (request.pullImage && !imageExists(request.image)) {
             val raw = request.image.trim()
@@ -583,15 +616,32 @@ class DockerService(dockerSocketPath: String) {
         request.runtimeOptions.entrypoint?.let { createCommand.withEntrypoint(*it.toTypedArray()) }
         request.runtimeOptions.workingDirectory?.let(createCommand::withWorkingDir)
         request.runtimeOptions.user?.let(createCommand::withUser)
-        val createResponse: CreateContainerResponse = createCommand.exec()
-        
-        client.startContainerCmd(createResponse.id).exec()
-        request.additionalNetworks.distinct().filter { it != request.network }.forEach { network ->
-            client.connectToNetworkCmd().withNetworkId(network).withContainerId(createResponse.id).exec()
-        }
+        val created = createContainerWithCleanup(
+            create = { createCommand.exec() },
+            start = { response ->
+                client.startContainerCmd(response.id).exec()
+                request.additionalNetworks.distinct().filter { it != request.network }.forEach { network ->
+                    client.connectToNetworkCmd().withNetworkId(network).withContainerId(response.id).exec()
+                }
+            },
+            inspect = { response ->
+                response to (inspectContainer(response.id)
+                    ?: error("Created container ${response.id} could not be inspected"))
+            },
+            remove = { response -> removeContainerByIdIfPresent(response.id) }
+        )
+        val (createResponse, info) = created
         logger.info("Created and started container: ${request.name} (id: ${createResponse.id})")
-        
-        return getContainer(createResponse.id)!!
+        return CreatedContainer(createResponse.id, info)
+    }
+
+    /** Idempotently removes only a container with the exact Docker ID returned by create. */
+    internal fun removeContainerByIdIfPresent(containerId: String): Boolean {
+        val owned = client.listContainersCmd().withShowAll(true).exec()
+            .firstOrNull { it.id == containerId } ?: return false
+        client.removeContainerCmd(owned.id).withForce(true).exec()
+        logger.info("Removed container created by failed operation (id: {})", owned.id)
+        return true
     }
 
     private fun enforceSecurityPolicy(request: CreateContainerRequest) {

@@ -107,6 +107,7 @@ object DeploymentWorker {
         }
         val deterministicCandidateName = deploymentContainerName(job.serviceName, job.id)
         var candidateName: String? = null
+        var candidateContainerId: String? = null
         var routeRollback: (() -> Boolean)? = null
         try {
             val recordedCandidateName = DeploymentApplicationService.candidateContainerName(job.id)
@@ -189,7 +190,7 @@ object DeploymentWorker {
                         "Docker image declares no TCP ports; readiness will use container process state"
                     }
                 )
-                val created = docker.createContainer(CreateContainerRequest(
+                val created = docker.createContainerTracked(CreateContainerRequest(
                     name = candidateName,
                     image = immutableImageReference,
                     randomHostPorts = dynamicContainerPorts,
@@ -199,17 +200,23 @@ object DeploymentWorker {
                     volumes = job.volumes,
                     pullImage = false
                 ))
+                candidateContainerId = created.id
+                val candidateInfo = created.info
                 val candidatePortMappings = dynamicContainerPorts.associateWith { containerPort ->
-                    created.ports.publishedHostPort(containerPort)
+                    candidateInfo.ports.publishedHostPort(containerPort)
                         ?: error("Docker did not assign a host port for candidate container port $containerPort")
                 }
                 val selectedProbe = selectedReadiness(job, candidatePortMappings.isNotEmpty())
                 update(job, step = "health_checking", log = "Waiting for candidate readiness using $selectedProbe probe")
                 val readiness = awaitHealthy(docker, candidateName, candidatePortMappings, job)
                 if (readiness == null) {
-                    docker.deleteContainer(candidateName)
+                    val failure = IllegalStateException(
+                        "Candidate container did not pass automatic readiness checks for port(s) ${dynamicContainerPorts.sorted().joinToString().ifBlank { "none declared" }}"
+                    )
+                    candidateContainerId?.let { removeCandidatePreservingFailure(docker, it, failure) }
+                    candidateContainerId = null
                     candidateName = null
-                    error("Candidate container did not pass automatic readiness checks for port(s) ${dynamicContainerPorts.sorted().joinToString().ifBlank { "none declared" }}")
+                    throw failure
                 }
                 ensureNotCancelled(job.id, requireNotNull(job.claimToken))
                 val resolvedContainerPort = readiness.containerPort ?: job.containerPort
@@ -228,9 +235,10 @@ object DeploymentWorker {
                 AuditRepository.write(null, "deployment_readiness_succeeded", "deployment-worker", "job=${job.id} repository=${job.repository ?: "prebuilt-image"} commit=${commit ?: "not-applicable"}")
                 cutover(job.copy(containerPort = resolvedContainerPort), docker) { rollback -> routeRollback = rollback }
                 candidateName = null
+                candidateContainerId = null
             } finally { docker.close() }
         } catch (error: CancellationException) {
-            candidateName?.let { name -> runCatching { val cleanupDocker = DockerService(AppConfig.dockerSocket); cleanupDocker.deleteContainer(name); cleanupDocker.close() } }
+            candidateContainerId?.let { id -> removeCandidatePreservingFailure(null, id, error) }
             if (DeploymentJobRepository.isCancelled(job.id)) {
                 logger.info("Deployment {} cancelled", job.id)
             } else {
@@ -246,7 +254,7 @@ object DeploymentWorker {
             if (candidateIsReady) {
                 update(job, step = "readiness_succeeded", log = "Cutover attempt failed; ready candidate retained for retry: ${error.message}")
             }
-            if (routeRestored && !candidateIsReady) candidateName?.let { name -> runCatching { val cleanupDocker = DockerService(AppConfig.dockerSocket); cleanupDocker.deleteContainer(name); cleanupDocker.close() } }
+            if (routeRestored && !candidateIsReady) candidateContainerId?.let { id -> removeCandidatePreservingFailure(null, id, error) }
             else logger.error("Deployment {} failed after gateway cutover; candidate runtime retained because gateway restoration failed", job.id)
             if (!DeploymentJobRepository.isCancelled(job.id) && !candidateIsReady) {
                 AuditRepository.write(null, "deployment_failed", "deployment-worker", "job=${job.id} error=${error.message}")
@@ -254,6 +262,23 @@ object DeploymentWorker {
             }
         } finally {
             workspace.toFile().deleteRecursively()
+        }
+    }
+
+    private fun removeCandidatePreservingFailure(
+        existingDocker: DockerService?,
+        containerId: String,
+        failure: Throwable
+    ) {
+        var cleanupDocker = existingDocker
+        try {
+            if (cleanupDocker == null) cleanupDocker = DockerService(AppConfig.dockerSocket)
+            cleanupDocker.removeContainerByIdIfPresent(containerId)
+        } catch (cleanupFailure: Throwable) {
+            if (cleanupFailure !== failure) failure.addSuppressed(cleanupFailure)
+            logger.warn("Could not remove failed deployment candidate {}", containerId, cleanupFailure)
+        } finally {
+            if (existingDocker == null) runCatching { cleanupDocker?.close() }
         }
     }
 
