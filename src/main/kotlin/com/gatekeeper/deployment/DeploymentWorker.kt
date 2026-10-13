@@ -66,12 +66,21 @@ object DeploymentWorker {
         val workspace = withContext(Dispatchers.IO) {
             Files.createTempDirectory("gatekeeper-deployment-${job.id}-")
         }
+        val deterministicCandidateName = deploymentContainerName(job.serviceName, job.id)
         var candidateName: String? = null
         var routeRollback: (() -> Boolean)? = null
         try {
-            DeploymentApplicationService.candidateContainerName(job.id)?.let { staleCandidate ->
-                runCatching { val cleanupDocker = DockerService(AppConfig.dockerSocket); try { cleanupDocker.deleteContainer(staleCandidate) } finally { cleanupDocker.close() } }
-                DeploymentApplicationService.clearCandidateRuntime(job.id)
+            val recordedCandidateName = DeploymentApplicationService.candidateContainerName(job.id)
+            val cleanupDocker = DockerService(AppConfig.dockerSocket)
+            try {
+                CandidateRetryRecovery.prepareForRetry(
+                    deterministicName = deterministicCandidateName,
+                    recordedName = recordedCandidateName,
+                    containers = CandidateContainerBoundary { name -> cleanupDocker.removeContainerIfPresent(name) },
+                    clearRecordedRuntime = { DeploymentApplicationService.clearCandidateRuntime(job.id) }
+                )
+            } finally {
+                cleanupDocker.close()
             }
             ensureNotCancelled(job.id)
             val rollbackArtifact = DeploymentApplicationService.rollbackArtifact(job.id)
@@ -126,7 +135,7 @@ object DeploymentWorker {
                 val digest = docker.imageDigest(image)
                 DeploymentJobRepository.update(job.id, log = "Image digest: ${digest ?: "unavailable"}", imageDigest = digest)
                 if (job.network != "bridge" && job.createNetworkIfMissing) docker.createNetworkIfMissing(job.network)
-                candidateName = deploymentContainerName(job.serviceName, job.id)
+                candidateName = deterministicCandidateName
                 val imagePorts = docker.imageExposedTcpPorts(image)
                 val dynamicContainerPorts = imagePorts.ifEmpty { listOfNotNull(job.containerPort) }.toSet()
                 DeploymentJobRepository.update(

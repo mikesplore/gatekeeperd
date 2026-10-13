@@ -95,6 +95,22 @@ class DockerService(dockerSocketPath: String) {
         }
     }
 
+    /** Force-removes an exactly named container if present; Docker/list failures propagate. */
+    fun removeContainerIfPresent(containerName: String): Boolean {
+        val container = client.listContainersCmd()
+            .withShowAll(true)
+            .exec()
+            .firstOrNull { listed ->
+                listed.names.orEmpty().any { it.removePrefix("/") == containerName }
+            } ?: return false
+
+        client.removeContainerCmd(container.id)
+            .withForce(true)
+            .exec()
+        logger.info("Removed existing container before retry: {} (id: {})", containerName, container.id)
+        return true
+    }
+
     /** Runtime details for explicit project adoption. Environment values stay inside the service. */
     data class AdoptionDetails(
         val id: String,
