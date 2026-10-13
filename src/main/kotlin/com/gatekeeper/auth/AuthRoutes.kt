@@ -169,12 +169,13 @@ fun Application.configureAuthRoutes() {
             val emailKey = "auth:login:email:$email"
             val ipKey = "auth:login:ip:$clientIp"
             val rateLimited = try {
-                val emailAttempts = RedisService.incrementWithExpiry(emailKey, LOGIN_WINDOW_SECONDS) ?: 0
-                val ipAttempts = RedisService.incrementWithExpiry(ipKey, LOGIN_WINDOW_SECONDS) ?: 0
+                val emailAttempts = RedisService.incrementWithExpiry(emailKey, LOGIN_WINDOW_SECONDS)
+                val ipAttempts = RedisService.incrementWithExpiry(ipKey, LOGIN_WINDOW_SECONDS)
                 emailAttempts > LOGIN_ATTEMPT_LIMIT || ipAttempts > LOGIN_ATTEMPT_LIMIT
             } catch (e: Exception) {
-                logger.warn("Login rate limiter unavailable: ${e.message}")
-                false
+                logger.error("Login refused because Redis-backed rate limiting is unavailable", e)
+                call.respondError(HttpStatusCode.ServiceUnavailable, "redis_unavailable", "Authentication storage is temporarily unavailable")
+                return@post
             }
             if (rateLimited) {
                 call.response.headers.append(HttpHeaders.RetryAfter, LOGIN_WINDOW_SECONDS.toString())
@@ -215,9 +216,13 @@ fun Application.configureAuthRoutes() {
             val role = user[Users.role]
             val token = JwtConfig.createToken(email, role)
             val refreshToken = newRefreshToken()
-            val refreshStored = runCatching {
-                RedisService.set("auth:refresh:${resetTokenHash(refreshToken)}", "$email|$role", REFRESH_TTL_SECONDS)
-            }.isSuccess
+            val refreshStored = try {
+                RedisService.setRequired("auth:refresh:${resetTokenHash(refreshToken)}", "$email|$role", REFRESH_TTL_SECONDS)
+                true
+            } catch (e: Exception) {
+                logger.error("Failed to store refresh token in Redis; refusing login", e)
+                false
+            }
             if (!refreshStored) {
                 logger.error("Login refused because refresh-token storage is unavailable")
                 call.respondError(HttpStatusCode.ServiceUnavailable, "redis_unavailable", "Authentication storage is temporarily unavailable")
@@ -264,11 +269,11 @@ fun Application.configureAuthRoutes() {
                     val matched = user[Users.recoveryCodes].indexOfFirst { RecoveryCodeHasher.matches(body.code, it) }
                     if (matched >= 0) { recoveryUsed = true; valid = true; transaction { Users.update({ Users.id eq user[Users.id] }) { it[Users.recoveryCodes] = user[Users.recoveryCodes].filterIndexed { index, _ -> index != matched } } } }
                 }
-                if (!valid) { val attempts = RedisService.incrementWithExpiry("auth:2fa:fail:$email", TWO_FACTOR_LOCK_SECONDS) ?: 0; if (attempts >= TWO_FACTOR_FAILURE_LIMIT) RedisService.set("auth:2fa:lock:$email", "1", TWO_FACTOR_LOCK_SECONDS); AuditRepository.write(null, "2FA Verification Failed", email, "Invalid authenticator or recovery code ${auditContext(call)}"); call.respondError(HttpStatusCode.Unauthorized, "invalid_two_factor_code", "The verification code is invalid"); return@post }
+                if (!valid) { val attempts = RedisService.incrementWithExpiry("auth:2fa:fail:$email", TWO_FACTOR_LOCK_SECONDS); if (attempts >= TWO_FACTOR_FAILURE_LIMIT) RedisService.setRequired("auth:2fa:lock:$email", "1", TWO_FACTOR_LOCK_SECONDS); AuditRepository.write(null, "2FA Verification Failed", email, "Invalid authenticator or recovery code ${auditContext(call)}"); call.respondError(HttpStatusCode.Unauthorized, "invalid_two_factor_code", "The verification code is invalid"); return@post }
                 RedisService.delete(key)
                 if (recoveryUsed) AuditRepository.write(null, "2FA Recovery Code Used", email, "A recovery code was used ${auditContext(call)}")
                 val token = JwtConfig.createToken(email, role); val refreshToken = newRefreshToken()
-                RedisService.set("auth:refresh:${resetTokenHash(refreshToken)}", "$email|$role", REFRESH_TTL_SECONDS)
+                RedisService.setRequired("auth:refresh:${resetTokenHash(refreshToken)}", "$email|$role", REFRESH_TTL_SECONDS)
                 call.respond(LoginResponse(token, refreshToken))
             }
 

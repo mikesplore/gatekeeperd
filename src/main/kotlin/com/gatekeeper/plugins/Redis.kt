@@ -9,8 +9,10 @@ import redis.clients.jedis.JedisPoolConfig
 private val logger = LoggerFactory.getLogger("com.gatekeeper.plugins.Redis")
 
 object RedisService {
+    @Volatile
     private var pool: JedisPool? = null
 
+    @Synchronized
     fun init(host: String, port: Int) {
         val config = JedisPoolConfig().apply {
             maxTotal = 16
@@ -20,10 +22,25 @@ object RedisService {
             testOnBorrow = true
             testOnReturn = true
         }
-        pool = runCatching { JedisPool(config, host, port, 2000) }
-            .onFailure { logger.warn("Redis unavailable at $host:$port; continuing with degraded Redis features", it) }
+        pool?.close()
+        val newPool = runCatching { JedisPool(config, host, port, 2000) }
+            .onFailure { logger.warn("Could not initialize Redis connection pool for $host:$port", it) }
             .getOrNull()
-        logger.info("Redis client initialized: available={}", pool != null)
+        pool = newPool
+
+        val pingResult = newPool?.let { activePool ->
+            runCatching { activePool.resource.use { jedis -> jedis.ping() } }
+        }
+        val reachable = pingResult?.getOrNull() == "PONG"
+        logger.info("Redis connection check at {}:{}: reachable={}", host, port, reachable)
+        if (!reachable) {
+            val cause = pingResult?.exceptionOrNull()
+            if (cause == null) {
+                logger.warn("Redis connection pool could not be created for {}:{}; Redis-dependent authentication will be unavailable", host, port)
+            } else {
+                logger.warn("Redis startup PING failed at {}:{}; Redis-dependent authentication will be unavailable until connectivity recovers", host, port, cause)
+            }
+        }
     }
 
     fun get(key: String): String? {
@@ -66,16 +83,19 @@ object RedisService {
         }
     }
 
-    fun incrementWithExpiry(key: String, ttlSeconds: Int): Long? {
-        return pool?.resource?.use { jedis ->
+    fun incrementWithExpiry(key: String, ttlSeconds: Int): Long {
+        val activePool = pool ?: throw RedisUnavailableException()
+        return activePool.resource.use { jedis ->
             val count = jedis.incr(key)
             if (count == 1L) jedis.expire(key, ttlSeconds.toLong())
             count
         }
     }
 
+    @Synchronized
     fun close() {
         pool?.close()
+        pool = null
         logger.info("Redis connection pool closed")
     }
 }
