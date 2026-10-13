@@ -573,7 +573,9 @@ object DeploymentJobRepository {
             id = id, projectId = projectId, serviceId = serviceId, configurationId = configurationId, executionId = execution[DeploymentExecutions.id],
             environment = environment, triggerSource = "container_adoption", containerName = container.name,
             hostPort = mappedHostPort, containerPort = containerPort, portMappings = container.ports,
-            imageDigest = container.imageDigest, secretSetId = secretSet?.id, secretSetVersion = secretSet?.version
+            imageDigest = container.imageDigest, immutableImageReference = container.imageDigest ?: container.imageId,
+            portHostIps = container.portHostIps, networks = container.networks, runtimeOptions = container.runtimeOptions,
+            secretSetId = secretSet?.id, secretSetVersion = secretSet?.version
         )) { "Unable to record adopted runtime" }
         AdoptedRuntimeRecord(id, configurationId, serviceId)
     }

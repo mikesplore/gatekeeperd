@@ -117,12 +117,15 @@ class DockerService(dockerSocketPath: String) {
         val name: String,
         val image: String,
         val imageDigest: String?,
+        val imageId: String,
         val state: String,
         val ports: Map<Int, Int>,
+        val portHostIps: Map<Int, String>,
         val networks: List<String>,
         val restartPolicy: String,
         val volumes: List<VolumeMount>,
-        val environment: Map<String, String>
+        val environment: Map<String, String>,
+        val runtimeOptions: ContainerRuntimeOptions
     )
 
     fun adoptionDetails(containerIdOrName: String): AdoptionDetails? = try {
@@ -131,10 +134,16 @@ class DockerService(dockerSocketPath: String) {
         } ?: return null
         val inspected = client.inspectContainerCmd(listed.id).exec()
         val image = inspected.config?.image ?: listed.image ?: return null
+        val containerImageId = inspected.imageId ?: return null
         val mappings = listed.ports.orEmpty().mapNotNull { port ->
             val containerPort = port.privatePort?.takeIf { it in 1..65535 } ?: return@mapNotNull null
             val hostPort = port.publicPort?.takeIf { it in 1..65535 } ?: return@mapNotNull null
             if ((port.type ?: "tcp") != "tcp") null else containerPort to hostPort
+        }.toMap()
+        val portHostIps = listed.ports.orEmpty().mapNotNull { port ->
+            val containerPort = port.privatePort?.takeIf { it in 1..65535 } ?: return@mapNotNull null
+            if ((port.type ?: "tcp") != "tcp" || port.publicPort == null) null
+            else containerPort to (port.ip?.takeIf(String::isNotBlank) ?: "0.0.0.0")
         }.toMap()
         val environment = inspected.config?.env.orEmpty().mapNotNull { value ->
             val index = value.indexOf('=')
@@ -144,9 +153,11 @@ class DockerService(dockerSocketPath: String) {
             id = listed.id,
             name = listed.names?.firstOrNull()?.removePrefix("/") ?: listed.id.take(12),
             image = image,
-            imageDigest = imageDigest(image),
+            imageDigest = runCatching { client.inspectImageCmd(containerImageId).exec().repoDigests?.firstOrNull() }.getOrNull(),
+            imageId = containerImageId,
             state = inspected.state?.status ?: listed.state ?: "unknown",
             ports = mappings,
+            portHostIps = portHostIps,
             networks = inspected.networkSettings?.networks?.keys?.sorted().orEmpty(),
             restartPolicy = inspected.hostConfig?.restartPolicy?.name ?: "unless-stopped",
             volumes = inspected.mounts.orEmpty().mapNotNull { mount ->
@@ -154,7 +165,13 @@ class DockerService(dockerSocketPath: String) {
                 val destination = mount.destination?.path ?: return@mapNotNull null
                 VolumeMount(source, destination, mount.mode?.contains("ro") == true, mount.getName())
             },
-            environment = environment
+            environment = environment,
+            runtimeOptions = ContainerRuntimeOptions(
+                command = inspected.config?.cmd?.toList(),
+                entrypoint = inspected.config?.entrypoint?.toList(),
+                workingDirectory = inspected.config?.workingDir,
+                user = inspected.config?.user
+            )
         )
     } catch (e: Exception) {
         logger.warn("Unable to inspect container for adoption", e)
@@ -254,6 +271,115 @@ class DockerService(dockerSocketPath: String) {
     fun imageDigest(imageRef: String): String? = runCatching {
         client.inspectImageCmd(imageRef).exec().repoDigests?.firstOrNull()
     }.getOrNull()
+
+    /** Immutable local identity for recovery when the registry does not expose a repository digest. */
+    fun immutableImageReference(imageRef: String): String? = runCatching {
+        val image = client.inspectImageCmd(imageRef).exec()
+        image.repoDigests?.firstOrNull() ?: image.id?.takeIf { it.startsWith("sha256:") }
+    }.getOrNull()
+
+    fun containerImageId(containerNameOrId: String): String? = runCatching {
+        client.inspectContainerCmd(containerNameOrId).exec().imageId
+    }.getOrNull()
+
+    /** Reuse only the expected immutable image at the exact recorded name; never delete a conflicting container. */
+    fun ensureRestoredContainer(request: CreateContainerRequest): ContainerInfo {
+        require(request.name.isNotBlank()) { "Restored runtime name must not be blank" }
+        val expectedImageId = client.inspectImageCmd(request.image).exec().id
+            ?: error("Immutable runtime image is unavailable")
+        fun existing(): Container? = client.listContainersCmd().withShowAll(true).exec().firstOrNull { listed ->
+            listed.names.orEmpty().any { it.removePrefix("/") == request.name }
+        }
+        val found = existing()
+        if (found != null) {
+            val inspected = client.inspectContainerCmd(found.id).exec()
+            verifyRestoredContainer(found, inspected, request, expectedImageId)
+            if (inspected.state?.running != true) client.startContainerCmd(found.id).exec()
+            val attachedNetworks = inspected.networkSettings?.networks?.keys.orEmpty()
+            (request.additionalNetworks + request.network).distinct()
+                .filter { it !in attachedNetworks && it !in setOf("host", "none") && !it.startsWith("container:") }
+                .forEach { network ->
+                client.connectToNetworkCmd().withNetworkId(network).withContainerId(found.id).exec()
+            }
+            return getContainer(found.id) ?: error("Restored runtime could not be inspected")
+        }
+        return try {
+            createContainer(request)
+        } catch (createError: Exception) {
+            // A competing retry may have created the named container after the first lookup.
+            val raced = existing() ?: throw createError
+            val inspected = client.inspectContainerCmd(raced.id).exec()
+            verifyRestoredContainer(raced, inspected, request, expectedImageId)
+            if (inspected.state?.running != true) client.startContainerCmd(raced.id).exec()
+            val attachedNetworks = inspected.networkSettings?.networks?.keys.orEmpty()
+            (request.additionalNetworks + request.network).distinct()
+                .filter { it !in attachedNetworks && it !in setOf("host", "none") && !it.startsWith("container:") }
+                .forEach { network ->
+                client.connectToNetworkCmd().withNetworkId(network).withContainerId(raced.id).exec()
+            }
+            getContainer(raced.id) ?: throw createError
+        }
+    }
+
+    private fun verifyRestoredContainer(
+        listed: Container,
+        inspected: InspectContainerResponse,
+        request: CreateContainerRequest,
+        expectedImageId: String
+    ) {
+        check(inspected.imageId == expectedImageId) {
+            "A container with the previous runtime name exists with a different immutable image"
+        }
+        fun toEnvironmentMap(values: Array<out String>?): Map<String, String> = values.orEmpty().mapNotNull { item ->
+            val separator = item.indexOf('=')
+            if (separator <= 0) null else item.substring(0, separator) to item.substring(separator + 1)
+        }.toMap()
+        val expectedEnvironment = toEnvironmentMap(client.inspectImageCmd(request.image).exec().config?.env) + request.env
+        val actualEnvironment = toEnvironmentMap(inspected.config?.env)
+        check(actualEnvironment == expectedEnvironment) {
+            "A container with the previous runtime name has different environment configuration"
+        }
+        val actualPorts = listed.ports.orEmpty().filter { (it.type ?: "tcp") == "tcp" && it.publicPort != null }
+            .associate { it.privatePort to it.publicPort }
+        val expectedPorts = request.ports.map { (hostPort, containerPort) -> containerPort to hostPort }.toMap()
+        check(actualPorts == expectedPorts) { "A container with the previous runtime name has different published ports" }
+        val expectedPortIps = expectedPorts.keys.associateWith { request.portHostIps[it] ?: request.portHostIp }
+        check(listed.ports.orEmpty().filter { it.publicPort != null }.all { port ->
+            expectedPortIps[port.privatePort]?.let { it == port.ip } ?: true
+        }) {
+            "A container with the previous runtime name has a different published port address"
+        }
+        val expectedNetworks = (request.additionalNetworks + request.network).filterNot {
+            it in setOf("host", "none") || it.startsWith("container:")
+        }.toSet()
+        check(inspected.networkSettings?.networks?.keys.orEmpty() == expectedNetworks) {
+            "A container with the previous runtime name has different network attachments"
+        }
+        request.volumes.forEach { expected ->
+            check(inspected.mounts.orEmpty().any { mount ->
+                mount.destination?.path == expected.containerPath &&
+                    (if (expected.volumeName != null) mount.getName() == expected.volumeName else mount.source == expected.hostPath) &&
+                    mount.rw == !expected.readOnly
+            }) { "A container with the previous runtime name has different volume mounts" }
+        }
+        request.restartPolicy?.let { expected ->
+            check(inspected.hostConfig?.restartPolicy?.name == expected) {
+                "A container with the previous runtime name has a different restart policy"
+            }
+        }
+        request.runtimeOptions.command?.let { expected ->
+            check(inspected.config?.cmd?.toList() == expected) { "A container with the previous runtime name has a different command" }
+        }
+        request.runtimeOptions.entrypoint?.let { expected ->
+            check(inspected.config?.entrypoint?.toList() == expected) { "A container with the previous runtime name has a different entrypoint" }
+        }
+        request.runtimeOptions.workingDirectory?.let { expected ->
+            check(inspected.config?.workingDir == expected) { "A container with the previous runtime name has a different working directory" }
+        }
+        request.runtimeOptions.user?.let { expected ->
+            check(inspected.config?.user == expected) { "A container with the previous runtime name has a different user" }
+        }
+    }
 
     /** TCP ports declared by the image's Docker metadata (Dockerfile EXPOSE). */
     fun imageExposedTcpPorts(imageRef: String): List<Int> = client.inspectImageCmd(imageRef).exec()
@@ -414,7 +540,8 @@ class DockerService(dockerSocketPath: String) {
         request.ports.forEach { (hostPort, containerPort) ->
             val exposed = ExposedPort.tcp(containerPort)
             exposedPorts.add(exposed)
-            portBindings.bind(exposed, Ports.Binding.bindPort(hostPort))
+            val hostIp = request.portHostIps[containerPort] ?: request.portHostIp
+            portBindings.bind(exposed, hostIp?.let { Ports.Binding.bindIpAndPort(it, hostPort) } ?: Ports.Binding.bindPort(hostPort))
         }
         request.randomHostPorts.forEach { containerPort ->
             require(containerPort in 1..65535) { "Container port must be between 1 and 65535" }
@@ -447,14 +574,21 @@ class DockerService(dockerSocketPath: String) {
             hostConfig.withRestartPolicy(RestartPolicy.parse(request.restartPolicy))
         }
 
-        val createResponse: CreateContainerResponse = client.createContainerCmd(request.image)
+        val createCommand = client.createContainerCmd(request.image)
             .withName(request.name)
             .withEnv(envVars)
             .withHostConfig(hostConfig)
             .withExposedPorts(exposedPorts)
-            .exec()
+        request.runtimeOptions.command?.let { createCommand.withCmd(*it.toTypedArray()) }
+        request.runtimeOptions.entrypoint?.let { createCommand.withEntrypoint(*it.toTypedArray()) }
+        request.runtimeOptions.workingDirectory?.let(createCommand::withWorkingDir)
+        request.runtimeOptions.user?.let(createCommand::withUser)
+        val createResponse: CreateContainerResponse = createCommand.exec()
         
         client.startContainerCmd(createResponse.id).exec()
+        request.additionalNetworks.distinct().filter { it != request.network }.forEach { network ->
+            client.connectToNetworkCmd().withNetworkId(network).withContainerId(createResponse.id).exec()
+        }
         logger.info("Created and started container: ${request.name} (id: ${createResponse.id})")
         
         return getContainer(createResponse.id)!!

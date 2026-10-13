@@ -25,6 +25,13 @@ object Deployments : Table("deployments") {
     val runtimeContainerName = text("runtime_container_name").nullable()
     val runtimeHostPort = integer("runtime_host_port").nullable()
     val runtimePortsJson = text("runtime_ports_json").default("{}")
+    val runtimePortHostIpsJson = text("runtime_port_host_ips_json").default("{}")
+    val runtimeImageReference = text("runtime_image_reference").nullable()
+    val runtimeNetworksJson = text("runtime_networks_json").default("[]")
+    val runtimeOptionsJson = text("runtime_options_json").default("{}")
+    val cutoverState = text("cutover_state").default("not_started")
+    val cutoverPreviousNginxConfig = text("cutover_previous_nginx_config").nullable()
+    val cutoverError = text("cutover_error").nullable()
     val triggerSource = text("trigger_source")
     // Self-referential constraints are installed by the Flyway migration.
     val replacesDeploymentId = uuid("replaces_deployment_id").nullable()

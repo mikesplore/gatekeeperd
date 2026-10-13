@@ -1,6 +1,7 @@
 package com.gatekeeper.docker
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.Transient
 
 @Serializable
 data class ContainerInfo(
@@ -90,6 +91,14 @@ data class VolumeMount(
 )
 
 @Serializable
+data class ContainerRuntimeOptions(
+    val command: List<String>? = null,
+    val entrypoint: List<String>? = null,
+    val workingDirectory: String? = null,
+    val user: String? = null
+)
+
+@Serializable
 data class CreateContainerRequest(
     val preset: String? = null,
     val name: String = "",
@@ -102,7 +111,15 @@ data class CreateContainerRequest(
     val volumes: List<VolumeMount> = emptyList(),
     val restartPolicy: String? = null,
     val pullImage: Boolean = true,
-    val pullViaCli: Boolean = false
+    val pullViaCli: Boolean = false,
+    @Transient
+    val additionalNetworks: List<String> = emptyList(),
+    @Transient
+    val portHostIp: String? = null,
+    @Transient
+    val portHostIps: Map<Int, String> = emptyMap(),
+    @Transient
+    val runtimeOptions: ContainerRuntimeOptions = ContainerRuntimeOptions()
 )
 
 @Serializable

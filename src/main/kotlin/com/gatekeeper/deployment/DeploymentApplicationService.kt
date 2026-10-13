@@ -83,6 +83,10 @@ object DeploymentApplicationService {
         containerPort: Int,
         portMappings: Map<Int, Int>,
         imageDigest: String?,
+        immutableImageReference: String?,
+        portHostIps: Map<Int, String>,
+        networks: List<String>,
+        runtimeOptions: com.gatekeeper.docker.ContainerRuntimeOptions,
         secretSetId: UUID?,
         secretSetVersion: Int?
     ): Boolean = transaction {
@@ -100,6 +104,10 @@ object DeploymentApplicationService {
             it[Deployments.runtimeContainerName] = containerName
             it[Deployments.runtimeHostPort] = hostPort
             it[Deployments.runtimePortsJson] = kotlinx.serialization.json.Json.encodeToString(portMappings.mapKeys { entry -> entry.key.toString() })
+            it[Deployments.runtimePortHostIpsJson] = kotlinx.serialization.json.Json.encodeToString(portHostIps.mapKeys { entry -> entry.key.toString() })
+            it[Deployments.runtimeImageReference] = immutableImageReference ?: imageDigest
+            it[Deployments.runtimeNetworksJson] = kotlinx.serialization.json.Json.encodeToString(networks.distinct())
+            it[Deployments.runtimeOptionsJson] = kotlinx.serialization.json.Json.encodeToString(runtimeOptions)
             it[Deployments.triggerSource] = triggerSource
             it[healthCheckingAt] = now
             it[readyAt] = now
@@ -116,7 +124,16 @@ object DeploymentApplicationService {
         true
     }
 
-    fun recordCandidateRuntime(id: UUID, containerName: String, hostPort: Int?, containerPort: Int?, portMappings: Map<Int, Int> = emptyMap()): Boolean = transaction {
+    fun recordCandidateRuntime(
+        id: UUID,
+        containerName: String,
+        hostPort: Int?,
+        containerPort: Int?,
+        portMappings: Map<Int, Int> = emptyMap(),
+        imageReference: String? = null,
+        networks: List<String> = emptyList(),
+        portHostIps: Map<Int, String> = emptyMap()
+    ): Boolean = transaction {
         require(containerName.isNotBlank()) { "Candidate container name must not be blank" }
         require(hostPort == null || hostPort in 1..65535) { "Candidate host port must be between 1 and 65535" }
         require(containerPort == null || containerPort in 1..65535) { "Candidate container port must be between 1 and 65535" }
@@ -128,6 +145,9 @@ object DeploymentApplicationService {
             it[Deployments.runtimeContainerName] = containerName
             it[Deployments.runtimeHostPort] = hostPort
             it[Deployments.runtimePortsJson] = kotlinx.serialization.json.Json.encodeToString(portMappings.mapKeys { it.key.toString() })
+            it[Deployments.runtimePortHostIpsJson] = kotlinx.serialization.json.Json.encodeToString(portHostIps.mapKeys { entry -> entry.key.toString() })
+            it[Deployments.runtimeImageReference] = imageReference
+            it[Deployments.runtimeNetworksJson] = kotlinx.serialization.json.Json.encodeToString(networks.distinct())
             it[updatedAt] = LocalDateTime.now()
         } == 1
         if (!updated) return@transaction false
@@ -146,6 +166,71 @@ object DeploymentApplicationService {
             }
         }
         true
+    }
+
+    fun recordRuntimeImageReference(id: UUID, imageReference: String): Boolean = transaction {
+        require(imageReference.contains("@sha256:") || imageReference.startsWith("sha256:")) {
+            "Runtime image reference must be immutable"
+        }
+        Deployments.update({ Deployments.id eq id }) {
+            it[Deployments.runtimeImageReference] = imageReference
+            it[updatedAt] = LocalDateTime.now()
+        } == 1
+    }
+
+    fun recordRuntimeNetworkAttachments(id: UUID, networks: List<String>): Boolean = transaction {
+        Deployments.update({ Deployments.id eq id }) {
+            it[Deployments.runtimeNetworksJson] = kotlinx.serialization.json.Json.encodeToString(networks.distinct())
+            it[updatedAt] = LocalDateTime.now()
+        } == 1
+    }
+
+    fun recordRuntimeRestorationSnapshot(
+        id: UUID,
+        imageReference: String,
+        ports: Map<Int, Int>,
+        portHostIps: Map<Int, String>,
+        networks: List<String>,
+        runtimeOptions: com.gatekeeper.docker.ContainerRuntimeOptions
+    ): Boolean = transaction {
+        require(imageReference.contains("@sha256:") || imageReference.startsWith("sha256:")) {
+            "Runtime image reference must be immutable"
+        }
+        Deployments.update({ Deployments.id eq id }) {
+            it[Deployments.runtimeImageReference] = imageReference
+            it[Deployments.runtimePortsJson] = kotlinx.serialization.json.Json.encodeToString(ports.mapKeys { entry -> entry.key.toString() })
+            it[Deployments.runtimePortHostIpsJson] = kotlinx.serialization.json.Json.encodeToString(portHostIps.mapKeys { entry -> entry.key.toString() })
+            it[Deployments.runtimeNetworksJson] = kotlinx.serialization.json.Json.encodeToString(networks.distinct())
+            it[Deployments.runtimeOptionsJson] = kotlinx.serialization.json.Json.encodeToString(runtimeOptions)
+            it[updatedAt] = LocalDateTime.now()
+        } == 1
+    }
+
+    fun prepareRuntimeCutover(id: UUID, previousId: UUID?, previousNginxConfig: String?): Boolean = transaction {
+        Deployments.update({ Deployments.id eq id }) {
+            it[Deployments.replacesDeploymentId] = previousId
+            it[Deployments.cutoverPreviousNginxConfig] = previousNginxConfig
+            it[Deployments.cutoverState] = "prepared"
+            it[Deployments.cutoverError] = null
+            it[updatedAt] = LocalDateTime.now()
+        } == 1
+    }
+
+    fun updateCutoverState(id: UUID, state: String, error: String? = null): Boolean = transaction {
+        require(state in setOf("not_started", "prepared", "route_switched", "retiring_previous", "previous_retired", "restoring", "runtime_restored", "restore_failed", "restored", "activated"))
+        Deployments.update({ Deployments.id eq id }) {
+            it[Deployments.cutoverState] = state
+            it[Deployments.cutoverError] = error
+            it[updatedAt] = LocalDateTime.now()
+        } == 1
+    }
+
+    data class CutoverRecoveryRecord(val state: String, val previousNginxConfig: String?, val previousDeploymentId: UUID?)
+
+    fun cutoverRecovery(id: UUID): CutoverRecoveryRecord? = transaction {
+        Deployments.selectAll().where { Deployments.id eq id }.singleOrNull()?.let {
+            CutoverRecoveryRecord(it[Deployments.cutoverState], it[Deployments.cutoverPreviousNginxConfig], it[Deployments.replacesDeploymentId])
+        }
     }
 
     fun recordCredentialReference(id: UUID, credentialId: UUID, version: Int): Boolean = transaction {
@@ -192,7 +277,9 @@ object DeploymentApplicationService {
     data class ActiveRuntime(
         val id: UUID, val executionId: UUID, val name: String?, val hostPort: Int?, val image: String?, val hostConfigPort: Int?,
         val containerPort: Int?, val network: String, val restartPolicy: String,
-        val env: Map<String, String>, val secretEnv: Map<String, String>, val volumes: List<com.gatekeeper.docker.VolumeMount>
+        val env: Map<String, String>, val secretEnv: Map<String, String>, val volumes: List<com.gatekeeper.docker.VolumeMount>,
+        val ports: Map<Int, Int>, val portHostIps: Map<Int, String>, val networks: List<String>,
+        val runtimeOptions: com.gatekeeper.docker.ContainerRuntimeOptions, val triggerSource: String
     )
 
     fun activeRuntime(serviceId: UUID, environment: String): ActiveRuntime? = transaction {
@@ -201,16 +288,31 @@ object DeploymentApplicationService {
         }.singleOrNull()?.let { row ->
             val execution = com.gatekeeper.db.tables.DeploymentExecutions.selectAll()
                 .where { com.gatekeeper.db.tables.DeploymentExecutions.id eq row[Deployments.executionId] }.singleOrNull()
-            val image = execution?.let { "${it[com.gatekeeper.db.tables.DeploymentExecutions.imageName]}:${it[com.gatekeeper.db.tables.DeploymentExecutions.imageTag]}" }
+            val image = row[Deployments.runtimeImageReference]
+                ?: execution?.get(com.gatekeeper.db.tables.DeploymentExecutions.imageDigest)
             val env = execution?.let { kotlinx.serialization.json.Json.decodeFromString<Map<String, String>>(it[com.gatekeeper.db.tables.DeploymentExecutions.envJson]) }.orEmpty()
             val volumes = execution?.let { kotlinx.serialization.json.Json.decodeFromString<List<com.gatekeeper.docker.VolumeMount>>(it[com.gatekeeper.db.tables.DeploymentExecutions.volumesJson]) }.orEmpty()
+            val ports = runCatching {
+                kotlinx.serialization.json.Json.decodeFromString<Map<String, Int>>(row[Deployments.runtimePortsJson]).mapKeys { it.key.toInt() }
+            }.getOrDefault(emptyMap())
+            val portHostIps = runCatching {
+                kotlinx.serialization.json.Json.decodeFromString<Map<String, String>>(row[Deployments.runtimePortHostIpsJson]).mapKeys { it.key.toInt() }
+            }.getOrDefault(emptyMap())
+            val networks = runCatching {
+                kotlinx.serialization.json.Json.decodeFromString<List<String>>(row[Deployments.runtimeNetworksJson])
+            }.getOrDefault(emptyList()).ifEmpty {
+                listOfNotNull(execution?.get(com.gatekeeper.db.tables.DeploymentExecutions.network))
+            }
+            val runtimeOptions = runCatching {
+                kotlinx.serialization.json.Json.decodeFromString<com.gatekeeper.docker.ContainerRuntimeOptions>(row[Deployments.runtimeOptionsJson])
+            }.getOrDefault(com.gatekeeper.docker.ContainerRuntimeOptions())
             ActiveRuntime(
                 row[Deployments.id], row[Deployments.executionId], row[Deployments.runtimeContainerName], row[Deployments.runtimeHostPort], image,
                 execution?.get(com.gatekeeper.db.tables.DeploymentExecutions.hostPort),
                 execution?.get(com.gatekeeper.db.tables.DeploymentExecutions.containerPort),
                 execution?.get(com.gatekeeper.db.tables.DeploymentExecutions.network) ?: "bridge",
                 execution?.get(com.gatekeeper.db.tables.DeploymentExecutions.restartPolicy) ?: "unless-stopped",
-                env, emptyMap(), volumes
+                env, emptyMap(), volumes, ports, portHostIps, networks, runtimeOptions, row[Deployments.triggerSource]
             )
         }
     }
@@ -513,6 +615,8 @@ object DeploymentApplicationService {
             it[status] = DeploymentStatus.ACTIVE
             it[activeAt] = now
             it[Deployments.replacesDeploymentId] = previousId
+            it[Deployments.cutoverState] = "activated"
+            it[Deployments.cutoverError] = null
             it[updatedAt] = now
         }
         check(updated == 1) { "Unable to activate deployment $id" }
