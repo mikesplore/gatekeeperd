@@ -21,6 +21,8 @@ import kotlinx.serialization.json.Json
 data class DurableCutoverFiles(
     val format: String = "deployment-upstream-v1",
     val previousSiteConfig: String? = null,
+    val siteSlug: String? = null,
+    val previousUpstreamKind: String? = null,
     val previousIncludeContent: String? = null,
     val pendingIncludeContent: String? = null,
     val pendingChecksum: String? = null

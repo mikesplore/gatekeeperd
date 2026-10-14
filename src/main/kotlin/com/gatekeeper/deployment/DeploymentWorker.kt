@@ -71,7 +71,7 @@ object DeploymentWorker {
                     runCatching { docker?.close() }
                 }
                 val result = NginxService.configured().recoverInterruptedUpstream(
-                    serviceId, site.domain, site.tlsMode != com.gatekeeper.db.tables.TlsMode.HTTP_ONLY, files, candidateRunning
+                    site, files, candidateRunning
                 )
                 when (result) {
                     NginxService.InterruptedCutoverResult.TARGET_RELOADED,
@@ -125,7 +125,14 @@ object DeploymentWorker {
         )
     }
 
-    private suspend fun processClaimedJob(job: DeploymentJobRecord) {
+    private suspend fun processClaimedJob(claimedJob: DeploymentJobRecord) {
+        var job = claimedJob
+        val site = if (job.environment == "production") SiteRepository.findByServiceId(job.serviceId) else null
+        if (job.containerPort == null) {
+            job = job.copy(containerPort = DeploymentSiteCutoverPolicy.primaryContainerPort(
+                null, site?.upstreamKind, site?.upstreamExplicitPort
+            ))
+        }
         DeploymentApplicationService.deploymentBlockReason(job.serviceId, job.environment)?.let { reason ->
             update(job, step = "failed", log = reason, status = "failed", error = reason)
             return
@@ -228,7 +235,7 @@ object DeploymentWorker {
                 candidateName = deterministicCandidateName
                 val imagePorts = docker.imageExposedTcpPorts(image)
                 val managedSite = if (job.environment == "production") SiteRepository.findByServiceId(job.serviceId) else null
-                if (managedSite?.upstreamKind == "DEPLOYMENT_MANAGED" && job.containerPort == null && imagePorts.size != 1) {
+                if (DeploymentSiteCutoverPolicy.hasDeploymentRoute(managedSite?.upstreamKind) && job.containerPort == null && imagePorts.size != 1) {
                     error("Managed service must configure a primary container port when its image exposes zero or multiple TCP ports")
                 }
                 val dynamicContainerPorts = (imagePorts + listOfNotNull(job.containerPort)).toSet()
@@ -407,7 +414,11 @@ object DeploymentWorker {
         val siteOwnerSlug = site?.projectSlug
         val siteService = if (site != null && siteOwnerSlug != null) NginxService.configured() else null
         val existingSiteConfig = if (siteService != null && siteOwnerSlug != null) siteService.inspectSite(siteOwnerSlug) else null
-        val hasEnabledManagedSite = site?.upstreamKind == "DEPLOYMENT_MANAGED" && existingSiteConfig?.canDeploymentCutoverUpdateRoute() == true
+        // Legacy explicit sites may already receive managed deployments. Convert them on cutover
+        // so deployment changes only the stable service include after this first activation.
+        val convertsLegacySite = DeploymentSiteCutoverPolicy.convertsLegacySite(site?.upstreamKind)
+        val hasEnabledManagedSite = DeploymentSiteCutoverPolicy.hasDeploymentRoute(site?.upstreamKind) &&
+            existingSiteConfig?.canDeploymentCutoverUpdateRoute() == true
         val managedRoute = if (hasEnabledManagedSite) {
             val managedSite = requireNotNull(site)
             val containerPort = job.containerPort ?: runtime.ports.keys.singleOrNull()
@@ -422,6 +433,7 @@ object DeploymentWorker {
         } else null
         val managedPreviousHostPort = managedRoute?.let { route ->
             previousDeployment?.ports?.get(route.first) ?: previousDeployment?.hostPort
+                ?: if (convertsLegacySite) site?.upstreamExplicitPort else null
         }
         val durableCutoverFiles = managedRoute?.let { route ->
             val serviceId = job.serviceId
@@ -430,6 +442,8 @@ object DeploymentWorker {
             val candidateInclude = includes.render(serviceId, route.second)
             DurableCutoverFiles(
                 previousSiteConfig = existingSiteConfig?.content,
+                siteSlug = siteOwnerSlug,
+                previousUpstreamKind = site?.upstreamKind,
                 previousIncludeContent = oldInclude,
                 pendingIncludeContent = candidateInclude,
                 pendingChecksum = includes.checksum(candidateInclude)
@@ -481,8 +495,15 @@ object DeploymentWorker {
             val (containerPort, hostPort) = managedRoute ?: error("Managed site candidate route was not prepared")
             val previousHostPort = managedPreviousHostPort
             rollbackRoute = {
-                val restored = activeSiteService.restoreDeploymentUpstream(job.serviceId, previousHostPort)
-                if (restored) SiteRepository.restoreDeploymentUpstreamForSite(managedSite) != null else false
+                if (convertsLegacySite) {
+                    val restoredSite = previousConfig?.let { activeSiteService.restoreSiteConfiguration(ownerSlug, it) } == true
+                    val restoredInclude = activeSiteService.restoreDeploymentUpstream(job.serviceId, previousHostPort)
+                    val restoredKind = SiteRepository.restoreUpstreamKind(managedSite.id, managedSite.upstreamKind) != null
+                    restoredSite && restoredInclude && restoredKind
+                } else {
+                    val restored = activeSiteService.restoreDeploymentUpstream(job.serviceId, previousHostPort)
+                    if (restored) SiteRepository.restoreDeploymentUpstreamForSite(managedSite) != null else false
+                }
             }
             onRouteRollback(rollbackRoute)
 
@@ -490,7 +511,12 @@ object DeploymentWorker {
                 onRouteRollback(null)
                 restorePreviousRuntime(job.id, previousDeployment, previousConfig, docker, activeSiteService, ownerSlug, managedSite)
             }
-            check(activeSiteService.switchDeploymentUpstream(job.serviceId, ownerSlug, "127.0.0.1", containerPort, hostPort)) {
+            val routeActivated = if (convertsLegacySite) {
+                activeSiteService.convertSiteToDeploymentManaged(managedSite, hostPort)
+            } else {
+                activeSiteService.switchDeploymentUpstream(job.serviceId, ownerSlug, "127.0.0.1", containerPort, hostPort)
+            }
+            check(routeActivated) {
                 "Gateway/site upstream cutover failed; previous runtime remains active"
             }
             check(DeploymentApplicationService.updateCutoverState(job.id, "route_switched")) { "Unable to persist route cutover state" }

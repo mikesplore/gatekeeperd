@@ -1130,12 +1130,13 @@ class NginxService(
         }
 
     fun recoverInterruptedUpstream(
-        serviceId: java.util.UUID,
-        domain: String,
-        tls: Boolean,
+        site: SiteRepository.SiteRecord,
         files: com.gatekeeper.deployment.DurableCutoverFiles,
         candidateRunning: Boolean
     ): InterruptedCutoverResult = DistributedLock.withLock("nginx-host-mutation") {
+        val serviceId = site.serviceId ?: return@withLock InterruptedCutoverResult.CONFLICT
+        val domain = site.domain
+        val tls = site.tlsMode != TlsMode.HTTP_ONLY
         val includes = DeploymentUpstreamIncludes(File(upstreamIncludeDirectory))
         val file = includes.file(serviceId)
         val current = file.takeIf { it.isFile }?.readText()
@@ -1144,14 +1145,36 @@ class NginxService(
         val pendingMatches = currentHash == files.pendingChecksum && files.pendingChecksum == includes.checksum(pending)
         val previousMatches = current == files.previousIncludeContent
         if (pendingMatches && candidateRunning) {
-            if (nginxTestRunner().valid && nginxReloadRunner() && localProbeRunner(domain, tls)) {
+            val restored = if (site.upstreamKind != "DEPLOYMENT_MANAGED") {
+                val targetPort = includePort(pending) ?: return@withLock InterruptedCutoverResult.CONFLICT
+                convertSiteToDeploymentManaged(site, targetPort)
+            } else {
+                nginxTestRunner().valid && nginxReloadRunner() && localProbeRunner(domain, tls)
+            }
+            if (restored) {
                 return@withLock InterruptedCutoverResult.TARGET_RELOADED
             }
         } else if (previousMatches) {
+            if (files.previousUpstreamKind != "DEPLOYMENT_MANAGED") {
+                val slug = files.siteSlug ?: site.projectSlug
+                val configRestored = if (files.previousSiteConfig != null && slug != null) {
+                    restoreSiteConfiguration(slug, files.previousSiteConfig)
+                } else true
+                if (!configRestored) return@withLock InterruptedCutoverResult.CONFLICT
+                if (SiteRepository.restoreUpstreamKind(site.id, files.previousUpstreamKind) == null) {
+                    return@withLock InterruptedCutoverResult.CONFLICT
+                }
+            }
             return@withLock InterruptedCutoverResult.PREVIOUS_RESTORED
         }
         if (!pendingMatches) return@withLock InterruptedCutoverResult.CONFLICT
         runCatching {
+            if (files.previousUpstreamKind != "DEPLOYMENT_MANAGED") {
+                val slug = files.siteSlug ?: site.projectSlug
+                check(files.previousSiteConfig != null && slug != null)
+                check(restoreSiteConfiguration(slug, files.previousSiteConfig))
+                check(SiteRepository.restoreUpstreamKind(site.id, files.previousUpstreamKind) != null)
+            }
             if (files.previousIncludeContent == null) Files.deleteIfExists(file.toPath())
             else includes.write(serviceId, files.previousIncludeContent)
             check(nginxTestRunner().valid && nginxReloadRunner())
@@ -1164,6 +1187,9 @@ class NginxService(
             }
         )
     }
+
+    private fun includePort(content: String): Int? = Regex("server\\s+127\\.0\\.0\\.1:(\\d+);?")
+        .find(content)?.groupValues?.getOrNull(1)?.toIntOrNull()?.takeIf { it in 1..65535 }
 
     private fun restoreUpstreamInclude(includes: DeploymentUpstreamIncludes, serviceId: java.util.UUID, previous: String?) {
         if (previous == null) Files.deleteIfExists(includes.file(serviceId).toPath()) else includes.write(serviceId, previous)
