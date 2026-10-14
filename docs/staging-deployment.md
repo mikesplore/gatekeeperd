@@ -100,12 +100,44 @@ renewal requests; update the existing site config and reload nginx after changin
   - `gatekeeperd-all.jar.sha256`
   - `gatekeeperd-certbot`
   - `gatekeeperd-certbot.sha256`
+  - `gatekeeperd-deploy-tools.tar.gz` and its SHA-256 checksum
 
 ### Install jar on VPS
 
 Run the repository's `deploy.sh` on the VPS. It selects a specific successful workflow
 run, reports its source commit, validates the downloaded checksum, installs the JAR at
 `/opt/gatekeeperd/gatekeeperd-all.jar`, and restarts the systemd service.
+
+### Automatic deployment from successful builds
+
+After deploying a build that includes the deployment checker, `deploy.sh` installs
+and enables a systemd timer. It checks GitHub every five minutes for the newest
+successful `build.yml` run on `main`. When that run's commit differs from
+`/opt/gatekeeperd/source-commit.txt`, it deploys that exact workflow run, verifies
+the JAR and helper checksums, restarts Gatekeeperd, and confirms the liveness
+endpoint responds. A failed deployment restores the previous JAR; the same failed
+commit is then held back until a newer successful build appears.
+
+The timer needs no inbound port or GitHub webhook. It runs on the VPS and uses the
+GitHub CLI credentials already configured there. The first rollout requires one
+manual deployment using the updated `deploy.sh`; after that, pushes to `main` deploy
+automatically when CI succeeds. If root cannot read the existing `gh` authentication,
+the timer stays disabled and `deploy.sh` prints the setup issue. Check it with:
+
+```bash
+sudo systemctl status gatekeeperd-auto-deploy.timer
+sudo journalctl -u gatekeeperd-auto-deploy.service -n 50 --no-pager
+```
+
+To stop automatic deployments:
+
+```bash
+sudo systemctl disable --now gatekeeperd-auto-deploy.timer
+```
+
+The checker deploys the most recent successful `main` build. It does not deploy pull
+request builds or tags. A commit whose deployment failed is not retried automatically;
+deploy a newer successful commit or run `deploy.sh` manually to retry it.
 
 To stop all services:
 ```bash

@@ -1,0 +1,11 @@
+[Unit]
+Description=Deploy the latest successful Gatekeeperd GitHub Actions build
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+EnvironmentFile=/etc/gatekeeperd/auto-deploy.env
+ExecStart=/opt/gatekeeperd/gatekeeperd-auto-deploy
+TimeoutStartSec=15min

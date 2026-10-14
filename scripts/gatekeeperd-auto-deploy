@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO="mikesplore/gatekeeperd"
+BRANCH="${DEPLOY_BRANCH:-main}"
+WORKFLOW="build.yml"
+TARGET_DIR="/opt/gatekeeperd"
+DEPLOY_SCRIPT="${TARGET_DIR}/deploy.sh"
+SOURCE_COMMIT_FILE="${TARGET_DIR}/source-commit.txt"
+FAILED_COMMIT_FILE="${TARGET_DIR}/auto-deploy-failed-commit.txt"
+
+if [[ "${EUID}" -ne 0 ]]; then
+  echo "Error: Automatic deployment checker must run as root." >&2
+  exit 1
+fi
+
+if ! command -v gh >/dev/null 2>&1; then
+  echo "Error: GitHub CLI ('gh') is required for automatic deployment." >&2
+  exit 1
+fi
+if [[ ! -x "${DEPLOY_SCRIPT}" ]]; then
+  echo "Error: ${DEPLOY_SCRIPT} is missing; run deploy.sh once to install auto-deploy." >&2
+  exit 1
+fi
+
+RUN_INFO="$(gh run list \
+  --repo "${REPO}" \
+  --workflow "${WORKFLOW}" \
+  --branch "${BRANCH}" \
+  --status success \
+  --limit 1 \
+  --json databaseId,headSha,headBranch \
+  --jq '.[0] | [.databaseId, .headSha, .headBranch] | @tsv')"
+
+if [[ -z "${RUN_INFO}" ]]; then
+  echo "No successful ${WORKFLOW} run found on ${BRANCH}; nothing to deploy."
+  exit 0
+fi
+
+IFS=$'\t' read -r RUN_ID COMMIT_SHA HEAD_BRANCH <<<"${RUN_INFO}"
+if [[ ! "${RUN_ID}" =~ ^[0-9]+$ || ! "${COMMIT_SHA}" =~ ^[0-9a-f]{40}$ || "${HEAD_BRANCH}" != "${BRANCH}" ]]; then
+  echo "Error: GitHub returned unexpected workflow metadata: ${RUN_INFO}" >&2
+  exit 1
+fi
+
+INSTALLED_SHA="$(cat "${SOURCE_COMMIT_FILE}" 2>/dev/null || true)"
+if [[ "${INSTALLED_SHA}" == "${COMMIT_SHA}" ]]; then
+  echo "Gatekeeperd is already deployed from ${COMMIT_SHA}."
+  exit 0
+fi
+
+FAILED_SHA="$(cat "${FAILED_COMMIT_FILE}" 2>/dev/null || true)"
+if [[ "${FAILED_SHA}" == "${COMMIT_SHA}" ]]; then
+  echo "Build ${COMMIT_SHA} previously failed deployment; waiting for a newer successful build." >&2
+  exit 0
+fi
+
+echo "Deploying successful workflow run ${RUN_ID} (${COMMIT_SHA})..."
+if "${DEPLOY_SCRIPT}" --run-id "${RUN_ID}"; then
+  rm -f "${FAILED_COMMIT_FILE}"
+else
+  printf '%s\n' "${COMMIT_SHA}" >"${FAILED_COMMIT_FILE}"
+  echo "Deployment of ${COMMIT_SHA} failed; it will not be retried automatically." >&2
+  exit 1
+fi

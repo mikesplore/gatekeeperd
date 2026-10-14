@@ -36,6 +36,12 @@ jobs:
           sha256sum build/libs/gatekeeperd-all.jar | awk '{print $1}' > build/libs/gatekeeperd-all.jar.sha256
           install -m 0644 scripts/gatekeeperd-certbot build/libs/gatekeeperd-certbot
           sha256sum build/libs/gatekeeperd-certbot | awk '{print $1}' > build/libs/gatekeeperd-certbot.sha256
+          tar -czf build/libs/gatekeeperd-deploy-tools.tar.gz \
+            deploy.sh \
+            scripts/gatekeeperd-auto-deploy \
+            scripts/gatekeeperd-auto-deploy.service \
+            scripts/gatekeeperd-auto-deploy.timer
+          sha256sum build/libs/gatekeeperd-deploy-tools.tar.gz | awk '{print $1}' > build/libs/gatekeeperd-deploy-tools.tar.gz.sha256
 
       - name: Upload jar artifact
         uses: actions/upload-artifact@v4
@@ -46,4 +52,6 @@ jobs:
             build/libs/gatekeeperd-all.jar.sha256
             build/libs/gatekeeperd-certbot
             build/libs/gatekeeperd-certbot.sha256
+            build/libs/gatekeeperd-deploy-tools.tar.gz
+            build/libs/gatekeeperd-deploy-tools.tar.gz.sha256
           if-no-files-found: error

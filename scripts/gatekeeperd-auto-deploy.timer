@@ -1,0 +1,12 @@
+[Unit]
+Description=Check for a new successful Gatekeeperd build
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+RandomizedDelaySec=30sec
+Persistent=true
+Unit=gatekeeperd-auto-deploy.service
+
+[Install]
+WantedBy=timers.target
