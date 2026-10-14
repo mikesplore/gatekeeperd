@@ -581,6 +581,19 @@ Successful block updates and rollbacks are recorded in the project audit log.
 
 ## Deployment operations
 
+### GET /api/admin/logs
+
+Returns recent structured entries from the `gatekeeperd.service` systemd journal. This endpoint requires the admin JWT and journal-read permission for the Gatekeeperd service account. The reader scans up to the latest 10,000 journal entries per request; the response marks when that window was truncated.
+
+Query parameters:
+
+- `limit`: rows per page, 1–100 (default 25).
+- `offset`: zero-based row offset (default 0).
+- `search`: case-insensitive match across timestamp, level, source, message, request ID, and stack trace (maximum 200 characters).
+- `level`: exact severity filter (`TRACE`, `DEBUG`, `INFO`, `WARN`, `ERROR`, or `FATAL`).
+
+The response includes the filtered page and total, `hasMore`, a truncation flag, and summary counts for the scanned window. Success and error rates are calculated from Ktor HTTP access log statuses (2xx/3xx versus 4xx/5xx). Values resembling credentials, authorization headers, and URL passwords are redacted before returning entries. If the system journal cannot be read, the endpoint returns `503 logs_unavailable`.
+
 Registry credentials are managed through `GET /api/admin/registries`, `PUT /api/admin/registries/{registry}`, and `DELETE /api/admin/registries/{registry}`. PUT creates or rotates an immutable credential version; prior versions are marked superseded and retained. Passwords are AES-256-GCM encrypted at rest and never returned. DELETE retires the current version while retaining its record. The deployment worker performs registry-scoped `docker login --password-stdin` before push/pull operations.
 
 `GET /api/admin/provider-credentials` and `GET /api/admin/provider-credentials/{id}` return provider credential metadata and version history only (provider, type, display name, scope, version, rotation/audit timestamps, and current/superseded state). They never return encrypted payloads or plaintext values. These endpoints are JWT-protected.

@@ -75,6 +75,7 @@ The `/api/admin/nginx/*` endpoints need host access to:
 - run `nginx -t` and `systemctl reload nginx`
 
 The simplest setup is to run **gatekeeperd on the host (systemd)** and run client apps in Docker.
+The admin logs page reads `gatekeeperd.service` from the systemd journal; the Gatekeeperd service account must be allowed to read that journal.
 
 ### Allowing Gatekeeperd to manage Let's Encrypt certificates
 

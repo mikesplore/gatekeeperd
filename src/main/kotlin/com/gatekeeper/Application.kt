@@ -16,6 +16,7 @@ import com.gatekeeper.feature.payment.data.provider.PaystackClient
 import com.gatekeeper.feature.payment.presentation.configureMpesaRoutes
 import com.gatekeeper.feature.payment.presentation.configurePaystackWebhookRoutes
 import com.gatekeeper.feature.payment.presentation.configurePaymentAdminRoutes
+import com.gatekeeper.admin.configureLogAdminRoutes
 import com.gatekeeper.feature.payment.presentation.configurePaymentRoutes
 import com.gatekeeper.nginx.NginxBackfillRunner
 import com.gatekeeper.plugins.*
@@ -136,6 +137,7 @@ fun Application.module() {
     configureNginxAdminRoutes()
     configureDeploymentAdminRoutes()
     configureSystemAdminRoutes()
+    configureLogAdminRoutes()
     configureRegistryAdminRoutes()
     configurePaystackWebhookRoutes()
     configureMpesaRoutes()
