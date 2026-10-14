@@ -2,6 +2,7 @@ package com.gatekeeper.deployment
 
 import com.gatekeeper.db.repositories.DeploymentJobRepository
 import com.gatekeeper.db.repositories.DeploymentJobRecord
+import com.gatekeeper.db.repositories.DeploymentPortAllocationRepository
 import com.gatekeeper.db.repositories.AuditRepository
 import com.gatekeeper.db.repositories.RegistryCredentialRepository
 import com.gatekeeper.config.AppConfig
@@ -190,18 +191,52 @@ object DeploymentWorker {
                         "Docker image declares no TCP ports; readiness will use container process state"
                     }
                 )
-                val created = docker.createContainerTracked(CreateContainerRequest(
-                    name = candidateName,
-                    image = immutableImageReference,
-                    randomHostPorts = dynamicContainerPorts,
-                    network = job.network,
-                    restartPolicy = job.restartPolicy,
-                    env = DeploymentJobRepository.resolveEnvironmentForExecution(job.id).values,
-                    volumes = job.volumes,
-                    pullImage = false
-                ))
-                candidateContainerId = created.id
-                val candidateInfo = created.info
+                val activePorts = DeploymentApplicationService.activeRuntime(job.serviceId, job.environment)?.ports.orEmpty()
+                val rejectedPorts = mutableSetOf<Int>()
+                var created: Pair<String, com.gatekeeper.docker.ContainerInfo>? = null
+                var reservedPorts = emptyMap<Int, Int>()
+                for (attempt in 0 until 4) {
+                    reservedPorts = if (dynamicContainerPorts.isEmpty()) emptyMap() else {
+                        DeploymentPortAllocationRepository.allocateSlot(
+                            serviceId = job.serviceId,
+                            environment = job.environment,
+                            activePorts = activePorts,
+                            containerPorts = dynamicContainerPorts,
+                            dockerPortsInUse = docker.hostPortsInUse(),
+                            portRange = AppConfig.deploymentHostPortRange,
+                            rejectedPorts = rejectedPorts
+                        )
+                    }
+                    if (reservedPorts.isNotEmpty()) {
+                        update(
+                            job,
+                            log = "Reserved stable host ports for candidate: " +
+                                reservedPorts.entries.sortedBy { it.key }.joinToString { "${it.value}->${it.key}" }
+                        )
+                    }
+                    try {
+                        val result = docker.createContainerTracked(CreateContainerRequest(
+                            name = candidateName,
+                            image = immutableImageReference,
+                            ports = reservedPorts.map { (containerPort, hostPort) -> hostPort to containerPort }.toMap(),
+                            portHostIp = "127.0.0.1",
+                            network = job.network,
+                            restartPolicy = job.restartPolicy,
+                            env = DeploymentJobRepository.resolveEnvironmentForExecution(job.id).values,
+                            volumes = job.volumes,
+                            pullImage = false
+                        ))
+                        created = result.id to result.info
+                        break
+                    } catch (error: Exception) {
+                        if (!isHostPortConflict(error) || attempt == 3 || reservedPorts.isEmpty()) throw error
+                        rejectedPorts += reservedPorts.values
+                        update(job, log = "Docker could not bind reserved port(s) ${reservedPorts.values.joinToString()}; reallocating from the configured pool")
+                    }
+                }
+                val (createdId, candidateInfo) = created
+                    ?: error("Docker did not create the candidate container")
+                candidateContainerId = createdId
                 val candidatePortMappings = dynamicContainerPorts.associateWith { containerPort ->
                     candidateInfo.ports.publishedHostPort(containerPort)
                         ?: error("Docker did not assign a host port for candidate container port $containerPort")
@@ -281,6 +316,15 @@ object DeploymentWorker {
             if (existingDocker == null) runCatching { cleanupDocker?.close() }
         }
     }
+
+    private fun isHostPortConflict(error: Throwable): Boolean = generateSequence(error) { it.cause }
+        .mapNotNull { it.message?.lowercase() }
+        .any { message ->
+            "address already in use" in message ||
+                "port is already allocated" in message ||
+                "failed to bind" in message ||
+                "bind for 127.0.0.1" in message
+        }
 
     private fun deploymentContainerName(serviceName: String, deploymentId: UUID): String {
         val normalizedServiceName = serviceName.lowercase()

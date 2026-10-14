@@ -229,6 +229,7 @@ Gatekeeperd persists Scribed suspension and payment notifications in the Postgre
 | `SUPPORT_CONTACT_EMAIL` | No | Shown on paywall pages |
 | `CORS_ALLOWED_ORIGINS` | No | Comma-separated admin dashboard origins |
 | `DOCKER_SOCKET` | No | Default `unix:///var/run/docker.sock` |
+| `DEPLOYMENT_HOST_PORT_RANGE` | No | Stable host-port pool for managed blue/green deployments; default `32000-40000`. Reserve the range for Gatekeeperd on the Docker host. |
 | `GATEKEEPER_INTERNAL_NETWORK` | No | Default `gatekeeper-internal` |
 | `DEFAULT_GRACE_PERIOD_DAYS` | No | Default `3` |
 | `FAIL_MODE` | No | `open` or `closed` |

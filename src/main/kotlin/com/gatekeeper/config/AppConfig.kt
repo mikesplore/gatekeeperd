@@ -79,6 +79,19 @@ object AppConfig {
     val githubAppPrivateKeyPath: String = optionalSetting("GITHUB_APP_PRIVATE_KEY_PATH", "")
     val githubWebhookSecret: String = optionalSetting("GITHUB_WEBHOOK_SECRET", "")
     val deploymentStaleMinutes: Long = optionalSetting("DEPLOYMENT_STALE_MINUTES", "30").toLong()
+    val deploymentHostPortRange: IntRange = optionalSetting("DEPLOYMENT_HOST_PORT_RANGE", "32000-40000")
+        .split('-', limit = 2)
+        .let { parts ->
+            require(parts.size == 2) { "DEPLOYMENT_HOST_PORT_RANGE must use START-END format" }
+            val start = parts[0].toIntOrNull()
+                ?: error("DEPLOYMENT_HOST_PORT_RANGE start must be an integer")
+            val end = parts[1].toIntOrNull()
+                ?: error("DEPLOYMENT_HOST_PORT_RANGE end must be an integer")
+            require(start in 1024..65535 && end in 1024..65535 && start <= end) {
+                "DEPLOYMENT_HOST_PORT_RANGE must be an ordered range between 1024 and 65535"
+            }
+            start..end
+        }
     val deploymentSecretsKey: String = optionalSetting("DEPLOYMENT_SECRETS_KEY", "")
 
     init {
