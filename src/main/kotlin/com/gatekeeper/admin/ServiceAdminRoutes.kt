@@ -47,7 +47,8 @@ data class ServiceAdjustmentView(val id: String, val projectId: String, val serv
 @Serializable
 data class UpdateServiceRequest(
     val name: String? = null, val accessStatus: String? = null, val blockReason: String? = null,
-    val blockReasonCode: String? = null, val blockReasonNote: String? = null
+    val blockReasonCode: String? = null, val blockReasonNote: String? = null,
+    val isDefault: Boolean? = null
 )
 
 @Serializable
@@ -196,6 +197,9 @@ fun Application.configureServiceAdminRoutes() {
                     ?: return@patch call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
                 val body = runCatching { call.receive<UpdateServiceRequest>() }.getOrNull()
                     ?: return@patch call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid service update")
+                if (body.isDefault == false) {
+                    return@patch call.respondError(HttpStatusCode.BadRequest, "invalid_default_service", "Choose another service as default; the current default cannot be unset directly")
+                }
                 val name = body.name?.trim()
                 if (name != null && (!validServiceName(name) || (!current.isDefault && name.equals("default", ignoreCase = true)))) {
                     return@patch call.respondError(HttpStatusCode.BadRequest, "invalid_service_name", "Service name is invalid or reserved")
@@ -214,7 +218,7 @@ fun Application.configureServiceAdminRoutes() {
                         ?: return@patch call.respondError(HttpStatusCode.BadRequest, "invalid_block_reason_code", "Unsupported blockReasonCode")
                 }
                 val updated = runCatching {
-                    ServiceRepository.update(projectId, serviceId, name, body.accessStatus, body.blockReason, blockReasonCode, body.blockReasonNote)
+                    ServiceRepository.update(projectId, serviceId, name, body.accessStatus, body.blockReason, blockReasonCode, body.blockReasonNote, body.isDefault == true)
                 }.getOrElse {
                     return@patch call.respondError(HttpStatusCode.Conflict, "service_update_conflict", "The service update conflicts with an existing service")
                 } ?: return@patch call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")

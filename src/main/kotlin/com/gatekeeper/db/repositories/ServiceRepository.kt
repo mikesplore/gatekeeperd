@@ -106,15 +106,23 @@ object ServiceRepository {
         accessStatus: String? = null,
         blockReason: String? = null,
         blockReasonCode: AccessBlockReason? = null,
-        blockReasonNote: String? = null
+        blockReasonNote: String? = null,
+        makeDefault: Boolean = false
     ): ServiceRecord? {
         accessStatus?.let { require(it in setOf("active", "blocked", "manual_block")) { "Unsupported service access status" } }
+        val previousGateSlugs = if (makeDefault) SiteRepository.findGateSlugsByProjectId(projectId) else emptyList()
         val updated = transaction {
             val existing = Services.selectAll().where {
                 (Services.projectId eq projectId) and (Services.id eq id)
             }.singleOrNull() ?: return@transaction null
+            if (makeDefault && !existing[Services.isDefault]) {
+                Services.update({ Services.projectId eq projectId }) {
+                    it[Services.isDefault] = false
+                }
+            }
             Services.update({ (Services.projectId eq projectId) and (Services.id eq id) }) {
                 name?.let { value -> it[Services.name] = value }
+                if (makeDefault) it[Services.isDefault] = true
                 accessStatus?.let { value -> it[Services.accessStatus] = value }
                 if (accessStatus == "active") {
                     it[Services.blockReason] = null
@@ -135,8 +143,10 @@ object ServiceRepository {
             }
             Services.selectAll().where { Services.id eq existing[Services.id] }.single().let(::toRecord)
         }
-        if (updated != null && (accessStatus != null || name != null)) {
-            SiteRepository.findGateSlugsByServiceId(id).forEach(::invalidateGateCache)
+        if (updated != null && (accessStatus != null || name != null || makeDefault)) {
+            val gateSlugs = if (makeDefault) previousGateSlugs + SiteRepository.findGateSlugsByProjectId(projectId)
+            else SiteRepository.findGateSlugsByServiceId(id)
+            gateSlugs.distinct().forEach(::invalidateGateCache)
         }
         return updated
     }

@@ -2840,12 +2840,31 @@ paths:
           type: string
       requestBody:
         required: false
-        description: JSON request fields are operation-specific; see the referenced source and docs/API.md.
+        description: Update service metadata, access policy, or choose the project's default service.
         content:
           application/json:
             schema:
               type: object
-              additionalProperties: true
+              properties:
+                name:
+                  type: string
+                accessStatus:
+                  type: string
+                  enum: [active, blocked, manual_block]
+                blockReason:
+                  type: string
+                  nullable: true
+                blockReasonCode:
+                  type: string
+                  enum: [payment, manual_hold, abuse_tos, suspended_by_request, other]
+                  nullable: true
+                blockReasonNote:
+                  type: string
+                  nullable: true
+                isDefault:
+                  type: boolean
+                  description: Set true to make this service the project default. False is not accepted; select another service instead.
+              additionalProperties: false
     delete:
       tags:
       - Projects
