@@ -246,7 +246,7 @@ Attach an already-running container as a canonical active deployment without res
 
 #### PUT /api/admin/project-setup/projects/{projectId}/source-runtime
 
-Create or update the desired configuration for a service/environment. Accepts optional `serviceId` (omitted selects `default`), `repository` and `gitRef`, registry/image, optional `registryCredentialId` referring to a current Docker registry provider credential for the configured registry, optional `containerPort` fallback, optional legacy `hostPort`, network/restart policy, service-level `env`, optional pinned `sharedEnvironmentSetId` plus `sharedEnvironmentSetVersion`, `environment`, and readiness settings. The worker reads TCP ports declared by the pulled image's Docker metadata and uses those in preference to the saved `containerPort`; it automatically checks the declared ports and records the one that accepts connections. If the image declares no TCP ports, the optional saved `containerPort` is a fallback. When neither is available, the worker checks that the process remains running, but a managed nginx site still needs a discoverable application port. Wizard-supplied HTTP/TCP probe targets do not override Docker's declared ports. Environment values are stored only in encrypted, immutable versions; responses expose key names and version references, never values. At deployment time, imported shared variables are loaded first and service values override matching keys. Provide a GitHub repository to build from source; omit it to pull and run the configured prebuilt registry image directly. GitHub auto-deploy is only available when a repository is configured. Managed deployments reserve stable host ports from `DEPLOYMENT_HOST_PORT_RANGE` (default `32000-40000`) and alternate between two persisted slots for blue/green cutovers; ports bind to `127.0.0.1`. `environment` defaults to `production`. This saves desired state only and is safe to repeat; it does not queue a deployment.
+Create or update the desired configuration for a service/environment. Accepts optional `serviceId` (omitted selects `default`), `repository` and `gitRef`, registry/image, optional `registryCredentialId` referring to a current Docker registry provider credential for the configured registry, optional `containerPort` primary port, optional legacy `hostPort`, network/restart policy, service-level `env`, optional pinned `sharedEnvironmentSetId` plus `sharedEnvironmentSetVersion`, `environment`, and readiness settings. For a deployment-managed nginx site, the primary port is the configured `containerPort`; when omitted, the image must expose exactly one TCP port. Images exposing zero or multiple ports require an explicit primary port so nginx cutover is unambiguous. Other exposed TCP ports are also mapped and readiness-checked. If the image declares no TCP ports, the optional saved `containerPort` is used. Wizard-supplied HTTP/TCP probe targets do not override Docker's declared ports. Environment values are stored only in encrypted, immutable versions; responses expose key names and version references, never values. At deployment time, imported shared variables are loaded first and service values override matching keys. Provide a GitHub repository to build from source; omit it to pull and run the configured prebuilt registry image directly. GitHub auto-deploy is only available when a repository is configured. Managed deployments reserve stable host ports from `DEPLOYMENT_HOST_PORT_RANGE` (default `32000-40000`) and alternate between two persisted slots for blue/green cutovers; ports bind to `127.0.0.1`. `environment` defaults to `production`. This saves desired state only and is safe to repeat; it does not queue a deployment.
 
 Returns `{ "configurationId": "<uuid>", "environment": "production", "status": "configured" }`.
 
@@ -300,7 +300,7 @@ Queue a deployment from the saved desired configuration. `serviceId` is optional
 
 ### GET /api/admin/projects/{slug}/overview
 
-Returns sectioned project state: `accessLifecycle`, `desiredConfiguration`, `currentDeployment`, `domainsGateway`, and `customerBilling`. `domainsGateway.domain` is the selected default service's saved domain and may be null; it is not inferred from the legacy project domain. The current runtime and upstream come from the canonical active deployment and Phase 3 resolver, not `projects.container_name`. `runtimeHealth` is inspected from the active deployment's persisted runtime container. Secret and credential values are never included; only version references are returned.
+Returns sectioned project state: `accessLifecycle`, `desiredConfiguration`, `currentDeployment`, `domainsGateway`, and `customerBilling`. `domainsGateway.domain` is the selected default service's saved domain and may be null; it is not inferred from the legacy project domain. The current runtime and upstream come from the canonical active deployment and Phase 3 resolver, not `projects.container_name`. `runtimeHealth` is inspected from the active deployment's persisted runtime container. `currentDeployment.publicExposure` is true while an adopted active container has a published port bound to `0.0.0.0` or `::`; it becomes false when that deployment is retired. Secret and credential values are never included; only version references are returned.
 
 ### GET /api/admin/projects/{slug}/deployments/history
 
@@ -745,6 +745,20 @@ Remove an nginx site completely (both sites-available file and sites-enabled sym
   "message": "Nginx site removed and reloaded successfully"
 }
 ```
+
+### GET /api/admin/nginx/upstream-migration
+Report-only preview of persisted sites that can be converted from inline upstreams to stable per-service nginx upstreams. Sites using `docker_discovery` without an active deployment are reported as `needs_adoption_first`.
+
+### POST /api/admin/nginx/upstream-migration/sites/{siteId}
+Apply the upstream conversion for one site. The site must have a deployment configuration and active runtime. Legacy `explicit_port` values are treated as the primary container port; conflicting configured values are rejected for manual resolution. The operation changes only that site and its service include and restores saved files if validation, reload, or probe fails.
+
+### POST /api/admin/nginx/upstream-migration/sites/{siteId}/rollback
+Restore the site's nginx configuration from the backup returned as `backupName` by the apply endpoint, restore its previous upstream kind, and remove the generated service include. The request body is `{ "backupName": "<saved backup name>" }`. The endpoint reports `rolled_back_include_cleanup_pending` if nginx config rollback succeeds but include cleanup fails.
+
+### POST /api/admin/nginx/upstream-repair/{serviceId}
+Explicitly repair a deployment-managed service's nginx include to its active runtime. This operation runs under the host nginx mutation lock and clears that service's `repair_required` cutover state only after nginx validation, reload, and the local probe succeed. New deployments for a repair-required service are rejected before port allocation.
+
+Managed site configs use `gk_<service UUID without hyphens>` as their stable upstream. Nginx loads per-service include files from `NGINX_UPSTREAM_INCLUDE_DIR`; Gatekeeperd creates/checks that directory at startup and fails startup if nginx does not include it inside `http {}`. Cutover probes directly against the candidate and through nginx using a loopback-only probe location that bypasses payment gating only for local requests.
 
 ## SSL Certificate Management Endpoints (JWT Required)
 

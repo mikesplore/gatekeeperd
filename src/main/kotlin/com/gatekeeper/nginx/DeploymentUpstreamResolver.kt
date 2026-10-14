@@ -9,7 +9,7 @@ import java.util.UUID
 /** Resolves a service's desired gateway target without changing persisted site configuration. */
 object DeploymentUpstreamResolver {
     data class Target(val host: String, val port: Int, val containerName: String? = null, val containerPort: Int? = null)
-    data class SiteTarget(val mode: UpstreamMode, val host: String, val explicitPort: Int?)
+    data class SiteTarget(val mode: UpstreamMode, val host: String, val explicitPort: Int?, val upstreamKind: String? = null)
     data class RuntimeTarget(
         val serviceId: UUID?, val environment: String, val usable: Boolean,
         val containerName: String?, val containerPort: Int?, val publishedPorts: Map<Int, Int>
@@ -24,7 +24,7 @@ object DeploymentUpstreamResolver {
         val runtime = activeRuntime?.takeIf {
             it.serviceId == serviceId && it.environment == environment && it.usable
         }
-        if (runtime == null && site.mode == UpstreamMode.EXPLICIT_PORT) {
+        if (site.mode == UpstreamMode.EXPLICIT_PORT && site.upstreamKind != "DEPLOYMENT_MANAGED") {
             val port = site.explicitPort?.takeIf { it in 1..65535 } ?: return null
             return Target(site.host, port)
         }
@@ -44,7 +44,7 @@ object DeploymentUpstreamResolver {
     ): Target? = resolve(
         serviceId,
         environment,
-        SiteTarget(site.upstreamMode, site.upstreamHost, site.upstreamExplicitPort),
+        SiteTarget(site.upstreamMode, site.upstreamHost, site.upstreamExplicitPort, site.upstreamKind),
         activeRuntime?.let {
             RuntimeTarget(
                 it.serviceId, it.environment,

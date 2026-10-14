@@ -84,6 +84,57 @@ class NginxServiceTest {
     }
 
     @Test
+    fun `deployment managed site uses stable upstream and loopback-only probe`() {
+        val serviceId = UUID.fromString("123e4567-e89b-12d3-a456-426614174000")
+        val config = service.generateNginxConfig(
+            NginxSiteRenderModel(
+                slug = "acw", projectId = UUID.randomUUID(), serviceId = serviceId,
+                domain = "acw.example.com", appPort = 32123, upstreamScheme = "http",
+                tlsMode = TlsRenderMode.HTTP_ONLY, upstreamKind = "DEPLOYMENT_MANAGED"
+            )
+        )
+
+        assertContains(config, "proxy_pass http://gk_123e4567e89b12d3a456426614174000;")
+        assertContains(config, "location = /.well-known/gatekeeperd-cutover-probe")
+        assertContains(config, "allow 127.0.0.1;")
+        assertContains(config, "allow ::1;")
+        assertContains(config, "deny all;")
+        assertContains(config, "auth_request off;")
+        assertContains(config, "add_header X-Gatekeeperd-Cutover-Probe stable always;")
+        assertFalse(config.contains("proxy_pass http://127.0.0.1:32123;"))
+    }
+
+    @Test
+    fun `deployment upstream bootstrap accepts only configured http context include`() {
+        val root = Files.createTempDirectory("gk-upstream-bootstrap").toFile()
+        val includeDirectory = File(root, "upstreams").absolutePath
+        val validDump = "http {\n include $includeDirectory/*.conf;\n server { listen 80; }\n}"
+        val service = NginxService(
+            upstreamIncludeDirectory = includeDirectory,
+            nginxConfigDumpRunner = { validDump }
+        )
+
+        service.bootstrapDeploymentUpstreams()
+
+        assertTrue(File(includeDirectory).isDirectory)
+        val invalidService = NginxService(
+            upstreamIncludeDirectory = File(root, "other").absolutePath,
+            nginxConfigDumpRunner = { validDump }
+        )
+        assertFailsWith<IllegalStateException> { invalidService.bootstrapDeploymentUpstreams() }
+    }
+
+    @Test
+    fun `upstream include must be included at http context depth`() {
+        val directory = Files.createTempDirectory("gk-includes").toFile().absolutePath
+        val valid = "http {\n include $directory/*.conf;\n server { listen 80; }\n}"
+        val nestedOnly = "http {\n server {\n include $directory/*.conf;\n }\n}"
+
+        assertTrue(nginxIncludesDirectoryInHttpContext(valid, directory))
+        assertFalse(nginxIncludesDirectoryInHttpContext(nestedOnly, directory))
+    }
+
+    @Test
     fun `site with gate disabled and no bypasses is a plain proxy`() {
         val config = service.generateNginxConfig(
             slug = "plain",

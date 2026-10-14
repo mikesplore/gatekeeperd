@@ -4,6 +4,7 @@ package com.gatekeeper.config
 
 import io.github.cdimascio.dotenv.dotenv
 import org.slf4j.LoggerFactory
+import java.io.File
 
 object AppConfig {
     private val logger = LoggerFactory.getLogger(AppConfig::class.java)
@@ -92,6 +93,9 @@ object AppConfig {
             }
             start..end
         }
+    val deploymentDrainDelaySeconds: Long = optionalSetting("DEPLOYMENT_DRAIN_DELAY_SECONDS", "5").toLong().also {
+        require(it in 0..300) { "DEPLOYMENT_DRAIN_DELAY_SECONDS must be between 0 and 300" }
+    }
     val deploymentSecretsKey: String = optionalSetting("DEPLOYMENT_SECRETS_KEY", "")
 
     init {
@@ -124,6 +128,7 @@ object AppConfig {
     // Nginx
     val nginxSitesAvailablePath: String = optionalSetting("NGINX_SITES_AVAILABLE", "/etc/nginx/sites-available")
     val nginxSitesEnabledPath: String = optionalSetting("NGINX_SITES_ENABLED", "/etc/nginx/sites-enabled")
+    val nginxUpstreamIncludeDirectory: String = optionalSetting("NGINX_UPSTREAM_INCLUDE_DIR", "/etc/nginx/conf.d/gatekeeperd-upstreams")
     val nginxSslCertPath: String = optionalSetting("NGINX_SSL_CERT_PATH", "/etc/letsencrypt/live")
     /** Comma-separated hostnames owned by Gatekeeperd's own deployment; never manage their nginx files. */
     val gatekeeperdSelfDomains: List<String> = requiredSetting("GATEKEEPERD_SELF_DOMAIN")
@@ -184,5 +189,23 @@ object AppConfig {
 
     fun logConfig() {
         logger.info("AppConfig loaded; configuration values are hidden to protect secrets.")
+    }
+
+    fun warnIfDeploymentPortsOverlapEphemeralRange(readRange: () -> String? = {
+        runCatching { File("/proc/sys/net/ipv4/ip_local_port_range").readText().trim() }.getOrNull()
+    }) {
+        val raw = readRange() ?: run {
+            logger.warn("Cannot read /proc/sys/net/ipv4/ip_local_port_range; skipping deployment port overlap check")
+            return
+        }
+        val values = raw.split(Regex("\\s+")).mapNotNull(String::toIntOrNull)
+        if (values.size != 2 || values[0] !in 1..65535 || values[1] !in values[0]..65535) {
+            logger.warn("Invalid Linux ephemeral port range '{}'; skipping deployment port overlap check", raw)
+            return
+        }
+        if (com.gatekeeper.deployment.overlaps(deploymentHostPortRange, values[0]..values[1])) {
+            logger.warn("DEPLOYMENT_HOST_PORT_RANGE {}-{} overlaps Linux ephemeral range {}-{}; consider configuring a disjoint port range",
+                deploymentHostPortRange.first, deploymentHostPortRange.last, values[0], values[1])
+        }
     }
 }

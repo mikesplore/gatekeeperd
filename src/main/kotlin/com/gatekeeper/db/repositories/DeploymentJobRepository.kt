@@ -333,6 +333,14 @@ object DeploymentJobRepository {
         configurationSummaryById(id)
     }
 
+    fun setPrimaryContainerPortForService(projectId: UUID, serviceId: UUID, port: Int): Boolean {
+        require(port in 1..65535)
+        val id = configurationIdForService(projectId, serviceId) ?: return false
+        val current = configurationSummaryById(id) ?: return false
+        if (current.containerPort != null) return current.containerPort == port
+        return updateConfiguration(id, UpdateDeploymentConfigurationRequest(containerPort = port))
+    }
+
     fun configurationSummaryById(id: UUID): ConfigurationSummary? = transaction {
         val row = DeploymentConfigurations.selectAll().where { DeploymentConfigurations.id eq id }.singleOrNull()
             ?: return@transaction null
@@ -1163,6 +1171,53 @@ object DeploymentJobRepository {
         if (!isReadyForCutover) DeploymentApplicationService.transition(row[DeploymentJobs.id], DeploymentStatus.BUILDING)
         DeploymentJobs.selectAll().where { DeploymentJobs.id eq row[DeploymentJobs.id] }
             .singleOrNull()?.toRecord(includeSecretEnv = false)
+    }
+
+    fun requeueInterruptedCutover(id: UUID): Boolean = transaction {
+        val row = DeploymentJobs.selectAll().where { DeploymentJobs.id eq id }.singleOrNull() ?: return@transaction false
+        if (row[DeploymentJobs.status] != "running" || row[DeploymentJobs.currentStep] !in setOf("cutover_in_progress", "readiness_succeeded")) {
+            return@transaction false
+        }
+        val now = LocalDateTime.now()
+        val changed = DeploymentJobs.update({ (DeploymentJobs.id eq id) and (DeploymentJobs.status eq "running") }) {
+            it[DeploymentJobs.status] = "queued"
+            it[DeploymentJobs.currentStep] = "readiness_succeeded"
+            it[DeploymentJobs.claimToken] = null
+            it[DeploymentJobs.updatedAt] = now
+        }
+        if (changed == 1) {
+            DeploymentExecutions.update({ DeploymentExecutions.id eq id }) {
+                it[DeploymentExecutions.status] = "queued"
+                it[DeploymentExecutions.currentStep] = "readiness_succeeded"
+                it[DeploymentExecutions.updatedAt] = now
+            }
+        }
+        changed == 1
+    }
+
+    fun failInterruptedCutover(id: UUID, reason: String): Boolean = transaction {
+        val now = LocalDateTime.now()
+        val changed = DeploymentJobs.update({
+            (DeploymentJobs.id eq id) and (DeploymentJobs.status eq "running")
+        }) {
+            it[DeploymentJobs.status] = "failed"
+            it[DeploymentJobs.currentStep] = "failed"
+            it[DeploymentJobs.errorMessage] = reason
+            it[DeploymentJobs.updatedAt] = now
+            it[DeploymentJobs.completedAt] = now
+            it[DeploymentJobs.claimToken] = null
+        }
+        if (changed == 1) {
+            DeploymentExecutions.update({ DeploymentExecutions.id eq id }) {
+                it[DeploymentExecutions.status] = "failed"
+                it[DeploymentExecutions.currentStep] = "failed"
+                it[DeploymentExecutions.errorMessage] = reason
+                it[DeploymentExecutions.updatedAt] = now
+                it[DeploymentExecutions.completedAt] = now
+            }
+            DeploymentApplicationService.transition(id, DeploymentStatus.FAILED, reason)
+        }
+        changed == 1
     }
 
     data class StaleJobLockKey(val id: UUID, val serviceId: UUID, val environment: String, val claimToken: UUID?)

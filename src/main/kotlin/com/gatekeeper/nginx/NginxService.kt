@@ -46,6 +46,12 @@ private fun runNginxReloadCommand(): Boolean {
     }
 }
 
+private fun dumpNginxConfig(): String? = runCatching {
+    val process = ProcessBuilder("sudo", "-n", "/usr/sbin/nginx", "-T").redirectErrorStream(true).start()
+    val output = process.inputStream.bufferedReader().readText()
+    if (process.waitFor() == 0) output else null
+}.getOrNull()
+
 data class ResolvedCertificate(
     val certificateDomain: String,
     val certificatePath: String,
@@ -59,13 +65,36 @@ class NginxService(
     private val sslCertPath: String = AppConfig.nginxSslCertPath,
     private val nginxTestRunner: () -> NginxTestResult = ::runNginxTestCommand,
     private val nginxReloadRunner: () -> Boolean = ::runNginxReloadCommand,
-    private val selfDomainExclusion: NginxSelfDomainExclusion = NginxSelfDomainExclusion(emptyList())
+    private val selfDomainExclusion: NginxSelfDomainExclusion = NginxSelfDomainExclusion(emptyList()),
+    private val upstreamIncludeDirectory: String = AppConfig.nginxUpstreamIncludeDirectory,
+    private val localProbeRunner: (String, Boolean) -> Boolean = ::probeViaLocalNginx,
+    private val nginxConfigDumpRunner: () -> String? = ::dumpNginxConfig
 ) {
+    enum class InterruptedCutoverResult { TARGET_RELOADED, PREVIOUS_RESTORED, CONFLICT }
     companion object {
         fun configured(): NginxService = NginxService(
             selfDomainExclusion = NginxSelfDomainExclusion(AppConfig.gatekeeperdSelfDomains)
         )
     }
+
+    fun bootstrapDeploymentUpstreams() {
+        val directory = File(upstreamIncludeDirectory).absoluteFile
+        check((directory.isDirectory || directory.mkdirs()) && directory.canWrite()) {
+            "Cannot create or write nginx deployment upstream include directory: ${directory.absolutePath}"
+        }
+        val dump = nginxConfigDumpRunner()
+            ?: error("Unable to read active nginx configuration with nginx -T; deployment upstream bootstrap cannot continue")
+        check(nginxIncludesDirectoryInHttpContext(dump, directory.path)) {
+            "nginx.conf must include ${directory.path}/*.conf inside the http {} block before Gatekeeperd deployment cutovers can start"
+        }
+    }
+
+    fun inspectDeploymentUpstreamPort(serviceId: java.util.UUID): Int? = runCatching {
+        val content = DeploymentUpstreamIncludes(File(upstreamIncludeDirectory)).file(serviceId).takeIf { it.isFile }?.readText()
+            ?: return null
+        Regex("""(?m)^\s*server\s+127\.0\.0\.1:(\d+)\s*;""")
+            .find(content)?.groupValues?.get(1)?.toIntOrNull()
+    }.getOrNull()
 
     fun inspectSite(slug: String): NginxConfigInspection {
         require(slug.matches(Regex("[a-zA-Z0-9][a-zA-Z0-9_-]*"))) { "Invalid nginx site name" }
@@ -159,7 +188,10 @@ class NginxService(
             available.isFile, enabled.exists() || Files.isSymbolicLink(enabled.toPath()), content)
     }
 
-    fun disableManualConfig(filename: String): NginxManualConfigDisableResult {
+    fun disableManualConfig(filename: String): NginxManualConfigDisableResult =
+        DistributedLock.withLock("nginx-host-mutation") { disableManualConfigLocked(filename) }
+
+    private fun disableManualConfigLocked(filename: String): NginxManualConfigDisableResult {
         require(isSafeConfigFilename(filename)) { "Invalid nginx config filename" }
         val detail = inspectManualConfig(filename)
         require(detail.enabled) { "Manual nginx config is already disabled" }
@@ -207,7 +239,10 @@ class NginxService(
         return NginxManualConfigDisableResult(backup.name, matchingManaged.map { it.filename })
     }
 
-    fun deleteDisabledManualConfig(filename: String): String {
+    fun deleteDisabledManualConfig(filename: String): String =
+        DistributedLock.withLock("nginx-host-mutation") { deleteDisabledManualConfigLocked(filename) }
+
+    private fun deleteDisabledManualConfigLocked(filename: String): String {
         require(isSafeConfigFilename(filename)) { "Invalid nginx config filename" }
         val detail = inspectManualConfig(filename)
         require(!detail.enabled) { "Disable the manual nginx config before deleting it" }
@@ -461,7 +496,10 @@ class NginxService(
         return current.content.replaceRange(start, start + block.content.length, replacement)
     }
 
-    fun applyBlockUpdate(slug: String, blockIndex: Int, replacement: String): NginxBlockUpdateResponse {
+    fun applyBlockUpdate(slug: String, blockIndex: Int, replacement: String): NginxBlockUpdateResponse =
+        DistributedLock.withLock("nginx-host-mutation") { applyBlockUpdateLocked(slug, blockIndex, replacement) }
+
+    private fun applyBlockUpdateLocked(slug: String, blockIndex: Int, replacement: String): NginxBlockUpdateResponse {
         val file = File(sitesAvailablePath, slug)
         val proposed = previewBlockUpdate(slug, blockIndex, replacement)
         val current = file.readText()
@@ -491,7 +529,10 @@ class NginxService(
             .orEmpty()
     }
 
-    fun rollback(slug: String, backupName: String): NginxRollbackResponse {
+    fun rollback(slug: String, backupName: String): NginxRollbackResponse =
+        DistributedLock.withLock("nginx-host-mutation") { rollbackLocked(slug, backupName) }
+
+    private fun rollbackLocked(slug: String, backupName: String): NginxRollbackResponse {
         require(backupName.matches(Regex("${Regex.escape(slug)}\\.bak-[0-9]+"))) { "Invalid backup name" }
         val backup = File(sitesAvailablePath, backupName)
         require(backup.isFile) { "Backup does not exist" }
@@ -584,7 +625,8 @@ class NginxService(
         bypassPaths = site.bypassPaths,
         projectId = site.projectId,
         serviceId = site.serviceId,
-        siteId = site.siteId
+        siteId = site.siteId,
+        upstreamKind = site.upstreamKind
     )
 
     fun generateNginxConfig(
@@ -601,7 +643,8 @@ class NginxService(
         bypassPaths: List<String> = DEFAULT_GATEKEEPER_BYPASS_PATHS,
         projectId: java.util.UUID? = null,
         serviceId: java.util.UUID? = null,
-        siteId: java.util.UUID? = null
+        siteId: java.util.UUID? = null,
+        upstreamKind: String? = null
     ): String {
         requireValidHostname(domain)
         val effectiveSslCert = sslCertificatePath?.let { requireCertificatePath(it, sslCertPath) }
@@ -609,6 +652,9 @@ class NginxService(
         val effectiveSslKey = sslCertificateKeyPath?.let { requireCertificatePath(it, sslCertPath) }
             ?: "$sslCertPath/$domain/privkey.pem"
         val effectiveUpstreamScheme = normalizeUpstreamScheme(appPort, upstreamScheme)
+        val managedUpstream = upstreamKind == "DEPLOYMENT_MANAGED" && serviceId != null
+        val upstreamName = serviceId?.let { DeploymentUpstreamIncludes(File(upstreamIncludeDirectory)).upstreamName(it) }
+        val proxyTarget = if (managedUpstream) "$effectiveUpstreamScheme://$upstreamName" else "$effectiveUpstreamScheme://$upstreamHost:$appPort"
 
         return buildString {
             projectId?.let { appendLine("# gatekeeperd:project_id:$it") }
@@ -652,6 +698,24 @@ class NginxService(
                 appendLine("    }")
                 appendLine()
             }
+
+            }
+
+            if (managedUpstream) {
+                appendLine("    # Local-only deployment cutover probe; the normal application route remains gated")
+                appendLine("    location = /.well-known/gatekeeperd-cutover-probe {")
+                appendLine("        allow 127.0.0.1;")
+                appendLine("        allow ::1;")
+                appendLine("        deny all;")
+                appendLine("        auth_request off;")
+                appendLine("        proxy_pass $proxyTarget;")
+                appendLine("        add_header X-Gatekeeperd-Cutover-Probe stable always;")
+                appendLine("        proxy_set_header Host \$host;")
+                appendLine("        proxy_set_header X-Real-IP \$remote_addr;")
+                appendLine("        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;")
+                appendLine("        proxy_set_header X-Forwarded-Proto \$scheme;")
+                appendLine("    }")
+                appendLine()
             }
 
             appendLine("    # -------------------------------------------------------------------------")
@@ -665,7 +729,7 @@ class NginxService(
                     appendLine("        error_page 403 = @gatekeeper_paywall_$slug;")
                 }
                 appendLine()
-                appendLine("        proxy_pass $effectiveUpstreamScheme://$upstreamHost:$appPort;")
+                appendLine("        proxy_pass $proxyTarget;")
                 appendLine("        proxy_http_version 1.1;")
                 appendLine()
                 appendLine("        proxy_set_header Upgrade \$http_upgrade;")
@@ -756,7 +820,7 @@ class NginxService(
     }
 
     fun enableProjectDetailed(slug: String, configContent: String): NginxSiteActivationResult {
-        return DistributedLock.withLock("nginx-domain-configs") {
+        return DistributedLock.withLock("nginx-host-mutation") {
           try {
             val conflicts = findDomainConflicts(configContent, slug)
             if (conflicts.isNotEmpty()) {
@@ -841,6 +905,26 @@ class NginxService(
         require(host == "127.0.0.1") { "Deployment upstream must use loopback" }
         require(containerPort in 1..65535 && hostPort in 1..65535) { "Deployment upstream ports must be between 1 and 65535" }
         val site = SiteRepository.findByServiceId(serviceId) ?: return true
+        if (site.upstreamKind == "DEPLOYMENT_MANAGED") {
+            return DistributedLock.withLock("nginx-host-mutation") {
+                val includes = DeploymentUpstreamIncludes(File(upstreamIncludeDirectory))
+                val file = includes.file(serviceId)
+                val previous = file.takeIf { it.isFile }?.readText()
+                val candidate = includes.render(serviceId, hostPort)
+                try {
+                    includes.write(serviceId, candidate)
+                    if (!nginxTestRunner().valid || !nginxReloadRunner() || !localProbeRunner(site.domain, site.tlsMode != TlsMode.HTTP_ONLY)) {
+                        restoreUpstreamInclude(includes, serviceId, previous)
+                        return@withLock false
+                    }
+                    true
+                } catch (error: Exception) {
+                    runCatching { restoreUpstreamInclude(includes, serviceId, previous) }
+                    logger.error("Stable upstream cutover failed for service {}", serviceId, error)
+                    false
+                }
+            }
+        }
         val previousContent = inspectSite(slug).content
         val previousPort = site.upstreamExplicitPort
         val certificate = when (site.certMode) {
@@ -879,6 +963,149 @@ class NginxService(
         return false
     }
 
+    /** One-site admin migration from an inline upstream to the stable service include. */
+    fun convertSiteToDeploymentManaged(site: SiteRepository.SiteRecord, hostPort: Int): Boolean {
+        val serviceId = site.serviceId ?: return false
+        val slug = site.projectSlug ?: return false
+        require(hostPort in 1..65535)
+        return DistributedLock.withLock("nginx-host-mutation") {
+            val previousSite = inspectSite(slug).content ?: return@withLock false
+            val includes = DeploymentUpstreamIncludes(File(upstreamIncludeDirectory))
+            val includeFile = includes.file(serviceId)
+            val previousInclude = includeFile.takeIf { it.isFile }?.readText()
+            val target = includes.render(serviceId, hostPort)
+            val certificate = when (site.certMode) {
+                CertMode.AUTO_RESOLVE -> resolveCertificateForDomain(site.domain)
+                CertMode.EXPLICIT_PATH -> site.certExplicitPath?.let { ResolvedCertificate("explicit", it, it.replace("fullchain.pem", "privkey.pem")) }
+                    ?: return@withLock false
+            }
+            val model = NginxSiteRenderModel(
+                slug = slug, projectId = site.projectId, serviceId = serviceId, siteId = site.id,
+                domain = site.domain, upstreamHost = "127.0.0.1", appPort = site.upstreamExplicitPort ?: hostPort,
+                upstreamScheme = "http",
+                tlsMode = when (site.tlsMode) {
+                    TlsMode.HTTP_ONLY -> TlsRenderMode.HTTP_ONLY
+                    TlsMode.HTTPS -> TlsRenderMode.HTTPS
+                    TlsMode.HTTPS_HTTP2 -> TlsRenderMode.HTTPS_HTTP2
+                }, certificatePath = certificate?.certificatePath, certificateKeyPath = certificate?.privateKeyPath,
+                upstreamMode = site.upstreamMode, certMode = site.certMode, gateEnabled = site.gateEnabled,
+                bypassPaths = site.bypassPaths, upstreamKind = "DEPLOYMENT_MANAGED"
+            )
+            try {
+                includes.write(serviceId, target)
+                check(nginxTestRunner().valid) { "nginx -t failed with the service upstream include" }
+                check(enableProject(slug, generateNginxConfig(model))) { "Unable to activate stable upstream site config" }
+                check(localProbeRunner(site.domain, site.tlsMode != TlsMode.HTTP_ONLY)) { "Stable upstream probe failed after nginx reload" }
+                check(SiteRepository.setUpstreamKind(site.id, "DEPLOYMENT_MANAGED") != null) { "Unable to persist deployment-managed site kind" }
+                true
+            } catch (error: Exception) {
+                runCatching { restoreSiteConfiguration(slug, previousSite) }
+                runCatching { restoreUpstreamInclude(includes, serviceId, previousInclude) }
+                logger.error("Unable to convert site {} to deployment-managed upstream", site.id, error)
+                false
+            }
+        }
+    }
+
+    fun restoreDeploymentUpstream(serviceId: java.util.UUID, port: Int?): Boolean =
+        DistributedLock.withLock("nginx-host-mutation") {
+            val includes = DeploymentUpstreamIncludes(File(upstreamIncludeDirectory))
+            val previous = includes.file(serviceId).takeIf { it.isFile }?.readText()
+            try {
+                if (port == null) Files.deleteIfExists(includes.file(serviceId).toPath())
+                else includes.write(serviceId, includes.render(serviceId, port))
+                if (!nginxTestRunner().valid || !nginxReloadRunner()) {
+                    restoreUpstreamInclude(includes, serviceId, previous)
+                    return@withLock false
+                }
+                true
+            } catch (error: Exception) {
+                runCatching { restoreUpstreamInclude(includes, serviceId, previous) }
+                logger.error("Unable to restore stable upstream for service {}", serviceId, error)
+                false
+            }
+        }
+
+    fun verifyDeploymentRoute(domain: String, tls: Boolean): Boolean =
+        DistributedLock.withLock("nginx-host-mutation") { localProbeRunner(domain, tls) }
+
+    data class PostDrainRouteCheck(val candidateHealthy: Boolean, val previousRouteRestored: Boolean)
+
+    fun verifyAfterDrain(serviceId: java.util.UUID, domain: String, tls: Boolean, previousPort: Int?): PostDrainRouteCheck =
+        DistributedLock.withLock("nginx-host-mutation") {
+            if (localProbeRunner(domain, tls)) return@withLock PostDrainRouteCheck(true, false)
+            val includes = DeploymentUpstreamIncludes(File(upstreamIncludeDirectory))
+            runCatching {
+                if (previousPort == null) Files.deleteIfExists(includes.file(serviceId).toPath())
+                else includes.write(serviceId, includes.render(serviceId, previousPort))
+                check(nginxTestRunner().valid && nginxReloadRunner())
+                check(localProbeRunner(domain, tls))
+            }.fold(
+                onSuccess = { PostDrainRouteCheck(false, true) },
+                onFailure = { error ->
+                    logger.error("Post-drain route failed and rollback was unsuccessful for service {}", serviceId, error)
+                    PostDrainRouteCheck(false, false)
+                }
+            )
+        }
+
+    fun repairDeploymentUpstream(serviceId: java.util.UUID, domain: String, tls: Boolean, port: Int): Boolean =
+        DistributedLock.withLock("nginx-host-mutation") {
+            val includes = DeploymentUpstreamIncludes(File(upstreamIncludeDirectory))
+            val previous = includes.file(serviceId).takeIf { it.isFile }?.readText()
+            try {
+                includes.write(serviceId, includes.render(serviceId, port))
+                check(nginxTestRunner().valid && nginxReloadRunner())
+                check(localProbeRunner(domain, tls))
+                true
+            } catch (error: Exception) {
+                runCatching { restoreUpstreamInclude(includes, serviceId, previous) }
+                logger.error("Explicit nginx upstream repair failed for service {}", serviceId, error)
+                false
+            }
+        }
+
+    fun recoverInterruptedUpstream(
+        serviceId: java.util.UUID,
+        domain: String,
+        tls: Boolean,
+        files: com.gatekeeper.deployment.DurableCutoverFiles,
+        candidateRunning: Boolean
+    ): InterruptedCutoverResult = DistributedLock.withLock("nginx-host-mutation") {
+        val includes = DeploymentUpstreamIncludes(File(upstreamIncludeDirectory))
+        val file = includes.file(serviceId)
+        val current = file.takeIf { it.isFile }?.readText()
+        val pending = files.pendingIncludeContent ?: return@withLock InterruptedCutoverResult.CONFLICT
+        val currentHash = current?.let(includes::checksum)
+        val pendingMatches = currentHash == files.pendingChecksum && files.pendingChecksum == includes.checksum(pending)
+        val previousMatches = current == files.previousIncludeContent
+        if (pendingMatches && candidateRunning) {
+            if (nginxTestRunner().valid && nginxReloadRunner() && localProbeRunner(domain, tls)) {
+                return@withLock InterruptedCutoverResult.TARGET_RELOADED
+            }
+        } else if (previousMatches) {
+            return@withLock InterruptedCutoverResult.PREVIOUS_RESTORED
+        }
+        if (!pendingMatches) return@withLock InterruptedCutoverResult.CONFLICT
+        runCatching {
+            if (files.previousIncludeContent == null) Files.deleteIfExists(file.toPath())
+            else includes.write(serviceId, files.previousIncludeContent)
+            check(nginxTestRunner().valid && nginxReloadRunner())
+            check(localProbeRunner(domain, tls))
+        }.fold(
+            onSuccess = { InterruptedCutoverResult.PREVIOUS_RESTORED },
+            onFailure = { error ->
+                logger.error("Interrupted nginx cutover could not restore service {}", serviceId, error)
+                InterruptedCutoverResult.CONFLICT
+            }
+        )
+    }
+
+    private fun restoreUpstreamInclude(includes: DeploymentUpstreamIncludes, serviceId: java.util.UUID, previous: String?) {
+        if (previous == null) Files.deleteIfExists(includes.file(serviceId).toPath()) else includes.write(serviceId, previous)
+        check(nginxTestRunner().valid && nginxReloadRunner()) { "Unable to restore the previous nginx upstream include" }
+    }
+
     private fun replaceEnabledSymlink(availableFile: File, enabledFile: File) {
         Files.deleteIfExists(enabledFile.toPath())
         Files.createSymbolicLink(enabledFile.toPath(), availableFile.toPath())
@@ -906,7 +1133,7 @@ class NginxService(
     }
 
     fun disableProject(slug: String): Boolean {
-        return DistributedLock.withLock("nginx-site:$slug") { try {
+        return DistributedLock.withLock("nginx-host-mutation") { try {
             val enabledFile = File("$sitesEnabledPath/$slug")
             if (isExcluded(File(sitesAvailablePath, slug), enabledFile)) {
                 logger.warn("Refusing to disable nginx site $slug because it serves Gatekeeperd")
@@ -924,7 +1151,7 @@ class NginxService(
     }
 
     fun removeProject(slug: String): Boolean {
-        return DistributedLock.withLock("nginx-site:$slug") { try {
+        return DistributedLock.withLock("nginx-host-mutation") { try {
             val availableFile = File("$sitesAvailablePath/$slug")
             val enabledFile = File("$sitesEnabledPath/$slug")
             if (isExcluded(availableFile, enabledFile)) {
@@ -953,18 +1180,17 @@ class NginxService(
     }
 
     fun reloadNginx(): Boolean {
-        return try {
-            val testPassed = testNginxConfig()
-            if (!testPassed) {
-                return false
+        return DistributedLock.withLock("nginx-host-mutation") {
+            try {
+                val testPassed = testNginxConfig()
+                if (!testPassed) return@withLock false
+                if (!nginxReloadRunner()) return@withLock false
+                logger.info("Nginx reloaded successfully")
+                true
+            } catch (e: Exception) {
+                logger.error("Failed to reload nginx", e)
+                false
             }
-
-            if (!nginxReloadRunner()) return false
-            logger.info("Nginx reloaded successfully")
-            true
-        } catch (e: Exception) {
-            logger.error("Failed to reload nginx", e)
-            false
         }
     }
 
@@ -1029,12 +1255,12 @@ class NginxService(
             return false
         }
 
-        return try {
+        return DistributedLock.withLock("nginx-host-mutation") { try {
             val exitCode = runCertbotHelper("install", domain, email)
 
             if (exitCode != 0) {
                 logger.error("Certbot install failed for domain $domain (exit=${exitCode ?: "timeout"})")
-                return false
+                return@withLock false
             }
 
             logger.info("SSL certificate installed for domain: $domain")
@@ -1042,29 +1268,29 @@ class NginxService(
         } catch (e: Exception) {
             logger.error("Failed to install SSL certificate for $domain", e)
             false
-        }
+        } }
     }
 
     fun renewCertificate(domain: String): Boolean {
         requireValidHostname(domain)
         if (!isCertificateInstalled(domain) || certificateManagerIssue() != null) return false
 
-        return try {
+        return DistributedLock.withLock("nginx-host-mutation") { try {
             val exitCode = runCertbotHelper("renew", domain)
             if (exitCode != 0) {
                 logger.error("Certbot renewal failed for domain $domain (exit=${exitCode ?: "timeout"})")
-                return false
+                return@withLock false
             }
-            if (!nginxReloadRunner()) {
+            if (!reloadNginx()) {
                 logger.error("Nginx reload failed after Certbot renewal for domain $domain")
-                return false
+                return@withLock false
             }
             logger.info("Certbot renewal check completed for domain: $domain")
             true
         } catch (e: Exception) {
             logger.error("Failed to renew certificate for $domain", e)
             false
-        }
+        } }
     }
 
     fun removeCertificate(domain: String): Boolean {
@@ -1078,12 +1304,12 @@ class NginxService(
             return false
         }
 
-        return try {
+        return DistributedLock.withLock("nginx-host-mutation") { try {
             val exitCode = runCertbotHelper("remove", domain)
 
             if (exitCode != 0) {
                 logger.error("Certbot delete failed for domain $domain (exit=${exitCode ?: "timeout"})")
-                return false
+                return@withLock false
             }
 
             logger.info("SSL certificate removed for domain: $domain")
@@ -1091,7 +1317,7 @@ class NginxService(
         } catch (e: Exception) {
             logger.error("Failed to remove SSL certificate for $domain", e)
             false
-        }
+        } }
     }
 
     fun isCertificateInstalled(domain: String): Boolean {
@@ -1159,4 +1385,25 @@ class NginxService(
         }
         return candidates
     }
+}
+
+internal fun nginxIncludesDirectoryInHttpContext(configDump: String, directory: String): Boolean {
+    val expected = "${File(directory).absolutePath.trimEnd('/') }/*.conf"
+    val withoutComments = configDump.lineSequence().map { it.substringBefore('#') }.joinToString("\n")
+    val httpStart = Regex("\\bhttp\\s*\\{").find(withoutComments) ?: return false
+    var depth = 1
+    var index = httpStart.range.last + 1
+    val bodyStart = index
+    while (index < withoutComments.length && depth > 0) {
+        when (withoutComments[index]) {
+            '{' -> depth++
+            '}' -> depth--
+        }
+        if (depth == 1 && withoutComments[index] == ';') {
+            val statement = withoutComments.substring(bodyStart.coerceAtMost(index), index + 1)
+            if (Regex("\\binclude\\s+${Regex.escape(expected)}\\s*;").containsMatchIn(statement)) return true
+        }
+        index++
+    }
+    return false
 }

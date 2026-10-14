@@ -157,7 +157,11 @@ class DeploymentReconciliationService(
         if (site == null) {
                 drift += DeploymentDriftItem("gateway_site_missing", "Project has no persisted gateway site")
         } else {
-                gatewayTarget = when (site.upstreamMode) {
+                val deploymentManaged = site.upstreamKind == "DEPLOYMENT_MANAGED"
+                gatewayTarget = if (deploymentManaged) {
+                    val includePort = site.serviceId?.let(nginx::inspectDeploymentUpstreamPort)
+                    "gk_${site.serviceId?.toString()?.replace("-", "")}:$includePort"
+                } else when (site.upstreamMode) {
                     UpstreamMode.EXPLICIT_PORT -> "${site.upstreamHost}:${site.upstreamExplicitPort ?: "missing-port"}"
                     UpstreamMode.DOCKER_DISCOVERY -> site.serviceId?.let { DeploymentUpstreamResolver.resolve(it, deployment.environment) }?.let { "${it.host}:${it.port}" } ?: "missing-runtime"
                 }
@@ -184,12 +188,21 @@ class DeploymentReconciliationService(
                     val configuredTarget = Regex("(?m)^\\s*proxy_pass\\s+https?://([^;]+);")
                         .findAll(inspection.content.orEmpty()).map { it.groupValues[1].trim() }
                         .firstOrNull { it.substringBefore('/') != "127.0.0.1:8080" }
-                    val expectedTarget = when (site.upstreamMode) {
+                    val expectedTarget = if (deploymentManaged) {
+                        "gk_${site.serviceId?.toString()?.replace("-", "")}"
+                    } else when (site.upstreamMode) {
                         UpstreamMode.EXPLICIT_PORT -> site.upstreamExplicitPort?.let { "${site.upstreamHost}:$it" }
                         UpstreamMode.DOCKER_DISCOVERY -> site.serviceId?.let { DeploymentUpstreamResolver.resolve(it, deployment.environment) }?.let { "${it.host}:${it.port}" }
                     }
                     if (configuredTarget == null || expectedTarget == null || configuredTarget != expectedTarget) {
                         drift += DeploymentDriftItem("gateway_config_drift", "Persisted gateway target '$expectedTarget' does not match nginx target '${configuredTarget ?: "missing"}'")
+                    }
+                    if (deploymentManaged) {
+                        val expectedHostPort = deployment.hostPort ?: deployment.ports.values.singleOrNull()
+                        val includePort = site.serviceId?.let(nginx::inspectDeploymentUpstreamPort)
+                        if (expectedHostPort != null && includePort != expectedHostPort) {
+                            drift += DeploymentDriftItem("gateway_active_runtime_mismatch", "Stable upstream include targets port ${includePort ?: "missing"}; active deployment runtime uses $expectedHostPort")
+                        }
                     }
                     if (deployment.environment == "production" && containerName != null &&
                         site.upstreamMode == UpstreamMode.EXPLICIT_PORT && site.upstreamHost == "127.0.0.1") {

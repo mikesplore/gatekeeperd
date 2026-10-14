@@ -52,7 +52,8 @@ object SiteRepository {
         val configVersion: Int, val createdAt: LocalDateTime, val updatedAt: LocalDateTime,
         val bypassPaths: List<String> = DEFAULT_GATEKEEPER_BYPASS_PATHS,
         val reconciliationStatus: ReconciliationStatus, val lastNginxError: String?, val lastDockerError: String?, val lastReconciledAt: LocalDateTime?, val projectSlug: String? = null,
-        val serviceId: UUID? = null
+        val serviceId: UUID? = null,
+        val upstreamKind: String? = null
     )
 
     fun findByProjectId(projectId: UUID): SiteRecord? = transaction {
@@ -198,6 +199,7 @@ object SiteRepository {
             it[Sites.domain] = model.domain
             it[Sites.upstreamHost] = model.upstreamHost
             it[Sites.upstreamMode] = model.upstreamMode
+            it[Sites.upstreamKind] = model.upstreamKind ?: if (model.upstreamMode == UpstreamMode.EXPLICIT_PORT) "EXPLICIT_PORT" else null
             it[Sites.upstreamExplicitPort] = if (model.upstreamMode == UpstreamMode.EXPLICIT_PORT) model.appPort else null
             it[Sites.tlsMode] = when (model.tlsMode) {
                 com.gatekeeper.nginx.TlsRenderMode.HTTP_ONLY -> TlsMode.HTTP_ONLY
@@ -250,6 +252,28 @@ object SiteRepository {
         row.toRecord(siteSlug)
     }
 
+    fun setUpstreamKind(id: UUID, kind: String): SiteRecord? = transaction {
+        require(kind in setOf("DEPLOYMENT_MANAGED", "EXPLICIT_PORT"))
+        val existing = Sites.selectAll().where { Sites.id eq id }.singleOrNull() ?: return@transaction null
+        Sites.update({ Sites.id eq id }) {
+            it[Sites.upstreamKind] = kind
+            it[Sites.configVersion] = existing[Sites.configVersion] + 1
+            it[Sites.updatedAt] = LocalDateTime.now()
+        }
+        Sites.selectAll().where { Sites.id eq id }.singleOrNull()?.toRecord()
+    }
+
+    fun restoreUpstreamKind(id: UUID, kind: String?): SiteRecord? = transaction {
+        require(kind == null || kind in setOf("DEPLOYMENT_MANAGED", "EXPLICIT_PORT"))
+        val existing = Sites.selectAll().where { Sites.id eq id }.singleOrNull() ?: return@transaction null
+        Sites.update({ Sites.id eq id }) {
+            it[Sites.upstreamKind] = kind
+            it[Sites.configVersion] = existing[Sites.configVersion] + 1
+            it[Sites.updatedAt] = LocalDateTime.now()
+        }
+        Sites.selectAll().where { Sites.id eq id }.singleOrNull()?.toRecord()
+    }
+
     fun updateDeploymentUpstream(serviceId: UUID, host: String, port: Int): SiteRecord? = transaction {
         require(host == "127.0.0.1") { "Deployment upstream host must be loopback" }
         require(port in 1..65535) { "Deployment upstream port must be between 1 and 65535" }
@@ -278,6 +302,7 @@ object SiteRepository {
             it[Sites.upstreamHost] = site.upstreamHost
             it[Sites.upstreamMode] = site.upstreamMode
             it[Sites.upstreamExplicitPort] = site.upstreamExplicitPort
+            it[Sites.upstreamKind] = site.upstreamKind
             it[Sites.configVersion] = existing[Sites.configVersion] + 1
             it[Sites.updatedAt] = LocalDateTime.now()
         }
@@ -290,6 +315,7 @@ object SiteRepository {
             it[Sites.upstreamHost] = site.upstreamHost
             it[Sites.upstreamMode] = site.upstreamMode
             it[Sites.upstreamExplicitPort] = site.upstreamExplicitPort
+            it[Sites.upstreamKind] = site.upstreamKind
             it[Sites.configVersion] = existing[Sites.configVersion] + 1
             it[Sites.updatedAt] = LocalDateTime.now()
         }
@@ -319,7 +345,7 @@ object SiteRepository {
         runCatching { Json.decodeFromString<List<String>>(this[Sites.bypassPaths]) }.getOrDefault(DEFAULT_GATEKEEPER_BYPASS_PATHS),
         this[Sites.reconciliationStatus],
         this[Sites.lastNginxError], this[Sites.lastDockerError], this[Sites.lastReconciledAt], projectSlug,
-        this[Sites.serviceId]
+        this[Sites.serviceId], this[Sites.upstreamKind]
     )
 }
 

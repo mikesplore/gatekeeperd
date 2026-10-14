@@ -192,6 +192,7 @@ data class ProjectOverviewCurrentDeployment(
     val runtimeHealth: String,
     val runtimeUpstreamHost: String?,
     val runtimeUpstreamPort: Int?,
+    val publicExposure: Boolean,
     val credentialSetId: String?,
     val credentialSetVersion: Int?,
     val secretSetId: String?,
@@ -481,10 +482,14 @@ fun Application.configureProjectSetupAdminRoutes() {
                 val site = SiteRepository.findByServiceId(adopted.serviceId)
                 val nginx = if (site != null) NginxService.configured() else null
                 val siteSlug = site?.projectSlug ?: project.slug
-                val previous = DeploymentApplicationService.activeDeploymentSummaryForService(adopted.serviceId, "production")
+                val previous = DeploymentApplicationService.activeRuntime(adopted.serviceId, "production")
                 val previousConfig = if (site != null) runCatching { nginx?.inspectSite(siteSlug)?.content }.getOrNull() else null
                 val routed = site == null || runCatching {
-                    nginx?.switchDeploymentUpstream(adopted.serviceId, siteSlug, "127.0.0.1", request.containerPort, hostPort) == true
+                    if (site?.upstreamKind == "DEPLOYMENT_MANAGED") {
+                        nginx?.switchDeploymentUpstream(adopted.serviceId, siteSlug, "127.0.0.1", request.containerPort, hostPort) == true
+                    } else {
+                        nginx?.convertSiteToDeploymentManaged(site, hostPort) == true
+                    }
                 }.getOrDefault(false)
                 if (!routed) {
                     DeploymentApplicationService.transition(adopted.deploymentId, com.gatekeeper.db.tables.DeploymentStatus.FAILED, "Gateway validation failed while adopting the running container")
@@ -492,9 +497,14 @@ fun Application.configureProjectSetupAdminRoutes() {
                 }
                 val activated = runCatching { DeploymentApplicationService.activateAfterCutover(adopted.deploymentId, previous?.id) }.getOrDefault(false)
                 if (!activated) {
-                    if (site != null && previousConfig != null) {
-                        runCatching { nginx?.restoreSiteConfiguration(siteSlug, previousConfig) }
+                    if (site != null) {
+                        previousConfig?.let { priorConfig -> runCatching { nginx?.restoreSiteConfiguration(siteSlug, priorConfig) } }
                         runCatching { SiteRepository.restoreDeploymentUpstreamForSite(site) }
+                        val previousPort = if (site.upstreamKind == "DEPLOYMENT_MANAGED") {
+                            val primary = previous?.containerPort ?: previous?.ports?.keys?.singleOrNull()
+                            primary?.let { previous?.ports?.get(it) } ?: previous?.hostPort
+                        } else null
+                        runCatching { nginx?.restoreDeploymentUpstream(adopted.serviceId, previousPort) }
                     }
                     DeploymentApplicationService.transition(adopted.deploymentId, com.gatekeeper.db.tables.DeploymentStatus.FAILED, "Active deployment changed during container adoption")
                     return@post call.respondError(HttpStatusCode.Conflict, "container_adoption_conflict", "Project runtime changed while the container was being attached; its gateway route was restored")
@@ -691,6 +701,8 @@ fun Application.configureProjectSetupAdminRoutes() {
                 val site = SiteRepository.findByProjectIdAndServiceId(project.id, serviceId)
                 val service = ServiceRepository.findByProjectAndId(project.id, serviceId)
                 val active = DeploymentApplicationService.activeDeploymentSummaryForService(serviceId, "production")
+                val activeRuntime = DeploymentApplicationService.activeRuntime(serviceId, "production")
+                val publicExposure = com.gatekeeper.deployment.adoptedRuntimeHasPublicBinding(activeRuntime?.triggerSource, activeRuntime?.portHostIps)
                 val dockerHealth = active?.containerName?.let { name ->
                     runCatching {
                         val docker = DockerService(AppConfig.dockerSocket)
@@ -711,7 +723,7 @@ fun Application.configureProjectSetupAdminRoutes() {
                         active?.id?.toString(), active?.status ?: "none", active?.environment ?: "production", active?.triggerSource,
                         active?.createdAt?.toString(), active?.activeAt?.toString(), active?.imageName, active?.imageTag,
                         active?.imageDigest, active?.commitSha, dockerHealth,
-                        upstream?.host, upstream?.port, active?.credentialSetId?.toString(), active?.credentialSetVersion,
+                        upstream?.host, upstream?.port, publicExposure, active?.credentialSetId?.toString(), active?.credentialSetVersion,
                         active?.secretSetId?.toString(),
                         active?.secretSetVersion
                     ),

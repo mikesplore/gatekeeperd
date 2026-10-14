@@ -54,7 +54,8 @@ object EnvironmentSetRepository {
         val sharedSetVersion: Int?,
         val serviceSetId: UUID?,
         val serviceSetVersion: Int?,
-        val variables: List<FingerprintedVariable>
+        val variables: List<FingerprintedVariable>,
+        val publicExposure: Boolean = false
     )
 
     fun sharedMetadata(projectId: UUID, environment: String): SharedMetadata = transaction {
@@ -171,11 +172,16 @@ object EnvironmentSetRepository {
             Json.decodeFromString<Map<String, Int>>(deployment[Deployments.runtimePortsJson]).mapKeys { it.key.toInt() }
         }.getOrDefault(emptyMap())
         val publishedPorts = PublishedPorts.normalize(recordedPorts, containerPort, hostPort)
+        val portHostIps = runCatching {
+            Json.decodeFromString<Map<String, String>>(deployment[Deployments.runtimePortHostIpsJson])
+                .mapKeys { it.key.toInt() }
+        }.getOrDefault(emptyMap())
         ActiveDeploymentInspection(
             deployment[Deployments.id], deployment[Deployments.status].value, deployment[Deployments.runtimeContainerName], publishedPorts, serviceId, environment,
             execution[DeploymentExecutions.imageName], execution[DeploymentExecutions.imageTag],
             execution[DeploymentExecutions.imageDigest], execution[DeploymentExecutions.commitSha],
-            deployment[Deployments.activeAt], sharedSetId, sharedVersion, serviceSetId, serviceVersion, variables
+            deployment[Deployments.activeAt], sharedSetId, sharedVersion, serviceSetId, serviceVersion, variables,
+            com.gatekeeper.deployment.adoptedRuntimeHasPublicBinding(deployment[Deployments.triggerSource], portHostIps)
         )
     }
 

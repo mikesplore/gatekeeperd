@@ -9,11 +9,22 @@ import org.jetbrains.exposed.sql.insert
 import org.jetbrains.exposed.sql.and
 import org.jetbrains.exposed.sql.selectAll
 import org.jetbrains.exposed.sql.update
-import org.jetbrains.exposed.sql.insert
-import org.jetbrains.exposed.sql.and
 import org.jetbrains.exposed.sql.transactions.transaction
 import java.time.LocalDateTime
 import java.util.UUID
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.json.Json
+
+@Serializable
+data class DurableCutoverFiles(
+    val format: String = "deployment-upstream-v1",
+    val previousSiteConfig: String? = null,
+    val previousIncludeContent: String? = null,
+    val pendingIncludeContent: String? = null,
+    val pendingChecksum: String? = null
+)
 
 /** The only writer of canonical deployment lifecycle state. */
 object DeploymentApplicationService {
@@ -48,6 +59,7 @@ object DeploymentApplicationService {
         secretSetId: UUID? = null,
         secretSetVersion: Int? = null
     ) = transaction {
+        deploymentBlockReason(serviceId, environment)?.let { error(it) }
         val now = LocalDateTime.now()
         Deployments.insert {
             it[Deployments.id] = id
@@ -66,6 +78,25 @@ object DeploymentApplicationService {
             it[queuedAt] = now
             it[createdAt] = now
             it[updatedAt] = now
+        }
+    }
+
+    fun deploymentBlockReason(serviceId: UUID, environment: String = "production"): String? = transaction {
+        if (Deployments.selectAll().where {
+                (Deployments.serviceId eq serviceId) and (Deployments.cutoverState eq "repair_required")
+            }.count() > 0) {
+            return@transaction "Service is in repair-required state; repair its nginx route before queuing another deployment"
+        }
+        null
+    }
+
+    fun clearRepairRequired(serviceId: UUID): Int = transaction {
+        Deployments.update({
+            (Deployments.serviceId eq serviceId) and (Deployments.cutoverState eq "repair_required")
+        }) {
+            it[Deployments.cutoverState] = "restored"
+            it[Deployments.cutoverError] = null
+            it[Deployments.updatedAt] = LocalDateTime.now()
         }
     }
 
@@ -206,10 +237,17 @@ object DeploymentApplicationService {
         } == 1
     }
 
-    fun prepareRuntimeCutover(id: UUID, previousId: UUID?, previousNginxConfig: String?): Boolean = transaction {
+    fun prepareRuntimeCutover(
+        id: UUID,
+        previousId: UUID?,
+        previousNginxConfig: String?,
+        cutoverFiles: DurableCutoverFiles? = null
+    ): Boolean = transaction {
+        val savedNginxState = cutoverFiles?.copy(previousSiteConfig = previousNginxConfig)?.let { Json.encodeToString(it) }
+            ?: previousNginxConfig
         Deployments.update({ Deployments.id eq id }) {
             it[Deployments.replacesDeploymentId] = previousId
-            it[Deployments.cutoverPreviousNginxConfig] = previousNginxConfig
+            it[Deployments.cutoverPreviousNginxConfig] = savedNginxState
             it[Deployments.cutoverState] = "prepared"
             it[Deployments.cutoverError] = null
             it[updatedAt] = LocalDateTime.now()
@@ -217,7 +255,7 @@ object DeploymentApplicationService {
     }
 
     fun updateCutoverState(id: UUID, state: String, error: String? = null): Boolean = transaction {
-        require(state in setOf("not_started", "prepared", "route_switched", "retiring_previous", "previous_retired", "restoring", "runtime_restored", "restore_failed", "restored", "activated"))
+        require(state in setOf("not_started", "prepared", "route_switched", "draining", "retiring_previous", "previous_retired", "restoring", "runtime_restored", "restore_failed", "restored", "repair_required", "activated"))
         Deployments.update({ Deployments.id eq id }) {
             it[Deployments.cutoverState] = state
             it[Deployments.cutoverError] = error
@@ -225,11 +263,39 @@ object DeploymentApplicationService {
         } == 1
     }
 
-    data class CutoverRecoveryRecord(val state: String, val previousNginxConfig: String?, val previousDeploymentId: UUID?)
+    data class CutoverRecoveryRecord(
+        val state: String,
+        val previousNginxConfig: String?,
+        val previousDeploymentId: UUID?,
+        val serviceId: UUID? = null,
+        val environment: String = "production",
+        val files: DurableCutoverFiles? = null
+    )
 
     fun cutoverRecovery(id: UUID): CutoverRecoveryRecord? = transaction {
         Deployments.selectAll().where { Deployments.id eq id }.singleOrNull()?.let {
-            CutoverRecoveryRecord(it[Deployments.cutoverState], it[Deployments.cutoverPreviousNginxConfig], it[Deployments.replacesDeploymentId])
+            val raw = it[Deployments.cutoverPreviousNginxConfig]
+            val files = raw?.let { value -> runCatching { Json.decodeFromString<DurableCutoverFiles>(value) }.getOrNull() }
+                ?.takeIf { snapshot -> snapshot.format == "deployment-upstream-v1" }
+            CutoverRecoveryRecord(
+                it[Deployments.cutoverState], files?.previousSiteConfig ?: raw,
+                it[Deployments.replacesDeploymentId], it[Deployments.serviceId], it[Deployments.environment], files
+            )
+        }
+    }
+
+    fun pendingCutovers(): List<Pair<UUID, CutoverRecoveryRecord>> = transaction {
+        Deployments.selectAll().where {
+            Deployments.cutoverState inList listOf("prepared", "route_switched", "draining", "retiring_previous", "previous_retired")
+        }.mapNotNull { row ->
+            val raw = row[Deployments.cutoverPreviousNginxConfig]
+            val files = raw?.let { value -> runCatching { Json.decodeFromString<DurableCutoverFiles>(value) }.getOrNull() }
+                ?.takeIf { snapshot -> snapshot.format == "deployment-upstream-v1" }
+                ?: return@mapNotNull null
+            row[Deployments.id] to CutoverRecoveryRecord(
+                row[Deployments.cutoverState], files.previousSiteConfig,
+                row[Deployments.replacesDeploymentId], row[Deployments.serviceId], row[Deployments.environment], files
+            )
         }
     }
 

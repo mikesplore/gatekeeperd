@@ -20,6 +20,8 @@ object Sites : Table("sites") {
         { it.value }
     )
     val upstreamExplicitPort = integer("upstream_explicit_port").nullable()
+    /** Nullable until a site is explicitly classified by the upstream migration operation. */
+    val upstreamKind = text("upstream_kind").nullable()
     val tlsMode = customEnumeration(
         "tls_mode",
         "TEXT",

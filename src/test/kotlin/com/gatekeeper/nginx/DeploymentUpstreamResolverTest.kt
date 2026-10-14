@@ -58,8 +58,34 @@ class DeploymentUpstreamResolverTest {
     }
 
     @Test
+    fun `explicit developer site remains on its explicit port when a deployment exists`() {
+        val explicitSite = DeploymentUpstreamResolver.SiteTarget(UpstreamMode.EXPLICIT_PORT, "127.0.0.1", 9000, "EXPLICIT_PORT")
+        val runtime = DeploymentUpstreamResolver.RuntimeTarget(
+            serviceId, "production", true, "managed-container", 8080, mapOf(8080 to 49152)
+        )
+
+        assertEquals(
+            DeploymentUpstreamResolver.Target("127.0.0.1", 9000),
+            DeploymentUpstreamResolver.resolve(serviceId, "production", explicitSite, runtime)
+        )
+    }
+
+    @Test
+    fun `converted explicit site follows active deployment instead of its legacy port`() {
+        val explicitSite = DeploymentUpstreamResolver.SiteTarget(UpstreamMode.EXPLICIT_PORT, "127.0.0.1", 9000, "DEPLOYMENT_MANAGED")
+        val runtime = DeploymentUpstreamResolver.RuntimeTarget(
+            serviceId, "production", true, "managed-container", 9000, mapOf(9000 to 49152)
+        )
+
+        assertEquals(
+            DeploymentUpstreamResolver.Target("127.0.0.1", 49152, "managed-container", 9000),
+            DeploymentUpstreamResolver.resolve(serviceId, "production", explicitSite, runtime)
+        )
+    }
+
+    @Test
     fun `active deployment pointer takes precedence after gateway cutover persisted explicit port`() {
-        val siteAfterCutover = DeploymentUpstreamResolver.SiteTarget(UpstreamMode.EXPLICIT_PORT, "127.0.0.1", 49151)
+        val siteAfterCutover = DeploymentUpstreamResolver.SiteTarget(UpstreamMode.EXPLICIT_PORT, "127.0.0.1", 49151, "DEPLOYMENT_MANAGED")
         val runtime = DeploymentUpstreamResolver.RuntimeTarget(
             serviceId, "production", true, "active-container", 8080, mapOf(8080 to 49152)
         )

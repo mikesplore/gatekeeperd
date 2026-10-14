@@ -26,6 +26,7 @@ import com.gatekeeper.db.repositories.ProjectRepository
 import com.gatekeeper.db.repositories.AuditRepository
 import com.gatekeeper.db.repositories.SiteRepository
 import com.gatekeeper.db.repositories.ServiceRepository
+import com.gatekeeper.db.repositories.DeploymentJobRepository
 import com.gatekeeper.db.repositories.CertificateRepository
 import com.gatekeeper.db.tables.CertMode
 import com.gatekeeper.db.tables.TlsMode
@@ -82,6 +83,19 @@ data class NginxWizardContextResponse(
     val resolvedCertificateDomain: String? = null
 )
 
+@Serializable
+data class UpstreamMigrationRow(
+    val siteId: String,
+    val projectSlug: String?,
+    val domain: String,
+    val currentKind: String?,
+    val result: String,
+    val reason: String? = null
+)
+
+@Serializable
+data class UpstreamMigrationRollbackRequest(val backupName: String)
+
 private data class NginxEnablePlan(
     val slug: String,
     val domain: String,
@@ -107,7 +121,11 @@ private fun renderModelFromSite(
     site: SiteRepository.SiteRecord,
     nginxService: NginxService
 ): NginxSiteRenderModel {
-    val (upstreamHost, port) = when (site.upstreamMode) {
+    val (upstreamHost, port) = if (site.upstreamKind == "DEPLOYMENT_MANAGED") {
+        val target = site.serviceId?.let { DeploymentUpstreamResolver.resolveRuntime(it, "production") }
+            ?: error("Could not resolve the active deployment upstream for managed site $slug")
+        target.host to target.port
+    } else when (site.upstreamMode) {
         UpstreamMode.EXPLICIT_PORT -> site.upstreamHost to
             (site.upstreamExplicitPort ?: error("Site $slug has no explicit upstream port"))
         UpstreamMode.DOCKER_DISCOVERY -> {
@@ -145,7 +163,8 @@ private fun renderModelFromSite(
         upstreamMode = site.upstreamMode,
         certMode = site.certMode,
         gateEnabled = site.gateEnabled,
-        bypassPaths = site.bypassPaths
+        bypassPaths = site.bypassPaths,
+        upstreamKind = site.upstreamKind
     )
 }
 
@@ -346,6 +365,101 @@ fun Application.configureNginxAdminRoutes() {
         })
 
         authenticate("auth-jwt") {
+
+            get("/api/admin/nginx/upstream-migration") {
+                val report = SiteRepository.findAll().map { site ->
+                    val serviceId = site.serviceId
+                    val configured = serviceId != null && DeploymentJobRepository.configurationIdForService(site.projectId, serviceId) != null
+                    val target = activeDeploymentTarget(site)
+                    val result = when {
+                        site.upstreamKind == "DEPLOYMENT_MANAGED" -> "already_migrated"
+                        site.upstreamMode == UpstreamMode.DOCKER_DISCOVERY && target == null -> "needs_adoption_first"
+                        !configured && site.upstreamMode == UpstreamMode.DOCKER_DISCOVERY -> "needs_adoption_first"
+                        !configured -> "explicit_site_unchanged"
+                        target == null -> "no_active_runtime"
+                        else -> "ready_to_apply"
+                    }
+                    UpstreamMigrationRow(site.id.toString(), site.projectSlug, site.domain, site.upstreamKind, result)
+                }
+                call.respond(report)
+            }
+
+            post("/api/admin/nginx/upstream-migration/sites/{siteId}") {
+                val siteId = call.parameters["siteId"]?.let { runCatching { java.util.UUID.fromString(it) }.getOrNull() }
+                    ?: return@post call.respondError(HttpStatusCode.BadRequest, "invalid_site_id", "A valid site ID is required")
+                val site = SiteRepository.findById(siteId)
+                    ?: return@post call.respondError(HttpStatusCode.NotFound, "site_not_found", "Site not found")
+                val serviceId = site.serviceId
+                    ?: return@post call.respondError(HttpStatusCode.Conflict, "service_missing", "Site must be attached to a service before migration")
+                if (site.upstreamKind == "DEPLOYMENT_MANAGED") return@post call.respond(mapOf("success" to true, "status" to "already_migrated"))
+                if (DeploymentJobRepository.configurationIdForService(site.projectId, serviceId) == null) {
+                    return@post call.respondError(HttpStatusCode.Conflict, "deployment_configuration_missing", "Create or adopt a deployment configuration before converting this site")
+                }
+                val target = activeDeploymentTarget(site)
+                    ?: return@post call.respondError(HttpStatusCode.Conflict, "needs_adoption_first", "This service has no active deployment runtime to target")
+                val summary = DeploymentJobRepository.configurationSummaryForService(site.projectId, serviceId)
+                val legacyPrimary = site.upstreamExplicitPort ?: target.containerPort
+                if (site.upstreamMode == UpstreamMode.EXPLICIT_PORT) {
+                    if (summary?.containerPort != null && legacyPrimary != null && summary.containerPort != legacyPrimary) {
+                        return@post call.respondError(HttpStatusCode.Conflict, "primary_port_mismatch", "Configured primary container port differs from the legacy explicit upstream port; resolve it in deployment settings first")
+                    }
+                }
+                if (summary?.containerPort == null && legacyPrimary != null) {
+                    DeploymentJobRepository.setPrimaryContainerPortForService(site.projectId, serviceId, legacyPrimary)
+                }
+                val migrated = nginxService.convertSiteToDeploymentManaged(site, target.port)
+                if (!migrated) return@post call.respondError(HttpStatusCode.InternalServerError, "upstream_migration_failed", "Site conversion failed; the previous route was restored where possible")
+                val backupName = site.projectSlug?.let { slug -> nginxService.listBackups(slug).firstOrNull()?.name }
+                call.respond(mapOf("success" to true, "status" to "deployment_managed", "serviceId" to serviceId.toString(), "backupName" to backupName))
+            }
+
+            post("/api/admin/nginx/upstream-migration/sites/{siteId}/rollback") {
+                val siteId = call.parameters["siteId"]?.let { runCatching { java.util.UUID.fromString(it) }.getOrNull() }
+                    ?: return@post call.respondError(HttpStatusCode.BadRequest, "invalid_site_id", "A valid site ID is required")
+                val site = SiteRepository.findById(siteId)
+                    ?: return@post call.respondError(HttpStatusCode.NotFound, "site_not_found", "Site not found")
+                if (site.upstreamKind != "DEPLOYMENT_MANAGED") {
+                    return@post call.respondError(HttpStatusCode.Conflict, "site_not_deployment_managed", "Site is not converted to deployment-managed upstream mode")
+                }
+                val request = runCatching { call.receive<UpstreamMigrationRollbackRequest>() }.getOrNull()
+                    ?: return@post call.respondError(HttpStatusCode.BadRequest, "invalid_request", "A site backup name is required")
+                val slug = site.projectSlug
+                    ?: return@post call.respondError(HttpStatusCode.Conflict, "site_slug_missing", "Site has no nginx configuration name")
+                val result = runCatching { nginxService.rollback(slug, request.backupName) }.getOrElse { error ->
+                    return@post call.respondError(HttpStatusCode.BadRequest, "upstream_migration_rollback_failed", error.message ?: "Could not restore the saved site config")
+                }
+                if (!result.success) {
+                    return@post call.respondError(HttpStatusCode.BadGateway, "upstream_migration_rollback_failed", result.message)
+                }
+                SiteRepository.restoreUpstreamKind(site.id, if (site.upstreamMode == UpstreamMode.EXPLICIT_PORT) "EXPLICIT_PORT" else null)
+                val includeRemoved = site.serviceId?.let { nginxService.restoreDeploymentUpstream(it, null) } ?: true
+                call.respond(mapOf(
+                    "success" to true,
+                    "status" to if (includeRemoved) "rolled_back" else "rolled_back_include_cleanup_pending",
+                    "serviceId" to site.serviceId?.toString()
+                ))
+            }
+
+            post("/api/admin/nginx/upstream-repair/{serviceId}") {
+                val serviceId = call.parameters["serviceId"]?.let { runCatching { java.util.UUID.fromString(it) }.getOrNull() }
+                    ?: return@post call.respondError(HttpStatusCode.BadRequest, "invalid_service_id", "A valid service ID is required")
+                val site = SiteRepository.findByServiceId(serviceId)
+                    ?: return@post call.respondError(HttpStatusCode.NotFound, "site_not_found", "Service has no nginx site")
+                if (site.upstreamKind != "DEPLOYMENT_MANAGED") {
+                    return@post call.respondError(HttpStatusCode.Conflict, "site_not_deployment_managed", "Only deployment-managed sites can be repaired through this operation")
+                }
+                val active = DeploymentApplicationService.activeRuntime(serviceId, "production")
+                    ?: return@post call.respondError(HttpStatusCode.Conflict, "active_runtime_missing", "No active runtime is available as a repair target")
+                val primaryPort = active.containerPort ?: active.ports.keys.singleOrNull()
+                    ?: return@post call.respondError(HttpStatusCode.Conflict, "primary_port_missing", "Active runtime has no unambiguous primary container port")
+                val hostPort = active.ports[primaryPort] ?: active.hostPort
+                    ?: return@post call.respondError(HttpStatusCode.Conflict, "host_port_missing", "Active runtime has no published primary port")
+                if (!nginxService.repairDeploymentUpstream(serviceId, site.domain, site.tlsMode != TlsMode.HTTP_ONLY, hostPort)) {
+                    return@post call.respondError(HttpStatusCode.BadGateway, "upstream_repair_failed", "Nginx upstream repair or probe failed")
+                }
+                DeploymentApplicationService.clearRepairRequired(serviceId)
+                call.respond(mapOf("success" to true, "status" to "repaired", "serviceId" to serviceId.toString()))
+            }
 
             get("/api/admin/nginx/wizard/context/{slug}") {
                 val slug = call.parameters["slug"]
@@ -1070,4 +1184,14 @@ fun Application.configureNginxAdminRoutes() {
             }
         }
     }
+}
+
+private fun activeDeploymentTarget(site: SiteRepository.SiteRecord): DeploymentUpstreamResolver.Target? {
+    val serviceId = site.serviceId ?: return null
+    val active = DeploymentApplicationService.activeRuntime(serviceId, "production") ?: return null
+    val containerPort = site.upstreamExplicitPort ?: active.containerPort ?: active.ports.keys.singleOrNull() ?: return null
+    val hostPort = active.ports[containerPort]
+        ?: active.hostPort?.takeIf { active.containerPort == containerPort }
+        ?: return null
+    return DeploymentUpstreamResolver.Target("127.0.0.1", hostPort, active.name, containerPort)
 }

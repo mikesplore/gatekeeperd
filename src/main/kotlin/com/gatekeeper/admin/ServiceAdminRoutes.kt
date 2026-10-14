@@ -91,6 +91,7 @@ data class ActiveDeploymentInspectionView(
     val imageName: String, val imageTag: String, val imageDigest: String?, val commitSha: String?, val activeAt: String?,
     val sharedSetId: String?, val sharedSetVersion: Int?, val serviceSetId: String?, val serviceSetVersion: Int?,
     val variables: List<FingerprintedEnvironmentVariableView>,
+    val publicExposure: Boolean = false,
     val fingerprintAlgorithm: String = "HMAC-SHA-256"
 )
 
@@ -366,5 +367,5 @@ private fun EnvironmentSetRepository.VersionMetadata.toView() = EnvironmentVersi
 private fun EnvironmentSetRepository.ActiveDeploymentInspection.toView() = ActiveDeploymentInspectionView(
     deploymentId.toString(), status, containerName, serviceId.toString(), environment, publishedPorts.mapKeys { it.key.toString() }, imageName, imageTag, imageDigest, commitSha,
     activeAt?.toString(), sharedSetId?.toString(), sharedSetVersion, serviceSetId?.toString(), serviceSetVersion,
-    variables.map { FingerprintedEnvironmentVariableView(it.key, it.source, it.fingerprint) }
+    variables.map { FingerprintedEnvironmentVariableView(it.key, it.source, it.fingerprint) }, publicExposure
 )

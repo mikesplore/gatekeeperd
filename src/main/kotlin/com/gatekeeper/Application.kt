@@ -19,6 +19,7 @@ import com.gatekeeper.feature.payment.presentation.configurePaymentAdminRoutes
 import com.gatekeeper.admin.configureLogAdminRoutes
 import com.gatekeeper.feature.payment.presentation.configurePaymentRoutes
 import com.gatekeeper.nginx.NginxBackfillRunner
+import com.gatekeeper.nginx.NginxService
 import com.gatekeeper.plugins.*
 import com.gatekeeper.feature.payment.domain.usecase.ReconcilePayments
 import com.gatekeeper.feature.payment.domain.repository.PaymentRepository as PaymentDomainRepository
@@ -116,10 +117,12 @@ private fun Array<String>.portArg(): Int? =
 
 fun Application.module() {
     AppConfig.logConfig()
+    AppConfig.warnIfDeploymentPortsOverlapEphemeralRange()
 
     configureSerialization()
     configureMonitoring()
     configureDatabase()
+    NginxService.configured().bootstrapDeploymentUpstreams()
     configureRedis()
     configureDependencyInjection()
     configureSecurity()
