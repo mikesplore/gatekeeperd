@@ -42,7 +42,7 @@ import kotlinx.coroutines.launch
 
 private val logger = LoggerFactory.getLogger("com.gatekeeper.auth.AuthRoutes")
 private const val LOGIN_WINDOW_SECONDS = 15 * 60
-private const val LOGIN_ATTEMPT_LIMIT = 5
+private const val LOGIN_ATTEMPT_LIMIT = 10
 private const val REFRESH_TTL_SECONDS = 30 * 24 * 60 * 60
 
 @Serializable

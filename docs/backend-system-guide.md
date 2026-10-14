@@ -152,21 +152,21 @@ PostgreSQL also stores users, password-reset tokens, certificates, registry/prov
 
 JSON serialization uses kotlinx.serialization. Most API errors use the common `{error, message, timestamp}` shape. Endpoint-specific response bodies and statuses are documented in [API.md](API.md).
 
-| Route area | Auth | Main responsibilities | Main source files |
-|---|---|---|---|
-| `/api/health*`, `/api/version` | Public | Liveness, dependency readiness, locally recorded deployment version. | `plugins/Routing.kt`, `deployment/DeploymentVersionService.kt` |
-| `/api/auth/*` | Login/reset public; profile and security token-protected | Login, refresh, logout/revocation, password/TOTP, profile and admin user management. | `auth/AuthRoutes.kt` |
-| `/api/gate/*` | Public | Proxy access decision, paywall, checkout initiation, payment callback. | `gate/GateRoutes.kt`, payment presentation routes |
-| `/api/customer/*` | Public/customer-safe | Project portal/status/payment receipts/support workflows. | `customer/CustomerRoutes.kt` |
-| `/api/paystack/*`, `/api/mpesa/*` | Provider callbacks | Signed Paystack webhook, M-Pesa initiation/callback. | `feature/payment/presentation/*` |
-| `/api/admin/projects*`, project setup | Admin JWT | Customer/project management, project setup, deployment/environment operations. | `admin/ProjectAdminRoutes.kt`, `admin/ProjectSetupAdminRoutes.kt` |
-| `/api/admin/projects/{id}/services*` | Admin JWT | Service settings, active runtime, environment, access, and service billing. | `admin/ServiceAdminRoutes.kt` |
-| `/api/admin/payments*` and payment events | Admin JWT | Payment history, revenue, cash entries, verification, event replay. | `feature/payment/presentation/PaymentAdminRoutes.kt` |
-| `/api/admin/nginx*`, certificates | Admin JWT | Site config lifecycle, custom blocks, migration/repair, certificate inventory and renewal. | `admin/NginxAdminRoutes.kt`, `nginx/*` |
-| `/api/admin/containers*`, networks, volumes, images | Admin JWT | Docker inventory and container wizard actions. | `plugins/Routing.kt`, `admin/ProjectAdminRoutes.kt`, `docker/*` |
-| `/api/admin/logs`, audit, operations | Admin JWT | Recent application logs, audit history, dashboards, notification state, health and drift. | `admin/LogAdminRoutes.kt`, `ProjectAdminRoutes.kt`, `OperationsAdminRoutes.kt` |
-| `/api/admin/integrations*`, GitHub | Admin JWT; GitHub callbacks separately verified | Scribed outbox, GitHub App setup/webhook activity. | `admin/IntegrationAdminRoutes.kt`, `integrations/*` |
-| `/api/admin/registries*`, provider credentials | Admin JWT | Registry and provider configuration. | `admin/RegistryAdminRoutes.kt` |
+| Route area                                          | Auth                                                     | Main responsibilities                                                                      | Main source files                                                              |
+|-----------------------------------------------------|----------------------------------------------------------|--------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------|
+| `/api/health*`, `/api/version`                      | Public                                                   | Liveness, dependency readiness, locally recorded deployment version.                       | `plugins/Routing.kt`, `deployment/DeploymentVersionService.kt`                 |
+| `/api/auth/*`                                       | Login/reset public; profile and security token-protected | Login, refresh, logout/revocation, password/TOTP, profile and admin user management.       | `auth/AuthRoutes.kt`                                                           |
+| `/api/gate/*`                                       | Public                                                   | Proxy access decision, paywall, checkout initiation, payment callback.                     | `gate/GateRoutes.kt`, payment presentation routes                              |
+| `/api/customer/*`                                   | Public/customer-safe                                     | Project portal/status/payment receipts/support workflows.                                  | `customer/CustomerRoutes.kt`                                                   |
+| `/api/paystack/*`, `/api/mpesa/*`                   | Provider callbacks                                       | Signed Paystack webhook, M-Pesa initiation/callback.                                       | `feature/payment/presentation/*`                                               |
+| `/api/admin/projects*`, project setup               | Admin JWT                                                | Customer/project management, project setup, deployment/environment operations.             | `admin/ProjectAdminRoutes.kt`, `admin/ProjectSetupAdminRoutes.kt`              |
+| `/api/admin/projects/{id}/services*`                | Admin JWT                                                | Service settings, active runtime, environment, access, and service billing.                | `admin/ServiceAdminRoutes.kt`                                                  |
+| `/api/admin/payments*` and payment events           | Admin JWT                                                | Payment history, revenue, cash entries, verification, event replay.                        | `feature/payment/presentation/PaymentAdminRoutes.kt`                           |
+| `/api/admin/nginx*`, certificates                   | Admin JWT                                                | Site config lifecycle, custom blocks, migration/repair, certificate inventory and renewal. | `admin/NginxAdminRoutes.kt`, `nginx/*`                                         |
+| `/api/admin/containers*`, networks, volumes, images | Admin JWT                                                | Docker inventory and container wizard actions.                                             | `plugins/Routing.kt`, `admin/ProjectAdminRoutes.kt`, `docker/*`                |
+| `/api/admin/logs`, audit, operations                | Admin JWT                                                | Recent application logs, audit history, dashboards, notification state, health and drift.  | `admin/LogAdminRoutes.kt`, `ProjectAdminRoutes.kt`, `OperationsAdminRoutes.kt` |
+| `/api/admin/integrations*`, GitHub                  | Admin JWT; GitHub callbacks separately verified          | Scribed outbox, GitHub App setup/webhook activity.                                         | `admin/IntegrationAdminRoutes.kt`, `integrations/*`                            |
+| `/api/admin/registries*`, provider credentials      | Admin JWT                                                | Registry and provider configuration.                                                       | `admin/RegistryAdminRoutes.kt`                                                 |
 
 `/api/admin/*` authentication is installed as a JWT provider. Some additional role checks exist within user management routes, but the shared JWT provider currently accepts only the `admin` role; see [known gaps](#22-implementation-caveats-and-known-gaps).
 
