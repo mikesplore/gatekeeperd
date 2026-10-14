@@ -60,6 +60,22 @@ Health check.
 ### GET /api/health/live
 Process liveness check. Returns `200 OK` when the application process is running.
 
+### GET /api/version
+Public, read-only deployment version check. It compares the commit running on this host with the latest successful `build.yml` commit recorded by the automatic deployment checker. The result is based on a local snapshot, so this endpoint does not contact GitHub.
+
+Example response:
+```json
+{
+  "status": "up_to_date",
+  "runningCommit": "0123456789abcdef0123456789abcdef01234567",
+  "latestSuccessfulCommit": "0123456789abcdef0123456789abcdef01234567",
+  "checkedAt": "2026-10-14T11:00:00Z",
+  "upToDate": true
+}
+```
+
+`status` is `up_to_date`, `update_available`, `deployment_failed`, `check_stale`, or `unknown`. Commit values are nullable if marker files are missing or invalid. `check_stale` means the last GitHub check is older than 15 minutes; `unknown` means required metadata has not been recorded. This endpoint reveals commit identifiers and deployment status, but no secrets or workflow artifacts.
+
 ### GET /api/health/ready
 Dependency readiness check. Returns `200 OK` only when PostgreSQL and Redis are reachable; otherwise returns `503 Service Unavailable` with dependency booleans.
 

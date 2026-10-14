@@ -10,6 +10,7 @@ import com.gatekeeper.docker.ContainerPresetCredentialsResponse
 import com.gatekeeper.docker.CreateNetworkRequest
 import com.gatekeeper.docker.NetworkPage
 import com.gatekeeper.docker.VolumePage
+import com.gatekeeper.deployment.DeploymentVersionService
 import com.gatekeeper.api.InputValidators
 import io.ktor.http.*
 import io.ktor.server.application.*
@@ -58,6 +59,11 @@ fun Application.configureRouting() {
         // Health check — no auth required
         get("/api/health") {
             call.respond(mapOf("status" to "ok"))
+        }
+
+        // Public and read-only: compares local deployment metadata, without a GitHub request.
+        get("/api/version") {
+            call.respond(DeploymentVersionService().current())
         }
 
         get("/api/health/live") {

@@ -24,6 +24,7 @@ Admin JWTs include a unique ID, are restricted to the `admin` role, and can be r
 Authenticated admins can change passwords through `POST /api/auth/password`. Password-reset email delivery is deployment-specific and remains outside the backend until an email provider is selected.
 
 Health endpoints are separated into liveness (`/api/health/live`) and readiness (`/api/health/ready`). Readiness requires both PostgreSQL and Redis to be reachable.
+`GET /api/version` publicly compares the running commit with the latest successful build recorded by the VPS auto-deploy checker; it reads local marker files and does not query GitHub per request.
 
 Docker operations can be restricted with `DOCKER_ALLOWED_REGISTRIES` and `DOCKER_ALLOWED_VOLUME_ROOTS`. When configured, images and host bind mounts outside these allowlists are rejected.
 
@@ -129,6 +130,7 @@ src/main/kotlin/com/gatekeeper/
 | Prefix | Auth | Purpose |
 |--------|------|---------|
 | `/api/health` | None | Liveness check |
+| `/api/version` | None | Compare running version with latest successful build |
 | `/api/auth/login` | None | Admin JWT login |
 | `/api/auth/me` | JWT | Admin profile |
 | `/api/gate/auth` | None | nginx auth_request subrequest (200/403) |

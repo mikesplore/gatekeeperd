@@ -8,6 +8,7 @@ TARGET_DIR="/opt/gatekeeperd"
 DEPLOY_SCRIPT="${TARGET_DIR}/deploy.sh"
 SOURCE_COMMIT_FILE="${TARGET_DIR}/source-commit.txt"
 FAILED_COMMIT_FILE="${TARGET_DIR}/auto-deploy-failed-commit.txt"
+LATEST_BUILD_FILE="${TARGET_DIR}/latest-successful-build.txt"
 
 if [[ "${EUID}" -ne 0 ]]; then
   echo "Error: Automatic deployment checker must run as root." >&2
@@ -42,6 +43,12 @@ if [[ ! "${RUN_ID}" =~ ^[0-9]+$ || ! "${COMMIT_SHA}" =~ ^[0-9a-f]{40}$ || "${HEA
   echo "Error: GitHub returned unexpected workflow metadata: ${RUN_INFO}" >&2
   exit 1
 fi
+
+# Keep a local, read-only snapshot for /api/version; public requests do not call GitHub.
+STATUS_TMP="$(mktemp "${TARGET_DIR}/.latest-successful-build.XXXXXX")"
+printf '%s\n%s\n' "${COMMIT_SHA}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"${STATUS_TMP}"
+chmod 0644 "${STATUS_TMP}"
+mv -f "${STATUS_TMP}" "${LATEST_BUILD_FILE}"
 
 INSTALLED_SHA="$(cat "${SOURCE_COMMIT_FILE}" 2>/dev/null || true)"
 if [[ "${INSTALLED_SHA}" == "${COMMIT_SHA}" ]]; then
