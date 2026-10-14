@@ -15,8 +15,10 @@ import io.ktor.server.response.respond
 import io.ktor.server.routing.get
 import io.ktor.server.routing.routing
 import io.ktor.server.testing.testApplication
+import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 class ServerTest {
 
@@ -34,6 +36,36 @@ class ServerTest {
         val swagger = client.get("/swagger")
         assertEquals(HttpStatusCode.OK, swagger.status)
         kotlin.test.assertTrue(swagger.bodyAsText().contains("SwaggerUIBundle"))
+    }
+
+    @Test
+    fun `OpenAPI covers every route declaration`() {
+        val routeRoot = File("src/main/kotlin/com/gatekeeper")
+        assertTrue(routeRoot.isDirectory, "Backend route source directory was not found")
+
+        val routeDeclaration = Regex("\\b(get|post|put|patch|delete|head|options)\\s*\\(\\s*\"(/[^\"]*)\"")
+        val sourceOperations = routeRoot.walkTopDown()
+            .filter { it.isFile && it.extension == "kt" }
+            .flatMap { file ->
+                routeDeclaration.findAll(file.readText()).map { match ->
+                    match.groupValues[1].lowercase() to match.groupValues[2]
+                }
+            }
+            .toSet()
+
+        val specification = File("src/main/resources/openapi/openapi.yaml").readText()
+        val pathSections = Regex(
+            "(?m)^  (/[^\\r\\n]+):\\r?\\n(.*?)(?=^  /|^components:|\\z)",
+            setOf(RegexOption.MULTILINE, RegexOption.DOT_MATCHES_ALL)
+        ).findAll(specification)
+        val operationDeclaration = Regex("(?m)^    (get|post|put|patch|delete|head|options):\\s*$")
+        val documentedOperations = pathSections.flatMap { section ->
+            operationDeclaration.findAll(section.groupValues[2]).map { match ->
+                match.groupValues[1] to section.groupValues[1]
+            }
+        }.toSet()
+
+        assertEquals(sourceOperations, documentedOperations)
     }
 
     @Test

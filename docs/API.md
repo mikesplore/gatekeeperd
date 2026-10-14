@@ -7,9 +7,11 @@ Interactive API reference: [`/swagger`](https://gateapi.mikesplore.me/swagger)
 
 OpenAPI 3.0.3 document: [`/openapi.yaml`](https://gateapi.mikesplore.me/openapi.yaml)
 
-The OpenAPI document covers the main public, authentication, project, service,
-deployment, container, nginx, operations, and webhook flows. This guide remains the
-source for detailed response behavior and endpoint-specific rules.
+The OpenAPI document lists all route operations declared by the backend, including
+public, authentication, project, service, deployment, container, nginx, payment,
+operations, and webhook routes. Some request and response schemas remain generic;
+this guide and the linked Kotlin route source describe operation-specific fields and
+behavior in detail.
 
 ---
 
