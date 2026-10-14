@@ -274,6 +274,7 @@ Details: [staging-deployment.md](staging-deployment.md)
 
 | File | Contents |
 |------|----------|
+| [backend-system-guide.md](backend-system-guide.md) | Detailed backend architecture, request/data flows, workers, deployment/gateway behavior, configuration, and operational diagnosis |
 | [API.md](API.md) | REST endpoints, request/response shapes |
 | [nginx-client-gating.md](nginx-client-gating.md) | Gate client apps behind nginx |
 | [nginx-reverse-proxy.md](nginx-reverse-proxy.md) | Expose gatekeeperd API behind nginx + SSL |
