@@ -1005,7 +1005,21 @@ class NginxService(
         }
     }
 
-    fun isCertificateManagerReady(): Boolean = certificateManagerIssue() == null
+    private fun runCertbotHelper(vararg arguments: String): Int? {
+        val process = ProcessBuilder(
+            listOf("sudo", "-n", "/usr/local/sbin/gatekeeperd-certbot") + arguments
+        )
+            .redirectOutput(ProcessBuilder.Redirect.INHERIT)
+            .redirectError(ProcessBuilder.Redirect.INHERIT)
+            .start()
+        if (!process.waitFor(8, java.util.concurrent.TimeUnit.MINUTES)) {
+            process.destroyForcibly()
+            process.waitFor(5, java.util.concurrent.TimeUnit.SECONDS)
+            logger.error("Certbot helper timed out after 8 minutes: ${arguments.firstOrNull() ?: "unknown operation"}")
+            return null
+        }
+        return process.exitValue()
+    }
 
     fun installCertificate(domain: String, email: String): Boolean {
         requireValidHostname(domain)
@@ -1016,15 +1030,10 @@ class NginxService(
         }
 
         return try {
-            val process = ProcessBuilder(
-                "sudo", "-n", "/usr/local/sbin/gatekeeperd-certbot",
-                "install", domain, email
-            ).redirectErrorStream(true).start()
-            val output = process.inputStream.bufferedReader().use { it.readText() }
-            val exitCode = process.waitFor()
+            val exitCode = runCertbotHelper("install", domain, email)
 
             if (exitCode != 0) {
-                logger.error("Certbot failed for domain $domain (exit=$exitCode): $output")
+                logger.error("Certbot install failed for domain $domain (exit=${exitCode ?: "timeout"})")
                 return false
             }
 
@@ -1041,14 +1050,9 @@ class NginxService(
         if (!isCertificateInstalled(domain) || certificateManagerIssue() != null) return false
 
         return try {
-            val process = ProcessBuilder(
-                "sudo", "-n", "/usr/local/sbin/gatekeeperd-certbot",
-                "renew", domain
-            ).redirectErrorStream(true).start()
-            val output = process.inputStream.bufferedReader().use { it.readText() }
-            val exitCode = process.waitFor()
+            val exitCode = runCertbotHelper("renew", domain)
             if (exitCode != 0) {
-                logger.error("Certbot renewal failed for domain $domain (exit=$exitCode): $output")
+                logger.error("Certbot renewal failed for domain $domain (exit=${exitCode ?: "timeout"})")
                 return false
             }
             if (!nginxReloadRunner()) {
@@ -1075,15 +1079,10 @@ class NginxService(
         }
 
         return try {
-            val process = ProcessBuilder(
-                "sudo", "-n", "/usr/local/sbin/gatekeeperd-certbot",
-                "remove", domain
-            ).redirectErrorStream(true).start()
-            val output = process.inputStream.bufferedReader().use { it.readText() }
-            val exitCode = process.waitFor()
+            val exitCode = runCertbotHelper("remove", domain)
 
             if (exitCode != 0) {
-                logger.error("Certbot delete failed for domain $domain (exit=$exitCode): $output")
+                logger.error("Certbot delete failed for domain $domain (exit=${exitCode ?: "timeout"})")
                 return false
             }
 

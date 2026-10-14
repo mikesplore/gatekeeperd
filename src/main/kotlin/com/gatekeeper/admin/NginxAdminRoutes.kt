@@ -1018,7 +1018,7 @@ fun Application.configureNginxAdminRoutes() {
                         else -> "active"
                     }
                     CertificateRepository.recordRenewalResult(validatedDomain, expiresAt, status, "Certbot renewal failed")
-                    call.respondError(HttpStatusCode.InternalServerError, "certificate_renewal_failed", "Certificate renewal failed. Check Certbot and nginx service logs.")
+                    call.respondError(HttpStatusCode.InternalServerError, "certificate_renewal_failed", "Certbot renewal failed or exceeded the 8-minute limit. Check Gatekeeperd logs for Certbot output and nginx reload status.")
                     return@post
                 }
 

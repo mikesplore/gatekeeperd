@@ -90,6 +90,8 @@ the requested domain/email and supports only certificate install, renewal, and r
 After deployment, the Certificates page shows whether Certbot management is ready and
 the server-side setup issue if it is not. If a server was deployed before the helper was
 included in CI artifacts, copy the latest `deploy.sh` to the VPS and run it again.
+The Gatekeeperd reverse proxy must allow a 10-minute `proxy_read_timeout` for certificate
+renewal requests; update the existing site config and reload nginx after changing it.
 
 ### Build artifact sources
 

@@ -816,6 +816,8 @@ Remove an SSL certificate for a domain.
 ### POST /api/admin/nginx/certificate/renew/{domain}
 Check and renew an installed certificate with Certbot. Certbot renews only when the certificate enters its renewal window; this does not force a new issuance. Nginx is reloaded after a successful Certbot check.
 
+Renewal runs synchronously and can take several minutes. The reverse proxy should allow at least a 10-minute read timeout. Certbot output is streamed into the Gatekeeperd service journal while the command runs, and the helper stops after 8 minutes if it does not finish.
+
 Returns `{ "domain": "example.com", "renewed": true, "certificateExpiresAt": "2026-10-22T00:00:00Z", "certificateDaysRemaining": 29, "message": "Certificate renewed successfully" }`. `renewed` is false when Certbot succeeds but the certificate is not due yet.
 
 ### GET /api/admin/nginx/certificate/status/{domain}

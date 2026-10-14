@@ -51,8 +51,9 @@ server {
         
         # Timeouts
         proxy_connect_timeout 60s;
-        proxy_send_timeout 60s;
-        proxy_read_timeout 60s;
+        proxy_send_timeout 600s;
+        # Certificate renewal can take several minutes while Let's Encrypt validates the domain.
+        proxy_read_timeout 600s;
     }
 }
 ```
