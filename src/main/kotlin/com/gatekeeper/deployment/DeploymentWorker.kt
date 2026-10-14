@@ -149,8 +149,21 @@ object DeploymentWorker {
                 if (!routeRestored) {
                     DeploymentApplicationService.updateCutoverState(job.id, "repair_required", "Gateway restoration failed after cutover error")
                     logger.error("Deployment {} failed after gateway cutover; candidate retained because gateway restoration failed", job.id)
+                    update(
+                        job,
+                        step = "failed",
+                        log = "Cutover failed and the previous gateway route could not be restored; operator repair is required: ${error.message}",
+                        status = "failed",
+                        error = "Cutover failed and gateway route restoration requires operator repair: ${error.message}"
+                    )
+                } else {
+                    val requeued = DeploymentJobRepository.requeueReadyCutover(
+                        job.id,
+                        requireNotNull(job.claimToken),
+                        error.message ?: "Cutover failed"
+                    )
+                    if (!requeued) logger.warn("Deployment {} cutover retry was not queued because its claim changed", job.id)
                 }
-                update(job, step = "readiness_succeeded", log = "Cutover attempt failed; ready candidate retained for retry: ${error.message}")
                 AuditRepository.write(null, "deployment_cutover_failed", "deployment-worker", "job=${job.id} error=${error.message}")
             } finally {
                 docker.close()
@@ -343,13 +356,32 @@ object DeploymentWorker {
             if (candidateIsReady && !routeRestored) {
                 DeploymentApplicationService.updateCutoverState(job.id, "repair_required", "Gateway restoration failed after cutover error")
                 logger.error("Deployment {} route rollback failed; candidate remains the routed runtime and cutover requires operator review", job.id)
-                throw error
+                update(
+                    job,
+                    step = "failed",
+                    log = "Cutover failed and the previous gateway route could not be restored; operator repair is required: ${error.message}",
+                    status = "failed",
+                    error = "Cutover failed and gateway route restoration requires operator repair: ${error.message}"
+                )
+                AuditRepository.write(null, "deployment_cutover_failed", "deployment-worker", "job=${job.id} error=${error.message}")
+                return
             }
             if (candidateIsReady) {
-                update(job, step = "readiness_succeeded", log = "Cutover attempt failed; ready candidate retained for retry: ${error.message}")
+                val requeued = DeploymentJobRepository.requeueReadyCutover(
+                    job.id,
+                    requireNotNull(job.claimToken),
+                    error.message ?: "Cutover failed"
+                )
+                if (!requeued) logger.warn("Deployment {} cutover retry was not queued because its claim changed", job.id)
             }
             if (routeRestored && !candidateIsReady) candidateContainerId?.let { id -> removeCandidatePreservingFailure(null, id, error) }
-            else logger.error("Deployment {} failed after gateway cutover; candidate runtime retained because gateway restoration failed", job.id)
+            else if (!routeRestored) logger.error(
+                "Deployment {} failed after gateway cutover; candidate runtime retained because gateway restoration failed",
+                job.id
+            ) else logger.info(
+                "Deployment {} cutover failed; previous route was restored and ready candidate retained for retry",
+                job.id
+            )
             if (!DeploymentJobRepository.isCancelled(job.id) && !candidateIsReady) {
                 AuditRepository.write(null, "deployment_failed", "deployment-worker", "job=${job.id} error=${error.message}")
                 update(job, "failed", error.message ?: "Deployment failed", status = "failed", error = error.message ?: "Deployment failed")

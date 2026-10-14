@@ -1154,9 +1154,14 @@ object DeploymentJobRepository {
         resolveEnvironmentForExecution(executionId).values
 
     fun claimNext(): DeploymentJobRecord? = transaction {
-        val row = DeploymentJobs.selectAll().where { DeploymentJobs.status eq "queued" }
-            .orderBy(DeploymentJobs.createdAt to SortOrder.ASC).limit(1).singleOrNull() ?: return@transaction null
         val now = LocalDateTime.now()
+        val row = DeploymentJobs.selectAll().where { DeploymentJobs.status eq "queued" }
+            .orderBy(DeploymentJobs.createdAt to SortOrder.ASC)
+            .firstOrNull { candidate ->
+                com.gatekeeper.deployment.DeploymentCutoverRetryPolicy.isEligible(
+                    candidate[DeploymentJobs.currentStep], candidate[DeploymentJobs.updatedAt], now
+                )
+            } ?: return@transaction null
         val claimToken = UUID.randomUUID()
         val isReadyForCutover = row[DeploymentJobs.currentStep] in setOf("readiness_succeeded", "cutover_in_progress")
         val claimed = DeploymentJobs.update({
@@ -1171,6 +1176,47 @@ object DeploymentJobRepository {
         if (!isReadyForCutover) DeploymentApplicationService.transition(row[DeploymentJobs.id], DeploymentStatus.BUILDING)
         DeploymentJobs.selectAll().where { DeploymentJobs.id eq row[DeploymentJobs.id] }
             .singleOrNull()?.toRecord(includeSecretEnv = false)
+    }
+
+    /** Requeues a healthy candidate after a recoverable cutover failure, with a short retry cooldown. */
+    fun requeueReadyCutover(id: UUID, claimToken: UUID, reason: String): Boolean = transaction {
+        val current = DeploymentJobs.selectAll().where {
+            (DeploymentJobs.id eq id) and (DeploymentJobs.status eq "running") and
+                (DeploymentJobs.claimToken eq claimToken)
+        }.singleOrNull() ?: return@transaction false
+        if (current[DeploymentJobs.currentStep] !in setOf("readiness_succeeded", "cutover_in_progress")) {
+            return@transaction false
+        }
+        val deploymentSecrets = runCatching { resolveEnvironmentForExecution(id).values.values }.getOrElse {
+            current[DeploymentJobs.secretEnvEncrypted]?.let { encoded ->
+                Json.decodeFromString<Map<String, String>>(SecretValueCipher.decrypt(encoded)).values
+            }.orEmpty()
+        }
+        val safeReason = SecretValueCipher.redact(reason, deploymentSecrets)
+        val now = LocalDateTime.now()
+        val changed = DeploymentJobs.update({
+            (DeploymentJobs.id eq id) and (DeploymentJobs.status eq "running") and
+                (DeploymentJobs.claimToken eq claimToken)
+        }) {
+            it[status] = "queued"
+            it[currentStep] = "readiness_succeeded"
+            it[errorMessage] = safeReason
+            it[logs] = current[DeploymentJobs.logs] + "Cutover attempt failed; ready candidate retained for retry: $safeReason\n"
+            it[DeploymentJobs.claimToken] = null
+            it[updatedAt] = now
+        }
+        if (changed == 0) return@transaction false
+        DeploymentExecutions.update({ DeploymentExecutions.id eq id }) {
+            it[status] = "queued"
+            it[currentStep] = "readiness_succeeded"
+            it[errorMessage] = safeReason
+            it[logs] = (DeploymentExecutions.selectAll().where { DeploymentExecutions.id eq id }
+                .singleOrNull()?.get(DeploymentExecutions.logs).orEmpty()) +
+                "Cutover attempt failed; ready candidate retained for retry: $safeReason\n"
+            it[updatedAt] = now
+        }
+        DeploymentApplicationService.transition(id, DeploymentStatus.READY, failureReason = safeReason)
+        true
     }
 
     fun requeueInterruptedCutover(id: UUID): Boolean = transaction {
