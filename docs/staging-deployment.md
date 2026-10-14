@@ -66,7 +66,10 @@ chmod +x deploy.sh
 
 The script downloads from a specific workflow run, checks the JAR and Certbot helper
 SHA-256 values, installs the jar and helper, prints the full source commit, saves it to
-`/opt/gatekeeperd/source-commit.txt`, and restarts the systemd service. It also detects
+`/opt/gatekeeperd/source-commit.txt`, and restarts the systemd service. It restores the
+previous JAR and commit marker if restart or health verification fails. A JAR-only
+update does not run `systemctl daemon-reload` because the service unit has not changed.
+It also detects
 the service account and configures a validated, restricted sudoers entry for the
 root-owned Certbot helper. The printed commit identifies the exact CI artifact installed.
 
@@ -115,8 +118,10 @@ and enables a systemd timer. It checks GitHub every five minutes for the newest
 successful `build.yml` run on `main`. When that run's commit differs from
 `/opt/gatekeeperd/source-commit.txt`, it deploys that exact workflow run, verifies
 the JAR and helper checksums, restarts Gatekeeperd, and confirms the liveness
-endpoint responds. A failed deployment restores the previous JAR; the same failed
-commit is then held back until a newer successful build appears.
+endpoint responds. A failed restart or health check restores the previous JAR. A
+systemd reload failure while installing the separate auto-deploy timer is reported
+as a warning and does not mark a healthy application deployment as failed. A failed
+application commit is held back until a newer successful build appears.
 
 The timer needs no inbound port or GitHub webhook. It runs on the VPS and uses the
 GitHub CLI credentials already configured there. The first rollout requires one

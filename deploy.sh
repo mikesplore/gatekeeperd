@@ -168,19 +168,37 @@ PREVIOUS_COMMIT="$(sudo cat "${TARGET_DIR}/source-commit.txt" 2>/dev/null || tru
 if sudo test -f "${JAR_PATH}"; then
   sudo cp "${JAR_PATH}" "${PREVIOUS_JAR}"
 fi
+
+restore_previous_jar() {
+  if [[ ! -f "${PREVIOUS_JAR}" ]]; then
+    echo "Error: No previous JAR backup is available; leaving the current service process untouched." >&2
+    return 1
+  fi
+
+  sudo install -o root -g root -m 0755 "${PREVIOUS_JAR}" "${JAR_PATH}"
+  if [[ -n "${PREVIOUS_COMMIT}" ]]; then
+    printf '%s\n' "${PREVIOUS_COMMIT}" | sudo tee "${TARGET_DIR}/source-commit.txt" >/dev/null
+  else
+    sudo rm -f "${TARGET_DIR}/source-commit.txt"
+  fi
+}
+
+restart_previous_service() {
+  if restore_previous_jar; then
+    if ! sudo systemctl restart "${SERVICE_NAME}"; then
+      echo "Error: Previous JAR was restored, but ${SERVICE_NAME} could not be restarted." >&2
+    fi
+  fi
+}
+
 sudo install -o root -g root -m 0755 "${DOWNLOADED_JAR}" "${JAR_PATH}"
 echo "==> Installed ${JAR_PATH}"
 echo "==> JAR SHA-256: ${ACTUAL_SHA}"
 
-echo "==> Reloading systemd and restarting ${SERVICE_NAME}..."
-sudo systemctl daemon-reload
+echo "==> Restarting ${SERVICE_NAME}..."
 if ! sudo systemctl restart "${SERVICE_NAME}"; then
   echo "Error: ${SERVICE_NAME} did not restart; restoring the previous JAR." >&2
-  if [[ -f "${PREVIOUS_JAR}" ]]; then
-    sudo install -o root -g root -m 0755 "${PREVIOUS_JAR}" "${JAR_PATH}"
-    [[ -z "${PREVIOUS_COMMIT}" ]] || printf '%s\n' "${PREVIOUS_COMMIT}" | sudo tee "${TARGET_DIR}/source-commit.txt" >/dev/null
-    sudo systemctl restart "${SERVICE_NAME}" || true
-  fi
+  restart_previous_service
   exit 1
 fi
 
@@ -193,15 +211,15 @@ if command -v curl >/dev/null 2>&1; then
   done
   if [[ "${HEALTHY}" != true ]]; then
     echo "Error: Gatekeeperd did not become healthy at ${HEALTH_URL}; restoring the previous JAR." >&2
-    if [[ -f "${PREVIOUS_JAR}" ]]; then
-      sudo install -o root -g root -m 0755 "${PREVIOUS_JAR}" "${JAR_PATH}"
-      [[ -z "${PREVIOUS_COMMIT}" ]] || printf '%s\n' "${PREVIOUS_COMMIT}" | sudo tee "${TARGET_DIR}/source-commit.txt" >/dev/null
-      sudo systemctl restart "${SERVICE_NAME}" || true
-    fi
+    restart_previous_service
     exit 1
   fi
 else
-  sudo systemctl is-active --quiet "${SERVICE_NAME}" || { echo "Error: ${SERVICE_NAME} is not active after restart." >&2; exit 1; }
+  if ! sudo systemctl is-active --quiet "${SERVICE_NAME}"; then
+    echo "Error: ${SERVICE_NAME} is not active after restart; restoring the previous JAR." >&2
+    restart_previous_service
+    exit 1
+  fi
 fi
 
 printf '%s\n' "${COMMIT_SHA}" | sudo tee "${TARGET_DIR}/source-commit.txt" >/dev/null
@@ -225,9 +243,15 @@ if [[ "${GH_CONFIG_DIR_VALUE}" != *[$'\n\r ']* ]] && sudo env "GH_CONFIG_DIR=${G
   sudo install -d -o root -g root -m 0755 /etc/gatekeeperd
   printf 'GH_CONFIG_DIR=%s\n' "${GH_CONFIG_DIR_VALUE}" >"${TMP_DIR}/auto-deploy.env"
   sudo install -o root -g root -m 0600 "${TMP_DIR}/auto-deploy.env" /etc/gatekeeperd/auto-deploy.env
-  sudo systemctl daemon-reload
-  sudo systemctl enable --now gatekeeperd-auto-deploy.timer
-  echo "==> Automatic deployment enabled; successful main builds are checked every five minutes."
+  if sudo systemctl daemon-reload; then
+    if sudo systemctl enable --now gatekeeperd-auto-deploy.timer; then
+      echo "==> Automatic deployment enabled; successful main builds are checked every five minutes."
+    else
+      echo "Warning: Gatekeeperd was deployed, but the automatic deployment timer could not be enabled. Run 'sudo systemctl enable --now gatekeeperd-auto-deploy.timer' after resolving the systemd issue." >&2
+    fi
+  else
+    echo "Warning: Gatekeeperd was deployed, but systemd could not reload the automatic deployment timer unit. The application deployment succeeded; resolve systemd and run 'sudo systemctl daemon-reload && sudo systemctl enable --now gatekeeperd-auto-deploy.timer'." >&2
+  fi
 else
   echo "Warning: Automatic deployment was not enabled because root cannot use the current gh authentication. Configure /etc/gatekeeperd/auto-deploy.env with a readable GH_CONFIG_DIR and run: sudo systemctl enable --now gatekeeperd-auto-deploy.timer" >&2
 fi
