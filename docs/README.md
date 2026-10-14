@@ -231,6 +231,7 @@ Gatekeeperd persists Scribed suspension and payment notifications in the Postgre
 | `DOCKER_SOCKET` | No | Default `unix:///var/run/docker.sock` |
 | `DEPLOYMENT_HOST_PORT_RANGE` | No | Stable host-port pool for managed blue/green deployments; default `32000-40000`. Reserve the range for Gatekeeperd on the Docker host. |
 | `DEPLOYMENT_DRAIN_DELAY_SECONDS` | No | Delay before retiring the previous runtime after a successful nginx cutover probe; default `5`, range `0-300`. |
+| `NGINX_DEPLOYMENT_UPSTREAMS_ENABLED` | No | Run the strict nginx include directory/configuration bootstrap; defaults to `true`. Set `false` only for local development without nginx. |
 | `NGINX_UPSTREAM_INCLUDE_DIR` | No | Writable per-service upstream include directory; default `/etc/nginx/conf.d/gatekeeperd-upstreams`. Nginx must include `<directory>/*.conf` inside `http {}`. |
 | `GATEKEEPER_INTERNAL_NETWORK` | No | Default `gatekeeper-internal` |
 | `DEFAULT_GRACE_PERIOD_DAYS` | No | Default `3` |

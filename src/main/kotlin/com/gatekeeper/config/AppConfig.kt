@@ -126,6 +126,10 @@ object AppConfig {
         .split(",").map { it.trim() }.filter { it.isNotBlank() }
 
     // Nginx
+    val nginxDeploymentUpstreamsEnabled: Boolean = optionalSetting("NGINX_DEPLOYMENT_UPSTREAMS_ENABLED", "true")
+        .trim()
+        .lowercase()
+        .let { it == "true" || it == "1" || it == "yes" }
     val nginxSitesAvailablePath: String = optionalSetting("NGINX_SITES_AVAILABLE", "/etc/nginx/sites-available")
     val nginxSitesEnabledPath: String = optionalSetting("NGINX_SITES_ENABLED", "/etc/nginx/sites-enabled")
     val nginxUpstreamIncludeDirectory: String = optionalSetting("NGINX_UPSTREAM_INCLUDE_DIR", "/etc/nginx/conf.d/gatekeeperd-upstreams")

@@ -122,7 +122,12 @@ fun Application.module() {
     configureSerialization()
     configureMonitoring()
     configureDatabase()
-    NginxService.configured().bootstrapDeploymentUpstreams()
+    if (AppConfig.nginxDeploymentUpstreamsEnabled) {
+        NginxService.configured().bootstrapDeploymentUpstreams()
+    } else {
+        org.slf4j.LoggerFactory.getLogger("com.gatekeeper.Application")
+            .warn("Nginx deployment upstream bootstrap is disabled; deployment cutovers require nginx configuration")
+    }
     configureRedis()
     configureDependencyInjection()
     configureSecurity()
