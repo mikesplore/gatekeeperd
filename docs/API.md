@@ -1056,6 +1056,9 @@ List all Docker containers.
 ### GET /api/admin/containers/{name}
 Get details for a single container by name or ID prefix.
 
+### GET /api/admin/containers/{name}/credentials
+Return only the standard PostgreSQL or Redis preset connection fields for a container, including its configured credentials and available Docker-host/network addresses. This JWT-protected endpoint does not return arbitrary environment variables. Redis containers without password authentication return a null password.
+
 ### POST /api/admin/containers/{name}/start
 Start a stopped container.
 

@@ -93,6 +93,55 @@ class DockerService(dockerSocketPath: String) {
         }
     }
 
+    /** Returns only the standard database/Redis preset credentials, never arbitrary container env. */
+    fun getContainerPresetCredentials(containerNameOrId: String): ContainerPresetCredentialsResponse? = try {
+        val listed = client.listContainersCmd().withShowAll(true).exec().firstOrNull { container ->
+            container.id.startsWith(containerNameOrId) || container.names.orEmpty().any { it.removePrefix("/") == containerNameOrId }
+        } ?: return null
+        val inspected = client.inspectContainerCmd(listed.id).exec()
+        val config = inspected.config ?: return null
+        val env = config.env.orEmpty().mapNotNull { entry ->
+            val separator = entry.indexOf('=')
+            if (separator <= 0) null else entry.substring(0, separator) to entry.substring(separator + 1)
+        }.toMap()
+        val command = config.cmd.orEmpty().toList() + config.entrypoint.orEmpty().toList()
+        val image = config.image.orEmpty().lowercase()
+        val presetLabel = config.labels.orEmpty()["com.gatekeeperd.container-preset"]
+        val isPostgres = presetLabel == "postgres" ||
+            (env.containsKey("POSTGRES_USER") && env.containsKey("POSTGRES_DB"))
+        val isRedis = presetLabel == "redis" ||
+            (image.substringAfterLast('/').startsWith("redis") || command.any { it == "redis-server" })
+        if (!isPostgres && !isRedis) return null
+
+        val containerPort = if (isPostgres) 5432 else 6379
+        val hostPort = inspected.networkSettings?.ports?.bindings
+            ?.get(ExposedPort.tcp(containerPort))
+            ?.firstOrNull()
+            ?.hostPortSpec
+            ?.toIntOrNull()
+        val containerName = listed.names?.firstOrNull()?.removePrefix("/") ?: listed.id.take(12)
+        val networkNames = inspected.networkSettings?.networks?.keys.orEmpty()
+        val internalDnsAvailable = networkNames.any { it != "bridge" }
+        val password = if (isPostgres) env["POSTGRES_PASSWORD"] else {
+            val requirePassIndex = command.indexOf("--requirepass")
+            command.getOrNull(requirePassIndex + 1)
+                ?: command.firstOrNull { it.startsWith("--requirepass=") }?.substringAfter('=')
+        }
+        ContainerPresetCredentialsResponse(
+            preset = if (isPostgres) "postgres" else "redis",
+            database = if (isPostgres) env["POSTGRES_DB"] ?: "postgres" else null,
+            username = if (isPostgres) env["POSTGRES_USER"] ?: "postgres" else "default",
+            password = password,
+            hostPort = hostPort,
+            internalAddress = "$containerName:$containerPort",
+            internalDnsAvailable = internalDnsAvailable,
+            hostAddress = hostPort?.let { "127.0.0.1:$it" }
+        )
+    } catch (e: Exception) {
+        logger.warn("Unable to read preset credentials for container {}", containerNameOrId, e)
+        null
+    }
+
     private fun inspectContainer(containerNameOrId: String): ContainerInfo? {
         val container = client.listContainersCmd()
             .withShowAll(true)
@@ -613,6 +662,9 @@ class DockerService(dockerSocketPath: String) {
             .withEnv(envVars)
             .withHostConfig(hostConfig)
             .withExposedPorts(exposedPorts)
+        request.preset?.takeIf { it == "postgres" || it == "redis" }?.let { preset ->
+            createCommand.withLabels(mapOf("com.gatekeeperd.container-preset" to preset))
+        }
         request.runtimeOptions.command?.let { createCommand.withCmd(*it.toTypedArray()) }
         request.runtimeOptions.entrypoint?.let { createCommand.withEntrypoint(*it.toTypedArray()) }
         request.runtimeOptions.workingDirectory?.let(createCommand::withWorkingDir)

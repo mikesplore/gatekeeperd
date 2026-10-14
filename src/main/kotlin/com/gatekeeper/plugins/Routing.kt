@@ -6,6 +6,7 @@ import com.gatekeeper.docker.DockerService
 import com.gatekeeper.docker.PullImageRequest
 import com.gatekeeper.docker.ContainersListResponse
 import com.gatekeeper.docker.ContainerLogsResponse
+import com.gatekeeper.docker.ContainerPresetCredentialsResponse
 import com.gatekeeper.docker.CreateNetworkRequest
 import com.gatekeeper.docker.NetworkPage
 import com.gatekeeper.docker.VolumePage
@@ -127,6 +128,17 @@ fun Application.configureRouting() {
                 } else {
                     call.respondError(HttpStatusCode.NotFound, "container_not_found", "Container not found")
                 }
+            }
+
+            get("/api/admin/containers/{name}/credentials") {
+                if (dockerService == null) {
+                    call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available")
+                    return@get
+                }
+                val name = call.requireContainerName() ?: return@get
+                val credentials = dockerService.getContainerPresetCredentials(name)
+                if (credentials != null) call.respond(credentials)
+                else call.respondError(HttpStatusCode.NotFound, "preset_credentials_not_found", "No supported database or Redis preset credentials were found for this container")
             }
 
             get("/api/admin/containers/{name}/logs") {

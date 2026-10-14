@@ -31,6 +31,19 @@ data class ContainerInfo(
 @Serializable
 data class ContainerLogsResponse(val container: String, val tail: Int, val logs: String)
 
+/** Preset connection details only; generic container environment values remain hidden. */
+@Serializable
+data class ContainerPresetCredentialsResponse(
+    val preset: String,
+    val database: String? = null,
+    val username: String? = null,
+    val password: String? = null,
+    val hostPort: Int? = null,
+    val internalAddress: String,
+    val internalDnsAvailable: Boolean,
+    val hostAddress: String? = null
+)
+
 @Serializable
 data class ContainersListResponse(
     val containers: List<ContainerInfo>,
