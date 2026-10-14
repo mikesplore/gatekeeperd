@@ -155,6 +155,51 @@ class NginxServiceTest {
     }
 
     @Test
+    fun `custom location blocks stay gated and core blocks cannot be edited`() {
+        val root = Files.createTempDirectory("gk-custom-locations").toFile()
+        val available = File(root, "available").apply { mkdirs() }
+        val enabled = File(root, "enabled").apply { mkdirs() }
+        val svc = NginxService(available.absolutePath, enabled.absolutePath, 8080, root.absolutePath)
+        val custom = NginxCustomLocation(UUID.randomUUID().toString(), "/socket.io/", "proxy_http_version 1.1;\nproxy_set_header Upgrade \$http_upgrade;\nproxy_set_header Connection \"upgrade\";")
+        svc.validateCustomLocations(listOf(custom))
+        val config = svc.generateNginxConfig(
+            slug = "acw", domain = "acw.example.com", appPort = 3000, upstreamScheme = "http",
+            sslEnabled = false, customNginxLocations = listOf(custom)
+        )
+        assertContains(config, "location /socket.io/ {")
+        assertContains(config, "proxy_pass http://127.0.0.1:3000;")
+        assertContains(config, "auth_request /gatekeeper-auth-acw;")
+        assertContains(config, "error_page 403 = @gatekeeper_paywall_acw;")
+        assertTrue(config.indexOf("location /socket.io/") < config.indexOf("location / {"))
+        File(available, "acw").writeText(config)
+        val blocks = svc.inspectSite("acw").blocks
+        assertEquals(1, blocks.count { it.type == "custom" })
+        assertFailsWith<IllegalArgumentException> { svc.previewBlockUpdate("acw", blocks.indexOfFirst { it.type == "auth_request" }, "") }
+        assertFailsWith<IllegalArgumentException> { svc.validateCustomLocations(listOf(custom.copy(path = "/"))) }
+        assertFailsWith<IllegalArgumentException> { svc.validateCustomLocations(listOf(custom.copy(directives = "auth_request off;"))) }
+        assertFailsWith<IllegalArgumentException> { svc.validateCustomLocations(listOf(custom.copy(directives = "proxy_pass http://evil.example;"))) }
+
+        val managedConfig = svc.generateNginxConfig(NginxSiteRenderModel(
+            slug = "acw", serviceId = UUID.fromString("123e4567-e89b-12d3-a456-426614174000"),
+            domain = "acw.example.com", appPort = 3000, upstreamScheme = "http",
+            tlsMode = TlsRenderMode.HTTP_ONLY, upstreamKind = "DEPLOYMENT_MANAGED",
+            customNginxLocations = listOf(custom)
+        ))
+        assertContains(managedConfig, "proxy_pass http://gk_123e4567e89b12d3a456426614174000;")
+    }
+
+    @Test
+    fun `rollback rejects backups that omit protected gate routes`() {
+        val root = Files.createTempDirectory("gk-protected-rollback").toFile()
+        val available = File(root, "available").apply { mkdirs() }
+        val enabled = File(root, "enabled").apply { mkdirs() }
+        val svc = NginxService(available.absolutePath, enabled.absolutePath, 8080, root.absolutePath)
+        File(available, "acw").writeText("current")
+        File(available, "acw.bak-1").writeText("server { listen 80; }\n")
+        assertFailsWith<IllegalArgumentException> { svc.rollback("acw", "acw.bak-1") }
+    }
+
+    @Test
     fun `rejects invalid upstream scheme`() {
         assertFailsWith<IllegalArgumentException> {
             service.generateNginxConfig(

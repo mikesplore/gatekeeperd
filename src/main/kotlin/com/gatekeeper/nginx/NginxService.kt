@@ -118,6 +118,7 @@ class NginxService(
             isSymlink = Files.isSymbolicLink(enabledFile.toPath()),
             content = content,
             blocks = content?.let(::extractBlocks).orEmpty(),
+            customLocations = runCatching { SiteRepository.findByProjectSlug(slug)?.customNginxLocations.orEmpty() }.getOrDefault(emptyList()),
             modifiedAt = availableFile.takeIf { it.exists() }?.let { Instant.ofEpochMilli(it.lastModified()).toString() },
             sizeBytes = availableFile.takeIf { it.exists() }?.length()
             ,managed = content?.contains("# gatekeeperd:block:") == true,
@@ -489,15 +490,39 @@ class NginxService(
         return nginxTestRunner()
     }
 
+    @Suppress("UNUSED_PARAMETER")
     fun previewBlockUpdate(slug: String, blockIndex: Int, replacement: String): String {
         val current = inspectSite(slug)
         require(current.available) { "Nginx site '$slug' does not exist" }
         require(!current.manual) { "Nginx site '$slug' is manual/unmanaged; edit the file directly. Gatekeeperd will only detect drift." }
         require(blockIndex in current.blocks.indices) { "Block index $blockIndex is out of range" }
-        val block = current.blocks[blockIndex]
-        val start = current.content!!.indexOf(block.content)
-        require(start >= 0) { "Could not locate selected block in the live configuration" }
-        return current.content.replaceRange(start, start + block.content.length, replacement)
+        throw IllegalArgumentException("Managed Nginx blocks are read-only. Add or remove custom location blocks through the custom locations API.")
+    }
+
+    fun validateCustomLocations(locations: List<NginxCustomLocation>) {
+        require(locations.size <= 20) { "A site can have at most 20 custom location blocks" }
+        locations.forEach(::validateCustomLocation)
+        require(locations.map { it.path.lowercase() }.distinct().size == locations.size) { "Custom location paths must be unique" }
+    }
+
+    private fun validateCustomLocation(location: NginxCustomLocation) {
+        require(location.id.matches(Regex("[a-f0-9-]{36}"))) { "Invalid custom location ID" }
+        require(location.path.matches(Regex("/(?:[A-Za-z0-9._~-]+/?)+")) &&
+            location.path.split('/').none { it == "." || it == ".." }) {
+            "Location path must be a literal URI prefix such as /socket.io/"
+        }
+        require(location.path != "/") { "The root location is reserved for the application route" }
+        val reserved = listOf("/api/gate", "/api/paystack", "/api/mpesa", "/gatekeeper-auth-", "/.well-known/gatekeeperd-cutover-probe")
+        require(reserved.none { location.path.startsWith(it, ignoreCase = true) }) { "This path is reserved for Gatekeeper routes" }
+        require(location.directives.isNotBlank() && location.directives.length <= 16_000) { "Add directives (maximum 16,000 characters)" }
+        val forbidden = Regex("(?im)^\\s*(?:location|server|listen|include|auth_request|error_page|satisfy|allow|deny|return|rewrite|try_files|internal)\\b")
+        require(!forbidden.containsMatchIn(location.directives)) { "Custom locations cannot define nested routes or override Gatekeeper access control" }
+        require(!location.directives.contains('{') && !location.directives.contains('}')) { "Nested nginx blocks are not supported in custom locations" }
+        require(location.directives.lineSequence().all { it.isBlank() || it.trimEnd().endsWith(';') }) { "Each directive must end with a semicolon" }
+        val proxyPasses = location.directives.lineSequence().filter { it.trimStart().matches(Regex("^proxy_pass(?:\\s|$).*")) }
+        require(proxyPasses.none()) {
+            "The application upstream is added automatically; custom proxy_pass directives are not allowed"
+        }
     }
 
     fun applyBlockUpdate(slug: String, blockIndex: Int, replacement: String): NginxBlockUpdateResponse =
@@ -545,6 +570,7 @@ class NginxService(
         require(!isExcluded(target, enabledFile) && !selfDomainExclusion.excludesFile(backup)) {
             "This nginx config serves Gatekeeperd and is excluded from site management"
         }
+        validateProtectedGateBlocks(slug, backup.readText())
         val stagedFile = File(sitesAvailablePath, ".${slug}.staged")
         Files.copy(backup.toPath(), stagedFile.toPath(), StandardCopyOption.REPLACE_EXISTING)
         val validation = testNginxConfigWithStagedSite(slug, stagedFile)
@@ -579,6 +605,18 @@ class NginxService(
         }
         recordManagedVersion(slug, target.readText())
         return NginxRollbackResponse(true, "Configuration rolled back and Nginx reloaded successfully", validation, true)
+    }
+
+    private fun validateProtectedGateBlocks(slug: String, config: String) {
+        val gateEnabled = runCatching { SiteRepository.findByProjectSlug(slug)?.gateEnabled }.getOrNull() ?: true
+        if (!gateEnabled) return
+        require("# gatekeeperd:block:auth_request" in config && "# gatekeeperd:block:paywall" in config) {
+            "This backup is missing Gatekeeper's protected auth or paywall block"
+        }
+        require(Regex("(?m)^\\s*auth_request /gatekeeper-auth-${Regex.escape(slug)};\\s*$").containsMatchIn(config) &&
+            Regex("(?m)^\\s*error_page 403 = @gatekeeper_paywall_${Regex.escape(slug)};\\s*$").containsMatchIn(config)) {
+            "This backup does not preserve Gatekeeper's auth and paywall directives"
+        }
     }
 
     fun certificateExpiry(domain: String): Pair<String, Long>? {
@@ -630,7 +668,8 @@ class NginxService(
         projectId = site.projectId,
         serviceId = site.serviceId,
         siteId = site.siteId,
-        upstreamKind = site.upstreamKind
+        upstreamKind = site.upstreamKind,
+        customNginxLocations = site.customNginxLocations
     )
 
     fun generateNginxConfig(
@@ -648,7 +687,8 @@ class NginxService(
         projectId: java.util.UUID? = null,
         serviceId: java.util.UUID? = null,
         siteId: java.util.UUID? = null,
-        upstreamKind: String? = null
+        upstreamKind: String? = null,
+        customNginxLocations: List<NginxCustomLocation> = emptyList()
     ): String {
         requireValidHostname(domain)
         val effectiveSslCert = sslCertificatePath?.let { requireCertificatePath(it, sslCertPath) }
@@ -718,6 +758,24 @@ class NginxService(
                 appendLine("        proxy_set_header X-Real-IP \$remote_addr;")
                 appendLine("        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;")
                 appendLine("        proxy_set_header X-Forwarded-Proto \$scheme;")
+                appendLine("    }")
+                appendLine()
+            }
+
+            customNginxLocations.forEach { location ->
+                validateCustomLocation(location)
+                appendLine("    # gatekeeperd:block:custom")
+                appendLine("    location ${location.path} {")
+                if (gateEnabled) {
+                    appendLine("        auth_request /gatekeeper-auth-$slug;")
+                    appendLine("        error_page 403 = @gatekeeper_paywall_$slug;")
+                }
+                appendLine("        proxy_pass $proxyTarget;")
+                location.directives.lineSequence().forEach { line ->
+                    if (line.isNotBlank()) {
+                        appendLine("        ${line.trim()}")
+                    }
+                }
                 appendLine("    }")
                 appendLine()
             }
@@ -957,7 +1015,8 @@ class NginxService(
             upstreamMode = UpstreamMode.EXPLICIT_PORT,
             certMode = site.certMode,
             gateEnabled = site.gateEnabled,
-            bypassPaths = site.bypassPaths
+            bypassPaths = site.bypassPaths,
+            customNginxLocations = site.customNginxLocations
         )
         val config = generateNginxConfig(model)
         if (!enableProject(slug, config)) return false
@@ -993,7 +1052,8 @@ class NginxService(
                     TlsMode.HTTPS_HTTP2 -> TlsRenderMode.HTTPS_HTTP2
                 }, certificatePath = certificate?.certificatePath, certificateKeyPath = certificate?.privateKeyPath,
                 upstreamMode = site.upstreamMode, certMode = site.certMode, gateEnabled = site.gateEnabled,
-                bypassPaths = site.bypassPaths, upstreamKind = "DEPLOYMENT_MANAGED"
+                bypassPaths = site.bypassPaths, upstreamKind = "DEPLOYMENT_MANAGED",
+                customNginxLocations = site.customNginxLocations
             )
             try {
                 includes.write(serviceId, target)

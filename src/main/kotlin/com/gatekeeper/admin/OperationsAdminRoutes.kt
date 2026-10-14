@@ -291,7 +291,8 @@ fun Application.configureOperationsAdminRoutes() {
                     }, certificatePath = cert?.certificatePath ?: updated.certExplicitPath, certificateKeyPath = cert?.privateKeyPath,
                     upstreamMode = updated.upstreamMode,
                     certMode = updated.certMode,
-                    gateEnabled = updated.gateEnabled, bypassPaths = updated.bypassPaths
+                    gateEnabled = updated.gateEnabled, bypassPaths = updated.bypassPaths,
+                    customNginxLocations = updated.customNginxLocations
                 ))
                 val siteSlug = updated.projectSlug ?: slug
                 val conflicts = runCatching { nginx.findDomainConflicts(config, siteSlug) }.getOrElse { error ->

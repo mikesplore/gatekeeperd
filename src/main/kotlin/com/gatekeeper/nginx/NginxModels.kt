@@ -38,6 +38,7 @@ data class NginxConfigInspection(
     val isSymlink: Boolean,
     val content: String? = null,
     val blocks: List<NginxConfigBlock> = emptyList(),
+    val customLocations: List<NginxCustomLocation> = emptyList(),
     val modifiedAt: String? = null,
     val sizeBytes: Long? = null
     ,val managed: Boolean = false,
@@ -116,6 +117,15 @@ data class NginxConfigBlock(
     val header: String,
     val content: String
 )
+
+@Serializable
+data class NginxCustomLocation(val id: String, val path: String, val directives: String)
+
+@Serializable
+data class NginxCustomLocationRequest(val path: String, val directives: String)
+
+@Serializable
+data class NginxCustomLocationResponse(val success: Boolean, val message: String, val locations: List<NginxCustomLocation>)
 
 @Serializable
 data class NginxTestResult(

@@ -16,7 +16,8 @@ data class NginxSiteRenderModel(
     val bypassPaths: List<String> = listOf("/api/gate/", "/api/paystack/", "/api/mpesa/"),
     val serviceId: java.util.UUID? = null,
     val siteId: java.util.UUID? = null,
-    val upstreamKind: String? = null
+    val upstreamKind: String? = null,
+    val customNginxLocations: List<NginxCustomLocation> = emptyList()
 )
 
 val DEFAULT_GATEKEEPER_BYPASS_PATHS = listOf("/api/gate/", "/api/paystack/", "/api/mpesa/")

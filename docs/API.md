@@ -567,11 +567,17 @@ Runs `nginx -t` on the host and returns the exit code, timestamp, validity, and 
 
 `POST /api/admin/nginx/test` performs the same validation on demand.
 
-### Block preview and apply
+### Custom Nginx locations
 
-`POST /api/admin/nginx/config/{slug}/blocks/{index}/preview` returns the complete proposed file without writing it. The request body is `{ "blockIndex": 0, "content": "..." }`.
+`POST /api/admin/nginx/config/{slug}/custom-blocks` adds an application-specific location to an enabled Gatekeeperd-managed site. The request body is `{ "path": "/socket.io/", "directives": "proxy_http_version 1.1;\\nproxy_set_header Upgrade $http_upgrade;" }`. Gatekeeper supplies the site's stable upstream, so custom paths follow deployment cutovers. The response includes the saved custom locations.
 
-`POST /api/admin/nginx/config/{slug}/blocks/{index}/apply` replaces only the selected block, runs `nginx -t`, reloads Nginx, and restores the previous file if validation or reload fails.
+`DELETE /api/admin/nginx/config/{slug}/custom-blocks/{id}` removes a saved custom location. Both operations persist the location in the site record, render a staged site config, run `nginx -t`, atomically activate and reload it, and restore the previous saved config on failure. Custom locations automatically receive Gatekeeper's `auth_request` and paywall handling. Core routes and reserved Gatekeeper paths cannot be overridden. Only literal prefix locations are supported; nested blocks and access-control directives are rejected.
+
+### Managed block preview and apply
+
+The legacy `/blocks/{index}/preview` and `/apply` endpoints are retained as read-only compatibility endpoints and reject edits. Generated server, bypass, upstream, auth, and paywall blocks are protected. Use the custom location endpoints above to add or remove app-specific routing.
+
+Custom locations are stored in `sites.custom_nginx_locations`, so normal site regeneration preserves them. Gatekeeper injects the site's `proxy_pass`, auth, and paywall handling automatically. User directives cannot replace the upstream or alter gate access control.
 
 `GET /api/admin/nginx/config/{slug}/versions` lists available configuration backups. `POST /api/admin/nginx/config/{slug}/rollback/{backup}` restores a selected backup, validates it, reloads Nginx, and restores the current version if anything fails.
 

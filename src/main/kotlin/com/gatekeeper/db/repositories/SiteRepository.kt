@@ -23,6 +23,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import com.gatekeeper.nginx.DEFAULT_GATEKEEPER_BYPASS_PATHS
+import com.gatekeeper.nginx.NginxCustomLocation
 
 object SiteRepository {
     private fun defaultServiceId(projectId: UUID): UUID = Services.selectAll().where {
@@ -53,7 +54,8 @@ object SiteRepository {
         val bypassPaths: List<String> = DEFAULT_GATEKEEPER_BYPASS_PATHS,
         val reconciliationStatus: ReconciliationStatus, val lastNginxError: String?, val lastDockerError: String?, val lastReconciledAt: LocalDateTime?, val projectSlug: String? = null,
         val serviceId: UUID? = null,
-        val upstreamKind: String? = null
+        val upstreamKind: String? = null,
+        val customNginxLocations: List<NginxCustomLocation> = emptyList()
     )
 
     fun findByProjectId(projectId: UUID): SiteRecord? = transaction {
@@ -210,6 +212,7 @@ object SiteRepository {
             it[Sites.certExplicitPath] = model.certificatePath.takeIf { model.certMode == CertMode.EXPLICIT_PATH }
             it[Sites.gateEnabled] = model.gateEnabled
             it[Sites.bypassPaths] = Json.encodeToString(model.bypassPaths)
+            it[Sites.customNginxLocations] = Json.encodeToString(model.customNginxLocations)
         }
         Services.update({ Services.id eq serviceId }) { it[Services.domain] = model.domain }
         findById(id)!!.copy(projectSlug = fileSlug)
@@ -237,6 +240,7 @@ object SiteRepository {
             update.certExplicitPath?.let { value -> it[Sites.certExplicitPath] = value }
             update.gateEnabled?.let { value -> it[Sites.gateEnabled] = value }
             update.bypassPaths?.let { value -> it[Sites.bypassPaths] = Json.encodeToString(value) }
+            update.customNginxLocations?.let { value -> it[Sites.customNginxLocations] = Json.encodeToString(value) }
             it[Sites.configVersion] = currentVersion + 1
             it[Sites.updatedAt] = LocalDateTime.now()
         }
@@ -326,7 +330,8 @@ object SiteRepository {
         val domain: String? = null, val upstreamHost: String? = null, val upstreamMode: UpstreamMode? = null,
         val upstreamExplicitPort: Int? = null,
         val tlsMode: TlsMode? = null, val certMode: CertMode? = null, val certExplicitPath: String? = null,
-        val gateEnabled: Boolean? = null, val bypassPaths: List<String>? = null
+        val gateEnabled: Boolean? = null, val bypassPaths: List<String>? = null,
+        val customNginxLocations: List<NginxCustomLocation>? = null
     )
 
     fun linkCertificateForDomain(domain: String, certificateId: UUID) = transaction {
@@ -345,7 +350,8 @@ object SiteRepository {
         runCatching { Json.decodeFromString<List<String>>(this[Sites.bypassPaths]) }.getOrDefault(DEFAULT_GATEKEEPER_BYPASS_PATHS),
         this[Sites.reconciliationStatus],
         this[Sites.lastNginxError], this[Sites.lastDockerError], this[Sites.lastReconciledAt], projectSlug,
-        this[Sites.serviceId], this[Sites.upstreamKind]
+        this[Sites.serviceId], this[Sites.upstreamKind],
+        runCatching { Json.decodeFromString<List<NginxCustomLocation>>(this[Sites.customNginxLocations]) }.getOrDefault(emptyList())
     )
 }
 

@@ -37,6 +37,7 @@ object Sites : Table("sites") {
     val certExplicitPath = text("cert_explicit_path").nullable()
     val gateEnabled = bool("gate_enabled").default(true)
     val bypassPaths = text("bypass_paths").default("[\"/api/gate/\",\"/api/paystack/\",\"/api/mpesa/\"]")
+    val customNginxLocations = text("custom_nginx_locations").default("[]")
     val configVersion = integer("config_version").default(1)
     val reconciliationStatus = customEnumeration(
         "reconciliation_status",
