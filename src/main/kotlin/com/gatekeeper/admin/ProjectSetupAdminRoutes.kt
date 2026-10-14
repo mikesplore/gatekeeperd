@@ -178,6 +178,13 @@ data class ProjectOverviewDesiredConfiguration(
 )
 
 @Serializable
+data class ProjectOverviewPortMapping(
+    val containerPort: Int,
+    val hostPort: Int,
+    val hostIp: String?
+)
+
+@Serializable
 data class ProjectOverviewCurrentDeployment(
     val id: String?,
     val status: String,
@@ -196,7 +203,8 @@ data class ProjectOverviewCurrentDeployment(
     val credentialSetId: String?,
     val credentialSetVersion: Int?,
     val secretSetId: String?,
-    val secretSetVersion: Int?
+    val secretSetVersion: Int?,
+    val portMappings: List<ProjectOverviewPortMapping> = emptyList()
 )
 
 @Serializable
@@ -702,6 +710,16 @@ fun Application.configureProjectSetupAdminRoutes() {
                 val service = ServiceRepository.findByProjectAndId(project.id, serviceId)
                 val active = DeploymentApplicationService.activeDeploymentSummaryForService(serviceId, "production")
                 val activeRuntime = DeploymentApplicationService.activeRuntime(serviceId, "production")
+                val publishedPorts = activeRuntime?.ports?.takeIf { it.isNotEmpty() } ?: active?.runtimePorts.orEmpty()
+                val portMappings = publishedPorts.toSortedMap().map { (containerPort, hostPort) ->
+                    ProjectOverviewPortMapping(containerPort, hostPort, activeRuntime?.portHostIps?.get(containerPort))
+                }.ifEmpty {
+                    val containerPort = activeRuntime?.containerPort
+                    val hostPort = activeRuntime?.hostPort
+                    if (containerPort != null && hostPort != null) {
+                        listOf(ProjectOverviewPortMapping(containerPort, hostPort, activeRuntime.portHostIps[containerPort]))
+                    } else emptyList()
+                }
                 val publicExposure = com.gatekeeper.deployment.adoptedRuntimeHasPublicBinding(activeRuntime?.triggerSource, activeRuntime?.portHostIps)
                 val dockerHealth = active?.containerName?.let { name ->
                     runCatching {
@@ -725,7 +743,8 @@ fun Application.configureProjectSetupAdminRoutes() {
                         active?.imageDigest, active?.commitSha, dockerHealth,
                         upstream?.host, upstream?.port, publicExposure, active?.credentialSetId?.toString(), active?.credentialSetVersion,
                         active?.secretSetId?.toString(),
-                        active?.secretSetVersion
+                        active?.secretSetVersion,
+                        portMappings = portMappings
                     ),
                     ProjectOverviewGateway(
                         site?.id?.toString(), service?.domain,
