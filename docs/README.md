@@ -145,7 +145,7 @@ Full reference: [API.md](API.md)
 
 ## Frontend wizard flows (recommended)
 
-The admin dashboard should use a **wizard-like flow** for Docker container creation and nginx enablement so that later steps are not attempted when earlier prerequisites fail.
+The admin dashboard uses a wizard-like flow for Docker container creation and nginx enablement so that later steps are not attempted when earlier prerequisites fail. Container creation offers generic, PostgreSQL, and Redis presets. The database presets create persistent named volumes, generate PostgreSQL credentials, and default to the configured internal Docker network. Redis password authentication is optional. Host port mappings are optional; containers sharing that network should connect by container name and service port. Host processes use `127.0.0.1:<published-host-port>` when a host port is explicitly configured.
 
 ### Docker container creation wizard
 

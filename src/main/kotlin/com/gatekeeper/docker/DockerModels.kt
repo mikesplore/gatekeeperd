@@ -118,7 +118,6 @@ data class CreateContainerRequest(
     val portHostIp: String? = null,
     @Transient
     val portHostIps: Map<Int, String> = emptyMap(),
-    @Transient
     val runtimeOptions: ContainerRuntimeOptions = ContainerRuntimeOptions()
 )
 

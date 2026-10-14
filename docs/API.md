@@ -918,6 +918,9 @@ Create and start a new Docker container with custom configuration.
     "DB_HOST": "postgres",
     "API_KEY": "secret123"
   },
+  "runtimeOptions": {
+    "command": ["redis-server", "--appendonly", "yes", "--requirepass", "replace-with-secret"]
+  },
   "network": "gatekeeper-internal",
   "volumes": [
     {
@@ -937,6 +940,7 @@ Create and start a new Docker container with custom configuration.
 - `image` (required): Docker image reference (e.g., `nginx:latest` or `nginx`)
 - `ports` (optional): Map of host ports to container ports (e.g., `{"8080": 80}`)
 - `env` (optional): Environment variables as key-value pairs
+- `runtimeOptions` (optional): Container startup command, entrypoint, working directory, or user. Treat command arguments as secrets when they contain credentials.
 - `network` (optional): Docker network to connect to (default: `"bridge"`)
 - `volumes` (optional): List of volume mounts
 - `restartPolicy` (optional): Docker restart policy (`"no"`, `"always"`, `"unless-stopped"`, `"on-failure"`)
@@ -958,6 +962,7 @@ Create and start a new Docker container with custom configuration.
 - Validates port availability before creating container (returns `409 Conflict` if ports are in use)
 - Container is started immediately after creation
 - Returns full container info including port mappings
+- PostgreSQL and Redis presets use named volumes and the configured internal Docker network. Host ports are optional; publish them only when host-level access is needed.
 
 ### GET /api/admin/containers/wizard/context
 Wizard helper: fetch Docker container-creation context in one request (networks + internal network info).

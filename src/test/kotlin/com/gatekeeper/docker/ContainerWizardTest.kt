@@ -1,6 +1,7 @@
 package com.gatekeeper.docker
 
 import io.ktor.http.HttpStatusCode
+import kotlinx.serialization.json.Json
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -21,6 +22,15 @@ private class FakeDocker(
 class ContainerWizardTest {
 
     private val internalNetwork = "gatekeeper-internal"
+
+    @Test
+    fun `container create request accepts a Redis startup command`() {
+        val request = Json.decodeFromString<CreateContainerRequest>(
+            """{"name":"cache","image":"redis:7-alpine","runtimeOptions":{"command":["redis-server","--requirepass","secret"]}}"""
+        )
+
+        assertEquals(listOf("redis-server", "--requirepass", "secret"), request.runtimeOptions.command)
+    }
 
     @Test
     fun `invalid container name returns invalid_request`() {
