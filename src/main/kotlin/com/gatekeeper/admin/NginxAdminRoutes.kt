@@ -18,7 +18,7 @@ import com.gatekeeper.nginx.DeploymentUpstreamResolver
 import com.gatekeeper.deployment.DeploymentApplicationService
 import com.gatekeeper.nginx.TlsRenderMode
 import com.gatekeeper.nginx.ResolvedCertificate
-import com.gatekeeper.nginx.parsePublishedHostPorts
+import com.gatekeeper.nginx.parsePublishedPorts
 import com.gatekeeper.nginx.requireCertificatePath
 import com.gatekeeper.nginx.requireValidEmail
 import com.gatekeeper.nginx.requireValidHostname
@@ -168,7 +168,7 @@ private fun computeNginxEnablePlan(
     }
 
     val configuredContainerName = activeRuntimeTarget?.containerName?.takeIf(String::isNotBlank)
-    val dockerPublishedHostPorts = run {
+    val dockerPublishedPorts = run {
         if (dockerService == null || configuredContainerName == null) return@run null
         val health = dockerService.containerHealth(configuredContainerName)
         if (health != "running") {
@@ -179,11 +179,19 @@ private fun computeNginxEnablePlan(
             )
         }
         val info = dockerService.getContainer(configuredContainerName)
-        parsePublishedHostPorts(info?.ports.orEmpty())
+        parsePublishedPorts(info?.ports.orEmpty())
     }
+    val dockerPublishedHostPorts = dockerPublishedPorts?.values?.toSet()
 
-    val appPort = explicitPort ?: activeRuntimeTarget?.port?.takeIf { it in 1..65535 }
+    val actualRuntimeHostPort = activeRuntimeTarget?.containerPort?.let { dockerPublishedPorts?.get(it) }
         ?: dockerPublishedHostPorts?.singleOrNull()
+    // Docker's current binding is authoritative when the recorded host port has gone stale,
+    // which can happen if an adopted/recreated container receives a new dynamic host port.
+    val appPort = when {
+        actualRuntimeHostPort != null && (explicitPort == null || explicitPort == activeRuntimeTarget?.port || explicitPort !in dockerPublishedHostPorts.orEmpty()) -> actualRuntimeHostPort
+        explicitPort != null -> explicitPort
+        else -> activeRuntimeTarget?.port?.takeIf { it in 1..65535 } ?: actualRuntimeHostPort
+    }
 
     if (appPort == null) {
         if (dockerPublishedHostPorts != null) {

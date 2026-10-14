@@ -18,7 +18,7 @@ class DeploymentUpstreamResolverTest {
         )
 
         assertEquals(
-            DeploymentUpstreamResolver.Target("127.0.0.1", 49152, "candidate-container"),
+            DeploymentUpstreamResolver.Target("127.0.0.1", 49152, "candidate-container", 8080),
             DeploymentUpstreamResolver.resolve(serviceId, "production", dockerSite, runtime)
         )
     }
@@ -30,7 +30,7 @@ class DeploymentUpstreamResolverTest {
         )
 
         assertEquals(
-            DeploymentUpstreamResolver.Target("127.0.0.1", 32940, "mtaaniwatch-container"),
+            DeploymentUpstreamResolver.Target("127.0.0.1", 32940, "mtaaniwatch-container", 9002),
             DeploymentUpstreamResolver.resolveRuntime(serviceId, "production", runtime)
         )
     }
@@ -42,7 +42,7 @@ class DeploymentUpstreamResolverTest {
         )
 
         assertEquals(
-            DeploymentUpstreamResolver.Target("127.0.0.1", 32923, "ready-service-container"),
+            DeploymentUpstreamResolver.Target("127.0.0.1", 32923, "ready-service-container", 9002),
             DeploymentUpstreamResolver.resolve(serviceId, "production", dockerSite, readyCandidate)
         )
     }
@@ -65,7 +65,7 @@ class DeploymentUpstreamResolverTest {
         )
 
         assertEquals(
-            DeploymentUpstreamResolver.Target("127.0.0.1", 49152, "active-container"),
+            DeploymentUpstreamResolver.Target("127.0.0.1", 49152, "active-container", 8080),
             DeploymentUpstreamResolver.resolve(serviceId, "production", siteAfterCutover, runtime)
         )
     }

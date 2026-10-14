@@ -31,18 +31,30 @@ fun extractConfiguredContainerName(containerName: String): String? {
  * (for example, `32768:9921/tcp`). In both formats, return the published host port.
  */
 fun parsePublishedHostPorts(portsField: String): Set<Int> {
-    if (portsField.isBlank()) return emptySet()
+    return parsePublishedPorts(portsField).values.toSet()
+}
+
+/** Parse host-to-container TCP/UDP port bindings from Docker's compact port field. */
+fun parsePublishedPorts(portsField: String): Map<Int, Int> {
+    if (portsField.isBlank()) return emptyMap()
 
     return portsField
         .split(",")
         .map { it.trim() }
         .mapNotNull { mapping ->
-            val hostPortPart = when {
-                "->" in mapping -> mapping.substringBefore("->").substringAfterLast(":")
-                ":" in mapping -> mapping.substringBefore("/").substringBeforeLast(":").substringAfterLast(":")
-                else -> return@mapNotNull null
+            val binding = mapping.substringBefore("/")
+            val hostAndContainer = if ("->" in binding) {
+                val (host, container) = binding.split("->", limit = 2)
+                host.substringAfterLast(":") to container.substringAfterLast(":")
+            } else {
+                val parts = binding.split(":")
+                if (parts.size < 2) return@mapNotNull null
+                parts[parts.lastIndex - 1] to parts.last()
             }
-            hostPortPart.trim().toIntOrNull()
+            val hostPort = hostAndContainer.first.toIntOrNull() ?: return@mapNotNull null
+            val containerPort = hostAndContainer.second.toIntOrNull() ?: return@mapNotNull null
+            if (hostPort !in 1..65535 || containerPort !in 1..65535) return@mapNotNull null
+            containerPort to hostPort
         }
-        .toSet()
+        .toMap()
 }
