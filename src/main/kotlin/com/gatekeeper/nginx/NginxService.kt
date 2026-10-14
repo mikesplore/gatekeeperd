@@ -59,20 +59,24 @@ data class ResolvedCertificate(
 )
 
 class NginxService(
-    private val sitesAvailablePath: String = AppConfig.nginxSitesAvailablePath,
-    private val sitesEnabledPath: String = AppConfig.nginxSitesEnabledPath,
+    private val sitesAvailablePath: String = "/etc/nginx/sites-available",
+    private val sitesEnabledPath: String = "/etc/nginx/sites-enabled",
     private val gatekeeperPort: Int = 8080,
-    private val sslCertPath: String = AppConfig.nginxSslCertPath,
+    private val sslCertPath: String = "/etc/letsencrypt/live",
     private val nginxTestRunner: () -> NginxTestResult = ::runNginxTestCommand,
     private val nginxReloadRunner: () -> Boolean = ::runNginxReloadCommand,
     private val selfDomainExclusion: NginxSelfDomainExclusion = NginxSelfDomainExclusion(emptyList()),
-    private val upstreamIncludeDirectory: String = AppConfig.nginxUpstreamIncludeDirectory,
+    private val upstreamIncludeDirectory: String = "/etc/nginx/conf.d/gatekeeperd-upstreams",
     private val localProbeRunner: (String, Boolean) -> Boolean = ::probeViaLocalNginx,
     private val nginxConfigDumpRunner: () -> String? = ::dumpNginxConfig
 ) {
     enum class InterruptedCutoverResult { TARGET_RELOADED, PREVIOUS_RESTORED, CONFLICT }
     companion object {
         fun configured(): NginxService = NginxService(
+            sitesAvailablePath = AppConfig.nginxSitesAvailablePath,
+            sitesEnabledPath = AppConfig.nginxSitesEnabledPath,
+            sslCertPath = AppConfig.nginxSslCertPath,
+            upstreamIncludeDirectory = AppConfig.nginxUpstreamIncludeDirectory,
             selfDomainExclusion = NginxSelfDomainExclusion(AppConfig.gatekeeperdSelfDomains)
         )
     }
