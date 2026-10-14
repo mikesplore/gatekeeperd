@@ -121,6 +121,7 @@ fun Application.module() {
 
     configureSerialization()
     configureMonitoring()
+    configureApiDocumentation()
     configureDatabase()
     if (AppConfig.nginxDeploymentUpstreamsEnabled) {
         NginxService.configured().bootstrapDeploymentUpstreams()

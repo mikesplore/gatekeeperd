@@ -2,12 +2,14 @@ package com.gatekeeper
 
 import com.gatekeeper.gate.configureGateRoutes
 import com.gatekeeper.feature.payment.presentation.configurePaymentRoutes
+import com.gatekeeper.plugins.configureApiDocumentation
 import com.gatekeeper.plugins.configureSerialization
 import io.ktor.server.application.install
 import io.ktor.server.auth.Authentication
 import io.ktor.server.auth.authenticate
 import io.ktor.server.auth.bearer
 import io.ktor.client.request.get
+import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.response.respond
 import io.ktor.server.routing.get
@@ -17,6 +19,22 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 
 class ServerTest {
+
+    @Test
+    fun `OpenAPI document and Swagger UI are served`() = testApplication {
+        application {
+            configureApiDocumentation()
+        }
+
+        val specification = client.get("/openapi.yaml")
+        assertEquals(HttpStatusCode.OK, specification.status)
+        kotlin.test.assertTrue(specification.bodyAsText().contains("openapi: 3.0.3"))
+        kotlin.test.assertTrue(specification.bodyAsText().contains("/api/admin/projects"))
+
+        val swagger = client.get("/swagger")
+        assertEquals(HttpStatusCode.OK, swagger.status)
+        kotlin.test.assertTrue(swagger.bodyAsText().contains("SwaggerUIBundle"))
+    }
 
     @Test
     fun `health endpoint returns 200`() = testApplication {

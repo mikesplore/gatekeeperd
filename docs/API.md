@@ -3,6 +3,14 @@
 Base URL: `http://localhost:8080` (development)  
 Content-Type: `application/json` unless noted otherwise
 
+Interactive API reference: [`/swagger`](https://gateapi.mikesplore.me/swagger)
+
+OpenAPI 3.0.3 document: [`/openapi.yaml`](https://gateapi.mikesplore.me/openapi.yaml)
+
+The OpenAPI document covers the main public, authentication, project, service,
+deployment, container, nginx, operations, and webhook flows. This guide remains the
+source for detailed response behavior and endpoint-specific rules.
+
 ---
 
 ## Authentication

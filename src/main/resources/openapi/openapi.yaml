@@ -1,0 +1,804 @@
+openapi: 3.0.3
+info:
+  title: Gatekeeperd API
+  version: 1.0.0
+  description: >-
+    Payment gating, project administration, deployment, container, and gateway API.
+    The full endpoint guide is maintained in docs/API.md. Admin operations require a
+    Gatekeeperd JWT unless explicitly marked public. Gate decisions use 200/403 for
+    nginx auth_request and 200/402 for Traefik ForwardAuth.
+  contact:
+    name: Gatekeeperd
+servers:
+  - url: https://gateapi.mikesplore.me
+    description: Deployed Gatekeeperd API
+  - url: http://localhost:8080
+    description: Local development
+tags:
+  - name: Health
+  - name: Authentication
+  - name: Gate
+  - name: Customer
+  - name: Projects
+  - name: Services and deployments
+  - name: Containers
+  - name: Nginx
+  - name: Operations
+  - name: Webhooks
+security:
+  - BearerAuth: []
+paths:
+  /api/health:
+    get:
+      tags: [Health]
+      summary: Liveness and basic process status
+      security: []
+      responses:
+        '200':
+          description: Process is responding
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+  /api/health/live:
+    get:
+      tags: [Health]
+      summary: Process liveness probe
+      security: []
+      responses:
+        '200':
+          description: Process is alive
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+  /api/health/ready:
+    get:
+      tags: [Health]
+      summary: Dependency readiness probe
+      description: Returns 503 when PostgreSQL, Redis, or migrations are unavailable.
+      security: []
+      responses:
+        '200':
+          description: Dependencies are ready
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Readiness'
+        '503':
+          description: One or more dependencies are unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Readiness'
+  /api/version:
+    get:
+      tags: [Health]
+      summary: Compare running version with latest successful build
+      security: []
+      responses:
+        '200':
+          description: Local deployment version metadata
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VersionStatus'
+  /api/auth/login:
+    post:
+      tags: [Authentication]
+      summary: Sign in and obtain an access token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Login succeeded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          description: Required login storage is unavailable
+  /api/auth/refresh:
+    post:
+      tags: [Authentication]
+      summary: Exchange a refresh token for fresh tokens
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refreshToken]
+              properties:
+                refreshToken:
+                  type: string
+      responses:
+        '200':
+          description: Tokens refreshed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/auth/me:
+    get:
+      tags: [Authentication]
+      summary: Get the current user profile
+      responses:
+        '200':
+          description: Current user profile
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProfile'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    patch:
+      tags: [Authentication]
+      summary: Update the current user profile
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Profile updated
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/gate/check:
+    get:
+      tags: [Gate]
+      summary: Check access for Traefik ForwardAuth
+      description: >-
+        Use for Traefik ForwardAuth. Active access returns 200; blocked or unknown
+        projects return 402. Keep this endpoint on a trusted network.
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectSlug'
+        - $ref: '#/components/parameters/Domain'
+      responses:
+        '200':
+          description: Access is allowed
+        '402':
+          description: Access is blocked or the project is unknown
+        '400':
+          $ref: '#/components/responses/BadRequest'
+  /api/gate/auth:
+    get:
+      tags: [Gate]
+      summary: Check access for nginx auth_request
+      description: Returns 200 when allowed and 403 when blocked. nginx auth_request does not support 402 as a denial status.
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectSlug'
+        - $ref: '#/components/parameters/Domain'
+      responses:
+        '200':
+          description: Access is allowed
+        '403':
+          description: Access is blocked or the project is unknown
+  /api/gate/paywall:
+    get:
+      tags: [Gate]
+      summary: Render the blocked-project paywall
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectSlug'
+        - $ref: '#/components/parameters/Domain'
+      responses:
+        '402':
+          description: HTML paywall content
+          content:
+            text/html:
+              schema:
+                type: string
+  /api/gate/pay:
+    get:
+      tags: [Gate]
+      summary: Start a payment
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectSlug'
+        - name: serviceId
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: amount
+          in: query
+          required: false
+          schema:
+            type: number
+      responses:
+        '302':
+          description: Redirect to the payment provider
+        '400':
+          $ref: '#/components/responses/BadRequest'
+  /api/customer/projects/{slug}/status:
+    get:
+      tags: [Customer]
+      summary: Get customer-safe project status and payment data
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/SlugPath'
+      responses:
+        '200':
+          description: Customer project status
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/customer/projects/{slug}/support:
+    post:
+      tags: [Customer]
+      summary: Submit a customer support request
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/SlugPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, email, message]
+              properties:
+                name:
+                  type: string
+                email:
+                  type: string
+                  format: email
+                message:
+                  type: string
+      responses:
+        '201':
+          description: Support request saved
+        '400':
+          $ref: '#/components/responses/BadRequest'
+  /api/admin/projects:
+    get:
+      tags: [Projects]
+      summary: List projects
+      responses:
+        '200':
+          description: Project list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  additionalProperties: true
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/admin/projects/{slug}:
+    get:
+      tags: [Projects]
+      summary: Get a project and its history
+      parameters:
+        - $ref: '#/components/parameters/SlugPath'
+      responses:
+        '200':
+          description: Project details
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    patch:
+      tags: [Projects]
+      summary: Update project settings
+      parameters:
+        - $ref: '#/components/parameters/SlugPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Project updated
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/admin/projects/{projectId}/services:
+    get:
+      tags: [Services and deployments]
+      summary: List project services
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+      responses:
+        '200':
+          description: Service list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  additionalProperties: true
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      tags: [Services and deployments]
+      summary: Create a project service
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '201':
+          description: Service created
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/admin/projects/{projectId}/services/{serviceId}/runtime:
+    get:
+      tags: [Services and deployments]
+      summary: Get service runtime, including assigned ports
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/ServiceId'
+      responses:
+        '200':
+          description: Runtime details and port assignments
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/admin/projects/{projectId}/services/{serviceId}/environment:
+    get:
+      tags: [Services and deployments]
+      summary: Get service environment configuration
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/ServiceId'
+      responses:
+        '200':
+          description: Effective service environment configuration
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    put:
+      tags: [Services and deployments]
+      summary: Replace service environment configuration
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/ServiceId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Environment saved
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/admin/project-setup/projects/{projectId}/deploy:
+    post:
+      tags: [Services and deployments]
+      summary: Queue a project deployment
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '202':
+          description: Deployment job accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/admin/deployment-history:
+    get:
+      tags: [Services and deployments]
+      summary: List recent deployment jobs
+      responses:
+        '200':
+          description: Deployment history
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  additionalProperties: true
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/admin/containers:
+    get:
+      tags: [Containers]
+      summary: List Docker containers
+      parameters:
+        - name: search
+          in: query
+          schema:
+            type: string
+        - name: state
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+      responses:
+        '200':
+          description: Container page
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          description: Docker is unavailable
+  /api/admin/containers/{name}/logs:
+    get:
+      tags: [Containers]
+      summary: Read recent container logs
+      parameters:
+        - $ref: '#/components/parameters/ContainerName'
+        - name: tail
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+      responses:
+        '200':
+          description: Container log lines
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/admin/logs:
+    get:
+      tags: [Operations]
+      summary: Search and paginate Gatekeeperd journal logs
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 25
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+        - name: search
+          in: query
+          schema:
+            type: string
+        - name: level
+          in: query
+          schema:
+            type: string
+        - name: since
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: until
+          in: query
+          schema:
+            type: string
+            format: date-time
+      responses:
+        '200':
+          description: Paginated journal entries and summary statistics
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          description: System journal is unavailable
+  /api/admin/nginx/diagnostics:
+    get:
+      tags: [Nginx]
+      summary: Inspect nginx configuration and service status
+      responses:
+        '200':
+          description: Nginx diagnostics
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/admin/nginx/config/{slug}:
+    get:
+      tags: [Nginx]
+      summary: Read managed nginx configuration
+      parameters:
+        - $ref: '#/components/parameters/SlugPath'
+      responses:
+        '200':
+          description: Site configuration and available blocks
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/admin/nginx/certificate/list:
+    get:
+      tags: [Nginx]
+      summary: List Certbot certificates and renewal state
+      responses:
+        '200':
+          description: Certificate inventory
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/admin/deployments/reconciliation:
+    get:
+      tags: [Operations]
+      summary: Read deployment and runtime reconciliation report
+      responses:
+        '200':
+          description: Report-only reconciliation results
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/paystack/webhook:
+    post:
+      tags: [Webhooks]
+      summary: Receive a Paystack event
+      description: Public endpoint; requests are authenticated by Paystack signature validation.
+      security: []
+      parameters:
+        - name: x-paystack-signature
+          in: header
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Event accepted or safely ignored
+        '401':
+          description: Invalid webhook signature
+  /api/integrations/github/webhook:
+    post:
+      tags: [Webhooks]
+      summary: Receive GitHub repository events
+      description: Public endpoint authenticated with the configured GitHub webhook secret.
+      security: []
+      parameters:
+        - name: x-hub-signature-256
+          in: header
+          required: true
+          schema:
+            type: string
+        - name: x-github-delivery
+          in: header
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Event accepted or deduplicated
+        '401':
+          description: Invalid signature
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    ProjectSlug:
+      name: project
+      in: query
+      required: true
+      schema:
+        type: string
+    Domain:
+      name: domain
+      in: query
+      required: false
+      schema:
+        type: string
+        format: hostname
+    SlugPath:
+      name: slug
+      in: path
+      required: true
+      schema:
+        type: string
+    ProjectId:
+      name: projectId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    ServiceId:
+      name: serviceId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    ContainerName:
+      name: name
+      in: path
+      required: true
+      schema:
+        type: string
+  responses:
+    BadRequest:
+      description: Request validation failed
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+    Unauthorized:
+      description: Missing or invalid bearer token
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+  schemas:
+    Health:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          example: ok
+    Readiness:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ready, not_ready]
+        dependencies:
+          type: object
+          properties:
+            database:
+              type: boolean
+            redis:
+              type: boolean
+            migrations:
+              type: boolean
+    VersionStatus:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [up_to_date, update_available, deployment_failed, check_stale, unknown]
+        runningCommit:
+          type: string
+          nullable: true
+        latestSuccessfulCommit:
+          type: string
+          nullable: true
+        checkedAt:
+          type: string
+          format: date-time
+          nullable: true
+        upToDate:
+          type: boolean
+          nullable: true
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          format: password
+    LoginResponse:
+      type: object
+      properties:
+        token:
+          type: string
+        refreshToken:
+          type: string
+    UserProfile:
+      type: object
+      properties:
+        email:
+          type: string
+        role:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+    ApiError:
+      type: object
+      properties:
+        error:
+          type: string
+        message:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
