@@ -765,11 +765,14 @@ List installed certificates found under `/etc/letsencrypt/live`.
       "certificateDaysRemaining": 29,
       "renewalStatus": "active"
     }
-  ]
+  ],
+  "managerReady": true,
+  "managerMessage": null
 }
 ```
 
 The endpoint reads the installed certificate's expiry and synchronizes `expires_at` and `renewal_status` in the `certificates` table. `renewalStatus` is `active`, `expired`, or `unknown` when the certificate file cannot be parsed.
+`managerReady` reports whether Certbot, the restricted Gatekeeperd helper, and its non-interactive sudo permission are available. When false, `managerMessage` explains the server-side setup issue; install/renew/remove endpoints return the same actionable message.
 
 ### POST /api/admin/nginx/certificate/install
 Install an SSL certificate for a domain using certbot's nginx plugin.
@@ -794,7 +797,7 @@ Install an SSL certificate for a domain using certbot's nginx plugin.
 
 **Notes:**
 - Requires `certbot` to be installed on the host.
-- Runs the root-owned `gatekeeperd-certbot` helper through non-interactive `sudo` so Certbot can write to its system directories. See the [staging deployment guide](staging-deployment.md#allowing-gatekeeperd-to-manage-lets-encrypt-certificates) for setup.
+- Runs the root-owned `gatekeeperd-certbot` helper through non-interactive `sudo` so Certbot can write to its system directories. The CI artifact includes the helper, and the current `deploy.sh` installs it and configures the service account's restricted sudoers rule. See the [staging deployment guide](staging-deployment.md#certbot-certificate-management) for setup.
 - The certificate paths follow the standard Let's Encrypt layout.
 
 ### POST /api/admin/nginx/certificate/remove/{domain}

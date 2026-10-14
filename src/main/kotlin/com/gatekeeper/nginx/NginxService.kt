@@ -979,11 +979,39 @@ class NginxService(
         }
     }
 
+    fun certificateManagerIssue(): String? {
+        if (!isCertbotAvailable()) return "Certbot is not installed or is not available in the Gatekeeperd service PATH."
+        val helper = File("/usr/local/sbin/gatekeeperd-certbot")
+        if (!helper.isFile || !helper.canExecute()) {
+            return "The restricted Gatekeeperd Certbot helper is missing. Redeploy with the current deploy.sh to install it."
+        }
+        return try {
+            val process = ProcessBuilder("sudo", "-n", "-l", helper.absolutePath)
+                .redirectErrorStream(true)
+                .start()
+            if (!process.waitFor(5, java.util.concurrent.TimeUnit.SECONDS)) {
+                process.destroyForcibly()
+                "Timed out checking Gatekeeperd's Certbot permissions."
+            } else if (process.exitValue() != 0) {
+                process.inputStream.close()
+                "The Gatekeeperd service account cannot run the Certbot helper. Redeploy to configure its restricted sudoers rule."
+            } else {
+                process.inputStream.close()
+                null
+            }
+        } catch (e: Exception) {
+            logger.warn("Could not verify Certbot helper permissions", e)
+            "Could not verify Gatekeeperd's Certbot permissions. Check the service sudoers configuration."
+        }
+    }
+
+    fun isCertificateManagerReady(): Boolean = certificateManagerIssue() == null
+
     fun installCertificate(domain: String, email: String): Boolean {
         requireValidHostname(domain)
         requireValidEmail(email)
-        if (!isCertbotAvailable()) {
-            logger.error("Certbot is not installed on this system")
+        certificateManagerIssue()?.let { issue ->
+            logger.error("Certificate manager unavailable: $issue")
             return false
         }
 
@@ -1010,7 +1038,7 @@ class NginxService(
 
     fun renewCertificate(domain: String): Boolean {
         requireValidHostname(domain)
-        if (!isCertificateInstalled(domain) || !isCertbotAvailable()) return false
+        if (!isCertificateInstalled(domain) || certificateManagerIssue() != null) return false
 
         return try {
             val process = ProcessBuilder(
@@ -1041,9 +1069,9 @@ class NginxService(
             logger.warn("Refusing to remove certificate $domain because it covers a Gatekeeperd self domain")
             return false
         }
-        if (!isCertbotAvailable()) {
-            logger.warn("Certbot is not installed, skipping certificate removal for $domain")
-            return true
+        certificateManagerIssue()?.let { issue ->
+            logger.error("Cannot remove certificate for $domain: $issue")
+            return false
         }
 
         return try {

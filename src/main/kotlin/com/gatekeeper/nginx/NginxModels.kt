@@ -165,5 +165,7 @@ data class InstalledCertificateInfo(
 
 @Serializable
 data class CertificateListResponse(
-    val certificates: List<InstalledCertificateInfo>
+    val certificates: List<InstalledCertificateInfo>,
+    val managerReady: Boolean = true,
+    val managerMessage: String? = null
 )

@@ -889,7 +889,12 @@ fun Application.configureNginxAdminRoutes() {
                     )
                 }
 
-                call.respond(CertificateListResponse(certificates = certificates))
+                val certificateManagerIssue = nginxService.certificateManagerIssue()
+                call.respond(CertificateListResponse(
+                    certificates = certificates,
+                    managerReady = certificateManagerIssue == null,
+                    managerMessage = certificateManagerIssue
+                ))
             }
 
             post("/api/admin/nginx/certificate/install") {
@@ -912,11 +917,11 @@ fun Application.configureNginxAdminRoutes() {
                     return@post
                 }
 
-                if (!nginxService.isCertbotAvailable()) {
+                nginxService.certificateManagerIssue()?.let { issue ->
                     call.respondError(
-                        HttpStatusCode.BadRequest,
-                        "certbot_unavailable",
-                        "Certbot is not installed on this system"
+                        HttpStatusCode.ServiceUnavailable,
+                        "certificate_manager_unavailable",
+                        issue
                     )
                     return@post
                 }
@@ -964,6 +969,10 @@ fun Application.configureNginxAdminRoutes() {
                     call.respondError(HttpStatusCode.Conflict, "certificate_in_use", e.message ?: "Certificate is still referenced by active sites")
                     return@post
                 }
+                nginxService.certificateManagerIssue()?.let { issue ->
+                    call.respondError(HttpStatusCode.ServiceUnavailable, "certificate_manager_unavailable", issue)
+                    return@post
+                }
                 val removed = nginxService.removeCertificate(validatedDomain)
                 if (!removed) {
                     call.respondError(HttpStatusCode.InternalServerError, "certificate_error", "Failed to remove SSL certificate")
@@ -995,8 +1004,8 @@ fun Application.configureNginxAdminRoutes() {
                     call.respondError(HttpStatusCode.NotFound, "certificate_not_found", "No installed certificate found for '$validatedDomain'")
                     return@post
                 }
-                if (!nginxService.isCertbotAvailable()) {
-                    call.respondError(HttpStatusCode.BadRequest, "certbot_unavailable", "Certbot is not installed on this system")
+                nginxService.certificateManagerIssue()?.let { issue ->
+                    call.respondError(HttpStatusCode.ServiceUnavailable, "certificate_manager_unavailable", issue)
                     return@post
                 }
 

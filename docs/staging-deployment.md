@@ -64,9 +64,11 @@ chmod +x deploy.sh
 ./deploy.sh
 ```
 
-The script downloads from a specific workflow run, checks the JAR SHA-256, prints the
-full source commit, saves it to `/opt/gatekeeperd/source-commit.txt`, and restarts the
-systemd service. The printed commit identifies the exact CI artifact installed.
+The script downloads from a specific workflow run, checks the JAR and Certbot helper
+SHA-256 values, installs the jar and helper, prints the full source commit, saves it to
+`/opt/gatekeeperd/source-commit.txt`, and restarts the systemd service. It also detects
+the service account and configures a validated, restricted sudoers entry for the
+root-owned Certbot helper. The printed commit identifies the exact CI artifact installed.
 
 ## Running gatekeeperd on the host (for nginx management)
 
@@ -77,33 +79,25 @@ The `/api/admin/nginx/*` endpoints need host access to:
 The simplest setup is to run **gatekeeperd on the host (systemd)** and run client apps in Docker.
 The admin logs page reads `gatekeeperd.service` from the systemd journal; the Gatekeeperd service account must be allowed to read that journal.
 
-### Allowing Gatekeeperd to manage Let's Encrypt certificates
+### Certbot certificate management
 
-Certbot needs root access to its configuration, work, and log directories. Keep the
-application running as its normal service user and install the restricted helper:
+Install Certbot on the host and deploy using the current `deploy.sh`. The CI artifact
+includes the checksum-verified, restricted helper. During deployment, the script installs
+it as root at `/usr/local/sbin/gatekeeperd-certbot` and grants only the Gatekeeperd
+systemd service account permission to invoke it without a password. The helper validates
+the requested domain/email and supports only certificate install, renewal, and removal.
 
-```bash
-sudo install -o root -g root -m 0755 scripts/gatekeeperd-certbot /usr/local/sbin/gatekeeperd-certbot
-sudo visudo -f /etc/sudoers.d/gatekeeperd-certbot
-```
-
-Add this line to the sudoers file, replacing `ubuntu` with the `User=` configured
-for `gatekeeperd.service`:
-
-```sudoers
-ubuntu ALL=(root) NOPASSWD: /usr/local/sbin/gatekeeperd-certbot *
-```
-
-The helper is root-owned and only accepts validated certificate install, renewal, and remove
-requests. Validate the rule with `sudo visudo -cf /etc/sudoers.d/gatekeeperd-certbot`.
-Gatekeeperd invokes it with `sudo -n`, so missing permission is reported immediately
-instead of hanging for a password.
+After deployment, the Certificates page shows whether Certbot management is ready and
+the server-side setup issue if it is not. If a server was deployed before the helper was
+included in CI artifacts, copy the latest `deploy.sh` to the VPS and run it again.
 
 ### Build artifact sources
 
 - GitHub Actions uploads a jar artifact named `gatekeeperd-all-jar` containing:
   - `gatekeeperd-all.jar`
   - `gatekeeperd-all.jar.sha256`
+  - `gatekeeperd-certbot`
+  - `gatekeeperd-certbot.sha256`
 
 ### Install jar on VPS
 
