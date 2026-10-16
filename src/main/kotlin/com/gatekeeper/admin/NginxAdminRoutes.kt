@@ -493,7 +493,7 @@ fun Application.configureNginxAdminRoutes() {
                 if (!nginxService.repairDeploymentUpstream(serviceId, site.domain, site.tlsMode != TlsMode.HTTP_ONLY, hostPort)) {
                     return@post call.respondError(HttpStatusCode.BadGateway, "upstream_repair_failed", "Nginx upstream repair or probe failed")
                 }
-                DeploymentApplicationService.clearRepairRequired(serviceId)
+                DeploymentApplicationService.clearRepairRequired(serviceId, "production")
                 call.respond(mapOf("success" to true, "status" to "repaired", "serviceId" to serviceId.toString()))
             }
 

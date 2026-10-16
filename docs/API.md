@@ -792,6 +792,8 @@ Explicitly repair a deployment-managed service's nginx include to its active run
 
 Managed site configs use `gk_<service UUID without hyphens>` as their stable upstream. Nginx loads per-service include files from `NGINX_UPSTREAM_INCLUDE_DIR`; Gatekeeperd creates/checks that directory at startup and fails startup if nginx does not include it inside `http {}`. Cutover probes directly against the candidate and through nginx using a loopback-only probe location that bypasses payment gating only for local requests.
 
+The endpoint repairs the production deployment and requires the service's nginx site to still exist and be `DEPLOYMENT_MANAGED`. If the nginx site was deleted, recreate or adopt the site first; the endpoint cannot infer the deleted site's domain or TLS settings. The generated include filename is `<service UUID>.conf`, while the upstream block name is `gk_<service UUID without hyphens>`.
+
 ## SSL Certificate Management Endpoints (JWT Required)
 
 These endpoints manage Let's Encrypt certificates via `certbot`.

@@ -92,9 +92,11 @@ object DeploymentApplicationService {
         null
     }
 
-    fun clearRepairRequired(serviceId: UUID): Int = transaction {
+    fun clearRepairRequired(serviceId: UUID, environment: String = "production"): Int = transaction {
         Deployments.update({
-            (Deployments.serviceId eq serviceId) and (Deployments.cutoverState eq "repair_required")
+            (Deployments.serviceId eq serviceId) and
+                (Deployments.environment eq environment) and
+                (Deployments.cutoverState eq "repair_required")
         }) {
             it[Deployments.cutoverState] = "restored"
             it[Deployments.cutoverError] = null
