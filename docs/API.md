@@ -788,11 +788,13 @@ Apply the upstream conversion for one site. The site must have a deployment conf
 Restore the site's nginx configuration from the backup returned as `backupName` by the apply endpoint, restore its previous upstream kind, and remove the generated service include. The request body is `{ "backupName": "<saved backup name>" }`. The endpoint reports `rolled_back_include_cleanup_pending` if nginx config rollback succeeds but include cleanup fails.
 
 ### POST /api/admin/nginx/upstream-repair/{serviceId}
-Explicitly repair a deployment-managed service's nginx include to its active runtime. This operation runs under the host nginx mutation lock and clears that service's `repair_required` cutover state only after nginx validation, reload, and the local probe succeed. New deployments for a repair-required service are rejected before port allocation.
+Explicitly repair a deployment-managed service's nginx include to its active runtime. Add `?environment=<name>` for a non-production deployment. This operation verifies that the persisted active Docker container is running and still exposes the persisted host port, then runs under the host nginx mutation lock and clears that environment's `repair_required` cutover state only after nginx validation, reload, and the local probe succeed. New deployments for a repair-required service are rejected before port allocation.
 
 Managed site configs use `gk_<service UUID without hyphens>` as their stable upstream. Nginx loads per-service include files from `NGINX_UPSTREAM_INCLUDE_DIR`; Gatekeeperd creates/checks that directory at startup and fails startup if nginx does not include it inside `http {}`. Cutover probes directly against the candidate and through nginx using a loopback-only probe location that bypasses payment gating only for local requests.
 
-The endpoint repairs the production deployment and requires the service's nginx site to still exist and be `DEPLOYMENT_MANAGED`. If the nginx site was deleted, recreate or adopt the site first; the endpoint cannot infer the deleted site's domain or TLS settings. The generated include filename is `<service UUID>.conf`, while the upstream block name is `gk_<service UUID without hyphens>`.
+The endpoint repairs the selected environment and requires the service's nginx site to still exist and be `DEPLOYMENT_MANAGED`. If the nginx site was deleted, recreate or adopt the site first; the endpoint cannot infer the deleted site's domain or TLS settings. The generated include filename is `<service UUID>.conf`, while the upstream block name is `gk_<service UUID without hyphens>`.
+
+Deployment history responses include `cutoverState`, `cutoverError`, `runtimeContainerName`, `runtimeHostPort`, and `runtimePorts`. These fields identify whether a failure reached route switching or rollback and which persisted runtime port Gatekeeperd used as the repair target.
 
 ## SSL Certificate Management Endpoints (JWT Required)
 

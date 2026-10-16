@@ -479,22 +479,40 @@ fun Application.configureNginxAdminRoutes() {
             post("/api/admin/nginx/upstream-repair/{serviceId}") {
                 val serviceId = call.parameters["serviceId"]?.let { runCatching { java.util.UUID.fromString(it) }.getOrNull() }
                     ?: return@post call.respondError(HttpStatusCode.BadRequest, "invalid_service_id", "A valid service ID is required")
+                val environment = call.request.queryParameters["environment"]?.trim()?.takeIf { it.isNotEmpty() } ?: "production"
                 val site = SiteRepository.findByServiceId(serviceId)
                     ?: return@post call.respondError(HttpStatusCode.NotFound, "site_not_found", "Service has no nginx site")
                 if (site.upstreamKind != "DEPLOYMENT_MANAGED") {
                     return@post call.respondError(HttpStatusCode.Conflict, "site_not_deployment_managed", "Only deployment-managed sites can be repaired through this operation")
                 }
-                val active = DeploymentApplicationService.activeRuntime(serviceId, "production")
+                val active = DeploymentApplicationService.activeRuntime(serviceId, environment)
                     ?: return@post call.respondError(HttpStatusCode.Conflict, "active_runtime_missing", "No active runtime is available as a repair target")
                 val primaryPort = active.containerPort ?: active.ports.keys.singleOrNull()
                     ?: return@post call.respondError(HttpStatusCode.Conflict, "primary_port_missing", "Active runtime has no unambiguous primary container port")
                 val hostPort = active.ports[primaryPort] ?: active.hostPort
                     ?: return@post call.respondError(HttpStatusCode.Conflict, "host_port_missing", "Active runtime has no published primary port")
+                val containerName = active.name
+                    ?: return@post call.respondError(HttpStatusCode.Conflict, "active_container_missing", "Active runtime has no Docker container identity")
+                val docker = runCatching { DockerService(AppConfig.dockerSocket) }.getOrElse {
+                    return@post call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is unavailable")
+                }
+                try {
+                    if (docker.containerHealth(containerName) != "running") {
+                        return@post call.respondError(HttpStatusCode.Conflict, "active_container_not_running", "The active runtime container is not running; restore or redeploy it before repairing nginx")
+                    }
+                    val runtime = docker.adoptionDetails(containerName)
+                        ?: return@post call.respondError(HttpStatusCode.Conflict, "active_container_missing", "The active runtime container no longer exists")
+                    if (runtime.ports[primaryPort] != hostPort) {
+                        return@post call.respondError(HttpStatusCode.Conflict, "active_port_mismatch", "The active container no longer exposes the persisted host port; redeploy or adopt the runtime before repairing nginx")
+                    }
+                } finally {
+                    docker.close()
+                }
                 if (!nginxService.repairDeploymentUpstream(serviceId, site.domain, site.tlsMode != TlsMode.HTTP_ONLY, hostPort)) {
                     return@post call.respondError(HttpStatusCode.BadGateway, "upstream_repair_failed", "Nginx upstream repair or probe failed")
                 }
-                DeploymentApplicationService.clearRepairRequired(serviceId, "production")
-                call.respond(mapOf("success" to true, "status" to "repaired", "serviceId" to serviceId.toString()))
+                DeploymentApplicationService.clearRepairRequired(serviceId, environment)
+                call.respond(mapOf("success" to true, "status" to "repaired", "serviceId" to serviceId.toString(), "environment" to environment, "hostPort" to hostPort))
             }
 
             get("/api/admin/nginx/wizard/context/{slug}") {

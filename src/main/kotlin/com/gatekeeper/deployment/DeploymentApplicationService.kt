@@ -85,7 +85,9 @@ object DeploymentApplicationService {
 
     fun deploymentBlockReason(serviceId: UUID, environment: String = "production"): String? = transaction {
         if (Deployments.selectAll().where {
-                (Deployments.serviceId eq serviceId) and (Deployments.cutoverState eq "repair_required")
+                (Deployments.serviceId eq serviceId) and
+                    (Deployments.environment eq environment) and
+                    (Deployments.cutoverState eq "repair_required")
             }.count() > 0) {
             return@transaction "Service is in repair-required state; repair its nginx route before queuing another deployment"
         }
@@ -441,7 +443,12 @@ object DeploymentApplicationService {
         val canRollback: Boolean,
         val canRedeploy: Boolean,
         val canCancel: Boolean,
-        val configurationId: UUID
+        val configurationId: UUID,
+        val cutoverState: String,
+        val cutoverError: String?,
+        val runtimeContainerName: String?,
+        val runtimeHostPort: Int?,
+        val runtimePorts: Map<Int, Int>
     )
 
     /** History metadata only: never reads encrypted environment or credential payloads. */
@@ -488,7 +495,15 @@ object DeploymentApplicationService {
                 status == DeploymentStatus.ACTIVE ||
                     status == DeploymentStatus.FAILED && latestDeploymentByService[deployment[Deployments.serviceId]] == targetId,
                 canCancel,
-                deployment[Deployments.configurationId]
+                deployment[Deployments.configurationId],
+                deployment[Deployments.cutoverState],
+                deployment[Deployments.cutoverError],
+                deployment[Deployments.runtimeContainerName],
+                deployment[Deployments.runtimeHostPort],
+                runCatching {
+                    Json.decodeFromString<Map<String, Int>>(deployment[Deployments.runtimePortsJson])
+                        .mapKeys { it.key.toInt() }
+                }.getOrDefault(emptyMap())
             )
         }
     }
@@ -538,7 +553,15 @@ object DeploymentApplicationService {
                 status == DeploymentStatus.ACTIVE ||
                     status == DeploymentStatus.FAILED && latestDeploymentByService[deployment[Deployments.serviceId] to environment] == deployment[Deployments.id],
                 canCancel,
-                deployment[Deployments.configurationId]
+                deployment[Deployments.configurationId],
+                deployment[Deployments.cutoverState],
+                deployment[Deployments.cutoverError],
+                deployment[Deployments.runtimeContainerName],
+                deployment[Deployments.runtimeHostPort],
+                runCatching {
+                    Json.decodeFromString<Map<String, Int>>(deployment[Deployments.runtimePortsJson])
+                        .mapKeys { it.key.toInt() }
+                }.getOrDefault(emptyMap())
             )
             project[Projects.slug] to entry
         }

@@ -267,7 +267,12 @@ data class ProjectDeploymentHistoryItem(
     val secretSetId: String?,
     val secretSetVersion: Int?,
     val configurationId: String,
-    val actions: List<String>
+    val actions: List<String>,
+    val cutoverState: String,
+    val cutoverError: String?,
+    val runtimeContainerName: String?,
+    val runtimeHostPort: Int?,
+    val runtimePorts: Map<String, Int>
 )
 
 @Serializable
@@ -294,7 +299,12 @@ data class AdminDeploymentHistoryItem(
     val secretSetId: String?,
     val secretSetVersion: Int?,
     val canRedeploy: Boolean,
-    val canCancel: Boolean
+    val canCancel: Boolean,
+    val cutoverState: String,
+    val cutoverError: String?,
+    val runtimeContainerName: String?,
+    val runtimeHostPort: Int?,
+    val runtimePorts: Map<String, Int>
 )
 
 @Serializable
@@ -380,7 +390,10 @@ fun Application.configureProjectSetupAdminRoutes() {
                                 healthCheckResult = item.healthCheckResult, failureReason = item.failureReason,
                                 credentialSetId = item.credentialSetId?.toString(), credentialSetVersion = item.credentialSetVersion,
                                 secretSetId = item.secretSetId?.toString(), secretSetVersion = item.secretSetVersion,
-                                canRedeploy = item.canRedeploy, canCancel = item.canCancel
+                                canRedeploy = item.canRedeploy, canCancel = item.canCancel,
+                                cutoverState = item.cutoverState, cutoverError = item.cutoverError,
+                                runtimeContainerName = item.runtimeContainerName, runtimeHostPort = item.runtimeHostPort,
+                                runtimePorts = item.runtimePorts.mapKeys { it.key.toString() }
                             )
                         },
                         total = total,
@@ -779,7 +792,9 @@ fun Application.configureProjectSetupAdminRoutes() {
                         item.activeAt?.toString(), item.healthCheckResult, item.failureReason,
                         item.credentialSetId?.toString(), item.credentialSetVersion,
                         item.secretSetId?.toString(), item.secretSetVersion, item.configurationId.toString(),
-                        buildList { if (item.canRollback) add("rollback"); if (item.canRedeploy) add("redeploy"); if (item.canCancel) add("cancel") }
+                        buildList { if (item.canRollback) add("rollback"); if (item.canRedeploy) add("redeploy"); if (item.canCancel) add("cancel") },
+                        item.cutoverState, item.cutoverError, item.runtimeContainerName, item.runtimeHostPort,
+                        item.runtimePorts.mapKeys { it.key.toString() }
                     )
                 }
                     call.respond(ProjectDeploymentHistoryResponse(project.id.toString(), environment, items))
