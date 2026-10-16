@@ -42,6 +42,8 @@ object DeploymentWorker {
             var nextRecoveryAt = Long.MIN_VALUE
             while (isActive) {
                 if (System.nanoTime() >= nextRecoveryAt) {
+                    runCatching { recoverInterruptedCutovers() }
+                        .onFailure { logger.error("Interrupted deployment cutover recovery failed", it) }
                     runCatching { recoverStaleJobs() }
                         .onFailure { logger.error("Stale deployment recovery failed", it) }
                     nextRecoveryAt = System.nanoTime() + TimeUnit.MINUTES.toNanos(1)
@@ -70,14 +72,43 @@ object DeploymentWorker {
                 } finally {
                     runCatching { docker?.close() }
                 }
+                val restoringFailedCutover = recovery.state == "repair_required"
                 val result = NginxService.configured().recoverInterruptedUpstream(
-                    site, files, candidateRunning
+                    site, files, candidateRunning && !restoringFailedCutover
                 )
                 when (result) {
                     NginxService.InterruptedCutoverResult.TARGET_RELOADED,
                     NginxService.InterruptedCutoverResult.PREVIOUS_RESTORED -> {
-                        if (candidateRunning) DeploymentJobRepository.requeueInterruptedCutover(deploymentId)
-                        else DeploymentJobRepository.failInterruptedCutover(deploymentId, "Candidate runtime was not running during startup cutover recovery")
+                        if (restoringFailedCutover && result == NginxService.InterruptedCutoverResult.PREVIOUS_RESTORED) {
+                            val removed = candidate?.name?.let { name ->
+                                runCatching {
+                                    val cleanupDocker = DockerService(AppConfig.dockerSocket)
+                                    try {
+                                        cleanupDocker.removeContainerIfPresent(name)
+                                    } finally {
+                                        cleanupDocker.close()
+                                    }
+                                }.getOrElse { error ->
+                                    logger.error("Could not remove failed deployment candidate {} during recovery", name, error)
+                                    false
+                                }
+                            } ?: true
+                            if (removed) {
+                                DeploymentApplicationService.updateCutoverState(
+                                    deploymentId, "restored", "Previous gateway route restored and failed candidate removed"
+                                )
+                                AuditRepository.write(
+                                    null, "deployment_candidate_cleaned_up", "deployment-worker",
+                                    "deployment=$deploymentId reason=repair-required cutover recovery"
+                                )
+                            }
+                        } else if (candidateRunning) {
+                            DeploymentJobRepository.requeueInterruptedCutover(deploymentId)
+                        } else {
+                            DeploymentJobRepository.failInterruptedCutover(
+                                deploymentId, "Candidate runtime was not running during startup cutover recovery"
+                            )
+                        }
                     }
                     NginxService.InterruptedCutoverResult.CONFLICT -> {
                         DeploymentApplicationService.updateCutoverState(deploymentId, "repair_required", "Upstream include checksum matches neither saved cutover target nor previous content")
@@ -339,9 +370,13 @@ object DeploymentWorker {
                     log = "Candidate passed readiness checks ($selectedProbe); resolved application container port ${resolvedContainerPort ?: "none"}. Container is ready; gateway cutover is a separate step"
                 )
                 AuditRepository.write(null, "deployment_readiness_succeeded", "deployment-worker", "job=${job.id} repository=${job.repository ?: "prebuilt-image"} commit=${commit ?: "not-applicable"}")
+                var cutoverSucceeded = false
                 cutover(job.copy(containerPort = resolvedContainerPort), docker) { rollback -> routeRollback = rollback }
-                candidateName = null
-                candidateContainerId = null
+                cutoverSucceeded = true
+                if (cutoverSucceeded) {
+                    candidateName = null
+                    candidateContainerId = null
+                }
             } finally { docker.close() }
         } catch (error: CancellationException) {
             candidateContainerId?.let { id -> removeCandidatePreservingFailure(null, id, error) }

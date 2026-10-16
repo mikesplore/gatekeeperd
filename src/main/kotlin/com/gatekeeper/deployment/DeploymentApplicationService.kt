@@ -292,7 +292,9 @@ object DeploymentApplicationService {
 
     fun pendingCutovers(): List<Pair<UUID, CutoverRecoveryRecord>> = transaction {
         Deployments.selectAll().where {
-            Deployments.cutoverState inList listOf("prepared", "route_switched", "draining", "retiring_previous", "previous_retired")
+            Deployments.cutoverState inList listOf(
+                "prepared", "route_switched", "draining", "retiring_previous", "previous_retired", "repair_required"
+            )
         }.mapNotNull { row ->
             val raw = row[Deployments.cutoverPreviousNginxConfig]
             val files = raw?.let { value -> runCatching { Json.decodeFromString<DurableCutoverFiles>(value) }.getOrNull() }
@@ -469,7 +471,9 @@ object DeploymentApplicationService {
                 currentStep !in setOf("readiness_succeeded", "cutover_in_progress")
             val healthResult = when {
                 currentStep == "readiness_succeeded" || currentStep == "cutover_in_progress" ||
-                    status == DeploymentStatus.ACTIVE || status == DeploymentStatus.SUPERSEDED || status == DeploymentStatus.ROLLED_BACK -> "passed"
+                    status == DeploymentStatus.ACTIVE || status == DeploymentStatus.SUPERSEDED ||
+                    status == DeploymentStatus.ROLLED_BACK ||
+                    status == DeploymentStatus.FAILED && deployment[Deployments.cutoverState] == "repair_required" -> "passed"
                 status == DeploymentStatus.FAILED && currentStep == "health_checking" -> "failed"
                 status == DeploymentStatus.HEALTH_CHECKING -> "running"
                 status == DeploymentStatus.FAILED -> "not_passed"
