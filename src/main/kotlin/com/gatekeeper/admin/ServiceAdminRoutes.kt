@@ -4,7 +4,7 @@ import com.gatekeeper.api.respondError
 import com.gatekeeper.db.repositories.DeploymentJobRepository
 import com.gatekeeper.db.repositories.ProjectRepository
 import com.gatekeeper.db.repositories.ServiceRepository
-import com.gatekeeper.db.repositories.ProjectAdjustmentRepository
+import com.gatekeeper.feature.project.domain.repository.ProjectAdjustmentRepository as ProjectAdjustmentStore
 import com.gatekeeper.feature.audit.domain.repository.AuditRepository as AuditRepositoryPort
 import com.gatekeeper.feature.deployment.domain.repository.EnvironmentSetRepository as EnvironmentSetStore
 import com.gatekeeper.feature.deployment.domain.repository.EnvironmentVersionMetadata
@@ -195,7 +195,7 @@ fun Application.configureServiceAdminRoutes() {
                 }
                 if (invoice.body == null) return@post call.respondError(HttpStatusCode.BadGateway, "invoice_integration_unavailable", "The service invoice could not be checked")
                 val actor = call.principal<JWTPrincipal>()?.payload?.subject ?: "unknown"
-                val adjustment = try { ProjectAdjustmentRepository.create(projectId, type, amount, body.reason, actor, serviceId) }
+                val adjustment = try { call.application.get<ProjectAdjustmentStore>().create(projectId, type, amount, body.reason, actor, serviceId) }
                     catch (e: IllegalArgumentException) { return@post call.respondError(HttpStatusCode.BadRequest, "invalid_adjustment", e.message ?: "Invalid adjustment") }
                 auditRepository.write(projectId, "service_adjustment", actor, "service=${service.name} ${type.name} amount=$amount reason=${body.reason.trim()}")
                 ScribedIntegrationClient.notifyServiceLedger(serviceId, "adjustment-${adjustment.id}")

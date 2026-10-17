@@ -1,8 +1,12 @@
 package com.gatekeeper.db.tables
 
+import com.gatekeeper.feature.project.domain.model.AdjustmentType
+
 import org.jetbrains.exposed.sql.Table
 import org.jetbrains.exposed.sql.javatime.CurrentDateTime
 import org.jetbrains.exposed.sql.javatime.datetime
+
+typealias AdjustmentType = com.gatekeeper.feature.project.domain.model.AdjustmentType
 
 object ProjectAdjustments : Table("project_adjustments") {
     val id = uuid("id").autoGenerate()
@@ -17,7 +21,3 @@ object ProjectAdjustments : Table("project_adjustments") {
     override val primaryKey = PrimaryKey(id)
 }
 
-enum class AdjustmentType {
-    ADDITIONAL_CHARGE,
-    DISCOUNT
-}

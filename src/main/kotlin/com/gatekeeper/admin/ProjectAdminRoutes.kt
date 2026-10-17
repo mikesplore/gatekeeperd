@@ -16,7 +16,7 @@ import com.gatekeeper.feature.payment.domain.usecase.ListProjectPayments
 import com.gatekeeper.feature.payment.domain.usecase.GetPayment
 import com.gatekeeper.db.repositories.ProjectRepository
 import com.gatekeeper.db.repositories.CustomerRepository
-import com.gatekeeper.db.repositories.ProjectAdjustmentRepository
+import com.gatekeeper.feature.project.domain.repository.ProjectAdjustmentRepository as ProjectAdjustmentStore
 import com.gatekeeper.db.tables.AdjustmentType
 import com.gatekeeper.db.tables.AccessBlockReason
 import com.gatekeeper.integrations.ScribedIntegrationClient
@@ -173,7 +173,7 @@ fun Application.configureProjectAdminRoutes() {
                     call.respondError(HttpStatusCode.InternalServerError, "payment_list_failed", "Unable to load project payments")
                     return@get
                 }.items
-                val adjustments = ProjectAdjustmentRepository.findByProjectId(project.id)
+                val adjustments = call.application.get<ProjectAdjustmentStore>().findByProjectId(project.id)
                 val auditLog = auditRepository.findByProjectId(project.id)
                 call.respond(
                     ProjectDetailResponse(
@@ -481,7 +481,7 @@ fun Application.configureProjectAdminRoutes() {
                 val oldBalance = projectBalances.outstandingBalance(project)
                 val actor = call.principal<JWTPrincipal>()?.payload?.subject ?: "unknown"
                 val adjustment = try {
-                    ProjectAdjustmentRepository.create(project.id, type, amount, body.reason, actor)
+                    call.application.get<ProjectAdjustmentStore>().create(project.id, type, amount, body.reason, actor)
                 } catch (e: IllegalArgumentException) {
                     call.respondError(HttpStatusCode.BadRequest, "invalid_adjustment", e.message ?: "Invalid adjustment")
                     return@post

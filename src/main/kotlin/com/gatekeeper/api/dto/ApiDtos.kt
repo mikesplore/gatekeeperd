@@ -3,7 +3,7 @@ package com.gatekeeper.api.dto
 import com.gatekeeper.db.repositories.AuditRepository
 import com.gatekeeper.feature.payment.domain.model.Payment
 import com.gatekeeper.db.repositories.ProjectRepository
-import com.gatekeeper.db.repositories.ProjectAdjustmentRepository
+import com.gatekeeper.feature.project.domain.repository.ProjectAdjustmentRepository
 import com.gatekeeper.feature.payment.domain.model.ProjectFinancials
 import kotlinx.serialization.Serializable
 
@@ -79,7 +79,7 @@ data class ProjectAdjustmentResponse(
     val createdAt: String
 )
 
-fun ProjectAdjustmentRepository.AdjustmentRecord.toResponse() = ProjectAdjustmentResponse(
+fun ProjectAdjustmentRepository.Record.toResponse() = ProjectAdjustmentResponse(
     id = id.toString(), projectId = projectId.toString(), type = type.name,
     amount = amount.toDouble(), reason = reason, actor = actor, createdAt = createdAt.toNairobiTimestamp()
 )

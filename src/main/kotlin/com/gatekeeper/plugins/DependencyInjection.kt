@@ -82,6 +82,8 @@ import com.gatekeeper.feature.deployment.domain.repository.DeploymentPortAllocat
 import com.gatekeeper.feature.deployment.data.persistence.ExposedDeploymentPortAllocationRepository
 import com.gatekeeper.feature.deployment.domain.repository.EnvironmentSetRepository as EnvironmentSetStore
 import com.gatekeeper.feature.deployment.data.persistence.ExposedEnvironmentSetRepository
+import com.gatekeeper.feature.project.domain.repository.ProjectAdjustmentRepository as ProjectAdjustmentStore
+import com.gatekeeper.feature.project.data.persistence.ExposedProjectAdjustmentRepository
 import com.gatekeeper.feature.deployment.domain.port.DeploymentCommandRunner
 import com.gatekeeper.feature.deployment.data.process.HostDeploymentCommandRunner
 import com.gatekeeper.feature.deployment.domain.port.GitHubTokenProvider
@@ -118,6 +120,7 @@ private val applicationModule = module {
     single { GitHubAppClient(get(), get()) }
     single<DeploymentPortAllocationPort> { ExposedDeploymentPortAllocationRepository() }
     single<EnvironmentSetStore> { ExposedEnvironmentSetRepository() }
+    single<ProjectAdjustmentStore> { ExposedProjectAdjustmentRepository() }
     single<DeploymentCommandRunner> { HostDeploymentCommandRunner() }
     single<GitHubTokenProvider> { GitHubTokenProvider { get<GitHubAppClient>().installationToken() } }
     single { SourceFetcher(get<DeploymentCommandRunner>(), get<GitHubTokenProvider>()) }
@@ -132,7 +135,7 @@ private val applicationModule = module {
     single { ExposedCertificateStore(get<CertificateRepository>()) }
     single { NginxAdminService(get(), get<ExposedCertificateStore>()) }
     single<PaymentDomainRepository> { ExposedPaymentRepository() }
-    single { ProjectBalanceAdapter(get<PaymentDomainRepository>()) }
+    single { ProjectBalanceAdapter(get<PaymentDomainRepository>(), get<ProjectAdjustmentStore>()) }
     single<PaymentEventDomainRepository> { ExposedPaymentEventRepository() }
     single { PaymentProjectAdapter() }
     single { PaymentServiceAdapter() }
