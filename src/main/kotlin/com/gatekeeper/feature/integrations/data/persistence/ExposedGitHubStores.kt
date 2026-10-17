@@ -1,11 +1,11 @@
 package com.gatekeeper.feature.integrations.data.persistence
 
-import com.gatekeeper.db.repositories.GitHubCredentialRepository
 import com.gatekeeper.db.tables.GitHubAppInstallations
 import com.gatekeeper.db.tables.GitHubWebhookDeliveries
 import com.gatekeeper.feature.integrations.domain.repository.GitHubCredentialStore
 import com.gatekeeper.feature.integrations.domain.repository.GitHubInstallationStore
 import com.gatekeeper.feature.integrations.domain.repository.GitHubWebhookStore
+import com.gatekeeper.feature.integrations.domain.repository.ProviderCredentialStore
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
 import org.jetbrains.exposed.sql.deleteWhere
 import org.jetbrains.exposed.sql.insert
@@ -14,11 +14,14 @@ import org.jetbrains.exposed.sql.selectAll
 import org.jetbrains.exposed.sql.transactions.transaction
 import org.jetbrains.exposed.sql.update
 
-class ExposedGitHubCredentialStore : GitHubCredentialStore {
-    override fun privateKeyPem() = GitHubCredentialRepository.privateKeyPem()
-    override fun webhookSecret() = GitHubCredentialRepository.webhookSecret()
+class ExposedGitHubCredentialStore(private val credentials: ProviderCredentialStore) : GitHubCredentialStore {
+    override fun privateKeyPem() = credentials.findCurrent("github", GitHubCredentialStore.APP_PRIVATE_KEY, "global")?.payload
+    override fun webhookSecret() = credentials.findCurrent("github", GitHubCredentialStore.WEBHOOK_SECRET, "global")?.payload
     override fun save(type: String, value: String): GitHubCredentialStore.Version {
-        val saved = GitHubCredentialRepository.save(type, value)
+        require(type == GitHubCredentialStore.APP_PRIVATE_KEY || type == GitHubCredentialStore.WEBHOOK_SECRET) { "Unsupported GitHub credential type" }
+        require(value.isNotBlank()) { "Credential value must not be blank" }
+        val displayName = if (type == GitHubCredentialStore.APP_PRIVATE_KEY) "GitHub App private key" else "GitHub webhook secret"
+        val saved = credentials.createOrRotate("github", type, displayName, "global", value)
         return GitHubCredentialStore.Version(saved.id, saved.version)
     }
 }

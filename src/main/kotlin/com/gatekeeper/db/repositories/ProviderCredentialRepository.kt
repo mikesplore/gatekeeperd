@@ -1,133 +1,23 @@
 package com.gatekeeper.db.repositories
 
-import com.gatekeeper.db.tables.ProviderCredentials
-import com.gatekeeper.security.SecretValueCipher
-import com.gatekeeper.feature.integrations.domain.repository.ProviderCredentialMetadata as ProviderCredentialMetadataDomain
-import com.gatekeeper.feature.integrations.domain.repository.StoredProviderCredential as StoredProviderCredentialDomain
-import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
-import org.jetbrains.exposed.sql.and
-import org.jetbrains.exposed.sql.insert
-import org.jetbrains.exposed.sql.selectAll
-import org.jetbrains.exposed.sql.transactions.transaction
-import org.jetbrains.exposed.sql.update
-import java.time.LocalDateTime
+import com.gatekeeper.feature.integrations.data.persistence.ExposedProviderCredentialRepository
+import com.gatekeeper.feature.integrations.domain.repository.ProviderCredentialStore
 import java.util.UUID
 
-typealias ProviderCredentialMetadata = ProviderCredentialMetadataDomain
-typealias StoredProviderCredential = StoredProviderCredentialDomain
+typealias ProviderCredentialMetadata = com.gatekeeper.feature.integrations.domain.repository.ProviderCredentialMetadata
+typealias StoredProviderCredential = com.gatekeeper.feature.integrations.domain.repository.StoredProviderCredential
 
+/** @deprecated Inject ProviderCredentialStore instead. */
+@Deprecated("Inject ProviderCredentialStore")
 object ProviderCredentialRepository {
-    fun listMetadata(provider: String? = null, credentialType: String? = null): List<ProviderCredentialMetadata> = transaction {
-        ProviderCredentials.selectAll().asSequence().toList()
-            .filter { provider == null || it[ProviderCredentials.provider] == provider }
-            .filter { credentialType == null || it[ProviderCredentials.credentialType] == credentialType }
-            .map(::metadata)
-            .sortedWith(compareBy({ it.provider }, { it.credentialType }, { it.scope }, { it.version })).toList()
-    }
+    private val delegate: ProviderCredentialStore = ExposedProviderCredentialRepository()
 
-    fun findMetadata(id: UUID): ProviderCredentialMetadata? = transaction {
-        ProviderCredentials.selectAll().where { ProviderCredentials.id eq id }.singleOrNull()?.let(::metadata)
-    }
-
-    fun findById(id: UUID): StoredProviderCredential? = transaction {
-        ProviderCredentials.selectAll().where { ProviderCredentials.id eq id }.singleOrNull()?.let { row ->
-            StoredProviderCredential(metadata(row), SecretValueCipher.decrypt(row[ProviderCredentials.encryptedPayload]))
-        }
-    }
-
-    fun findCurrent(provider: String, credentialType: String, scope: String): StoredProviderCredential? = transaction {
-        ProviderCredentials.selectAll().where {
-            (ProviderCredentials.provider eq provider) and
-                (ProviderCredentials.credentialType eq credentialType) and
-                (ProviderCredentials.scope eq scope) and
-                ProviderCredentials.supersededAt.isNull()
-        }.singleOrNull()?.let { row ->
-            StoredProviderCredential(metadata(row), SecretValueCipher.decrypt(row[ProviderCredentials.encryptedPayload]))
-        }
-    }
-
-    fun retireCurrent(provider: String, credentialType: String, scope: String, actor: String = "admin"): Boolean = transaction {
-        val current = ProviderCredentials.selectAll().where {
-            (ProviderCredentials.provider eq provider) and
-                (ProviderCredentials.credentialType eq credentialType) and
-                (ProviderCredentials.scope eq scope) and
-                ProviderCredentials.supersededAt.isNull()
-        }.singleOrNull() ?: return@transaction false
-        val now = LocalDateTime.now()
-        ProviderCredentials.update({ ProviderCredentials.id eq current[ProviderCredentials.id] }) {
-            it[ProviderCredentials.supersededAt] = now
-            it[ProviderCredentials.updatedAt] = now
-            it[ProviderCredentials.updatedBy] = actor
-        }
-        true
-    }
-
-    /** Inserts a new immutable version and marks the prior current row as superseded. */
-    fun createOrRotate(
-        provider: String,
-        credentialType: String,
-        displayName: String,
-        scope: String,
-        payload: String,
-        actor: String = "admin"
-    ): ProviderCredentialMetadata = transaction {
-        require(provider in setOf("docker", "github")) { "Unsupported credential provider" }
-        require((provider == "docker" && credentialType == "registry") ||
-            (provider == "github" && credentialType in setOf("app_private_key", "webhook_secret"))) {
-            "Unsupported credential type"
-        }
-        val current = ProviderCredentials.selectAll().where {
-            (ProviderCredentials.provider eq provider) and
-                (ProviderCredentials.credentialType eq credentialType) and
-                (ProviderCredentials.scope eq scope) and
-                ProviderCredentials.supersededAt.isNull()
-        }.singleOrNull()
-        val nextVersion = (ProviderCredentials.selectAll().where {
-            (ProviderCredentials.provider eq provider) and
-                (ProviderCredentials.credentialType eq credentialType) and
-                (ProviderCredentials.scope eq scope)
-        }.map { it[ProviderCredentials.version] }.maxOrNull() ?: 0) + 1
-        val id = UUID.randomUUID()
-        val now = LocalDateTime.now()
-        val encrypted = SecretValueCipher.encrypt(payload)
-
-        current?.let { old ->
-            ProviderCredentials.update({ ProviderCredentials.id eq old[ProviderCredentials.id] }) {
-                it[ProviderCredentials.supersededAt] = now
-                it[ProviderCredentials.supersededById] = id
-                it[ProviderCredentials.updatedAt] = now
-                it[ProviderCredentials.updatedBy] = actor
-            }
-        }
-        ProviderCredentials.insert {
-            it[ProviderCredentials.id] = id
-            it[ProviderCredentials.provider] = provider
-            it[ProviderCredentials.credentialType] = credentialType
-            it[ProviderCredentials.displayName] = displayName
-            it[ProviderCredentials.scope] = scope
-            it[ProviderCredentials.version] = nextVersion
-            it[ProviderCredentials.encryptedPayload] = encrypted
-            it[ProviderCredentials.rotatedAt] = if (current == null) null else now
-            it[ProviderCredentials.rotatedBy] = if (current == null) null else actor
-            it[ProviderCredentials.supersededAt] = null
-            it[ProviderCredentials.supersededById] = null
-            it[ProviderCredentials.createdAt] = now
-            it[ProviderCredentials.createdBy] = actor
-            it[ProviderCredentials.updatedAt] = now
-            it[ProviderCredentials.updatedBy] = actor
-        }
-        ProviderCredentialMetadata(
-            id, provider, credentialType, displayName, scope, nextVersion,
-            if (current == null) null else now, if (current == null) null else actor,
-            null, null, now, actor, now, actor
-        )
-    }
-
-    private fun metadata(row: org.jetbrains.exposed.sql.ResultRow) = ProviderCredentialMetadata(
-        row[ProviderCredentials.id], row[ProviderCredentials.provider], row[ProviderCredentials.credentialType],
-        row[ProviderCredentials.displayName], row[ProviderCredentials.scope], row[ProviderCredentials.version],
-        row[ProviderCredentials.rotatedAt], row[ProviderCredentials.rotatedBy], row[ProviderCredentials.supersededAt],
-        row[ProviderCredentials.supersededById], row[ProviderCredentials.createdAt], row[ProviderCredentials.createdBy],
-        row[ProviderCredentials.updatedAt], row[ProviderCredentials.updatedBy]
-    )
+    fun listMetadata(provider: String? = null, credentialType: String? = null) = delegate.listMetadata(provider, credentialType)
+    fun findMetadata(id: UUID) = delegate.findMetadata(id)
+    fun findById(id: UUID) = delegate.findById(id)
+    fun findCurrent(provider: String, credentialType: String, scope: String) = delegate.findCurrent(provider, credentialType, scope)
+    fun retireCurrent(provider: String, credentialType: String, scope: String, actor: String = "admin") =
+        delegate.retireCurrent(provider, credentialType, scope, actor)
+    fun createOrRotate(provider: String, credentialType: String, displayName: String, scope: String, payload: String, actor: String = "admin") =
+        delegate.createOrRotate(provider, credentialType, displayName, scope, payload, actor)
 }
