@@ -12,6 +12,8 @@ import com.gatekeeper.nginx.InstalledCertificateInfo
 import com.gatekeeper.nginx.NginxEnableRequest
 import com.gatekeeper.nginx.NginxStatusResponse
 import com.gatekeeper.nginx.NginxService
+import com.gatekeeper.nginx.NginxAdminService
+import com.gatekeeper.nginx.CertificateOperationResult
 import com.gatekeeper.nginx.NginxBlockUpdateRequest
 import com.gatekeeper.nginx.NginxCustomLocation
 import com.gatekeeper.nginx.NginxCustomLocationRequest
@@ -26,11 +28,10 @@ import com.gatekeeper.nginx.requireCertificatePath
 import com.gatekeeper.nginx.requireValidEmail
 import com.gatekeeper.nginx.requireValidHostname
 import com.gatekeeper.db.repositories.ProjectRepository
-import com.gatekeeper.db.repositories.AuditRepository
+import com.gatekeeper.feature.audit.domain.repository.AuditRepository as AuditRepositoryPort
 import com.gatekeeper.db.repositories.SiteRepository
 import com.gatekeeper.db.repositories.ServiceRepository
 import com.gatekeeper.db.repositories.DeploymentJobRepository
-import com.gatekeeper.db.repositories.CertificateRepository
 import com.gatekeeper.db.tables.CertMode
 import com.gatekeeper.db.tables.TlsMode
 import com.gatekeeper.db.tables.UpstreamMode
@@ -50,6 +51,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.JsonPrimitive
 import org.slf4j.LoggerFactory
+import org.koin.ktor.ext.get
 
 private val logger = LoggerFactory.getLogger("com.gatekeeper.admin.NginxAdminRoutes")
 
@@ -387,7 +389,9 @@ private fun computeNginxEnablePlan(
 }
 
 fun Application.configureNginxAdminRoutes() {
-    val nginxService = NginxService.configured()
+    val nginxService = get<NginxService>()
+    val nginxAdminService = get<NginxAdminService>()
+    val auditRepository = get<AuditRepositoryPort>()
     val dockerService: DockerService? = try {
         DockerService(AppConfig.dockerSocket)
     } catch (e: Exception) {
@@ -734,7 +738,7 @@ fun Application.configureNginxAdminRoutes() {
                 val result = runCatching { updateCustomNginxLocations(slug, site, site.customNginxLocations + location, nginxService) }
                     .getOrElse { return@post call.respondError(HttpStatusCode.UnprocessableEntity, "custom_location_failed", it.message ?: "Unable to add custom location") }
                 call.respond(result)
-                AuditRepository.write(site.projectId, "nginx_custom_location_added", "admin", "Added Nginx location ${location.path} for $slug")
+                auditRepository.write(site.projectId, "nginx_custom_location_added", "admin", "Added Nginx location ${location.path} for $slug")
             }
 
             delete("/api/admin/nginx/config/{slug}/custom-blocks/{id}") {
@@ -749,7 +753,7 @@ fun Application.configureNginxAdminRoutes() {
                     updateCustomNginxLocations(slug, site, site.customNginxLocations.filterNot { it.id == id }, nginxService)
                 }.getOrElse { return@delete call.respondError(HttpStatusCode.UnprocessableEntity, "custom_location_failed", it.message ?: "Unable to remove custom location") }
                 call.respond(result)
-                AuditRepository.write(site.projectId, "nginx_custom_location_removed", "admin", "Removed Nginx location ${location.path} for $slug")
+                auditRepository.write(site.projectId, "nginx_custom_location_removed", "admin", "Removed Nginx location ${location.path} for $slug")
             }
 
             post("/api/admin/nginx/config/{slug}/blocks/{index}/preview") {
@@ -775,7 +779,7 @@ fun Application.configureNginxAdminRoutes() {
                 val result = runCatching { nginxService.applyBlockUpdate(slug, index, body.content) }.getOrElse { call.respondError(HttpStatusCode.BadRequest, "invalid_block", it.message ?: "Unable to apply block"); return@post }
                 if (!result.success) call.respond(HttpStatusCode.UnprocessableEntity, result) else call.respond(result)
                 if (result.success) ProjectRepository.findBySlug(slug)?.let { project ->
-                    AuditRepository.write(project.id, "nginx_block_updated", "admin", "Applied Nginx block $index for $slug")
+                    auditRepository.write(project.id, "nginx_block_updated", "admin", "Applied Nginx block $index for $slug")
                 }
             }
 
@@ -793,7 +797,7 @@ fun Application.configureNginxAdminRoutes() {
                 val result = runCatching { nginxService.rollback(slug, backup) }.getOrElse { call.respondError(HttpStatusCode.BadRequest, "rollback_failed", it.message ?: "Unable to roll back configuration"); return@post }
                 if (!result.success) call.respond(HttpStatusCode.UnprocessableEntity, result) else call.respond(result)
                 if (result.success) ProjectRepository.findBySlug(slug)?.let { project ->
-                    AuditRepository.write(project.id, "nginx_rollback", "admin", "Rolled back Nginx configuration to $backup")
+                    auditRepository.write(project.id, "nginx_rollback", "admin", "Rolled back Nginx configuration to $backup")
                 }
             }
 
@@ -1035,7 +1039,7 @@ fun Application.configureNginxAdminRoutes() {
                     .getOrElse { call.respondError(HttpStatusCode.BadRequest, "rollback_failed", it.message ?: "Unable to roll back configuration"); return@post }
                 if (!result.success) call.respond(HttpStatusCode.UnprocessableEntity, result) else call.respond(result)
                 if (result.success) ProjectRepository.findBySlug(slug)?.let { project ->
-                    AuditRepository.write(project.id, "nginx_rollback", "admin", "Rolled back Nginx configuration to $latest")
+                    auditRepository.write(project.id, "nginx_rollback", "admin", "Rolled back Nginx configuration to $latest")
                 }
             }
 
@@ -1068,28 +1072,8 @@ fun Application.configureNginxAdminRoutes() {
             }
 
             get("/api/admin/nginx/certificate/list") {
-                val certificates = nginxService.listInstalledCertificates().map {
-                    val expiry = nginxService.certificateExpiry(it.certificateDomain)
-                    val expiresAt = expiry?.first?.let { value -> java.time.OffsetDateTime.parse(value).toLocalDateTime() }
-                    val renewalStatus = when {
-                        expiry == null -> "unknown"
-                        java.time.OffsetDateTime.parse(expiry.first).toInstant().isBefore(java.time.Instant.now()) -> "expired"
-                        else -> "active"
-                    }
-                    CertificateRepository.syncInventory(it.certificateDomain, expiresAt, renewalStatus)
-                    InstalledCertificateInfo(
-                        certificateDomain = it.certificateDomain,
-                        certificatePath = it.certificatePath,
-                        privateKeyPath = it.privateKeyPath,
-                        certificateExpiresAt = expiry?.first,
-                        certificateDaysRemaining = expiry?.second,
-                        renewalStatus = renewalStatus
-                    )
-                }
-
                 val certificateManagerIssue = nginxService.certificateManagerIssue()
-                call.respond(CertificateListResponse(
-                    certificates = certificates,
+                call.respond(nginxAdminService.listCertificates().copy(
                     managerReady = certificateManagerIssue == null,
                     managerMessage = certificateManagerIssue
                 ))
@@ -1103,51 +1087,14 @@ fun Application.configureNginxAdminRoutes() {
                     return@post
                 }
 
-                val domain = body.domain.trim()
-                val email = body.email.trim()
-
-                val validatedDomain = runCatching { requireValidHostname(domain) }.getOrElse {
-                    call.respondError(HttpStatusCode.BadRequest, "invalid_domain", it.message ?: "Invalid domain")
-                    return@post
+                when (val result = nginxAdminService.installCertificate(body.domain, body.email)) {
+                    is CertificateOperationResult.Success -> call.respond(result.value)
+                    CertificateOperationResult.InvalidDomain -> call.respondError(HttpStatusCode.BadRequest, "invalid_domain", "Invalid domain")
+                    is CertificateOperationResult.InvalidEmail -> call.respondError(HttpStatusCode.BadRequest, "invalid_email", result.message)
+                    CertificateOperationResult.CertbotUnavailable -> call.respondError(HttpStatusCode.ServiceUnavailable, "certificate_manager_unavailable", "Certbot is unavailable")
+                    CertificateOperationResult.Failed -> call.respondError(HttpStatusCode.InternalServerError, "certificate_error", "Failed to install SSL certificate")
+                    else -> call.respondError(HttpStatusCode.InternalServerError, "certificate_error", "Certificate installation failed")
                 }
-                val validatedEmail = runCatching { requireValidEmail(email) }.getOrElse {
-                    call.respondError(HttpStatusCode.BadRequest, "invalid_email", it.message ?: "Invalid email")
-                    return@post
-                }
-
-                nginxService.certificateManagerIssue()?.let { issue ->
-                    call.respondError(
-                        HttpStatusCode.ServiceUnavailable,
-                        "certificate_manager_unavailable",
-                        issue
-                    )
-                    return@post
-                }
-
-                val installed = nginxService.installCertificate(validatedDomain, validatedEmail)
-                if (!installed) {
-                    call.respondError(HttpStatusCode.InternalServerError, "certificate_error", "Failed to install SSL certificate")
-                    return@post
-                }
-
-                val certInstalled = nginxService.isCertificateInstalled(validatedDomain)
-                val expiry = nginxService.certificateExpiry(validatedDomain)
-                val certificate = CertificateRepository.upsert(
-                    domain = validatedDomain,
-                    issuedAt = java.time.LocalDateTime.now(),
-                    expiresAt = expiry?.first?.let { java.time.OffsetDateTime.parse(it).toLocalDateTime() },
-                    renewalStatus = if (expiry == null) "unknown" else "active"
-                )
-                SiteRepository.linkCertificateForDomain(validatedDomain, certificate.id)
-
-                call.respond(
-                    CertificateResponse(
-                        domain = validatedDomain,
-                        installed = certInstalled,
-                        certificatePath = "${AppConfig.nginxSslCertPath}/$validatedDomain/fullchain.pem",
-                        privateKeyPath = "${AppConfig.nginxSslCertPath}/$validatedDomain/privkey.pem"
-                    )
-                )
             }
 
             post("/api/admin/nginx/certificate/remove/{domain}") {
@@ -1157,35 +1104,13 @@ fun Application.configureNginxAdminRoutes() {
                     return@post
                 }
 
-                val validatedDomain = runCatching { requireValidHostname(domain) }.getOrElse {
-                    call.respondError(HttpStatusCode.BadRequest, "invalid_domain", it.message ?: "Invalid domain")
-                    return@post
+                when (val result = nginxAdminService.removeCertificate(domain)) {
+                    is CertificateOperationResult.Success -> call.respond(result.value)
+                    is CertificateOperationResult.InUse -> call.respondError(HttpStatusCode.Conflict, "certificate_in_use", result.message)
+                    CertificateOperationResult.InvalidDomain -> call.respondError(HttpStatusCode.BadRequest, "invalid_domain", "Invalid domain")
+                    CertificateOperationResult.CertbotUnavailable -> call.respondError(HttpStatusCode.ServiceUnavailable, "certificate_manager_unavailable", "Certbot is unavailable")
+                    else -> call.respondError(HttpStatusCode.InternalServerError, "certificate_error", "Failed to remove SSL certificate")
                 }
-                try {
-                    CertificateRepository.requireRemovable(validatedDomain)
-                } catch (e: IllegalArgumentException) {
-                    call.respondError(HttpStatusCode.Conflict, "certificate_in_use", e.message ?: "Certificate is still referenced by active sites")
-                    return@post
-                }
-                nginxService.certificateManagerIssue()?.let { issue ->
-                    call.respondError(HttpStatusCode.ServiceUnavailable, "certificate_manager_unavailable", issue)
-                    return@post
-                }
-                val removed = nginxService.removeCertificate(validatedDomain)
-                if (!removed) {
-                    call.respondError(HttpStatusCode.InternalServerError, "certificate_error", "Failed to remove SSL certificate")
-                    return@post
-                }
-                CertificateRepository.deleteByDomain(validatedDomain)
-
-                call.respond(
-                    CertificateResponse(
-                        domain = validatedDomain,
-                        installed = false,
-                        certificatePath = null,
-                        privateKeyPath = null
-                    )
-                )
             }
 
             post("/api/admin/nginx/certificate/renew/{domain}") {
@@ -1194,54 +1119,14 @@ fun Application.configureNginxAdminRoutes() {
                     call.respondError(HttpStatusCode.BadRequest, "missing_domain", "Missing domain path parameter")
                     return@post
                 }
-                val validatedDomain = runCatching { requireValidHostname(domain) }.getOrElse {
-                    call.respondError(HttpStatusCode.BadRequest, "invalid_domain", it.message ?: "Invalid domain")
-                    return@post
+                when (val result = nginxAdminService.renewCertificate(domain)) {
+                    is CertificateOperationResult.Success -> call.respond(result.value)
+                    CertificateOperationResult.InvalidDomain -> call.respondError(HttpStatusCode.BadRequest, "invalid_domain", "Invalid domain")
+                    CertificateOperationResult.NotFound -> call.respondError(HttpStatusCode.NotFound, "certificate_not_found", "No installed certificate found for '$domain'")
+                    CertificateOperationResult.CertbotUnavailable -> call.respondError(HttpStatusCode.ServiceUnavailable, "certificate_manager_unavailable", "Certbot is unavailable")
+                    CertificateOperationResult.RenewalFailed -> call.respondError(HttpStatusCode.InternalServerError, "certificate_renewal_failed", "Certbot renewal failed or exceeded the 8-minute limit. Check Gatekeeperd logs for Certbot output and nginx reload status.")
+                    else -> call.respondError(HttpStatusCode.InternalServerError, "certificate_error", "Certificate renewal failed")
                 }
-                if (!nginxService.isCertificateInstalled(validatedDomain)) {
-                    call.respondError(HttpStatusCode.NotFound, "certificate_not_found", "No installed certificate found for '$validatedDomain'")
-                    return@post
-                }
-                nginxService.certificateManagerIssue()?.let { issue ->
-                    call.respondError(HttpStatusCode.ServiceUnavailable, "certificate_manager_unavailable", issue)
-                    return@post
-                }
-
-                val beforeExpiry = nginxService.certificateExpiry(validatedDomain)
-                if (!nginxService.renewCertificate(validatedDomain)) {
-                    val expiresAt = beforeExpiry?.first?.let { java.time.OffsetDateTime.parse(it).toLocalDateTime() }
-                    val status = when {
-                        beforeExpiry == null -> "unknown"
-                        beforeExpiry.second < 0 -> "expired"
-                        else -> "active"
-                    }
-                    CertificateRepository.recordRenewalResult(validatedDomain, expiresAt, status, "Certbot renewal failed")
-                    call.respondError(HttpStatusCode.InternalServerError, "certificate_renewal_failed", "Certbot renewal failed or exceeded the 8-minute limit. Check Gatekeeperd logs for Certbot output and nginx reload status.")
-                    return@post
-                }
-
-                val afterExpiry = nginxService.certificateExpiry(validatedDomain)
-                val expiryInstant = afterExpiry?.first?.let(java.time.OffsetDateTime::parse)
-                val renewalStatus = when {
-                    expiryInstant == null -> "unknown"
-                    expiryInstant.toInstant().isBefore(java.time.Instant.now()) -> "expired"
-                    else -> "active"
-                }
-                CertificateRepository.recordRenewalResult(
-                    validatedDomain,
-                    expiryInstant?.toLocalDateTime(),
-                    renewalStatus
-                )
-                val renewed = beforeExpiry?.first != afterExpiry?.first
-                call.respond(
-                    CertificateRenewalResponse(
-                        domain = validatedDomain,
-                        renewed = renewed,
-                        certificateExpiresAt = afterExpiry?.first,
-                        certificateDaysRemaining = afterExpiry?.second,
-                        message = if (renewed) "Certificate renewed successfully" else "Certificate is not due for renewal yet"
-                    )
-                )
             }
 
             get("/api/admin/nginx/certificate/status/{domain}") {
@@ -1251,20 +1136,11 @@ fun Application.configureNginxAdminRoutes() {
                     return@get
                 }
 
-                val validatedDomain = runCatching { requireValidHostname(domain) }.getOrElse {
-                    call.respondError(HttpStatusCode.BadRequest, "invalid_domain", it.message ?: "Invalid domain")
-                    return@get
+                when (val result = nginxAdminService.certificateStatus(domain)) {
+                    is CertificateOperationResult.Success -> call.respond(result.value)
+                    CertificateOperationResult.InvalidDomain -> call.respondError(HttpStatusCode.BadRequest, "invalid_domain", "Invalid domain")
+                    else -> call.respondError(HttpStatusCode.InternalServerError, "certificate_error", "Unable to check certificate")
                 }
-                val installed = nginxService.isCertificateInstalled(validatedDomain)
-
-                call.respond(
-                    CertificateResponse(
-                        domain = validatedDomain,
-                        installed = installed,
-                        certificatePath = if (installed) "${AppConfig.nginxSslCertPath}/$validatedDomain/fullchain.pem" else null,
-                        privateKeyPath = if (installed) "${AppConfig.nginxSslCertPath}/$validatedDomain/privkey.pem" else null
-                    )
-                )
             }
         }
     }

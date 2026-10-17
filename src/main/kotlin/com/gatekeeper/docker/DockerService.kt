@@ -583,7 +583,7 @@ class DockerService(dockerSocketPath: String) : DockerGateway {
 
     fun deleteVolume(name: String) { client.removeVolumeCmd(name).exec() }
 
-    fun containerHealth(containerNameOrId: String): String {
+    override fun containerHealth(containerNameOrId: String): String {
         return try {
             val inspect: InspectContainerResponse = client.inspectContainerCmd(containerNameOrId).exec()
             val state = inspect.state
@@ -599,7 +599,7 @@ class DockerService(dockerSocketPath: String) : DockerGateway {
         }
     }
 
-    fun dockerHealthStatus(containerNameOrId: String): String? = try {
+    override fun dockerHealthStatus(containerNameOrId: String): String? = try {
         val inspect: InspectContainerResponse = client.inspectContainerCmd(containerNameOrId).exec()
         inspect.state?.health?.status
     } catch (e: Exception) {

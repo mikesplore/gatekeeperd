@@ -3,7 +3,7 @@ package com.gatekeeper.nginx
 import com.gatekeeper.config.AppConfig
 import com.gatekeeper.db.repositories.ProjectRepository
 import com.gatekeeper.db.repositories.SiteRepository
-import com.gatekeeper.db.repositories.CertificateRepository
+import com.gatekeeper.feature.certificate.data.persistence.ExposedCertificateRepository
 import com.gatekeeper.docker.DockerService
 import com.gatekeeper.deployment.DeploymentApplicationService
 import java.io.File
@@ -12,6 +12,7 @@ import java.io.File
 object NginxBackfillRunner {
     fun run(sitesAvailablePath: String = AppConfig.nginxSitesAvailablePath, dryRun: Boolean = false): NginxBackfillReport {
         val nginx = NginxService.configured()
+        val certificates = ExposedCertificateRepository()
         val docker = runCatching { DockerService(AppConfig.dockerSocket) }.getOrNull()
         try {
             val report = NginxSiteBackfill(
@@ -41,7 +42,7 @@ object NginxBackfillRunner {
                     if (model.certMode == com.gatekeeper.db.tables.CertMode.AUTO_RESOLVE) {
                         nginx.resolveCertificateForDomain(model.domain)?.let { resolved ->
                             val certificate =
-                                CertificateRepository.upsert(resolved.certificateDomain, null, null, "discovered")
+                                certificates.upsert(resolved.certificateDomain, null, null, "discovered")
                             SiteRepository.linkCertificateForDomain(model.domain, certificate.id)
                         }
                     }

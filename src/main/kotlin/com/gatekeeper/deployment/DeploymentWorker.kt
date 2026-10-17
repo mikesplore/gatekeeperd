@@ -9,6 +9,8 @@ import com.gatekeeper.config.AppConfig
 import com.gatekeeper.plugins.DistributedLock
 import com.gatekeeper.docker.CreateContainerRequest
 import com.gatekeeper.docker.DockerService
+import com.gatekeeper.infrastructure.TcpPortProbe
+import com.gatekeeper.infrastructure.TcpHttpPortProbe
 import com.gatekeeper.docker.DockerCleanupService
 import com.gatekeeper.nginx.NginxService
 import com.gatekeeper.nginx.DeploymentUpstreamIncludes
@@ -23,8 +25,6 @@ import java.io.File
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.atomic.AtomicBoolean
-import java.net.InetSocketAddress
-import java.net.Socket
 import java.util.UUID
 import java.time.LocalDateTime
 import java.util.concurrent.TimeUnit
@@ -33,6 +33,7 @@ import kotlin.time.Duration.Companion.milliseconds
 object DeploymentWorker {
     private val logger = LoggerFactory.getLogger("com.gatekeeper.deployment.DeploymentWorker")
     private val started = AtomicBoolean(false)
+    private val readinessChecker = ReadinessChecker(TcpPortProbe(), TcpHttpPortProbe())
 
     fun start(scope: CoroutineScope) {
         if (!started.compareAndSet(false, true)) return
@@ -343,7 +344,7 @@ object DeploymentWorker {
                     candidateInfo.ports.publishedHostPort(containerPort)
                         ?: error("Docker did not assign a host port for candidate container port $containerPort")
                 }
-                val selectedProbe = selectedReadiness(job, candidatePortMappings.isNotEmpty())
+                val selectedProbe = readinessChecker.selectedProbe(job, candidatePortMappings.isNotEmpty())
                 update(job, step = "health_checking", log = "Waiting for candidate readiness using $selectedProbe probe")
                 val readiness = awaitHealthy(docker, candidateName, candidatePortMappings, job)
                 if (readiness == null) {
@@ -782,67 +783,15 @@ object DeploymentWorker {
         }
     }
 
-    private data class ReadinessResult(val containerPort: Int?)
-
     private fun awaitHealthy(docker: DockerService, name: String, portMappings: Map<Int, Int>, job: DeploymentJobRecord): ReadinessResult? {
-        val probe = selectedReadiness(job, portMappings.isNotEmpty())
         return DeploymentReadiness.await(
             timeoutNanos = job.readinessTimeoutSeconds * 1_000_000_000L,
             intervalMillis = job.readinessIntervalSeconds * 1000L,
             checkCancelled = { ensureNotCancelled(job.id, requireNotNull(job.claimToken)) },
-            probe = { readinessProbe(docker, name, portMappings, job, probe) },
+            probe = { readinessChecker.check(docker, name, portMappings, job) },
             pause = { intervalMillis -> Thread.sleep(intervalMillis) }
         )
     }
-
-    private fun selectedReadiness(job: DeploymentJobRecord, hasPublishedPort: Boolean): String =
-        when (job.readinessType?.lowercase()) {
-            "docker" -> "docker"
-            "http" -> "http"
-            "tcp" -> "tcp"
-            "process" -> "process"
-            else -> if (hasPublishedPort) "tcp (auto-detected)" else "process"
-        }
-
-    private fun readinessProbe(docker: DockerService, name: String, portMappings: Map<Int, Int>, job: DeploymentJobRecord, probe: String): ReadinessResult? {
-        if (docker.containerHealth(name) != "running") return null
-        val openDeclaredPort = {
-            val configured = job.containerPort
-            if (configured != null) {
-                portMappings[configured]?.takeIf { tcpReachable(it, job.readinessProbeTimeoutMillis) }?.let { configured }
-            } else portMappings.entries.firstOrNull { (_, hostPort) -> tcpReachable(hostPort, job.readinessProbeTimeoutMillis) }?.key
-        }
-        return when (probe) {
-            "docker" -> if (docker.dockerHealthStatus(name) == "healthy") ReadinessResult(openDeclaredPort()) else null
-            "http" -> {
-                val path = job.readinessTarget?.takeIf { it.startsWith("/") } ?: "/"
-                val selected = job.containerPort?.let { port ->
-                    portMappings[port]?.takeIf { httpReachable(it, path, job.readinessProbeTimeoutMillis) }?.let { port }
-                } ?: if (job.containerPort == null) portMappings.entries.firstOrNull { (_, hostPort) ->
-                    httpReachable(hostPort, path, job.readinessProbeTimeoutMillis)
-                }?.key else null
-                selected?.let(::ReadinessResult)
-            }
-            "tcp (auto-detected)" -> openDeclaredPort()?.let(::ReadinessResult)
-            "tcp" -> openDeclaredPort()?.let(::ReadinessResult)
-            "process" -> ReadinessResult(openDeclaredPort() ?: job.containerPort ?: portMappings.keys.singleOrNull())
-            else -> error("Unsupported readiness type: $probe")
-        }
-    }
-
-    private fun tcpReachable(port: Int, timeoutMillis: Int = 500): Boolean = runCatching {
-        Socket().use { it.connect(InetSocketAddress("127.0.0.1", port), timeoutMillis); true }
-    }.getOrDefault(false)
-
-    private fun httpReachable(port: Int, path: String, timeoutMillis: Int): Boolean = runCatching {
-        Socket().use { socket ->
-            socket.connect(InetSocketAddress("127.0.0.1", port), timeoutMillis)
-            socket.soTimeout = timeoutMillis
-            socket.getOutputStream().write("GET $path HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n".toByteArray(Charsets.US_ASCII))
-            val status = socket.getInputStream().bufferedReader(Charsets.US_ASCII).readLine()?.split(' ')?.getOrNull(1)?.toIntOrNull()
-            status != null && status in 200..499
-        }
-    }.getOrDefault(false)
 
     private fun String.publishedHostPort(containerPort: Int): Int? = split(',').firstNotNullOfOrNull { mapping ->
         val parts = mapping.trim().substringBefore('/').split(':')
