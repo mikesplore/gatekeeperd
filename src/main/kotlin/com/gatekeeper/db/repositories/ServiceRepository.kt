@@ -26,6 +26,7 @@ object ServiceRepository {
         val id: UUID,
         val projectId: UUID,
         val name: String,
+        val serviceType: String,
         val domain: String?,
         val isDefault: Boolean,
         val accessStatus: String,
@@ -77,6 +78,7 @@ object ServiceRepository {
         Services.insertIgnore {
             it[Services.projectId] = projectId
             it[Services.name] = "default"
+            it[Services.serviceType] = "frontend"
             it[Services.isDefault] = true
             it[Services.accessStatus] = "active"
             it[Services.blockReason] = null
@@ -86,12 +88,13 @@ object ServiceRepository {
         }.single().let(::toRecord)
     }
 
-    fun create(projectId: UUID, name: String): ServiceRecord = transaction {
+    fun create(projectId: UUID, name: String, serviceType: String = "frontend"): ServiceRecord = transaction {
         val id = UUID.randomUUID()
         Services.insert {
             it[Services.id] = id
             it[Services.projectId] = projectId
             it[Services.name] = name
+            it[Services.serviceType] = serviceType
             it[Services.isDefault] = false
             it[Services.accessStatus] = "active"
             it[Services.blockReason] = null
@@ -107,7 +110,8 @@ object ServiceRepository {
         blockReason: String? = null,
         blockReasonCode: AccessBlockReason? = null,
         blockReasonNote: String? = null,
-        makeDefault: Boolean = false
+        makeDefault: Boolean = false,
+        serviceType: String? = null
     ): ServiceRecord? {
         accessStatus?.let { require(it in setOf("active", "blocked", "manual_block")) { "Unsupported service access status" } }
         val previousGateSlugs = if (makeDefault) SiteRepository.findGateSlugsByProjectId(projectId) else emptyList()
@@ -122,6 +126,7 @@ object ServiceRepository {
             }
             Services.update({ (Services.projectId eq projectId) and (Services.id eq id) }) {
                 name?.let { value -> it[Services.name] = value }
+                serviceType?.let { value -> it[Services.serviceType] = value }
                 if (makeDefault) it[Services.isDefault] = true
                 accessStatus?.let { value -> it[Services.accessStatus] = value }
                 if (accessStatus == "active") {
@@ -175,7 +180,7 @@ object ServiceRepository {
     }
 
     private fun toRecord(row: org.jetbrains.exposed.sql.ResultRow) = ServiceRecord(
-        row[Services.id], row[Services.projectId], row[Services.name], row[Services.domain], row[Services.isDefault],
+        row[Services.id], row[Services.projectId], row[Services.name], row[Services.serviceType], row[Services.domain], row[Services.isDefault],
         row[Services.accessStatus], row[Services.blockReason], row[Services.blockReasonCode], row[Services.blockReasonNote]
     )
 

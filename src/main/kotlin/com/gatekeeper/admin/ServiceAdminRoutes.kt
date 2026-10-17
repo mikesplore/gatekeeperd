@@ -24,16 +24,18 @@ import kotlinx.serialization.Serializable
 import java.util.UUID
 import java.math.BigDecimal
 
+private val supportedServiceTypes = setOf("frontend", "backend", "worker", "database", "redis", "cache", "custom")
+
 @Serializable
 data class ServiceAdminView(
-    val id: String, val projectId: String, val name: String, val accessStatus: String,
+    val id: String, val projectId: String, val name: String, val serviceType: String, val accessStatus: String,
     val isDefault: Boolean,
     val blockReason: String?, val blockReasonCode: String? = null, val blockReasonNote: String? = null,
     val domain: String? = null
 )
 
 @Serializable
-data class CreateServiceRequest(val name: String)
+data class CreateServiceRequest(val name: String, val serviceType: String = "frontend")
 
 @Serializable
 data class CreateServiceAdjustmentRequest(val type: String, val amount: Double, val reason: String)
@@ -48,7 +50,7 @@ data class ServiceAdjustmentView(val id: String, val projectId: String, val serv
 data class UpdateServiceRequest(
     val name: String? = null, val accessStatus: String? = null, val blockReason: String? = null,
     val blockReasonCode: String? = null, val blockReasonNote: String? = null,
-    val isDefault: Boolean? = null
+    val isDefault: Boolean? = null, val serviceType: String? = null
 )
 
 @Serializable
@@ -115,10 +117,14 @@ fun Application.configureServiceAdminRoutes() {
                 val body = runCatching { call.receive<CreateServiceRequest>() }.getOrNull()
                     ?: return@post call.respondError(HttpStatusCode.BadRequest, "invalid_request", "A service name is required")
                 val name = body.name.trim()
+                val serviceType = body.serviceType.trim().lowercase()
+                if (serviceType !in supportedServiceTypes) {
+                    return@post call.respondError(HttpStatusCode.BadRequest, "invalid_service_type", "Unsupported service type")
+                }
                 if (!validServiceName(name) || name.equals("default", ignoreCase = true)) {
                     return@post call.respondError(HttpStatusCode.BadRequest, "invalid_service_name", "Service name is invalid or reserved")
                 }
-                val service = runCatching { ServiceRepository.create(projectId, name) }.getOrElse {
+                val service = runCatching { ServiceRepository.create(projectId, name, serviceType) }.getOrElse {
                     return@post call.respondError(HttpStatusCode.Conflict, "service_create_conflict", "A service with that name already exists")
                 }
                 call.respond(HttpStatusCode.Created, service.toView())
@@ -217,8 +223,12 @@ fun Application.configureServiceAdminRoutes() {
                     AccessBlockReason.entries.firstOrNull { it.value == code }
                         ?: return@patch call.respondError(HttpStatusCode.BadRequest, "invalid_block_reason_code", "Unsupported blockReasonCode")
                 }
+                val serviceType = body.serviceType?.trim()?.lowercase()
+                if (serviceType != null && serviceType !in supportedServiceTypes) {
+                    return@patch call.respondError(HttpStatusCode.BadRequest, "invalid_service_type", "Unsupported service type")
+                }
                 val updated = runCatching {
-                    ServiceRepository.update(projectId, serviceId, name, body.accessStatus, body.blockReason, blockReasonCode, body.blockReasonNote, body.isDefault == true)
+                    ServiceRepository.update(projectId, serviceId, name, body.accessStatus, body.blockReason, blockReasonCode, body.blockReasonNote, body.isDefault == true, serviceType)
                 }.getOrElse {
                     return@patch call.respondError(HttpStatusCode.Conflict, "service_update_conflict", "The service update conflicts with an existing service")
                 } ?: return@patch call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
@@ -364,7 +374,7 @@ private fun validEnvironmentValues(values: Map<String, String>) = values.all { (
 }
 
 private fun ServiceRepository.ServiceRecord.toView() = ServiceAdminView(
-    id.toString(), projectId.toString(), name, accessStatus, isDefault, blockReason,
+    id.toString(), projectId.toString(), name, serviceType, accessStatus, isDefault, blockReason,
     blockReasonCode?.value, blockReasonNote, domain
 )
 private fun EnvironmentSetRepository.VersionMetadata.toView() = EnvironmentVersionView(id.toString(), version, environment, keys, createdAt.toString(), createdBy)
