@@ -24,18 +24,16 @@ CREATE INDEX idx_service_domains_domain ON service_domains(domain);
 -- projection. Only services that already have a domain and no service_domains
 -- row yet are backfilled. Duplicate domains across services are skipped
 -- safely (the first service wins); such conflicts require manual resolution.
-INSERT INTO service_domains (id, service_id, container_port, domain, status, created_at, updated_at)
+INSERT INTO service_domains (id, service_id, container_port, domain, status)
 SELECT
     gen_random_uuid(),
-    id,
+    svc.id,
     NULL,
-    domain,
-    'pending',
-    created_at,
-    created_at
-FROM services
-WHERE domain IS NOT NULL
+    svc.domain,
+    'pending'
+FROM services svc
+WHERE svc.domain IS NOT NULL
   AND NOT EXISTS (
-      SELECT 1 FROM service_domains sd WHERE sd.service_id = services.id
+      SELECT 1 FROM service_domains sd WHERE sd.service_id = svc.id
   )
 ON CONFLICT (domain) DO NOTHING;
