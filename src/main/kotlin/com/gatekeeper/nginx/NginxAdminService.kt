@@ -1,8 +1,8 @@
 package com.gatekeeper.nginx
 
 import com.gatekeeper.config.AppConfig
-import com.gatekeeper.db.repositories.CertificateRepository
 import com.gatekeeper.db.repositories.SiteRepository
+import com.gatekeeper.feature.certificate.domain.repository.CertificateRepository
 import java.time.Instant
 import java.time.LocalDateTime
 import java.time.OffsetDateTime
@@ -10,7 +10,7 @@ import java.time.OffsetDateTime
 /** Application-level operations for nginx administration routes. */
 class NginxAdminService(
     private val nginx: NginxService,
-    private val certificates: CertificateStore = ExposedCertificateStore
+    private val certificates: CertificateStore
 ) {
     fun hasRenderAffectingParameters(body: NginxEnableRequest): Boolean =
         body.port != null || body.domain != null || body.upstreamScheme != null ||
@@ -124,11 +124,11 @@ interface CertificateStore {
     fun recordRenewal(domain: String, expiresAt: LocalDateTime?, status: String, error: String?)
 }
 
-object ExposedCertificateStore : CertificateStore {
-    override fun syncInventory(domain: String, expiresAt: LocalDateTime?, status: String) { CertificateRepository.syncInventory(domain, expiresAt, status) }
-    override fun upsert(domain: String, issuedAt: LocalDateTime?, expiresAt: LocalDateTime?, status: String) = CertificateStore.Record(CertificateRepository.upsert(domain, issuedAt, expiresAt, status).id)
+class ExposedCertificateStore(private val repository: CertificateRepository) : CertificateStore {
+    override fun syncInventory(domain: String, expiresAt: LocalDateTime?, status: String) { repository.syncInventory(domain, expiresAt, status) }
+    override fun upsert(domain: String, issuedAt: LocalDateTime?, expiresAt: LocalDateTime?, status: String) = CertificateStore.Record(repository.upsert(domain, issuedAt, expiresAt, status).id)
     override fun linkSites(domain: String, certificateId: java.util.UUID) { SiteRepository.linkCertificateForDomain(domain, certificateId) }
-    override fun requireRemovable(domain: String) = CertificateRepository.requireRemovable(domain)
-    override fun delete(domain: String) { CertificateRepository.deleteByDomain(domain) }
-    override fun recordRenewal(domain: String, expiresAt: LocalDateTime?, status: String, error: String?) { CertificateRepository.recordRenewalResult(domain, expiresAt, status, error) }
+    override fun requireRemovable(domain: String) = repository.requireRemovable(domain)
+    override fun delete(domain: String) { repository.deleteByDomain(domain) }
+    override fun recordRenewal(domain: String, expiresAt: LocalDateTime?, status: String, error: String?) { repository.recordRenewalResult(domain, expiresAt, status, error) }
 }

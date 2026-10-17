@@ -6,6 +6,8 @@ import com.gatekeeper.gate.GateApplicationService
 import com.gatekeeper.gate.GateService
 import com.gatekeeper.nginx.NginxAdminService
 import com.gatekeeper.nginx.NginxService
+import com.gatekeeper.nginx.NginxCommandRunner
+import com.gatekeeper.nginx.ExposedCertificateStore
 import com.gatekeeper.config.AppConfig
 import com.gatekeeper.config.AppSettings
 import com.gatekeeper.docker.DockerGateway
@@ -77,6 +79,7 @@ private val applicationModule = module {
     single<PortProbe> { TcpPortProbe() }
     single<FileStore> { LocalFileStore() }
     single<TransactionRunner> { ExposedTransactionRunner() }
+    single { NginxCommandRunner(get<ProcessRunner>()) }
     single<NotificationRepository> { ExposedNotificationRepository() }
     single<AuditRepository> { ExposedAuditRepository(get()) }
     single<CertificateRepository> { ExposedCertificateRepository() }
@@ -85,8 +88,9 @@ private val applicationModule = module {
     single { CustomerApplicationService(get<ProjectQueryRepository>(), get(), get(), get<SupportRequestRepository>()) }
     single { GateService(get<ProjectQueryRepository>(), get<GetLatestPaymentLink>(), get()) }
     single { GateApplicationService(get<ProjectQueryRepository>(), get<GateService>()) }
-    single { NginxService.configured() }
-    single { NginxAdminService(get()) }
+    single { NginxService.configured(get<NginxCommandRunner>()) }
+    single { ExposedCertificateStore(get<CertificateRepository>()) }
+    single { NginxAdminService(get(), get<ExposedCertificateStore>()) }
     single<PaymentDomainRepository> { ExposedPaymentRepository() }
     single { ProjectBalanceAdapter(get<PaymentDomainRepository>()) }
     single<PaymentEventDomainRepository> { ExposedPaymentEventRepository() }

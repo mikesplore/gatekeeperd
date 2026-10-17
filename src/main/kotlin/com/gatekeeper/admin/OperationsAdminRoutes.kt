@@ -3,12 +3,9 @@ package com.gatekeeper.admin
 import com.gatekeeper.api.respondError
 import com.gatekeeper.api.dto.PaginatedResponse
 import com.gatekeeper.api.dto.toResponse
-import com.gatekeeper.db.repositories.AuditRepository
-import com.gatekeeper.db.repositories.NotificationRepository
 import com.gatekeeper.db.repositories.ProjectRepository
 import com.gatekeeper.db.repositories.SiteRepository
 import com.gatekeeper.db.repositories.CustomerRepository
-import com.gatekeeper.db.repositories.CertificateRepository
 import com.gatekeeper.docker.DockerService
 import com.gatekeeper.nginx.NginxService
 import com.gatekeeper.nginx.NginxSelfDomainExclusion
@@ -41,6 +38,9 @@ import java.io.File
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.sql.SQLException
+import com.gatekeeper.feature.notification.domain.repository.NotificationRepository as NotificationRepositoryPort
+import com.gatekeeper.feature.certificate.domain.repository.CertificateRepository as CertificateRepositoryPort
+import com.gatekeeper.feature.audit.domain.repository.AuditRepository as AuditRepositoryPort
 
 @Serializable
 data class ProjectHealthResponse(
@@ -231,6 +231,9 @@ private fun derivedBillingStatus(financials: List<DashboardProjectFinancials>): 
 )
 
 fun Application.configureOperationsAdminRoutes() {
+    val notificationRepository = get<NotificationRepositoryPort>()
+    val certificateRepository = get<CertificateRepositoryPort>()
+    val auditRepository = get<AuditRepositoryPort>()
     routing {
         authenticate("auth-jwt") {
             get("/api/admin/metrics") {
@@ -491,7 +494,7 @@ fun Application.configureOperationsAdminRoutes() {
                 val siteCounts = SiteRepository.findAll().filterNot { it.domain.lowercase().trimEnd('.') in selfDomains }
                     .groupingBy { it.reconciliationStatus.value }.eachCount().mapValues { it.value.toLong() }
                 val now = LocalDateTime.now()
-                val certificateAlerts = CertificateRepository.findAll().flatMap { certificate ->
+                val certificateAlerts = certificateRepository.findAll().flatMap { certificate ->
                     buildList {
                         certificate.lastRenewalError?.let { add("certificate for ${certificate.domain} renewal failed: $it") }
                         certificate.expiresAt?.let { expires ->
@@ -508,7 +511,7 @@ fun Application.configureOperationsAdminRoutes() {
                 val principal = call.principal<JWTPrincipal>()?.payload?.subject ?: "unknown"
                 val projectId = call.request.queryParameters["projectId"]?.let { runCatching { UUID.fromString(it) }.getOrNull() }
                 val severity = call.request.queryParameters["severity"]; val action = call.request.queryParameters["type"]; val from = call.request.queryParameters["from"]?.let { runCatching { LocalDateTime.parse(it) }.getOrNull() }; val to = call.request.queryParameters["to"]?.let { runCatching { LocalDateTime.parse(it) }.getOrNull() }; val archived = call.request.queryParameters["includeArchived"] == "true"
-                val notifications = NotificationRepository.list(principal, severity, action, projectId, from, to, archived, limit, offset).map { row -> NotificationResponse(row.id.toString(), row.title, row.message, row.severity, row.action, row.createdAt.toString(), row.readAt != null) }; val total = NotificationRepository.count(principal, severity, action, projectId, from, to, archived)
+                val notifications = notificationRepository.list(principal, severity, action, projectId, from, to, archived, limit, offset).map { row -> NotificationResponse(row.id.toString(), row.title, row.message, row.severity, row.action, row.createdAt.toString(), row.readAt != null) }; val total = notificationRepository.count(principal, severity, action, projectId, from, to, archived)
                 call.respond(PaginatedResponse(notifications, total, limit, offset, offset + notifications.size < total))
             }
             post("/api/admin/notifications/{id}/{state}") {
@@ -516,7 +519,7 @@ fun Application.configureOperationsAdminRoutes() {
                 val state = call.parameters["state"] ?: ""
                 if (state !in setOf("read", "dismissed", "archived")) { call.respondError(HttpStatusCode.BadRequest, "invalid_notification_state", "State must be read, dismissed, or archived"); return@post }
                 val recipient = call.principal<JWTPrincipal>()?.payload?.subject ?: "unknown"
-                if (!NotificationRepository.mark(id, recipient, state)) { call.respondError(HttpStatusCode.NotFound, "notification_not_found", "Notification not found"); return@post }
+                if (!notificationRepository.mark(id, recipient, state)) { call.respondError(HttpStatusCode.NotFound, "notification_not_found", "Notification not found"); return@post }
                 call.respond(mapOf("status" to state, "id" to id.toString()))
             }
             get("/api/admin/notifications/stream") {
@@ -525,7 +528,7 @@ fun Application.configureOperationsAdminRoutes() {
                     try {
                         var lastSeen: String? = null
                         repeat(20) {
-                            val latest = NotificationRepository.list(recipient, null, null, null, null, null, false, 10)
+                            val latest = notificationRepository.list(recipient, null, null, null, null, null, false, 10)
                             val fresh = latest.filter { it.id.toString() != lastSeen }
                             if (fresh.isNotEmpty()) {
                                 lastSeen = fresh.first().id.toString()
@@ -629,7 +632,7 @@ fun Application.configureOperationsAdminRoutes() {
                 val limit = call.request.queryParameters["limit"]?.toIntOrNull()?.coerceIn(1, 5000) ?: 1000
                 val action = call.request.queryParameters["action"]
                 val actor = call.request.queryParameters["actor"]
-                val rows = AuditRepository.findFiltered(action, actor, limit)
+                val rows = auditRepository.findFiltered(action, actor, limit)
                 val csv = buildString {
                     appendLine("id,project_id,action,actor,reason,created_at")
                     rows.forEach { row ->

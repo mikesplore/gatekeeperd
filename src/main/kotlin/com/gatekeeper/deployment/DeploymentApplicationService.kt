@@ -673,7 +673,7 @@ object DeploymentApplicationService {
     fun activateAfterCutover(id: UUID, replacesDeploymentId: UUID?): Boolean = transaction {
         val row = Deployments.selectAll().where { Deployments.id eq id }.singleOrNull() ?: return@transaction false
         val currentStatus = row[Deployments.status]
-        check(currentStatus == DeploymentStatus.READY || currentStatus == DeploymentStatus.HEALTH_CHECKING) {
+        check(currentStatus.canTransition(DeploymentStatus.ACTIVE)) {
             "Deployment $id is not ready for activation"
         }
         val projectId = row[Deployments.projectId] ?: error("Deployment has no project_id")

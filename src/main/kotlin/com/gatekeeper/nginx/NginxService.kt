@@ -11,7 +11,6 @@ import java.time.Instant
 import java.security.cert.CertificateFactory
 import java.io.ByteArrayInputStream
 import java.time.ZoneOffset
-import java.time.OffsetDateTime
 import java.security.MessageDigest
 import com.gatekeeper.plugins.DistributedLock
 import com.gatekeeper.db.repositories.SiteRepository
@@ -22,35 +21,6 @@ import com.gatekeeper.db.tables.UpstreamMode
 private val logger = LoggerFactory.getLogger("com.gatekeeper.nginx.NginxService")
 
 data class NginxSiteActivationResult(val success: Boolean, val message: String? = null)
-
-private fun runNginxTestCommand(): NginxTestResult {
-    return try {
-        val process = ProcessBuilder("sudo", "-n", "/usr/sbin/nginx", "-t").redirectErrorStream(true).start()
-        val output = process.inputStream.bufferedReader().readText()
-        val exitCode = process.waitFor()
-        NginxTestResult(exitCode == 0, exitCode, output, OffsetDateTime.now().toString())
-    } catch (e: Exception) {
-        NginxTestResult(false, -1, "Unable to execute nginx -t non-interactively: ${e.message ?: "unknown error"}. Configure sudoers NOPASSWD for the Gatekeeperd service account.", OffsetDateTime.now().toString())
-    }
-}
-
-private fun runNginxReloadCommand(): Boolean {
-    return try {
-        val process = ProcessBuilder("sudo", "-n", "/bin/systemctl", "reload", "nginx").redirectErrorStream(true).start()
-        val exitCode = process.waitFor()
-        if (exitCode != 0) logger.error("Failed to reload nginx: ${process.inputStream.bufferedReader().readText()}")
-        exitCode == 0
-    } catch (e: Exception) {
-        logger.error("Failed to reload nginx", e)
-        false
-    }
-}
-
-private fun dumpNginxConfig(): String? = runCatching {
-    val process = ProcessBuilder("sudo", "-n", "/usr/sbin/nginx", "-T").redirectErrorStream(true).start()
-    val output = process.inputStream.bufferedReader().readText()
-    if (process.waitFor() == 0) output else null
-}.getOrNull()
 
 data class ResolvedCertificate(
     val certificateDomain: String,
@@ -63,21 +33,24 @@ class NginxService(
     private val sitesEnabledPath: String = "/etc/nginx/sites-enabled",
     private val gatekeeperPort: Int = 8080,
     private val sslCertPath: String = "/etc/letsencrypt/live",
-    private val nginxTestRunner: () -> NginxTestResult = ::runNginxTestCommand,
-    private val nginxReloadRunner: () -> Boolean = ::runNginxReloadCommand,
+    private val nginxTestRunner: () -> NginxTestResult = { NginxCommandRunner().test() },
+    private val nginxReloadRunner: () -> Boolean = { NginxCommandRunner().reload() },
     private val selfDomainExclusion: NginxSelfDomainExclusion = NginxSelfDomainExclusion(emptyList()),
     private val upstreamIncludeDirectory: String = "/etc/nginx/conf.d/gatekeeperd-upstreams",
     private val localProbeRunner: (String, Boolean) -> Boolean = ::probeViaLocalNginx,
-    private val nginxConfigDumpRunner: () -> String? = ::dumpNginxConfig
+    private val nginxConfigDumpRunner: () -> String? = { NginxCommandRunner().dumpConfig() }
 ) {
     enum class InterruptedCutoverResult { TARGET_RELOADED, PREVIOUS_RESTORED, CONFLICT }
     companion object {
-        fun configured(): NginxService = NginxService(
+        fun configured(commands: NginxCommandRunner = NginxCommandRunner()): NginxService = NginxService(
             sitesAvailablePath = AppConfig.nginxSitesAvailablePath,
             sitesEnabledPath = AppConfig.nginxSitesEnabledPath,
             sslCertPath = AppConfig.nginxSslCertPath,
             upstreamIncludeDirectory = AppConfig.nginxUpstreamIncludeDirectory,
-            selfDomainExclusion = NginxSelfDomainExclusion(AppConfig.gatekeeperdSelfDomains)
+            selfDomainExclusion = NginxSelfDomainExclusion(AppConfig.gatekeeperdSelfDomains),
+            nginxTestRunner = commands::test,
+            nginxReloadRunner = commands::reload,
+            nginxConfigDumpRunner = commands::dumpConfig
         )
     }
 
