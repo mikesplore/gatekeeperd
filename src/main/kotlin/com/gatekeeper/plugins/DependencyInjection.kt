@@ -69,6 +69,12 @@ import com.gatekeeper.feature.integrations.domain.repository.IntegrationOutboxRe
 import com.gatekeeper.feature.integrations.data.persistence.ExposedIntegrationOutboxRepository
 import com.gatekeeper.feature.deployment.domain.repository.DeploymentPortAllocationRepository as DeploymentPortAllocationPort
 import com.gatekeeper.feature.deployment.data.persistence.ExposedDeploymentPortAllocationRepository
+import com.gatekeeper.feature.deployment.domain.port.DeploymentCommandRunner
+import com.gatekeeper.feature.deployment.data.process.HostDeploymentCommandRunner
+import com.gatekeeper.feature.deployment.domain.port.GitHubTokenProvider
+import com.gatekeeper.deployment.SourceFetcher
+import com.gatekeeper.deployment.ImageBuilder
+import com.gatekeeper.integrations.GitHubAppClient
 import org.koin.dsl.module
 import org.koin.core.qualifier.named
 import org.koin.ktor.plugin.Koin
@@ -89,6 +95,10 @@ private val applicationModule = module {
     single<CertificateRepository> { ExposedCertificateRepository() }
     single<IntegrationOutboxRepositoryPort> { ExposedIntegrationOutboxRepository() }
     single<DeploymentPortAllocationPort> { ExposedDeploymentPortAllocationRepository() }
+    single<DeploymentCommandRunner> { HostDeploymentCommandRunner() }
+    single<GitHubTokenProvider> { GitHubTokenProvider { GitHubAppClient.installationToken() } }
+    single { SourceFetcher(get<DeploymentCommandRunner>(), get<GitHubTokenProvider>()) }
+    single { ImageBuilder(get<DeploymentCommandRunner>()) }
     single<ProjectQueryRepository> { ExposedProjectQueryRepository() }
     single<SupportRequestRepository> { ExposedSupportRequestRepository() }
     single { CustomerApplicationService(get<ProjectQueryRepository>(), get(), get(), get<SupportRequestRepository>()) }

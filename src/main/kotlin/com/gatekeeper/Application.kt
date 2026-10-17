@@ -161,7 +161,7 @@ fun Application.module() {
     AutoBlockerJob.start(appScope)
     ReconciliationJob.start(appScope, get<ReconcilePayments>())
     IntegrationOutboxJob.start(appScope, get(), get<PaymentDomainRepository>(), get<ProjectBalanceAdapter>())
-    DeploymentWorker.start(appScope, get())
+    DeploymentWorker.start(appScope, get(), get(), get(), get())
 
     monitor.subscribe(ApplicationStopping) {
         runCatching { get<DockerService>().close() }
