@@ -6,7 +6,7 @@ import com.gatekeeper.db.repositories.EnvironmentSetRepository
 import com.gatekeeper.db.repositories.ProjectRepository
 import com.gatekeeper.db.repositories.ServiceRepository
 import com.gatekeeper.db.repositories.ProjectAdjustmentRepository
-import com.gatekeeper.db.repositories.AuditRepository
+import com.gatekeeper.feature.audit.domain.repository.AuditRepository as AuditRepositoryPort
 import com.gatekeeper.db.tables.AdjustmentType
 import com.gatekeeper.db.tables.AccessBlockReason
 import com.gatekeeper.integrations.ScribedIntegrationClient
@@ -23,6 +23,7 @@ import io.ktor.server.routing.*
 import kotlinx.serialization.Serializable
 import java.util.UUID
 import java.math.BigDecimal
+import org.koin.ktor.ext.get
 
 private val supportedServiceTypes = setOf("frontend", "backend", "worker", "database", "redis", "cache", "custom")
 
@@ -99,6 +100,7 @@ data class ActiveDeploymentInspectionView(
 )
 
 fun Application.configureServiceAdminRoutes() {
+    val auditRepository = get<AuditRepositoryPort>()
     routing {
         authenticate("auth-jwt") {
             get("/api/admin/projects/{projectId}/services") {
@@ -168,7 +170,7 @@ fun Application.configureServiceAdminRoutes() {
                 if (result.created == false) {
                     return@post call.respond(HttpStatusCode.OK, mapOf("status" to "already_exists", "serviceId" to serviceId.toString(), "invoice" to confirmed.body))
                 }
-                AuditRepository.write(projectId, "service_invoice_created", actor, "service=${service.name} amount=$amount ${project.currency}")
+                auditRepository.write(projectId, "service_invoice_created", actor, "service=${service.name} amount=$amount ${project.currency}")
                 call.respond(HttpStatusCode.Created, mapOf("status" to "created", "serviceId" to serviceId.toString(), "invoice" to confirmed.body))
             }
 
@@ -192,7 +194,7 @@ fun Application.configureServiceAdminRoutes() {
                 val actor = call.principal<JWTPrincipal>()?.payload?.subject ?: "unknown"
                 val adjustment = try { ProjectAdjustmentRepository.create(projectId, type, amount, body.reason, actor, serviceId) }
                     catch (e: IllegalArgumentException) { return@post call.respondError(HttpStatusCode.BadRequest, "invalid_adjustment", e.message ?: "Invalid adjustment") }
-                AuditRepository.write(projectId, "service_adjustment", actor, "service=${service.name} ${type.name} amount=$amount reason=${body.reason.trim()}")
+                auditRepository.write(projectId, "service_adjustment", actor, "service=${service.name} ${type.name} amount=$amount reason=${body.reason.trim()}")
                 ScribedIntegrationClient.notifyServiceLedger(serviceId, "adjustment-${adjustment.id}")
                 call.respond(HttpStatusCode.Created, ServiceAdjustmentView(adjustment.id.toString(), projectId.toString(), serviceId.toString(), type.name, amount.toDouble(), adjustment.reason, actor, adjustment.createdAt.toString()))
             }
