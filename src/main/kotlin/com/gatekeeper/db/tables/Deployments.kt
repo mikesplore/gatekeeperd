@@ -4,6 +4,7 @@ import org.jetbrains.exposed.sql.ReferenceOption
 import org.jetbrains.exposed.sql.Table
 import org.jetbrains.exposed.sql.javatime.datetime
 import java.time.LocalDateTime
+typealias DeploymentStatus = com.gatekeeper.deployment.DeploymentStatus
 
 /** Canonical lifecycle record for one attempted runtime release. */
 object Deployments : Table("deployments") {
@@ -51,10 +52,4 @@ object Deployments : Table("deployments") {
     val updatedAt = datetime("updated_at")
 
     override val primaryKey = PrimaryKey(id)
-}
-
-enum class DeploymentStatus(val value: String) {
-    QUEUED("queued"), BUILDING("building"), STARTING("starting"),
-    HEALTH_CHECKING("health-checking"), READY("ready"), ACTIVE("active"), SUPERSEDED("superseded"),
-    FAILED("failed"), CANCELLED("cancelled"), ROLLED_BACK("rolled-back")
 }

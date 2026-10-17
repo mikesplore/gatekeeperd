@@ -1,7 +1,6 @@
 package com.gatekeeper.deployment
 
 import com.gatekeeper.db.tables.Deployments
-import com.gatekeeper.db.tables.DeploymentStatus
 import com.gatekeeper.db.tables.Projects
 import com.gatekeeper.db.tables.AuditLog
 import com.gatekeeper.db.tables.Services
@@ -33,19 +32,6 @@ object DeploymentApplicationService {
     private fun defaultServiceId(projectId: UUID): UUID = Services.selectAll().where {
         (Services.projectId eq projectId) and (Services.isDefault eq true)
     }.singleOrNull()?.get(Services.id) ?: error("Default service not found for project $projectId")
-
-    private val allowedTransitions = mapOf(
-        DeploymentStatus.QUEUED to setOf(DeploymentStatus.BUILDING, DeploymentStatus.CANCELLED),
-        DeploymentStatus.BUILDING to setOf(DeploymentStatus.STARTING, DeploymentStatus.FAILED, DeploymentStatus.CANCELLED),
-        DeploymentStatus.STARTING to setOf(DeploymentStatus.HEALTH_CHECKING, DeploymentStatus.FAILED, DeploymentStatus.CANCELLED),
-        DeploymentStatus.HEALTH_CHECKING to setOf(DeploymentStatus.QUEUED, DeploymentStatus.READY, DeploymentStatus.ACTIVE, DeploymentStatus.FAILED, DeploymentStatus.CANCELLED),
-        DeploymentStatus.READY to setOf(DeploymentStatus.ACTIVE, DeploymentStatus.FAILED),
-        DeploymentStatus.ACTIVE to setOf(DeploymentStatus.SUPERSEDED, DeploymentStatus.ROLLED_BACK),
-        DeploymentStatus.SUPERSEDED to setOf(DeploymentStatus.ACTIVE, DeploymentStatus.ROLLED_BACK),
-        DeploymentStatus.FAILED to setOf(DeploymentStatus.QUEUED),
-        DeploymentStatus.CANCELLED to setOf(DeploymentStatus.QUEUED),
-        DeploymentStatus.ROLLED_BACK to emptySet()
-    )
 
     fun createQueued(
         id: UUID,
@@ -739,7 +725,7 @@ object DeploymentApplicationService {
         val row = Deployments.selectAll().where { Deployments.id eq id }.singleOrNull() ?: return@transaction false
         val current = row[Deployments.status]
         if (current == target) return@transaction true
-        require(target in allowedTransitions.getValue(current)) {
+        require(current.canTransition(target)) {
             "Invalid deployment transition ${current.value} -> ${target.value} for $id"
         }
         val now = LocalDateTime.now()
@@ -755,7 +741,7 @@ object DeploymentApplicationService {
                 }.singleOrNull()
                 if (prior != null) {
                     val priorId = prior[Deployments.id]
-                    require(DeploymentStatus.SUPERSEDED in allowedTransitions.getValue(prior[Deployments.status]))
+                    require(prior[Deployments.status].canTransition(DeploymentStatus.SUPERSEDED))
                     val superseded = Deployments.update({
                         (Deployments.id eq priorId) and (Deployments.status eq DeploymentStatus.ACTIVE)
                     }) {

@@ -57,6 +57,12 @@ import com.gatekeeper.feature.payment.domain.usecase.GetPaymentDashboardData
 import com.gatekeeper.feature.payment.domain.usecase.PaymentProviderReadiness
 import com.gatekeeper.feature.payment.data.provider.PaystackGateway
 import com.gatekeeper.feature.payment.data.provider.MpesaGateway
+import com.gatekeeper.feature.audit.domain.repository.AuditRepository
+import com.gatekeeper.feature.audit.data.persistence.ExposedAuditRepository
+import com.gatekeeper.feature.notification.domain.repository.NotificationRepository
+import com.gatekeeper.feature.notification.data.persistence.ExposedNotificationRepository
+import com.gatekeeper.feature.certificate.domain.repository.CertificateRepository
+import com.gatekeeper.feature.certificate.data.persistence.ExposedCertificateRepository
 import org.koin.dsl.module
 import org.koin.core.qualifier.named
 import org.koin.ktor.plugin.Koin
@@ -71,6 +77,9 @@ private val applicationModule = module {
     single<PortProbe> { TcpPortProbe() }
     single<FileStore> { LocalFileStore() }
     single<TransactionRunner> { ExposedTransactionRunner() }
+    single<NotificationRepository> { ExposedNotificationRepository() }
+    single<AuditRepository> { ExposedAuditRepository(get()) }
+    single<CertificateRepository> { ExposedCertificateRepository() }
     single<ProjectQueryRepository> { ExposedProjectQueryRepository() }
     single<SupportRequestRepository> { ExposedSupportRequestRepository() }
     single { CustomerApplicationService(get<ProjectQueryRepository>(), get(), get(), get<SupportRequestRepository>()) }
