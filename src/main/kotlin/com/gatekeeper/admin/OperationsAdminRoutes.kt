@@ -5,7 +5,8 @@ import com.gatekeeper.api.dto.PaginatedResponse
 import com.gatekeeper.api.dto.toResponse
 import com.gatekeeper.db.repositories.ProjectRepository
 import com.gatekeeper.db.repositories.SiteRepository
-import com.gatekeeper.db.repositories.CustomerRepository
+import com.gatekeeper.feature.customer.domain.repository.CustomerRepository as CustomerStore
+import com.gatekeeper.db.repositories.CustomerRepository as CustomerRepositoryCompatibility
 import com.gatekeeper.docker.DockerService
 import com.gatekeeper.nginx.NginxService
 import com.gatekeeper.nginx.NginxSelfDomainExclusion
@@ -169,7 +170,7 @@ private fun Throwable.isUniqueConstraintViolation(): Boolean = generateSequence(
 
 private fun dashboardSite(site: SiteRepository.SiteRecord, dockerService: DockerService? = null): DashboardSiteResponse {
     val project = ProjectRepository.findById(site.projectId)
-    val customer = project?.customerId?.let(CustomerRepository::findById)
+    val customer = project?.customerId?.let(CustomerRepositoryCompatibility::findById)
     val slug = site.projectSlug ?: site.projectId.toString()
     val availableFile = File(AppConfig.nginxSitesAvailablePath, slug)
     val enabledFile = File(AppConfig.nginxSitesEnabledPath, slug)
@@ -413,9 +414,10 @@ fun Application.configureOperationsAdminRoutes() {
                 if (body.name.isBlank()) { call.respondError(HttpStatusCode.BadRequest, "invalid_customer", "Customer name is required"); return@post }
                 val email = body.contactEmail?.trim()?.takeIf { it.isNotBlank() }?.lowercase()
                 if (email != null && !com.gatekeeper.api.InputValidators.isValidEmail(email)) { call.respondError(HttpStatusCode.BadRequest, "invalid_customer_email", "Enter a valid customer email address"); return@post }
-                if (email != null && CustomerRepository.existsByContactEmail(email)) { call.respondError(HttpStatusCode.Conflict, "customer_exists", "A customer with that email already exists"); return@post }
+                val customers = call.application.get<CustomerStore>()
+                if (email != null && customers.existsByContactEmail(email)) { call.respondError(HttpStatusCode.Conflict, "customer_exists", "A customer with that email already exists"); return@post }
                 val customer = try {
-                    CustomerRepository.create(body.name.trim(), email, body.contactPhone?.trim()?.takeIf { it.isNotBlank() }, body.billingStatus)
+                    customers.create(body.name.trim(), email, body.contactPhone?.trim()?.takeIf { it.isNotBlank() }, body.billingStatus)
                 } catch (error: Exception) {
                     if (error.isUniqueConstraintViolation()) {
                         call.respondError(HttpStatusCode.Conflict, "customer_exists", "A customer with that email already exists")
@@ -430,7 +432,7 @@ fun Application.configureOperationsAdminRoutes() {
                 val body = runCatching { call.receive<Map<String, String?>>() }.getOrElse { call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid project body"); return@patch }
                 val customerId = body["customerId"]?.let { runCatching { UUID.fromString(it) }.getOrNull() }
                 if (body.containsKey("customerId") && customerId == null) { call.respondError(HttpStatusCode.BadRequest, "invalid_customer_id", "Invalid customer ID"); return@patch }
-                if (customerId != null && CustomerRepository.findById(customerId) == null) { call.respondError(HttpStatusCode.NotFound, "customer_not_found", "Customer not found"); return@patch }
+                if (customerId != null && call.application.get<CustomerStore>().findById(customerId) == null) { call.respondError(HttpStatusCode.NotFound, "customer_not_found", "Customer not found"); return@patch }
                 val project = ProjectRepository.assignCustomer(id, customerId) ?: run { call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found"); return@patch }
                 call.respond(project)
             }
@@ -438,9 +440,10 @@ fun Application.configureOperationsAdminRoutes() {
                 val offset = call.request.queryParameters["offset"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0
                 val limit = call.request.queryParameters["limit"]?.toIntOrNull()?.coerceIn(1, 500) ?: 100
                 val query = call.request.queryParameters["q"]
-                val (customers, total) = CustomerRepository.findPage(query, limit, offset)
+                val customerRepository = call.application.get<CustomerStore>()
+                val (customers, total) = customerRepository.findPage(query, limit, offset)
                 val responses = customers.map { customer ->
-                    val owned = CustomerRepository.findSites(customer.id)
+                    val owned = CustomerRepositoryCompatibility.findSites(customer.id)
                     val balances = call.application.get<ProjectBalanceAdapter>()
                     val financials = owned.map { dashboardProjectFinancials(it.project, balances) }
                     val billed = financials.sumOf { it.billed }
@@ -452,8 +455,8 @@ fun Application.configureOperationsAdminRoutes() {
             }
             get("/api/admin/dashboard/customers/{id}") {
                 val id = runCatching { UUID.fromString(call.parameters["id"]) }.getOrNull() ?: run { call.respondError(HttpStatusCode.BadRequest, "invalid_customer_id", "Invalid customer ID"); return@get }
-                val customer = CustomerRepository.findById(id) ?: run { call.respondError(HttpStatusCode.NotFound, "customer_not_found", "Customer not found"); return@get }
-                val owned = CustomerRepository.findSites(id)
+                val customer = call.application.get<CustomerStore>().findById(id) ?: run { call.respondError(HttpStatusCode.NotFound, "customer_not_found", "Customer not found"); return@get }
+                val owned = CustomerRepositoryCompatibility.findSites(id)
                 val balances = call.application.get<ProjectBalanceAdapter>()
                 val financials = owned.map { dashboardProjectFinancials(it.project, balances) }
                 val projects = owned.map { ownedProject ->
@@ -475,9 +478,9 @@ fun Application.configureOperationsAdminRoutes() {
             }
             get("/api/admin/dashboard/customers/{id}/transactions") {
                 val id = runCatching { UUID.fromString(call.parameters["id"]) }.getOrNull() ?: run { call.respondError(HttpStatusCode.BadRequest, "invalid_customer_id", "Invalid customer ID"); return@get }
-                if (CustomerRepository.findById(id) == null) { call.respondError(HttpStatusCode.NotFound, "customer_not_found", "Customer not found"); return@get }
+                if (call.application.get<CustomerStore>().findById(id) == null) { call.respondError(HttpStatusCode.NotFound, "customer_not_found", "Customer not found"); return@get }
                 val listPayments = call.application.get<ListPaymentsByProject>()
-                val transactions = CustomerRepository.findSites(id).flatMap { owned ->
+                val transactions = CustomerRepositoryCompatibility.findSites(id).flatMap { owned ->
                     listPayments(owned.project.id).map { payment ->
                         DashboardCustomerTransactionResponse(payment.id.toString(), owned.project.id.toString(), owned.project.name, owned.project.slug, payment.amount.toDouble(), payment.recordStatus, payment.status, payment.provider, payment.providerReference, payment.paidAt?.toString(), payment.createdAt?.toString().orEmpty())
                     }

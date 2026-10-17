@@ -1,6 +1,8 @@
 package com.gatekeeper.plugins
 
 import com.gatekeeper.customer.CustomerApplicationService
+import com.gatekeeper.feature.customer.domain.repository.CustomerRepository as CustomerStore
+import com.gatekeeper.feature.customer.data.persistence.ExposedCustomerRepository
 import com.gatekeeper.db.repositories.*
 import com.gatekeeper.gate.GateApplicationService
 import com.gatekeeper.gate.GateService
@@ -108,6 +110,7 @@ private val applicationModule = module {
     single<TransactionRunner> { ExposedTransactionRunner() }
     single { NginxCommandRunner(get<ProcessRunner>()) }
     single<NotificationRepository> { ExposedNotificationRepository() }
+    single<CustomerStore> { ExposedCustomerRepository() }
     single<AuditRepository> { ExposedAuditRepository(get()) }
     single<CertificateRepository> { ExposedCertificateRepository() }
     single<IntegrationOutboxRepositoryPort> { ExposedIntegrationOutboxRepository() }

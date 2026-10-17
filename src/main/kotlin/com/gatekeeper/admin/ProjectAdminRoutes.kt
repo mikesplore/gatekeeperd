@@ -15,7 +15,7 @@ import com.gatekeeper.feature.payment.domain.repository.PaymentRepository as Pay
 import com.gatekeeper.feature.payment.domain.usecase.ListProjectPayments
 import com.gatekeeper.feature.payment.domain.usecase.GetPayment
 import com.gatekeeper.db.repositories.ProjectRepository
-import com.gatekeeper.db.repositories.CustomerRepository
+import com.gatekeeper.feature.customer.domain.repository.CustomerRepository as CustomerStore
 import com.gatekeeper.feature.project.domain.repository.ProjectAdjustmentRepository as ProjectAdjustmentStore
 import com.gatekeeper.db.tables.AdjustmentType
 import com.gatekeeper.db.tables.AccessBlockReason
@@ -385,7 +385,7 @@ fun Application.configureProjectAdminRoutes() {
                     runCatching { UUID.fromString(it) }.getOrNull()
                         ?: return@patch call.respondError(HttpStatusCode.BadRequest, "invalid_customer", "customerId must be a valid UUID")
                 } else null
-                if (customerId != null && CustomerRepository.findById(customerId) == null) {
+                if (customerId != null && call.application.get<CustomerStore>().findById(customerId) == null) {
                     call.respondError(HttpStatusCode.NotFound, "customer_not_found", "Customer not found")
                     return@patch
                 }

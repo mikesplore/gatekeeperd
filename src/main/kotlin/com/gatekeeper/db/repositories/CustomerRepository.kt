@@ -1,69 +1,36 @@
 package com.gatekeeper.db.repositories
 
-import com.gatekeeper.db.tables.Customers
-import org.jetbrains.exposed.sql.ResultRow
-import org.jetbrains.exposed.sql.SortOrder
-import org.jetbrains.exposed.sql.selectAll
+import com.gatekeeper.feature.customer.data.persistence.ExposedCustomerRepository
+import com.gatekeeper.feature.customer.domain.repository.CustomerRepository as CustomerStore
 import org.jetbrains.exposed.sql.transactions.transaction
 import java.time.LocalDateTime
 import java.util.UUID
-import org.jetbrains.exposed.sql.insert
-import org.jetbrains.exposed.sql.lowerCase
-import org.jetbrains.exposed.sql.or
 
+@Deprecated("Inject CustomerRepository instead")
 object CustomerRepository {
     data class CustomerRecord(val id: UUID, val name: String, val contactEmail: String?, val contactPhone: String?, val billingStatus: String, val createdAt: LocalDateTime, val updatedAt: LocalDateTime)
 
     data class CustomerSiteRecord(val customer: CustomerRecord, val project: ProjectRepository.ProjectRecord, val site: SiteRepository.SiteRecord?)
 
-    fun findAll(): List<CustomerRecord> = transaction {
-        Customers.selectAll().orderBy(Customers.createdAt, SortOrder.ASC).map { it.toRecord() }
-    }
+    private val delegate: CustomerStore by lazy { ExposedCustomerRepository() }
 
-    fun findPage(query: String?, limit: Int, offset: Int): Pair<List<CustomerRecord>, Int> = transaction {
-        val normalized = query?.trim()?.lowercase()?.takeIf { it.isNotBlank() }
-        val rows = if (normalized == null) Customers.selectAll() else Customers.selectAll().where {
-            (Customers.name.lowerCase() like "%$normalized%") or
-                (Customers.contactEmail.lowerCase() like "%$normalized%") or
-                (Customers.contactPhone.lowerCase() like "%$normalized%")
-        }
-        val all = rows.orderBy(Customers.createdAt, SortOrder.ASC).map { it.toRecord() }
-        all.drop(offset).take(limit) to all.size
-    }
+    fun findAll(): List<CustomerRecord> = delegate.findAll().map { it.toLegacy() }
 
-    fun findById(id: UUID): CustomerRecord? = transaction {
-        Customers.selectAll().where { Customers.id eq id }.singleOrNull()?.toRecord()
-    }
+    fun findPage(query: String?, limit: Int, offset: Int): Pair<List<CustomerRecord>, Int> = delegate.findPage(query, limit, offset).let { (items, total) -> items.map { it.toLegacy() } to total }
 
-    fun existsByContactEmail(email: String): Boolean = transaction {
-        val normalized = email.trim().lowercase()
-        normalized.isNotBlank() && Customers.selectAll().where {
-            Customers.contactEmail.lowerCase() eq normalized
-        }.singleOrNull() != null
-    }
+    fun findById(id: UUID): CustomerRecord? = delegate.findById(id)?.toLegacy()
 
-    fun create(name: String, contactEmail: String?, contactPhone: String?, billingStatus: String = "unknown"): CustomerRecord = transaction {
-        val id = UUID.randomUUID()
-        Customers.insert {
-            it[Customers.id] = id
-            it[Customers.name] = name
-            it[Customers.contactEmail] = contactEmail
-            it[Customers.contactPhone] = contactPhone
-            it[Customers.billingStatus] = billingStatus
-        }
-        findById(id)!!
-    }
+    fun existsByContactEmail(email: String): Boolean = delegate.existsByContactEmail(email)
+
+    fun create(name: String, contactEmail: String?, contactPhone: String?, billingStatus: String = "unknown"): CustomerRecord = delegate.create(name, contactEmail, contactPhone, billingStatus).toLegacy()
 
     fun findSites(id: UUID): List<CustomerSiteRecord> = transaction {
-        val customer = Customers.selectAll().where { Customers.id eq id }.singleOrNull()?.toRecord()
+        val customer = findById(id)
             ?: return@transaction emptyList()
         val projects = ProjectRepository.findByCustomerId(id)
         val sites = SiteRepository.findByProjectIds(projects.map { it.id })
         projects.map { project -> CustomerSiteRecord(customer, project, sites[project.id]) }
     }
 
-    private fun ResultRow.toRecord() = CustomerRecord(
-        this[Customers.id], this[Customers.name], this[Customers.contactEmail], this[Customers.contactPhone],
-        this[Customers.billingStatus], this[Customers.createdAt], this[Customers.updatedAt]
-    )
+    private fun CustomerStore.Record.toLegacy() = CustomerRecord(id, name, contactEmail, contactPhone, billingStatus, createdAt, updatedAt)
 }

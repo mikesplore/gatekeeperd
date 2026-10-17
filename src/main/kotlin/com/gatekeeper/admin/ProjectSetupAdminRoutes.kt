@@ -14,6 +14,7 @@ import com.gatekeeper.feature.payment.data.persistence.ProjectBalanceAdapter
 import com.gatekeeper.feature.audit.domain.repository.AuditRepository as AuditRepositoryPort
 import com.gatekeeper.feature.integrations.domain.repository.ProviderCredentialStore
 import com.gatekeeper.feature.integrations.domain.repository.RegistryCredentialStore
+import com.gatekeeper.feature.customer.domain.repository.CustomerRepository as CustomerStore
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.Application
 import io.ktor.server.auth.authenticate
@@ -422,7 +423,7 @@ fun Application.configureProjectSetupAdminRoutes() {
                     runCatching { UUID.fromString(it) }.getOrNull()
                         ?: return@post call.respondError(HttpStatusCode.BadRequest, "invalid_customer", "customerId must be a valid UUID")
                 } ?: return@post call.respondError(HttpStatusCode.BadRequest, "customer_required", "A customer must be associated with the project")
-                if (CustomerRepository.findById(customerId) == null) {
+                if (call.application.get<CustomerStore>().findById(customerId) == null) {
                     return@post call.respondError(HttpStatusCode.NotFound, "customer_not_found", "Customer not found")
                 }
                 val dueDate = InputValidators.parseDueDate(body.dueDate)
