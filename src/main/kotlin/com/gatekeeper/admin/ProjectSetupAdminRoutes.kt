@@ -12,6 +12,7 @@ import com.gatekeeper.nginx.requireValidHostname
 import com.gatekeeper.security.SecretValueCipher
 import com.gatekeeper.feature.payment.data.persistence.ProjectBalanceAdapter
 import com.gatekeeper.feature.audit.domain.repository.AuditRepository as AuditRepositoryPort
+import com.gatekeeper.feature.integrations.domain.repository.ProviderCredentialStore
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.Application
 import io.ktor.server.auth.authenticate
@@ -345,6 +346,7 @@ data class AdoptContainerResponse(
 
 fun Application.configureProjectSetupAdminRoutes() {
     val auditRepository = get<AuditRepositoryPort>()
+    val providerCredentials = get<ProviderCredentialStore>()
     routing {
         authenticate("auth-jwt") {
             get("/api/admin/project-setup/containers") {
@@ -372,7 +374,7 @@ fun Application.configureProjectSetupAdminRoutes() {
             get("/api/admin/project-setup/provider-credentials") {
                 val provider = call.request.queryParameters["provider"]?.trim()?.lowercase()
                 val type = call.request.queryParameters["type"]?.trim()?.lowercase()
-                call.respond(ProviderCredentialRepository.listMetadata(provider, type).map {
+                call.respond(providerCredentials.listMetadata(provider, type).map {
                     ProviderCredentialMetadataView(it.id.toString(), it.provider, it.credentialType, it.displayName, it.scope,
                         it.version, it.current, it.rotatedAt?.toString(), it.rotatedBy, it.createdAt.toString())
                 })
@@ -450,7 +452,7 @@ fun Application.configureProjectSetupAdminRoutes() {
                     return@get call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
                 }
                 val config = DeploymentJobRepository.configurationSummaryForService(projectId, serviceId)
-                val credential = config?.registryCredentialId?.let(ProviderCredentialRepository::findMetadata)
+                val credential = config?.registryCredentialId?.let(providerCredentials::findMetadata)
                 val service = ServiceRepository.findByProjectAndId(projectId, serviceId)
                 val active = DeploymentApplicationService.activeDeploymentSummaryForService(serviceId, "production")
                 val latest = DeploymentApplicationService.latestDeploymentStateForService(serviceId, "production")
@@ -559,7 +561,7 @@ fun Application.configureProjectSetupAdminRoutes() {
                 val registryCredentialId = body.registryCredentialId?.takeIf(String::isNotBlank)?.let { raw ->
                     val id = runCatching { UUID.fromString(raw) }.getOrNull()
                         ?: return@put call.respondError(HttpStatusCode.BadRequest, "invalid_registry_credential", "Registry credential ID is invalid")
-                    val metadata = ProviderCredentialRepository.findMetadata(id)
+                    val metadata = providerCredentials.findMetadata(id)
                         ?: return@put call.respondError(HttpStatusCode.BadRequest, "invalid_registry_credential", "Registry credential was not found")
                     if (metadata.provider != "docker" || metadata.credentialType != "registry" || metadata.scope != body.registry || !metadata.current) {
                         return@put call.respondError(HttpStatusCode.BadRequest, "invalid_registry_credential", "Select a current credential for this registry")
@@ -611,7 +613,7 @@ fun Application.configureProjectSetupAdminRoutes() {
                 val currentCredential = body.registryCredentialId?.takeIf(String::isNotBlank)?.let { raw ->
                     val credentialId = runCatching { UUID.fromString(raw) }.getOrNull()
                         ?: return@put call.respondError(HttpStatusCode.BadRequest, "invalid_registry_credential", "Registry credential ID is invalid")
-                    val credential = ProviderCredentialRepository.findMetadata(credentialId)
+                    val credential = providerCredentials.findMetadata(credentialId)
                         ?: return@put call.respondError(HttpStatusCode.BadRequest, "invalid_registry_credential", "Registry credential was not found")
                     if (credential.provider != "docker" || credential.credentialType != "registry" || credential.scope != registry || !credential.current) {
                         return@put call.respondError(HttpStatusCode.BadRequest, "invalid_registry_credential", "Select a current credential for this registry")

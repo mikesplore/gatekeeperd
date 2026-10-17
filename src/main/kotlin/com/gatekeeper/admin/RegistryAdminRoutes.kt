@@ -4,8 +4,8 @@ import com.gatekeeper.api.respondError
 import com.gatekeeper.config.AppConfig
 import com.gatekeeper.feature.audit.domain.repository.AuditRepository as AuditRepositoryPort
 import com.gatekeeper.db.repositories.RegistryCredentialRepository
-import com.gatekeeper.db.repositories.ProviderCredentialRepository
-import com.gatekeeper.db.repositories.ProviderCredentialMetadata
+import com.gatekeeper.feature.integrations.domain.repository.ProviderCredentialMetadata
+import com.gatekeeper.feature.integrations.domain.repository.ProviderCredentialStore
 import com.gatekeeper.security.SecretValueCipher
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.*
@@ -28,6 +28,7 @@ import org.koin.ktor.ext.get
 )
 fun Application.configureRegistryAdminRoutes() {
     val auditRepository = get<AuditRepositoryPort>()
+    val providerCredentials = get<ProviderCredentialStore>()
     routing { authenticate("auth-jwt") {
         get("/api/admin/provider-credentials") {
             val provider = call.request.queryParameters["provider"]?.trim()?.lowercase()
@@ -37,7 +38,7 @@ fun Application.configureRegistryAdminRoutes() {
                 call.respondError(HttpStatusCode.BadRequest, "invalid_credential_filter", "Credential provider or type is invalid")
                 return@get
             }
-            call.respond(ProviderCredentialRepository.listMetadata(provider, type).map { it.toMetadataResponse() })
+            call.respond(providerCredentials.listMetadata(provider, type).map { it.toMetadataResponse() })
         }
         get("/api/admin/provider-credentials/{id}") {
             val id = call.parameters["id"]?.let { runCatching { UUID.fromString(it) }.getOrNull() }
@@ -45,7 +46,7 @@ fun Application.configureRegistryAdminRoutes() {
                 call.respondError(HttpStatusCode.BadRequest, "invalid_credential_id", "Invalid credential ID")
                 return@get
             }
-            val metadata = ProviderCredentialRepository.findMetadata(id)
+            val metadata = providerCredentials.findMetadata(id)
             if (metadata == null) {
                 call.respondError(HttpStatusCode.NotFound, "credential_not_found", "Provider credential not found")
                 return@get

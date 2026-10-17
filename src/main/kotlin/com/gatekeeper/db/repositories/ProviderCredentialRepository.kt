@@ -2,6 +2,8 @@ package com.gatekeeper.db.repositories
 
 import com.gatekeeper.db.tables.ProviderCredentials
 import com.gatekeeper.security.SecretValueCipher
+import com.gatekeeper.feature.integrations.domain.repository.ProviderCredentialMetadata as ProviderCredentialMetadataDomain
+import com.gatekeeper.feature.integrations.domain.repository.StoredProviderCredential as StoredProviderCredentialDomain
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
 import org.jetbrains.exposed.sql.and
 import org.jetbrains.exposed.sql.insert
@@ -11,26 +13,8 @@ import org.jetbrains.exposed.sql.update
 import java.time.LocalDateTime
 import java.util.UUID
 
-data class ProviderCredentialMetadata(
-    val id: UUID,
-    val provider: String,
-    val credentialType: String,
-    val displayName: String,
-    val scope: String,
-    val version: Int,
-    val rotatedAt: LocalDateTime?,
-    val rotatedBy: String?,
-    val supersededAt: LocalDateTime?,
-    val supersededById: UUID?,
-    val createdAt: LocalDateTime,
-    val createdBy: String?,
-    val updatedAt: LocalDateTime,
-    val updatedBy: String?
-) {
-    val current: Boolean get() = supersededAt == null
-}
-
-data class StoredProviderCredential(val metadata: ProviderCredentialMetadata, val payload: String)
+typealias ProviderCredentialMetadata = ProviderCredentialMetadataDomain
+typealias StoredProviderCredential = StoredProviderCredentialDomain
 
 object ProviderCredentialRepository {
     fun listMetadata(provider: String? = null, credentialType: String? = null): List<ProviderCredentialMetadata> = transaction {
