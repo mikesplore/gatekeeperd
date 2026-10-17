@@ -29,38 +29,37 @@ import java.time.LocalDateTime
 import java.util.concurrent.TimeUnit
 import kotlin.time.Duration.Companion.milliseconds
 
-object DeploymentWorker {
+class DeploymentWorker(
+    private val portAllocationRepository: DeploymentPortAllocationRepository,
+    private val sourceFetcher: SourceFetcher,
+    private val imageBuilder: ImageBuilder,
+    private val auditRepository: AuditRepository
+) {
     private val logger = LoggerFactory.getLogger("com.gatekeeper.deployment.DeploymentWorker")
     private val started = AtomicBoolean(false)
     private val readinessChecker = ReadinessChecker(TcpPortProbe(), TcpHttpPortProbe())
 
-    fun start(
-        scope: CoroutineScope,
-        portAllocationRepository: DeploymentPortAllocationRepository,
-        sourceFetcher: SourceFetcher,
-        imageBuilder: ImageBuilder,
-        auditRepository: AuditRepository
-    ) {
+    fun start(scope: CoroutineScope) {
         if (!started.compareAndSet(false, true)) return
         scope.launch(Dispatchers.IO) {
-            runCatching { recoverInterruptedCutovers(auditRepository) }
+            runCatching { recoverInterruptedCutovers() }
                 .onFailure { logger.error("Interrupted deployment cutover recovery failed", it) }
             var nextRecoveryAt = Long.MIN_VALUE
             while (isActive) {
                 if (System.nanoTime() >= nextRecoveryAt) {
-                    runCatching { recoverInterruptedCutovers(auditRepository) }
+                    runCatching { recoverInterruptedCutovers() }
                         .onFailure { logger.error("Interrupted deployment cutover recovery failed", it) }
                     runCatching { recoverStaleJobs() }
                         .onFailure { logger.error("Stale deployment recovery failed", it) }
                     nextRecoveryAt = System.nanoTime() + TimeUnit.MINUTES.toNanos(1)
                 }
-                runCatching { processNext(portAllocationRepository, sourceFetcher, imageBuilder, auditRepository) }.onFailure { logger.error("Deployment worker cycle failed", it) }
+                runCatching { processNext() }.onFailure { logger.error("Deployment worker cycle failed", it) }
                 delay(1000.milliseconds)
             }
         }
     }
 
-    private fun recoverInterruptedCutovers(auditRepository: AuditRepository) {
+    private fun recoverInterruptedCutovers() {
         for ((deploymentId, recovery) in DeploymentApplicationService.pendingCutovers()) {
             val serviceId = recovery.serviceId ?: continue
             val lockKey = "deployment-service:$serviceId:${recovery.environment}"
@@ -124,19 +123,14 @@ object DeploymentWorker {
         }
     }
 
-    private suspend fun processNext(
-        portAllocationRepository: DeploymentPortAllocationRepository,
-        sourceFetcher: SourceFetcher,
-        imageBuilder: ImageBuilder,
-        auditRepository: AuditRepository
-    ) {
+    private suspend fun processNext() {
         val job = DeploymentJobRepository.claimNext() ?: return
         val claimToken = requireNotNull(job.claimToken) { "Claim token missing for deployment ${job.id}" }
         DeploymentJobRecovery.executeClaimed(
             RecoverableDeploymentJob(job.id, job.serviceId, job.environment, claimToken),
             withLock = { key, block -> DistributedLock.withLock(key, block) },
             ownsClaim = { DeploymentJobRepository.ownsClaim(job.id, claimToken) },
-            process = { runBlocking { processClaimedJob(job, portAllocationRepository, sourceFetcher, imageBuilder, auditRepository) } },
+            process = { runBlocking { processClaimedJob(job) } },
             release = { error ->
                 DeploymentJobRepository.releaseClaim(
                     job.id,
@@ -167,13 +161,7 @@ object DeploymentWorker {
         )
     }
 
-    private suspend fun processClaimedJob(
-        claimedJob: DeploymentJobRecord,
-        portAllocationRepository: DeploymentPortAllocationRepository,
-        sourceFetcher: SourceFetcher,
-        imageBuilder: ImageBuilder,
-        auditRepository: AuditRepository
-    ) {
+    private suspend fun processClaimedJob(claimedJob: DeploymentJobRecord) {
         var job = claimedJob
         val site = if (job.environment == "production") SiteRepository.findByServiceId(job.serviceId) else null
         if (job.containerPort == null) {

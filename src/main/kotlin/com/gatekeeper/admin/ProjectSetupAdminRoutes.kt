@@ -824,7 +824,7 @@ fun Application.configureProjectSetupAdminRoutes() {
                 val item = DeploymentApplicationService.deploymentHistory(project.id, environment).firstOrNull { it.id == id }
                     ?: return@post call.respondError(HttpStatusCode.NotFound, "deployment_not_found", "Deployment not found for project")
                 if (!item.canCancel) return@post call.respondError(HttpStatusCode.Conflict, "deployment_cancel_unavailable", "Deployment is no longer in a cancellable state")
-                if (!DeploymentWorker.cancel(id)) return@post call.respondError(HttpStatusCode.Conflict, "deployment_cancel_unavailable", "Deployment could not be cancelled because its state changed")
+                if (!get<DeploymentWorker>().cancel(id)) return@post call.respondError(HttpStatusCode.Conflict, "deployment_cancel_unavailable", "Deployment could not be cancelled because its state changed")
                 val actor = call.principal<io.ktor.server.auth.jwt.JWTPrincipal>()?.payload?.subject ?: "admin"
                 AuditRepository.write(project.id, "deployment_cancelled", actor, "deployment=$id")
                 call.respond(ProjectSetupCancelResponse(id.toString()))
@@ -839,7 +839,7 @@ fun Application.configureProjectSetupAdminRoutes() {
                 val item = DeploymentApplicationService.deploymentHistory(project.id, "production").firstOrNull { it.id == id }
                     ?: return@post call.respondError(HttpStatusCode.NotFound, "deployment_not_found", "Deployment not found for project")
                 if (!item.canRollback) return@post call.respondError(HttpStatusCode.Conflict, "rollback_unavailable", "Deployment cannot be used as a rollback target")
-                val rollbackId = DeploymentWorker.rollback(id)
+                val rollbackId = get<DeploymentWorker>().rollback(id)
                     ?: return@post call.respondError(HttpStatusCode.Conflict, "rollback_unavailable", "Deployment cannot be used as a rollback target")
                 call.respond(HttpStatusCode.Accepted, ProjectSetupDeployResponse(rollbackId.toString()))
             }

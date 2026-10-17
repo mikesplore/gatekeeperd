@@ -74,6 +74,7 @@ import com.gatekeeper.feature.deployment.data.process.HostDeploymentCommandRunne
 import com.gatekeeper.feature.deployment.domain.port.GitHubTokenProvider
 import com.gatekeeper.deployment.SourceFetcher
 import com.gatekeeper.deployment.ImageBuilder
+import com.gatekeeper.deployment.DeploymentWorker
 import com.gatekeeper.integrations.GitHubAppClient
 import org.koin.dsl.module
 import org.koin.core.qualifier.named
@@ -99,6 +100,7 @@ private val applicationModule = module {
     single<GitHubTokenProvider> { GitHubTokenProvider { GitHubAppClient.installationToken() } }
     single { SourceFetcher(get<DeploymentCommandRunner>(), get<GitHubTokenProvider>()) }
     single { ImageBuilder(get<DeploymentCommandRunner>()) }
+    single { DeploymentWorker(get(), get(), get(), get()) }
     single<ProjectQueryRepository> { ExposedProjectQueryRepository() }
     single<SupportRequestRepository> { ExposedSupportRequestRepository() }
     single { CustomerApplicationService(get<ProjectQueryRepository>(), get(), get(), get<SupportRequestRepository>()) }
