@@ -2,11 +2,13 @@ package com.gatekeeper.admin
 
 import com.gatekeeper.api.respondError
 import com.gatekeeper.db.repositories.DeploymentJobRepository
-import com.gatekeeper.db.repositories.EnvironmentSetRepository
 import com.gatekeeper.db.repositories.ProjectRepository
 import com.gatekeeper.db.repositories.ServiceRepository
 import com.gatekeeper.db.repositories.ProjectAdjustmentRepository
 import com.gatekeeper.feature.audit.domain.repository.AuditRepository as AuditRepositoryPort
+import com.gatekeeper.feature.deployment.domain.repository.EnvironmentSetRepository as EnvironmentSetStore
+import com.gatekeeper.feature.deployment.domain.repository.EnvironmentVersionMetadata
+import com.gatekeeper.feature.deployment.domain.repository.ActiveDeploymentInspection
 import com.gatekeeper.db.tables.AdjustmentType
 import com.gatekeeper.db.tables.AccessBlockReason
 import com.gatekeeper.integrations.ScribedIntegrationClient
@@ -101,6 +103,7 @@ data class ActiveDeploymentInspectionView(
 
 fun Application.configureServiceAdminRoutes() {
     val auditRepository = get<AuditRepositoryPort>()
+    val environmentSets = get<EnvironmentSetStore>()
     routing {
         authenticate("auth-jwt") {
             get("/api/admin/projects/{projectId}/services") {
@@ -258,7 +261,7 @@ fun Application.configureServiceAdminRoutes() {
                 val rawEnvironment = call.request.queryParameters["environment"]
                 val environment = if (rawEnvironment == null) "production" else normalizeEnvironment(rawEnvironment)
                     ?: return@get call.respondError(HttpStatusCode.BadRequest, "invalid_environment", "Environment name is invalid")
-                val metadata = EnvironmentSetRepository.sharedMetadata(projectId, environment)
+                val metadata = environmentSets.sharedMetadata(projectId, environment)
                 call.respond(SharedEnvironmentMetadataView(
                     projectId.toString(), environment, metadata.latest?.toView(), metadata.versions.map { it.toView() }
                 ))
@@ -272,7 +275,7 @@ fun Application.configureServiceAdminRoutes() {
                 val rawEnvironment = call.request.queryParameters["environment"]
                 val environment = if (rawEnvironment == null) "production" else normalizeEnvironment(rawEnvironment)
                     ?: return@get call.respondError(HttpStatusCode.BadRequest, "invalid_environment", "Environment name is invalid")
-                val metadata = EnvironmentSetRepository.serviceMetadata(projectId, serviceId, environment)!!
+                val metadata = environmentSets.serviceMetadata(projectId, serviceId, environment)!!
                 call.respond(ServiceEnvironmentMetadataView(
                     projectId.toString(), serviceId.toString(), environment, metadata.effectiveValues
                 ))
@@ -318,7 +321,7 @@ fun Application.configureServiceAdminRoutes() {
                 val rawEnvironment = call.request.queryParameters["environment"]
                 val environment = if (rawEnvironment == null) "production" else normalizeEnvironment(rawEnvironment)
                     ?: return@get call.respondError(HttpStatusCode.BadRequest, "invalid_environment", "Environment name is invalid")
-                val active = EnvironmentSetRepository.activeDeployment(serviceId, environment)
+                val active = environmentSets.activeDeployment(serviceId, environment)
                     ?: return@get call.respondError(HttpStatusCode.NotFound, "active_deployment_not_found", "No active deployment exists for this service and environment")
                 call.respond(active.toView())
             }
@@ -331,7 +334,7 @@ fun Application.configureServiceAdminRoutes() {
                 val rawEnvironment = call.request.queryParameters["environment"]
                 val environment = if (rawEnvironment == null) "production" else normalizeEnvironment(rawEnvironment)
                     ?: return@get call.respondError(HttpStatusCode.BadRequest, "invalid_environment", "Environment name is invalid")
-                val runtime = EnvironmentSetRepository.runtimeDeployment(serviceId, environment)
+                val runtime = environmentSets.runtimeDeployment(serviceId, environment)
                     ?: return@get call.respondError(HttpStatusCode.NotFound, "runtime_not_found", "No active or ready deployment runtime exists for this service and environment")
                 call.respond(runtime.toView())
             }
@@ -379,8 +382,8 @@ private fun ServiceRepository.ServiceRecord.toView() = ServiceAdminView(
     id.toString(), projectId.toString(), name, serviceType, accessStatus, isDefault, blockReason,
     blockReasonCode?.value, blockReasonNote, domain
 )
-private fun EnvironmentSetRepository.VersionMetadata.toView() = EnvironmentVersionView(id.toString(), version, environment, keys, createdAt.toString(), createdBy)
-private fun EnvironmentSetRepository.ActiveDeploymentInspection.toView() = ActiveDeploymentInspectionView(
+private fun EnvironmentVersionMetadata.toView() = EnvironmentVersionView(id.toString(), version, environment, keys, createdAt.toString(), createdBy)
+private fun ActiveDeploymentInspection.toView() = ActiveDeploymentInspectionView(
     deploymentId.toString(), status, containerName, serviceId.toString(), environment, publishedPorts.mapKeys { it.key.toString() }, imageName, imageTag, imageDigest, commitSha,
     activeAt?.toString(), sharedSetId?.toString(), sharedSetVersion, serviceSetId?.toString(), serviceSetVersion,
     variables.map { FingerprintedEnvironmentVariableView(it.key, it.source, it.fingerprint) }, publicExposure
