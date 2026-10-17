@@ -23,7 +23,7 @@ class NginxDockerReconciliationIntegrationTest {
     fun `stopped enabled container is reported as docker down`() {
         val containerName = System.getenv("GATEKEEPERD_DOCKER_INTEGRATION_CONTAINER") ?: return
         val docker = DockerService(AppConfig.dockerSocket)
-        try {
+        docker.use { docker ->
             if (docker.containerHealth(containerName) != "running") return
             val root = Files.createTempDirectory("gk-docker-reconcile").toFile()
             val available = File(root, "sites-available").apply { mkdirs() }
@@ -55,8 +55,6 @@ class NginxDockerReconciliationIntegrationTest {
             } finally {
                 docker.startContainer(containerName)
             }
-        } finally {
-            docker.close()
         }
     }
 }
