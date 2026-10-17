@@ -2,11 +2,13 @@ package com.gatekeeper.admin
 
 import com.gatekeeper.api.respondError
 import com.gatekeeper.docker.DockerCleanupService
+import com.gatekeeper.docker.DockerService
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.*
 import io.ktor.server.auth.authenticate
 import io.ktor.server.response.respond
 import io.ktor.server.routing.*
+import org.koin.ktor.ext.get
 
 fun Application.configureSystemAdminRoutes() {
     routing {
@@ -18,7 +20,7 @@ fun Application.configureSystemAdminRoutes() {
                     call.respondError(HttpStatusCode.BadRequest, "invalid_image_prefix", "Image prefix is invalid")
                     return@post
                 }
-                val result = DockerCleanupService.pruneProjectImages(prefix, emptySet(), dryRun, "admin")
+                val result = DockerCleanupService.pruneProjectImages(prefix, emptySet(), dryRun, "admin", get<DockerService>())
                 call.respond(result)
             }
         }

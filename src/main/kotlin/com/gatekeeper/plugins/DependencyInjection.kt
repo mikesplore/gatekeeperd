@@ -6,6 +6,18 @@ import com.gatekeeper.gate.GateApplicationService
 import com.gatekeeper.gate.GateService
 import com.gatekeeper.nginx.NginxAdminService
 import com.gatekeeper.nginx.NginxService
+import com.gatekeeper.config.AppConfig
+import com.gatekeeper.config.AppSettings
+import com.gatekeeper.docker.DockerGateway
+import com.gatekeeper.docker.DockerService
+import com.gatekeeper.core.ports.FileStore
+import com.gatekeeper.core.ports.PortProbe
+import com.gatekeeper.core.ports.ProcessRunner
+import com.gatekeeper.core.ports.TransactionRunner
+import com.gatekeeper.infrastructure.ExposedTransactionRunner
+import com.gatekeeper.infrastructure.LocalFileStore
+import com.gatekeeper.infrastructure.ProcessRunnerImpl
+import com.gatekeeper.infrastructure.TcpPortProbe
 import com.gatekeeper.feature.payment.data.persistence.ExposedPaymentRepository
 import com.gatekeeper.feature.payment.data.persistence.ExposedPaymentEventRepository
 import com.gatekeeper.feature.payment.data.persistence.PaymentEffectsAdapter
@@ -52,6 +64,13 @@ import io.ktor.server.application.Application
 import io.ktor.server.application.install
 
 private val applicationModule = module {
+    single { AppSettings.fromEnv() }
+    single { DockerService(get<AppSettings>()["DOCKER_SOCKET"] ?: AppConfig.dockerSocket) }
+    single<DockerGateway> { get<DockerService>() }
+    single<ProcessRunner> { ProcessRunnerImpl() }
+    single<PortProbe> { TcpPortProbe() }
+    single<FileStore> { LocalFileStore() }
+    single<TransactionRunner> { ExposedTransactionRunner() }
     single<ProjectQueryRepository> { ExposedProjectQueryRepository() }
     single<SupportRequestRepository> { ExposedSupportRequestRepository() }
     single { CustomerApplicationService(get<ProjectQueryRepository>(), get(), get(), get<SupportRequestRepository>()) }

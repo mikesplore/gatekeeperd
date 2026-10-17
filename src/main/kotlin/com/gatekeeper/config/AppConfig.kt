@@ -2,23 +2,15 @@ package com.gatekeeper.config
 
 // Centralized application settings loaded from the process environment or local .env file.
 
-import io.github.cdimascio.dotenv.dotenv
 import org.slf4j.LoggerFactory
 import java.io.File
 
 object AppConfig {
     private val logger = LoggerFactory.getLogger(AppConfig::class.java)
-
-    private val dotenv by lazy {
-        dotenv {
-            filename = ".env"
-            ignoreIfMissing = true
-        }
-    }
+    private val settings by lazy { AppSettings.fromEnv() }
 
     private fun requiredSetting(key: String): String {
-        val value = System.getenv(key)?.takeIf { it.isNotBlank() }
-            ?: dotenv[key]?.takeIf { it.isNotBlank() }
+        val value = settings[key]
         require(!value.isNullOrBlank()) {
             "Missing required configuration '$key'. Set it in the environment or .env file."
         }
@@ -26,8 +18,7 @@ object AppConfig {
     }
 
     private fun optionalSetting(key: String, default: String): String =
-        System.getenv(key)?.takeIf { it.isNotBlank() }
-            ?: dotenv[key]?.takeIf { it.isNotBlank() }
+        settings[key]
             ?: default
 
     // Database — no hardcoded credentials; must come from env / .env

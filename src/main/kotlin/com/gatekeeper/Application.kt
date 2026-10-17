@@ -4,6 +4,7 @@ import com.gatekeeper.admin.*
 import com.gatekeeper.api.InputValidators
 import com.gatekeeper.auth.configureAuthRoutes
 import com.gatekeeper.config.AppConfig
+import com.gatekeeper.config.AppSettings
 import com.gatekeeper.customer.configureCustomerRoutes
 import com.gatekeeper.db.tables.Users
 import com.gatekeeper.db.ServiceIdentityBackfill
@@ -25,6 +26,7 @@ import com.gatekeeper.feature.payment.domain.usecase.ReconcilePayments
 import com.gatekeeper.feature.payment.domain.repository.PaymentRepository as PaymentDomainRepository
 import com.gatekeeper.feature.payment.data.persistence.ProjectBalanceAdapter
 import org.koin.ktor.ext.get
+import com.gatekeeper.docker.DockerService
 import com.gatekeeper.scheduler.AutoBlockerJob
 import com.gatekeeper.scheduler.IntegrationOutboxJob
 import com.gatekeeper.scheduler.ReconciliationJob
@@ -47,7 +49,7 @@ fun main(args: Array<String>) {
         return
     }
     Telemetry.init()
-    val port = args.portArg() ?: System.getenv("PORT")?.toIntOrNull() ?: 8080
+    val port = args.portArg() ?: AppSettings.fromEnv()["PORT"]?.toIntOrNull() ?: 8080
     embeddedServer(Netty, port = port, host = "0.0.0.0", module = Application::module)
         .start(wait = true)
 }
@@ -162,6 +164,7 @@ fun Application.module() {
     DeploymentWorker.start(appScope)
 
     monitor.subscribe(ApplicationStopping) {
+        runCatching { get<DockerService>().close() }
         runCatching { PaystackClient.close() }
         runCatching { MpesaGateway.close() }
         runCatching { org.koin.core.context.stopKoin() }

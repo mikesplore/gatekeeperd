@@ -1,5 +1,6 @@
 package com.gatekeeper.plugins
 
+import com.gatekeeper.config.AppSettings
 import io.opentelemetry.api.GlobalOpenTelemetry
 import io.opentelemetry.api.trace.Span
 import io.opentelemetry.api.trace.Tracer
@@ -14,7 +15,7 @@ object Telemetry {
 
     fun init() {
         if (sdk != null) return
-        val endpoint = System.getenv("OTEL_EXPORTER_OTLP_ENDPOINT")?.takeIf { it.isNotBlank() }
+        val endpoint = AppSettings.fromEnv()["OTEL_EXPORTER_OTLP_ENDPOINT"]
         val exporter = if (endpoint != null) OtlpGrpcSpanExporter.builder().setEndpoint(endpoint).build() else null
         val provider = SdkTracerProvider.builder().apply {
             if (exporter != null) addSpanProcessor(BatchSpanProcessor.builder(exporter).build())

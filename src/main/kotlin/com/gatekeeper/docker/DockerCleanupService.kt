@@ -1,6 +1,5 @@
 package com.gatekeeper.docker
 
-import com.gatekeeper.config.AppConfig
 import com.gatekeeper.db.repositories.AuditRepository
 
 data class DockerCleanupItem(val reference: String, val sizeBytes: Long, val reason: String)
@@ -8,10 +7,8 @@ data class DockerCleanupResult(val dryRun: Boolean, val inspected: Int, val remo
 
 /** Reference-aware cleanup. It never invokes docker system prune. */
 object DockerCleanupService {
-    fun pruneProjectImages(projectImagePrefix: String?, preservedImages: Set<String>, dryRun: Boolean, actor: String): DockerCleanupResult {
-        val docker = DockerService(AppConfig.dockerSocket)
-        return try {
-            val referenced = docker.referencedImageNames() + preservedImages
+    fun pruneProjectImages(projectImagePrefix: String?, preservedImages: Set<String>, dryRun: Boolean, actor: String, docker: DockerService): DockerCleanupResult {
+        val referenced = docker.referencedImageNames() + preservedImages
             val candidates = docker.listImages().filter { image ->
                 image.tags.isNotEmpty() &&
                     (projectImagePrefix == null || image.tags.any { it.startsWith(projectImagePrefix) }) &&
@@ -27,8 +24,7 @@ object DockerCleanupService {
             }
             val result = DockerCleanupResult(dryRun, docker.listImages().size, items, items.sumOf { it.sizeBytes })
             AuditRepository.write(null, "docker_cleanup", actor, "dryRun=$dryRun removed=${items.size} reclaimedBytes=${result.reclaimedBytes} items=${items.joinToString { it.reference }}")
-            result
-        } finally { docker.close() }
+        return result
     }
 
     private fun sameImage(left: String, right: String): Boolean = left == right ||

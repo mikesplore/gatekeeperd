@@ -19,6 +19,7 @@ import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import org.slf4j.LoggerFactory
+import org.koin.ktor.ext.get
 import java.lang.Runtime
 
 private val logger = LoggerFactory.getLogger("com.gatekeeper.plugins.Routing")
@@ -41,7 +42,7 @@ fun Application.configureRouting() {
 
     // Initialize Docker lazily — may not be available in all environments
     val dockerService: DockerService? = try {
-        DockerService(AppConfig.dockerSocket).also { svc ->
+        get<DockerService>().also { svc ->
             svc.createNetworkIfMissing(internalNetwork)
             logger.info("Docker initialized successfully")
         }
@@ -51,11 +52,6 @@ fun Application.configureRouting() {
     }
 
     routing {
-        // Shutdown hooks after Docker init
-        Runtime.getRuntime().addShutdownHook(Thread {
-            runCatching { dockerService?.close() }
-        })
-
         // Health check — no auth required
         get("/api/health") {
             call.respond(mapOf("status" to "ok"))

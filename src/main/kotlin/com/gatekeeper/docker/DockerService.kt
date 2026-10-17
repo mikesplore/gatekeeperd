@@ -57,7 +57,7 @@ internal fun <Handle, Result> createContainerWithCleanup(
     }
 }
 
-class DockerService(dockerSocketPath: String) {
+class DockerService(dockerSocketPath: String) : DockerGateway {
     private val client: DockerClient
 
     init {
@@ -741,7 +741,7 @@ class DockerService(dockerSocketPath: String) {
         logger.info("Renamed container $containerNameOrId to $newName")
     }
 
-    fun close() {
+    override fun close() {
         try {
             client.close()
             logger.info("Docker client closed")

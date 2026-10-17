@@ -1,0 +1,8 @@
+# Existing Phase 0 violations. Remove an entry when its file is migrated.
+# Format: rule|project-relative-source-file
+docker-construction|src/main/kotlin/com/gatekeeper/admin/NginxAdminRoutes.kt
+docker-construction|src/main/kotlin/com/gatekeeper/admin/OperationsAdminRoutes.kt
+docker-construction|src/main/kotlin/com/gatekeeper/admin/ProjectAdminRoutes.kt
+docker-construction|src/main/kotlin/com/gatekeeper/admin/ProjectSetupAdminRoutes.kt
+docker-construction|src/main/kotlin/com/gatekeeper/deployment/DeploymentWorker.kt
+docker-construction|src/main/kotlin/com/gatekeeper/nginx/NginxBackfillRunner.kt

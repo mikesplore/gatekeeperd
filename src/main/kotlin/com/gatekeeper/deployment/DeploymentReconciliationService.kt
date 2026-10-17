@@ -227,8 +227,7 @@ class DeploymentReconciliationService(
     }
 
     companion object {
-        fun production(dockerSocket: String): DeploymentReconciliationService {
-            val docker = runCatching { DockerService(dockerSocket) }.getOrNull()
+        fun production(docker: DockerService): DeploymentReconciliationService {
             return DeploymentReconciliationService(docker, NginxService.configured())
         }
     }
