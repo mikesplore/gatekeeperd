@@ -176,36 +176,6 @@ private fun renderModelFromSite(
     )
 }
 
-private fun updateCustomNginxLocations(
-    slug: String,
-    site: SiteRepository.SiteRecord,
-    locations: List<NginxCustomLocation>,
-    nginxService: NginxService
-): NginxCustomLocationResponse = DistributedLock.withLock("nginx-host-mutation") {
-    nginxService.validateCustomLocations(locations)
-    val inspection = nginxService.inspectSite(slug)
-    require(inspection.available && inspection.enabled && inspection.managed) {
-        "Custom locations can only be managed for an enabled Gatekeeperd-managed Nginx site"
-    }
-    val previous = site.customNginxLocations
-    val updated = SiteRepository.updateDashboard(
-        site.id,
-        SiteRepository.SiteDashboardUpdate(customNginxLocations = locations)
-    ) ?: error("Site no longer exists")
-    val activation = runCatching {
-        val model = renderModelFromSite(slug, updated, nginxService)
-        nginxService.enableProjectDetailed(slug, nginxService.generateNginxConfig(model))
-    }.getOrElse { error ->
-        SiteRepository.updateDashboard(site.id, SiteRepository.SiteDashboardUpdate(customNginxLocations = previous))
-        throw error
-    }
-    if (!activation.success) {
-        SiteRepository.updateDashboard(site.id, SiteRepository.SiteDashboardUpdate(customNginxLocations = previous))
-        error(activation.message ?: "Nginx rejected the custom location update")
-    }
-    NginxCustomLocationResponse(true, "Custom Nginx locations saved and reloaded", locations)
-}
-
 internal fun hasRenderAffectingNginxParameters(body: NginxEnableRequest): Boolean =
         body.port != null || body.domain != null || body.upstreamScheme != null ||
         body.certificateDomain != null || body.sslCertificatePath != null ||
@@ -735,7 +705,7 @@ fun Application.configureNginxAdminRoutes() {
                 val site = SiteRepository.findByProjectSlug(slug)
                     ?: return@post call.respondError(HttpStatusCode.NotFound, "site_not_found", "Managed site not found")
                 val location = NginxCustomLocation(java.util.UUID.randomUUID().toString(), body.path.trim(), body.directives.trim())
-                val result = runCatching { updateCustomNginxLocations(slug, site, site.customNginxLocations + location, nginxService) }
+                val result = runCatching { nginxAdminService.updateCustomLocations(slug, site, site.customNginxLocations + location) { updated -> renderModelFromSite(slug, updated, nginxService) } }
                     .getOrElse { return@post call.respondError(HttpStatusCode.UnprocessableEntity, "custom_location_failed", it.message ?: "Unable to add custom location") }
                 call.respond(result)
                 auditRepository.write(site.projectId, "nginx_custom_location_added", "admin", "Added Nginx location ${location.path} for $slug")
@@ -750,7 +720,7 @@ fun Application.configureNginxAdminRoutes() {
                 val location = site.customNginxLocations.firstOrNull { it.id == id }
                     ?: return@delete call.respondError(HttpStatusCode.NotFound, "custom_location_not_found", "Custom location not found")
                 val result = runCatching {
-                    updateCustomNginxLocations(slug, site, site.customNginxLocations.filterNot { it.id == id }, nginxService)
+                    nginxAdminService.updateCustomLocations(slug, site, site.customNginxLocations.filterNot { it.id == id }) { updated -> renderModelFromSite(slug, updated, nginxService) }
                 }.getOrElse { return@delete call.respondError(HttpStatusCode.UnprocessableEntity, "custom_location_failed", it.message ?: "Unable to remove custom location") }
                 call.respond(result)
                 auditRepository.write(site.projectId, "nginx_custom_location_removed", "admin", "Removed Nginx location ${location.path} for $slug")

@@ -2,6 +2,7 @@ package com.gatekeeper.nginx
 
 import com.gatekeeper.config.AppConfig
 import com.gatekeeper.db.repositories.SiteRepository
+import com.gatekeeper.plugins.DistributedLock
 import com.gatekeeper.feature.certificate.domain.repository.CertificateRepository
 import java.time.Instant
 import java.time.LocalDateTime
@@ -12,6 +13,35 @@ class NginxAdminService(
     private val nginx: NginxService,
     private val certificates: CertificateStore
 ) {
+    fun updateCustomLocations(
+        slug: String,
+        site: SiteRepository.SiteRecord,
+        locations: List<NginxCustomLocation>,
+        renderModel: (SiteRepository.SiteRecord) -> NginxSiteRenderModel
+    ): NginxCustomLocationResponse = DistributedLock.withLock("nginx-host-mutation") {
+        nginx.validateCustomLocations(locations)
+        val inspection = nginx.inspectSite(slug)
+        require(inspection.available && inspection.enabled && inspection.managed) {
+            "Custom locations can only be managed for an enabled Gatekeeperd-managed Nginx site"
+        }
+        val previous = site.customNginxLocations
+        val updated = SiteRepository.updateDashboard(
+            site.id,
+            SiteRepository.SiteDashboardUpdate(customNginxLocations = locations)
+        ) ?: error("Site no longer exists")
+        val activation = runCatching {
+            nginx.enableProjectDetailed(slug, nginx.generateNginxConfig(renderModel(updated)))
+        }.getOrElse { error ->
+            SiteRepository.updateDashboard(site.id, SiteRepository.SiteDashboardUpdate(customNginxLocations = previous))
+            throw error
+        }
+        if (!activation.success) {
+            SiteRepository.updateDashboard(site.id, SiteRepository.SiteDashboardUpdate(customNginxLocations = previous))
+            error(activation.message ?: "Nginx rejected the custom location update")
+        }
+        NginxCustomLocationResponse(true, "Custom Nginx locations saved and reloaded", locations)
+    }
+
     fun hasRenderAffectingParameters(body: NginxEnableRequest): Boolean =
         body.port != null || body.domain != null || body.upstreamScheme != null ||
             body.certificateDomain != null || body.sslCertificatePath != null ||
