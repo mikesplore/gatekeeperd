@@ -160,7 +160,7 @@ fun Application.module() {
     val appScope = CoroutineScope(SupervisorJob())
     AutoBlockerJob.start(appScope)
     ReconciliationJob.start(appScope, get<ReconcilePayments>())
-    IntegrationOutboxJob.start(appScope, get<PaymentDomainRepository>(), get<ProjectBalanceAdapter>())
+    IntegrationOutboxJob.start(appScope, get(), get<PaymentDomainRepository>(), get<ProjectBalanceAdapter>())
     DeploymentWorker.start(appScope)
 
     monitor.subscribe(ApplicationStopping) {

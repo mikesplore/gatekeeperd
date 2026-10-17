@@ -1,7 +1,7 @@
 package com.gatekeeper.admin
 
 import com.gatekeeper.api.respondError
-import com.gatekeeper.db.repositories.IntegrationOutboxRepository
+import com.gatekeeper.feature.integrations.domain.repository.IntegrationOutboxRepository
 import com.gatekeeper.integrations.ScribedIntegrationClient
 import com.gatekeeper.feature.payment.domain.repository.PaymentRepository
 import com.gatekeeper.feature.payment.data.persistence.ProjectBalanceAdapter
@@ -20,9 +20,10 @@ private data class OutboxEventResponse(val id: String, val eventType: String, va
 private data class OutboxReplayResponse(val replayed: Boolean, val id: String, val status: String)
 
 fun Application.configureIntegrationAdminRoutes() {
+    val outbox = get<IntegrationOutboxRepository>()
     routing { authenticate("auth-jwt") {
         get("/api/admin/integrations/outbox") {
-            val events = IntegrationOutboxRepository.pending().map { event ->
+            val events = outbox.pending().map { event ->
                 OutboxEventResponse(event.id.toString(), event.eventType, event.idempotencyKey, event.payload, event.attempts, event.status, event.lastError)
             }
             call.respond(events)
@@ -30,11 +31,11 @@ fun Application.configureIntegrationAdminRoutes() {
         post("/api/admin/integrations/outbox/{id}/replay") {
             val id = runCatching { UUID.fromString(call.parameters["id"]) }.getOrNull()
             if (id == null) { call.respondError(HttpStatusCode.BadRequest, "invalid_id", "Invalid outbox event id"); return@post }
-            val event = IntegrationOutboxRepository.replayAndClaim(id)
+            val event = outbox.replayAndClaim(id)
             if (event == null) { call.respondError(HttpStatusCode.NotFound, "outbox_event_not_found", "Undelivered outbox event not found"); return@post }
             val delivered = ScribedIntegrationClient.deliver(event, call.application.get<PaymentRepository>(), call.application.get<ProjectBalanceAdapter>())
-            if (delivered) IntegrationOutboxRepository.markDelivered(id)
-            else IntegrationOutboxRepository.markFailed(id, "Scribed delivery failed", event.attempts)
+            if (delivered) outbox.markDelivered(id)
+            else outbox.markFailed(id, "Scribed delivery failed", event.attempts)
             call.respond(OutboxReplayResponse(delivered, id.toString(), if (delivered) "delivered" else "queued_for_retry"))
         }
     } }

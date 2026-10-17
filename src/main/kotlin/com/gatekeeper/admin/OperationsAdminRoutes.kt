@@ -28,7 +28,7 @@ import io.ktor.server.routing.*
 import kotlinx.serialization.Serializable
 import com.gatekeeper.feature.payment.domain.usecase.ListPaymentsByProject
 import com.gatekeeper.feature.payment.domain.usecase.GetPaymentDashboardData
-import com.gatekeeper.db.repositories.IntegrationOutboxRepository
+import com.gatekeeper.feature.integrations.domain.repository.IntegrationOutboxRepository as IntegrationOutboxRepositoryPort
 import com.gatekeeper.plugins.Metrics
 import java.time.OffsetDateTime
 import java.time.LocalDateTime
@@ -234,6 +234,7 @@ fun Application.configureOperationsAdminRoutes() {
     val notificationRepository = get<NotificationRepositoryPort>()
     val certificateRepository = get<CertificateRepositoryPort>()
     val auditRepository = get<AuditRepositoryPort>()
+    val integrationOutboxRepository = get<IntegrationOutboxRepositoryPort>()
     routing {
         authenticate("auth-jwt") {
             get("/api/admin/metrics") {
@@ -486,7 +487,7 @@ fun Application.configureOperationsAdminRoutes() {
             get("/api/admin/dashboard/summary") {
                 val projects = ProjectRepository.findAll()
                 val paymentDashboard = call.application.get<GetPaymentDashboardData>()()
-                val outbox = IntegrationOutboxRepository.summary()
+                val outbox = integrationOutboxRepository.summary()
                 val nginxArtifacts = NginxService.configured().listConfigArtifacts()
                 val available = nginxArtifacts.count { it.available }.toLong()
                 val enabled = nginxArtifacts.count { it.enabled }.toLong()
