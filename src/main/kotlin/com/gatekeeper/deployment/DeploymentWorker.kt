@@ -2,7 +2,7 @@ package com.gatekeeper.deployment
 
 import com.gatekeeper.db.repositories.DeploymentJobRepository
 import com.gatekeeper.db.repositories.DeploymentJobRecord
-import com.gatekeeper.db.repositories.DeploymentPortAllocationRepository
+import com.gatekeeper.feature.deployment.domain.repository.DeploymentPortAllocationRepository
 import com.gatekeeper.db.repositories.AuditRepository
 import com.gatekeeper.db.repositories.RegistryCredentialRepository
 import com.gatekeeper.config.AppConfig
@@ -35,7 +35,7 @@ object DeploymentWorker {
     private val started = AtomicBoolean(false)
     private val readinessChecker = ReadinessChecker(TcpPortProbe(), TcpHttpPortProbe())
 
-    fun start(scope: CoroutineScope) {
+    fun start(scope: CoroutineScope, portAllocationRepository: DeploymentPortAllocationRepository) {
         if (!started.compareAndSet(false, true)) return
         scope.launch(Dispatchers.IO) {
             runCatching { recoverInterruptedCutovers() }
@@ -49,7 +49,7 @@ object DeploymentWorker {
                         .onFailure { logger.error("Stale deployment recovery failed", it) }
                     nextRecoveryAt = System.nanoTime() + TimeUnit.MINUTES.toNanos(1)
                 }
-                runCatching { processNext() }.onFailure { logger.error("Deployment worker cycle failed", it) }
+                runCatching { processNext(portAllocationRepository) }.onFailure { logger.error("Deployment worker cycle failed", it) }
                 delay(1000.milliseconds)
             }
         }
@@ -119,14 +119,14 @@ object DeploymentWorker {
         }
     }
 
-    private suspend fun processNext() {
+    private suspend fun processNext(portAllocationRepository: DeploymentPortAllocationRepository) {
         val job = DeploymentJobRepository.claimNext() ?: return
         val claimToken = requireNotNull(job.claimToken) { "Claim token missing for deployment ${job.id}" }
         DeploymentJobRecovery.executeClaimed(
             RecoverableDeploymentJob(job.id, job.serviceId, job.environment, claimToken),
             withLock = { key, block -> DistributedLock.withLock(key, block) },
             ownsClaim = { DeploymentJobRepository.ownsClaim(job.id, claimToken) },
-            process = { runBlocking { processClaimedJob(job) } },
+            process = { runBlocking { processClaimedJob(job, portAllocationRepository) } },
             release = { error ->
                 DeploymentJobRepository.releaseClaim(
                     job.id,
@@ -157,7 +157,7 @@ object DeploymentWorker {
         )
     }
 
-    private suspend fun processClaimedJob(claimedJob: DeploymentJobRecord) {
+    private suspend fun processClaimedJob(claimedJob: DeploymentJobRecord, portAllocationRepository: DeploymentPortAllocationRepository) {
         var job = claimedJob
         val site = if (job.environment == "production") SiteRepository.findByServiceId(job.serviceId) else null
         if (job.containerPort == null) {
@@ -300,7 +300,7 @@ object DeploymentWorker {
                 var reservedPorts = emptyMap<Int, Int>()
                 for (attempt in 0 until 4) {
                     reservedPorts = if (dynamicContainerPorts.isEmpty()) emptyMap() else {
-                        DeploymentPortAllocationRepository.allocateSlot(
+                        portAllocationRepository.allocateSlot(
                             serviceId = job.serviceId,
                             environment = job.environment,
                             activePorts = activePorts,

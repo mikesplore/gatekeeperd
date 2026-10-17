@@ -1,7 +1,8 @@
-package com.gatekeeper.db.repositories
+package com.gatekeeper.feature.deployment.data.persistence
 
 import com.gatekeeper.db.tables.DeploymentPortAllocations
 import com.gatekeeper.deployment.DeploymentHostPortPool
+import com.gatekeeper.feature.deployment.domain.repository.DeploymentPortAllocationRepository as DeploymentPortAllocationPort
 import org.jetbrains.exposed.sql.and
 import org.jetbrains.exposed.sql.insert
 import org.jetbrains.exposed.sql.selectAll
@@ -9,16 +10,16 @@ import org.jetbrains.exposed.sql.update
 import org.jetbrains.exposed.sql.transactions.transaction
 import java.util.UUID
 
-object DeploymentPortAllocationRepository {
+class ExposedDeploymentPortAllocationRepository : DeploymentPortAllocationPort {
     /** Reserves/reuses both slots atomically; the DB lock coordinates all Gatekeeperd instances. */
-    fun allocateSlot(
+    override fun allocateSlot(
         serviceId: UUID,
         environment: String,
         activePorts: Map<Int, Int>,
         containerPorts: Set<Int>,
         dockerPortsInUse: Set<Int>,
         portRange: IntRange,
-        rejectedPorts: Set<Int> = emptySet()
+        rejectedPorts: Set<Int>
     ): Map<Int, Int> = transaction {
         require(containerPorts.all { it in 1..65535 }) { "Container ports must be between 1 and 65535" }
         require(!portRange.isEmpty()) { "Deployment host-port range is empty" }

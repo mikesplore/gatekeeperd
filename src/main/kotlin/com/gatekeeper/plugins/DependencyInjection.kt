@@ -67,6 +67,8 @@ import com.gatekeeper.feature.certificate.domain.repository.CertificateRepositor
 import com.gatekeeper.feature.certificate.data.persistence.ExposedCertificateRepository
 import com.gatekeeper.feature.integrations.domain.repository.IntegrationOutboxRepository as IntegrationOutboxRepositoryPort
 import com.gatekeeper.feature.integrations.data.persistence.ExposedIntegrationOutboxRepository
+import com.gatekeeper.feature.deployment.domain.repository.DeploymentPortAllocationRepository as DeploymentPortAllocationPort
+import com.gatekeeper.feature.deployment.data.persistence.ExposedDeploymentPortAllocationRepository
 import org.koin.dsl.module
 import org.koin.core.qualifier.named
 import org.koin.ktor.plugin.Koin
@@ -86,6 +88,7 @@ private val applicationModule = module {
     single<AuditRepository> { ExposedAuditRepository(get()) }
     single<CertificateRepository> { ExposedCertificateRepository() }
     single<IntegrationOutboxRepositoryPort> { ExposedIntegrationOutboxRepository() }
+    single<DeploymentPortAllocationPort> { ExposedDeploymentPortAllocationRepository() }
     single<ProjectQueryRepository> { ExposedProjectQueryRepository() }
     single<SupportRequestRepository> { ExposedSupportRequestRepository() }
     single { CustomerApplicationService(get<ProjectQueryRepository>(), get(), get(), get<SupportRequestRepository>()) }
