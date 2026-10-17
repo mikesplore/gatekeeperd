@@ -474,10 +474,13 @@ fun Application.configureProjectSetupAdminRoutes() {
                 val service = ServiceRepository.findByProjectAndId(projectId, serviceId)
                 val active = DeploymentApplicationService.activeDeploymentSummaryForService(serviceId, "production")
                 val latest = DeploymentApplicationService.latestDeploymentStateForService(serviceId, "production")
+                val bindings = ServiceDomainRepository.listByService(serviceId).map {
+                    ProjectSetupDomainBinding(it.id.toString(), it.serviceId.toString(), it.containerPort, it.domain, it.status)
+                }
                 call.respond(ProjectSetupStatusResponse(
                     projectId.toString(), project.slug, project.name, project.domain,
                     config?.toSetupResponse(), credential != null, credential?.version,
-                    service?.domain?.let { ProjectSetupGatewayResponse(it, "domain_saved") },
+                    service?.domain?.let { ProjectSetupGatewayResponse(it, "domain_saved", serviceId.toString(), bindings.firstOrNull { binding -> binding.domain == it }?.containerPort, bindings) },
                     active?.id?.toString(), active?.status, latest?.first?.toString(), latest?.second
                 ))
             }

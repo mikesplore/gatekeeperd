@@ -80,6 +80,15 @@ data class NginxDisableResponse(
 )
 
 @Serializable
+data class NginxWizardDomainBindingResponse(
+    val id: String,
+    val serviceId: String,
+    val containerPort: Int?,
+    val domain: String,
+    val status: String
+)
+
+@Serializable
 data class NginxWizardContextResponse(
     val slug: String,
     val serviceId: String? = null,
@@ -91,7 +100,8 @@ data class NginxWizardContextResponse(
     val publishedPorts: Map<Int, Int> = emptyMap(),
     val runtimeHealth: String? = null,
     val installedCertificates: List<String> = emptyList(),
-    val resolvedCertificateDomain: String? = null
+    val resolvedCertificateDomain: String? = null,
+    val bindings: List<NginxWizardDomainBindingResponse> = emptyList()
 )
 
 @Serializable
@@ -523,6 +533,9 @@ fun Application.configureNginxAdminRoutes() {
                         call.respondError(HttpStatusCode.BadRequest, "invalid_service", "No valid service is available for this project")
                         return@get
                     }
+                val bindings = ServiceDomainRepository.listByService(serviceId).map {
+                    NginxWizardDomainBindingResponse(it.id.toString(), it.serviceId.toString(), it.containerPort, it.domain, it.status)
+                }
                 val site = SiteRepository.findByProjectIdAndServiceId(project.id, serviceId)
                 val activeRuntime = runCatching { DeploymentApplicationService.activeDeploymentRuntime(serviceId, "production") }.getOrNull()
                 val resolvedTarget = DeploymentUpstreamResolver.resolve(serviceId, "production")
@@ -550,7 +563,8 @@ fun Application.configureNginxAdminRoutes() {
                         publishedPorts = activeRuntime?.publishedPorts ?: emptyMap(),
                         runtimeHealth = dockerHealth,
                         installedCertificates = installedCerts,
-                        resolvedCertificateDomain = resolvedCert?.certificateDomain
+                        resolvedCertificateDomain = resolvedCert?.certificateDomain,
+                        bindings = bindings
                     )
                 )
             }
@@ -586,10 +600,29 @@ fun Application.configureNginxAdminRoutes() {
                     call.respondError(HttpStatusCode.BadRequest, "invalid_service", "Selected service does not belong to this project")
                     return@post
                 }
-                val site = SiteRepository.findByProjectIdAndServiceId(project.id, selectedServiceId)
-                val serviceDomain = service.domain
+                val requestedDomain = body.domain?.let { raw ->
+                    runCatching { requireValidHostname(raw) }.getOrElse {
+                        call.respondError(HttpStatusCode.BadRequest, "invalid_domain", it.message ?: "Domain is invalid")
+                        return@post
+                    }
+                } ?: service.domain
+                val serviceDomain = requestedDomain
                 if (serviceDomain == null) {
                     call.respondError(HttpStatusCode.BadRequest, "service_domain_required", "Configure a domain for this service before creating its Nginx site")
+                    return@post
+                }
+                val binding = ServiceDomainRepository.findByServiceAndDomain(selectedServiceId, serviceDomain)
+                if (binding == null || binding.status == ServiceDomainStatus.PORT_UNAVAILABLE.value) {
+                    call.respondError(HttpStatusCode.Conflict, "domain_binding_unavailable", "Select an available domain binding for this service")
+                    return@post
+                }
+                if (body.containerPort != null && body.containerPort != binding.containerPort) {
+                    call.respondError(HttpStatusCode.Conflict, "binding_port_mismatch", "The selected domain is bound to a different container port")
+                    return@post
+                }
+                val site = SiteRepository.findByDomain(serviceDomain)
+                if (site != null && site.serviceId != selectedServiceId) {
+                    call.respondError(HttpStatusCode.Conflict, "domain_in_use", "Domain is already configured for another service")
                     return@post
                 }
                 val siteSlug = site?.projectSlug ?: nginxSiteSlug(slug, service.isDefault, serviceDomain, service.domain)
@@ -597,7 +630,8 @@ fun Application.configureNginxAdminRoutes() {
                 when (val result = computeNginxEnablePlan(
                     slug = siteSlug,
                     projectDomain = serviceDomain,
-                    activeRuntimeTarget = DeploymentUpstreamResolver.resolve(selectedServiceId, "production"),
+                    activeRuntimeTarget = binding.containerPort?.let { DeploymentUpstreamResolver.resolve(selectedServiceId, it, "production") }
+                        ?: DeploymentUpstreamResolver.resolve(selectedServiceId, "production"),
                     request = body,
                     nginxService = nginxService,
                     dockerService = dockerService
