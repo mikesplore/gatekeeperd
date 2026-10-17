@@ -1,8 +1,10 @@
 package com.gatekeeper.nginx
 
 import com.gatekeeper.db.repositories.SiteRepository
+import com.gatekeeper.db.tables.DeploymentStatus
 import com.gatekeeper.db.tables.UpstreamMode
 import com.gatekeeper.deployment.DeploymentApplicationService
+import com.gatekeeper.deployment.DeploymentApplicationService.ActiveDeploymentRuntime
 import com.gatekeeper.deployment.PublishedPorts
 import java.util.UUID
 
@@ -50,18 +52,12 @@ object DeploymentUpstreamResolver {
         serviceId: UUID,
         environment: String,
         site: SiteRepository.SiteRecord,
-        activeRuntime: DeploymentApplicationService.ActiveDeploymentRuntime?
+        activeRuntime: ActiveDeploymentRuntime?
     ): Target? = resolve(
         serviceId,
         environment,
         SiteTarget(site.upstreamMode, site.upstreamHost, site.upstreamExplicitPort, site.upstreamKind, site.upstreamContainerPort),
-        activeRuntime?.let {
-            RuntimeTarget(
-                it.serviceId, it.environment,
-                it.status in setOf(com.gatekeeper.db.tables.DeploymentStatus.ACTIVE, com.gatekeeper.db.tables.DeploymentStatus.READY),
-                it.containerName, it.containerPort, it.publishedPorts
-            )
-        }
+        activeRuntime?.let { toRuntimeTarget(it) }
     )
 
     fun resolve(serviceId: UUID, environment: String): Target? {
@@ -71,8 +67,35 @@ object DeploymentUpstreamResolver {
         return resolve(serviceId, environment, site, runtime)
     }
 
+    /**
+     * Port-aware resolution for multi-port services. Each (domain, container port)
+     * binding gets its own upstream so a second site never silently routes to the
+     * primary port. Falls back to the legacy lookup when no site exists for the port.
+     */
+    fun resolve(serviceId: UUID, containerPort: Int, environment: String): Target? {
+        val runtime = DeploymentApplicationService.gatewayDeploymentRuntime(serviceId, environment)
+        val site = SiteRepository.findByServiceAndPort(serviceId, containerPort)
+            ?: SiteRepository.findByServiceId(serviceId)
+        if (site == null) return resolveRuntime(serviceId, containerPort, environment, runtime)
+        val siteTarget = SiteTarget(
+            site.upstreamMode,
+            site.upstreamHost,
+            site.upstreamExplicitPort,
+            site.upstreamKind,
+            site.upstreamContainerPort ?: containerPort,
+        )
+        return resolve(serviceId, environment, siteTarget, runtime?.let { toRuntimeTarget(it) })
+            ?: resolveRuntime(serviceId, containerPort, environment, runtime)
+    }
+
     fun resolveRuntime(serviceId: UUID, environment: String): Target? = resolveRuntime(
         serviceId, environment, DeploymentApplicationService.gatewayDeploymentRuntime(serviceId, environment)
+    )
+
+    /** Port-aware runtime resolution: host port is derived from the requested container port. */
+    fun resolveRuntime(serviceId: UUID, containerPort: Int, environment: String): Target? = resolveRuntime(
+        serviceId, containerPort, environment,
+        DeploymentApplicationService.gatewayDeploymentRuntime(serviceId, environment)
     )
 
     fun resolveRuntime(serviceId: UUID, environment: String, runtime: RuntimeTarget?): Target? {
@@ -84,20 +107,41 @@ object DeploymentUpstreamResolver {
         return Target("127.0.0.1", port, containerName, selected.containerPort)
     }
 
+    private fun toRuntimeTarget(runtime: ActiveDeploymentRuntime): RuntimeTarget = RuntimeTarget(
+        runtime.serviceId,
+        runtime.environment,
+        runtime.status in setOf(DeploymentStatus.ACTIVE, DeploymentStatus.READY),
+        runtime.containerName,
+        runtime.containerPort,
+        runtime.publishedPorts,
+    )
+
     private fun resolveRuntime(
         serviceId: UUID,
         environment: String,
-        runtime: DeploymentApplicationService.ActiveDeploymentRuntime?
+        runtime: ActiveDeploymentRuntime?
     ): Target? {
         val selected = runtime?.takeIf {
             it.serviceId == serviceId && it.environment == environment &&
-                it.status in setOf(com.gatekeeper.db.tables.DeploymentStatus.ACTIVE, com.gatekeeper.db.tables.DeploymentStatus.READY)
+                it.status in setOf(DeploymentStatus.ACTIVE, DeploymentStatus.READY)
         } ?: return null
-        return resolveRuntime(
-            serviceId,
-            environment,
-            RuntimeTarget(serviceId, environment, true, selected.containerName, selected.containerPort, selected.publishedPorts)
-        )
+        return resolveRuntime(serviceId, environment, toRuntimeTarget(selected))
+    }
+
+    private fun resolveRuntime(
+        serviceId: UUID,
+        containerPort: Int,
+        environment: String,
+        runtime: ActiveDeploymentRuntime?
+    ): Target? {
+        val selected = runtime?.takeIf {
+            it.serviceId == serviceId && it.environment == environment &&
+                it.status in setOf(DeploymentStatus.ACTIVE, DeploymentStatus.READY)
+        } ?: return null
+        val containerName = selected.containerName?.takeIf(String::isNotBlank) ?: return null
+        val hostPort = PublishedPorts.applicationPort(selected.containerPort, selected.publishedPorts, containerPort)
+            ?: return null
+        return Target("127.0.0.1", hostPort, containerName, containerPort)
     }
 
     /** Compatibility lookup for project-level admin views: resolve its default service. */

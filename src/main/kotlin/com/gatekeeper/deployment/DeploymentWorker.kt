@@ -17,6 +17,7 @@ import com.gatekeeper.nginx.DeploymentUpstreamIncludes
 import com.gatekeeper.deployment.DurableCutoverFiles
 import com.gatekeeper.nginx.canDeploymentCutoverUpdateRoute
 import com.gatekeeper.db.repositories.SiteRepository
+import com.gatekeeper.db.repositories.ServiceDomainRepository
 import com.gatekeeper.security.SecretValueCipher
 import kotlinx.coroutines.*
 import org.slf4j.LoggerFactory
@@ -650,6 +651,10 @@ class DeploymentWorker(
                 )
             }
         )
+        if (changesProductionRoute) {
+            runCatching { ServiceDomainRepository.reconcilePorts(job.serviceId, runtime.ports.keys) }
+                .onFailure { logger.warn("Unable to reconcile domain bindings for service {} after deployment {}", job.serviceId, job.id, it) }
+        }
         update(
             job,
             step = "active",

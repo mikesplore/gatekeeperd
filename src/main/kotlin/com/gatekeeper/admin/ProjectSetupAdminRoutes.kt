@@ -102,13 +102,26 @@ data class ProjectEnvironmentDeployResponse(
 @Serializable
 data class ProjectSetupGatewayRequest(
     val domain: String,
-    val serviceId: String? = null
+    val serviceId: String? = null,
+    val containerPort: Int? = null
+)
+
+@Serializable
+data class ProjectSetupDomainBinding(
+    val id: String,
+    val serviceId: String,
+    val containerPort: Int?,
+    val domain: String,
+    val status: String
 )
 
 @Serializable
 data class ProjectSetupGatewayResponse(
     val domain: String,
-    val status: String
+    val status: String,
+    val serviceId: String? = null,
+    val containerPort: Int? = null,
+    val bindings: List<ProjectSetupDomainBinding> = emptyList()
 )
 
 @Serializable
@@ -220,7 +233,9 @@ data class ProjectOverviewGateway(
     val gateEnabled: Boolean?,
     val reconciliationStatus: String?,
     val resolvedUpstreamHost: String?,
-    val resolvedUpstreamPort: Int?
+    val resolvedUpstreamPort: Int?,
+    val bindings: List<ProjectSetupDomainBinding> = emptyList(),
+    val unboundPorts: List<Int> = emptyList()
 )
 
 @Serializable
@@ -673,9 +688,35 @@ fun Application.configureProjectSetupAdminRoutes() {
                     else return@put call.respondError(HttpStatusCode.BadRequest, "invalid_service_id", "Service ID is invalid")
                 val service = ServiceRepository.findByProjectAndId(projectId, serviceId)
                     ?: return@put call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
-                val updated = ServiceRepository.updateDomain(projectId, serviceId, domain)
-                    ?: return@put call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
-                call.respond(ProjectSetupGatewayResponse(updated.domain ?: domain, "domain_saved"))
+                if (body.containerPort != null && body.containerPort !in 1..65535) {
+                    return@put call.respondError(HttpStatusCode.BadRequest, "invalid_container_port", "containerPort must be between 1 and 65535")
+                }
+                val active = DeploymentApplicationService.activeRuntime(serviceId, "production")
+                val publishedPorts = active?.ports?.keys.orEmpty()
+                if (publishedPorts.size > 1 && body.containerPort == null) {
+                    return@put call.respondError(HttpStatusCode.BadRequest, "container_port_required", "Select a containerPort when the active deployment publishes multiple ports")
+                }
+                val selectedPort = body.containerPort ?: publishedPorts.singleOrNull()
+                if (body.containerPort != null && body.containerPort !in publishedPorts) {
+                    return@put call.respondError(HttpStatusCode.BadRequest, "container_port_not_published", "Selected container port is not published by the active deployment")
+                }
+                val existing = ServiceDomainRepository.findByDomain(domain)
+                if (existing != null && existing.serviceId != serviceId) {
+                    return@put call.respondError(HttpStatusCode.Conflict, "domain_in_use", "Domain is already bound to another service")
+                }
+                val binding = existing ?: runCatching {
+                    ServiceDomainRepository.add(serviceId, domain, selectedPort)
+                }.getOrElse {
+                    return@put call.respondError(HttpStatusCode.Conflict, "domain_binding_failed", "Domain binding could not be saved")
+                }
+                if (existing != null && selectedPort != null && existing.containerPort != selectedPort) {
+                    ServiceDomainRepository.attachPort(existing.id, selectedPort)
+                }
+                val bindings = ServiceDomainRepository.reconcilePorts(serviceId, publishedPorts).map {
+                    ProjectSetupDomainBinding(it.id.toString(), it.serviceId.toString(), it.containerPort, it.domain, it.status)
+                }
+                val savedBinding = bindings.first { it.id == binding.id.toString() }
+                call.respond(ProjectSetupGatewayResponse(domain, "domain_saved", serviceId.toString(), savedBinding.containerPort, bindings))
             }
 
             post("/api/admin/project-setup/projects/{projectId}/deploy") {
@@ -770,7 +811,11 @@ fun Application.configureProjectSetupAdminRoutes() {
                         site?.id?.toString(), service?.domain,
                         site != null && site.domain == service?.domain, site?.tlsMode?.value,
                         site?.gateEnabled?.takeIf { site.domain == service?.domain },
-                        site?.reconciliationStatus?.value?.takeIf { site.domain == service?.domain }, upstream?.host, upstream?.port
+                        site?.reconciliationStatus?.value?.takeIf { site.domain == service?.domain }, upstream?.host, upstream?.port,
+                        ServiceDomainRepository.listByService(serviceId).map {
+                            ProjectSetupDomainBinding(it.id.toString(), it.serviceId.toString(), it.containerPort, it.domain, it.status)
+                        },
+                        ServiceDomainRepository.unboundPorts(serviceId, publishedPorts.keys)
                     ),
                     ProjectOverviewCustomerBilling(
                         project.customerId?.toString(), project.customerName, project.customerEmail,

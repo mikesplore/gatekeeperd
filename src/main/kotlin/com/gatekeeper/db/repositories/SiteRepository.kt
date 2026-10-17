@@ -34,6 +34,13 @@ object SiteRepository {
         Services.selectAll().where { (Services.id eq id) and (Services.isDefault eq true) }.count() == 1L
     } ?: true
 
+    private fun siteSlug(projectSlug: String?, serviceId: UUID?, domain: String): String? {
+        if (projectSlug == null) return null
+        val service = serviceId?.let { id -> Services.selectAll().where { Services.id eq id }.singleOrNull() }
+        return if (service != null && service[Services.isDefault] && service[Services.domain] == domain) projectSlug
+        else "$projectSlug-${domain.toSiteSlugSuffix()}"
+    }
+
     fun existsForProject(projectId: UUID): Boolean = transaction {
         Sites.selectAll().where { Sites.projectId eq projectId }.count() > 0
     }
@@ -61,22 +68,41 @@ object SiteRepository {
 
     fun findByProjectId(projectId: UUID): SiteRecord? = transaction {
         val serviceId = defaultServiceId(projectId)
-        val row = Sites.selectAll().where { (Sites.projectId eq projectId) and (Sites.serviceId eq serviceId) }.singleOrNull()
-            ?: Sites.selectAll().where { (Sites.projectId eq projectId) and Sites.serviceId.isNull() }.singleOrNull()
+        val primaryDomain = Services.selectAll().where { Services.id eq serviceId }.singleOrNull()?.get(Services.domain)
+        val row = Sites.selectAll().where { (Sites.projectId eq projectId) and (Sites.serviceId eq serviceId) }
+            .toList().firstOrNull { it[Sites.domain] == primaryDomain }
+            ?: Sites.selectAll().where { (Sites.projectId eq projectId) and Sites.serviceId.isNull() }.firstOrNull()
             ?: return@transaction null
         val slug = Projects.selectAll().where { Projects.id eq projectId }.singleOrNull()?.get(Projects.slug)
-        row.toRecord(if (isDefaultService(serviceId)) slug else slug?.let { "$it-${row[Sites.domain].toSiteSlugSuffix()}" })
+        row.toRecord(siteSlug(slug, serviceId, row[Sites.domain]))
     }
 
     fun findDefaultServiceId(projectId: UUID): UUID = transaction { defaultServiceId(projectId) }
 
     fun findByServiceId(serviceId: UUID): SiteRecord? = transaction {
-        val row = Sites.selectAll().where { Sites.serviceId eq serviceId }.singleOrNull() ?: return@transaction null
+        val row = Sites.selectAll().where { Sites.serviceId eq serviceId }
+            .orderBy(Sites.createdAt, SortOrder.ASC).firstOrNull() ?: return@transaction null
         val projectId = row[Sites.projectId]
         val projectSlug = Projects.selectAll().where { Projects.id eq projectId }.singleOrNull()?.get(Projects.slug)
-        val domainSlug = row[Sites.domain].toSiteSlugSuffix()
-        row.toRecord(if (isDefaultService(serviceId)) projectSlug else projectSlug?.let { "$it-$domainSlug" })
+        row.toRecord(siteSlug(projectSlug, serviceId, row[Sites.domain]))
     }
+
+    /** Multi-port support: all nginx sites owned by one service, one per (domain, container port). */
+    fun findAllByServiceId(serviceId: UUID): List<SiteRecord> = transaction {
+        val rows = Sites.selectAll().where { Sites.serviceId eq serviceId }.toList()
+        if (rows.isEmpty()) return@transaction emptyList()
+        val default = isDefaultService(serviceId)
+        val projectSlugs = Projects.selectAll()
+            .where { Projects.id inList rows.map { it[Sites.projectId] }.distinct() }
+            .associate { it[Projects.id] to it[Projects.slug] }
+        rows.map { row ->
+            val projectSlug = projectSlugs[row[Sites.projectId]]
+            row.toRecord(siteSlug(projectSlug, serviceId, row[Sites.domain]))
+        }
+    }
+
+    fun findByServiceAndPort(serviceId: UUID, containerPort: Int): SiteRecord? =
+        findAllByServiceId(serviceId).firstOrNull { it.upstreamContainerPort == containerPort }
 
     fun findGateSlugsByServiceId(serviceId: UUID): List<String> = transaction {
         val service = Services.selectAll().where { Services.id eq serviceId }.singleOrNull()
@@ -85,7 +111,7 @@ object SiteRepository {
             .singleOrNull()?.get(Projects.slug) ?: return@transaction emptyList()
         val isDefault = service[Services.isDefault]
         val siteSlugs = Sites.selectAll().where { Sites.serviceId eq serviceId }.map { row ->
-            if (isDefault) projectSlug else "$projectSlug-${row[Sites.domain].toSiteSlugSuffix()}"
+            siteSlug(projectSlug, serviceId, row[Sites.domain]) ?: projectSlug
         }
         (if (isDefault) listOf(projectSlug) else emptyList()) + siteSlugs
     }
@@ -99,7 +125,7 @@ object SiteRepository {
                 Services.selectAll().where { (Services.id eq id) and (Services.isDefault eq true) }
                     .count() == 1L
             } ?: true
-            if (isDefault) projectSlug else "$projectSlug-${row[Sites.domain].toSiteSlugSuffix()}"
+            siteSlug(projectSlug, serviceId, row[Sites.domain]) ?: projectSlug
         }.distinct()
     }
 
@@ -108,22 +134,24 @@ object SiteRepository {
         val projectId = row[Sites.projectId]
         val projectSlug = Projects.selectAll().where { Projects.id eq projectId }.singleOrNull()?.get(Projects.slug)
         val serviceId = row[Sites.serviceId]
-        val siteSlug = if (isDefaultService(serviceId)) projectSlug else projectSlug?.let { "$it-${row[Sites.domain].toSiteSlugSuffix()}" }
+        val siteSlug = siteSlug(projectSlug, serviceId, row[Sites.domain])
         row.toRecord(siteSlug)
     }
 
     fun findByProjectIdAndServiceId(projectId: UUID, serviceId: UUID): SiteRecord? = transaction {
-        val row = Sites.selectAll().where { (Sites.projectId eq projectId) and (Sites.serviceId eq serviceId) }.singleOrNull() ?: return@transaction null
+        val preferredDomain = Services.selectAll().where { Services.id eq serviceId }.singleOrNull()?.get(Services.domain)
+        val rows = Sites.selectAll().where { (Sites.projectId eq projectId) and (Sites.serviceId eq serviceId) }
+            .orderBy(Sites.createdAt, SortOrder.ASC).toList()
+        val row = rows.firstOrNull { it[Sites.domain] == preferredDomain } ?: rows.firstOrNull() ?: return@transaction null
         val projectSlug = Projects.selectAll().where { Projects.id eq projectId }.singleOrNull()?.get(Projects.slug)
-        row.toRecord(if (isDefaultService(serviceId)) projectSlug else projectSlug?.let { "$it-${row[Sites.domain].toSiteSlugSuffix()}" })
+        row.toRecord(siteSlug(projectSlug, serviceId, row[Sites.domain]))
     }
 
     fun findById(id: UUID): SiteRecord? = transaction {
         val row = Sites.selectAll().where { Sites.id eq id }.singleOrNull() ?: return@transaction null
         val projectId = row[Sites.projectId]
         val projectSlug = Projects.selectAll().where { Projects.id eq projectId }.singleOrNull()?.get(Projects.slug)
-        val domainSlug = row[Sites.domain].toSiteSlugSuffix()
-        row.toRecord(if (isDefaultService(row[Sites.serviceId])) projectSlug else projectSlug?.let { "$it-$domainSlug" })
+        row.toRecord(siteSlug(projectSlug, row[Sites.serviceId], row[Sites.domain]))
     }
 
     fun findByProjectSlug(slug: String): SiteRecord? = transaction {
@@ -131,17 +159,9 @@ object SiteRepository {
             .where { Projects.deletedAt.isNull() }
             .toList()
             .firstOrNull { row ->
-                val siteSlug = "${row[Projects.slug]}-${row[Sites.domain].toSiteSlugSuffix()}"
-                val isDefault = row[Sites.serviceId]?.let { serviceId ->
-                    Services.selectAll().where { (Services.id eq serviceId) and (Services.isDefault eq true) }.count() == 1L
-                } ?: true
-                (slug == siteSlug && !isDefault) || (slug == row[Projects.slug] && isDefault)
+                slug == siteSlug(row[Projects.slug], row[Sites.serviceId], row[Sites.domain])
             }?.let { row ->
-                val isDefault = row[Sites.serviceId]?.let { serviceId ->
-                    Services.selectAll().where { (Services.id eq serviceId) and (Services.isDefault eq true) }.count() == 1L
-                } ?: true
-                val domainSuffix = row[Sites.domain].toSiteSlugSuffix()
-                row.toRecord(if (isDefault) row[Projects.slug] else "${row[Projects.slug]}-$domainSuffix")
+                row.toRecord(siteSlug(row[Projects.slug], row[Sites.serviceId], row[Sites.domain]))
             }
     }
 
@@ -149,10 +169,7 @@ object SiteRepository {
         Sites.innerJoin(Projects).selectAll()
             .where { Projects.deletedAt.isNull() }
             .map { row ->
-                val isDefault = row[Sites.serviceId]?.let { serviceId ->
-                    Services.selectAll().where { (Services.id eq serviceId) and (Services.isDefault eq true) }.count() == 1L
-                } ?: true
-                val slug = if (isDefault) row[Projects.slug] else "${row[Projects.slug]}-${row[Sites.domain].toSiteSlugSuffix()}"
+                val slug = siteSlug(row[Projects.slug], row[Sites.serviceId], row[Sites.domain])
                 row.toRecord(slug)
             }
     }
@@ -216,7 +233,6 @@ object SiteRepository {
             it[Sites.bypassPaths] = Json.encodeToString(model.bypassPaths)
             it[Sites.customNginxLocations] = Json.encodeToString(model.customNginxLocations)
         }
-        Services.update({ Services.id eq serviceId }) { it[Services.domain] = model.domain }
         findById(id)!!.copy(projectSlug = fileSlug)
     }
 

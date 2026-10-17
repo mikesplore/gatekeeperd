@@ -318,7 +318,7 @@ Returns the active runtime, or the latest ready candidate when no active deploym
 
 #### PUT /api/admin/project-setup/projects/{projectId}/domain-gateway
 
-Save only the service's domain before or after a runtime exists. Accepts `domain` and optional `serviceId` (omitted selects `default`). This updates the service record only; it does not create, update, or enable an Nginx Site record or file. Create or enable the Nginx site separately through Nginx administration after a runtime is active. Site records are service-owned and multiple domains can belong to one project.
+Add a service domain binding. Accepts `domain`, optional `serviceId` (omitted selects `default`), and optional `containerPort`. A single published runtime port is attached automatically. When multiple container ports are published, `containerPort` is required. The response includes the binding list and its lifecycle status. Bindings remain pending before deployment and become `port_unavailable` if a later deployment drops their port. The service's legacy `domain` field projects its primary binding. Enabling nginx remains a separate action.
 
 #### POST /api/admin/project-setup/projects/{projectId}/deploy?serviceId={uuid}
 
@@ -326,7 +326,7 @@ Queue a deployment from the saved desired configuration. `serviceId` is optional
 
 ### GET /api/admin/projects/{slug}/overview
 
-Returns sectioned project state: `accessLifecycle`, `desiredConfiguration`, `currentDeployment`, `domainsGateway`, and `customerBilling`. `domainsGateway.domain` is the selected default service's saved domain and may be null; it is not inferred from the legacy project domain. The current runtime and upstream come from the canonical active deployment and Phase 3 resolver, not `projects.container_name`. `runtimeHealth` is inspected from the active deployment's persisted runtime container. `currentDeployment.portMappings` lists each published `containerPort`, assigned `hostPort`, and recorded `hostIp`; legacy deployments with only a primary port return that mapping when available. `currentDeployment.publicExposure` is true while an adopted active container has a published port bound to `0.0.0.0` or `::`; it becomes false when that deployment is retired. Secret and credential values are never included; only version references are returned.
+Returns sectioned project state: `accessLifecycle`, `desiredConfiguration`, `currentDeployment`, `domainsGateway`, and `customerBilling`. `domainsGateway` includes service domain bindings and `unboundPorts`, computed from active deployment port mappings. The current runtime and upstream come from the canonical active deployment and Phase 3 resolver, not `projects.container_name`. `runtimeHealth` is inspected from the active deployment's persisted runtime container. `currentDeployment.portMappings` lists each published `containerPort`, assigned `hostPort`, and recorded `hostIp`; legacy deployments with only a primary port return that mapping when available. `currentDeployment.publicExposure` is true while an adopted active container has a published port bound to `0.0.0.0` or `::`; it becomes false when that deployment is retired. Secret and credential values are never included; only version references are returned.
 
 ### GET /api/admin/projects/{slug}/deployments/history
 
@@ -708,12 +708,14 @@ Check if a project has an nginx site configured and enabled, and whether SSL is 
 - `port` comes from the active deployment runtime record for Docker-discovery sites.
 
 ### POST /api/admin/nginx/enable/{slug}
-Generate and enable an nginx site config for a project's selected service. Validates that the service's active deployment container is running before creating the config. `serviceId` is optional and defaults to the project's default service.
+Generate and enable an nginx site config for a service domain binding. `serviceId` is optional and defaults to the project's default service. `domain` selects a binding; `containerPort` may select the binding's published container port. If one port is published, it is selected automatically. When several ports are published, a port selection is required. The service's active deployment must publish the selected port.
 
 **Request:**
 ```json
 {
   "serviceId": "b0ee7a11-1a47-4fcb-9325-4e6c704f0311",
+  "domain": "app.example.com",
+  "containerPort": 8080,
   "port": 9921,
   "upstreamScheme": "http",
   "certificateDomain": "example.com",
