@@ -13,6 +13,7 @@ import com.gatekeeper.security.SecretValueCipher
 import com.gatekeeper.feature.payment.data.persistence.ProjectBalanceAdapter
 import com.gatekeeper.feature.audit.domain.repository.AuditRepository as AuditRepositoryPort
 import com.gatekeeper.feature.integrations.domain.repository.ProviderCredentialStore
+import com.gatekeeper.feature.integrations.domain.repository.RegistryCredentialStore
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.Application
 import io.ktor.server.auth.authenticate
@@ -347,6 +348,7 @@ data class AdoptContainerResponse(
 fun Application.configureProjectSetupAdminRoutes() {
     val auditRepository = get<AuditRepositoryPort>()
     val providerCredentials = get<ProviderCredentialStore>()
+    val registryCredentials = get<RegistryCredentialStore>()
     routing {
         authenticate("auth-jwt") {
             get("/api/admin/project-setup/containers") {
@@ -606,7 +608,7 @@ fun Application.configureProjectSetupAdminRoutes() {
                 if (username.isNotBlank() && !SecretValueCipher.isConfigured()) {
                     return@put call.respondError(HttpStatusCode.ServiceUnavailable, "secrets_unconfigured", "Secret encryption is not configured")
                 }
-                val providerCredential = if (username.isNotBlank()) RegistryCredentialRepository.save(registry, username, password) else null
+                val providerCredential = if (username.isNotBlank()) registryCredentials.save(registry, username, password) else null
                 if (registry != config.registry) {
                     DeploymentJobRepository.updateConfiguration(config.id, UpdateDeploymentConfigurationRequest(registry = registry))
                 }

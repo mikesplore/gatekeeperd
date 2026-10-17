@@ -75,7 +75,9 @@ import com.gatekeeper.feature.integrations.data.persistence.ExposedGitHubCredent
 import com.gatekeeper.feature.integrations.data.persistence.ExposedGitHubInstallationStore
 import com.gatekeeper.feature.integrations.data.persistence.ExposedGitHubWebhookStore
 import com.gatekeeper.feature.integrations.domain.repository.ProviderCredentialStore
+import com.gatekeeper.feature.integrations.domain.repository.RegistryCredentialStore
 import com.gatekeeper.feature.integrations.data.persistence.ExposedProviderCredentialRepository
+import com.gatekeeper.feature.integrations.data.persistence.ExposedRegistryCredentialRepository
 import com.gatekeeper.feature.deployment.domain.repository.DeploymentPortAllocationRepository as DeploymentPortAllocationPort
 import com.gatekeeper.feature.deployment.data.persistence.ExposedDeploymentPortAllocationRepository
 import com.gatekeeper.feature.deployment.domain.port.DeploymentCommandRunner
@@ -110,6 +112,7 @@ private val applicationModule = module {
     single<GitHubWebhookStore> { ExposedGitHubWebhookStore() }
     single<ProviderCredentialStore> { get<ExposedProviderCredentialRepository>() }
     single { ExposedProviderCredentialRepository() }
+    single<RegistryCredentialStore> { ExposedRegistryCredentialRepository(get<ProviderCredentialStore>()) }
     single<DeploymentPortAllocationPort> { ExposedDeploymentPortAllocationRepository() }
     single<DeploymentCommandRunner> { HostDeploymentCommandRunner() }
     single<GitHubTokenProvider> { GitHubTokenProvider { GitHubAppClient.installationToken() } }

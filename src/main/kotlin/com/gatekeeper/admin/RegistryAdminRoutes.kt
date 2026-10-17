@@ -3,9 +3,9 @@ package com.gatekeeper.admin
 import com.gatekeeper.api.respondError
 import com.gatekeeper.config.AppConfig
 import com.gatekeeper.feature.audit.domain.repository.AuditRepository as AuditRepositoryPort
-import com.gatekeeper.db.repositories.RegistryCredentialRepository
 import com.gatekeeper.feature.integrations.domain.repository.ProviderCredentialMetadata
 import com.gatekeeper.feature.integrations.domain.repository.ProviderCredentialStore
+import com.gatekeeper.feature.integrations.domain.repository.RegistryCredentialStore
 import com.gatekeeper.security.SecretValueCipher
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.*
@@ -29,6 +29,7 @@ import org.koin.ktor.ext.get
 fun Application.configureRegistryAdminRoutes() {
     val auditRepository = get<AuditRepositoryPort>()
     val providerCredentials = get<ProviderCredentialStore>()
+    val registryCredentials = get<RegistryCredentialStore>()
     routing { authenticate("auth-jwt") {
         get("/api/admin/provider-credentials") {
             val provider = call.request.queryParameters["provider"]?.trim()?.lowercase()
@@ -53,19 +54,19 @@ fun Application.configureRegistryAdminRoutes() {
             }
             call.respond(metadata.toMetadataResponse())
         }
-        get("/api/admin/registries") { call.respond(RegistryCredentialRepository.list().map { RegistryMetadataResponse(it.first, it.second, true) }) }
+        get("/api/admin/registries") { call.respond(registryCredentials.list().map { RegistryMetadataResponse(it.first, it.second, true) }) }
         put("/api/admin/registries/{registry}") {
             val registry = call.parameters["registry"]?.trim()?.lowercase()
             val body = runCatching { call.receive<RegistryCredentialRequest>() }.getOrNull()
             if (registry.isNullOrBlank() || !registry.matches(Regex("^[a-z0-9.-]+(:[0-9]{1,5})?$")) || body == null || body.username.isBlank() || body.password.isBlank()) { call.respondError(HttpStatusCode.BadRequest, "invalid_registry_credentials", "Registry, username, and password are required"); return@put }
             if (!SecretValueCipher.isConfigured()) { call.respondError(HttpStatusCode.ServiceUnavailable, "secrets_unconfigured", "Secret encryption is not configured"); return@put }
-            val credential = RegistryCredentialRepository.save(registry, body.username, body.password, body.displayName?.trim()?.takeIf(String::isNotBlank))
+            val credential = registryCredentials.save(registry, body.username, body.password, body.displayName?.trim()?.takeIf(String::isNotBlank))
             auditRepository.write(null, "registry_credentials_updated", "admin", "registry=$registry username=${body.username} version=${credential.version}")
             call.respond(RegistryCredentialResponse(registry, body.username, true, credential.id.toString(), credential.version))
         }
         delete("/api/admin/registries/{registry}") {
             val registry = call.parameters["registry"]?.trim()?.lowercase() ?: ""
-            if (!RegistryCredentialRepository.delete(registry)) { call.respondError(HttpStatusCode.NotFound, "registry_credentials_not_found", "Registry credentials not found"); return@delete }
+            if (!registryCredentials.delete(registry)) { call.respondError(HttpStatusCode.NotFound, "registry_credentials_not_found", "Registry credentials not found"); return@delete }
             auditRepository.write(null, "registry_credentials_deleted", "admin", "registry=$registry")
             call.respond(mapOf("registry" to registry, "configured" to false))
         }
