@@ -6,6 +6,7 @@ import com.gatekeeper.db.repositories.ProjectRepository
 import com.gatekeeper.db.repositories.ServiceRepository
 import com.gatekeeper.feature.project.domain.repository.ProjectAdjustmentRepository as ProjectAdjustmentStore
 import com.gatekeeper.feature.audit.domain.repository.AuditRepository as AuditRepositoryPort
+import com.gatekeeper.feature.payment.data.persistence.ProjectBalanceAdapter
 import com.gatekeeper.feature.deployment.domain.repository.EnvironmentSetRepository as EnvironmentSetStore
 import com.gatekeeper.feature.deployment.domain.repository.EnvironmentVersionMetadata
 import com.gatekeeper.feature.deployment.domain.repository.ActiveDeploymentInspection
@@ -198,7 +199,7 @@ fun Application.configureServiceAdminRoutes() {
                 val adjustment = try { call.application.get<ProjectAdjustmentStore>().create(projectId, type, amount, body.reason, actor, serviceId) }
                     catch (e: IllegalArgumentException) { return@post call.respondError(HttpStatusCode.BadRequest, "invalid_adjustment", e.message ?: "Invalid adjustment") }
                 auditRepository.write(projectId, "service_adjustment", actor, "service=${service.name} ${type.name} amount=$amount reason=${body.reason.trim()}")
-                ScribedIntegrationClient.notifyServiceLedger(serviceId, "adjustment-${adjustment.id}")
+                ScribedIntegrationClient.notifyServiceLedger(serviceId, "adjustment-${adjustment.id}", call.application.get<ProjectBalanceAdapter>())
                 call.respond(HttpStatusCode.Created, ServiceAdjustmentView(adjustment.id.toString(), projectId.toString(), serviceId.toString(), type.name, amount.toDouble(), adjustment.reason, actor, adjustment.createdAt.toString()))
             }
 

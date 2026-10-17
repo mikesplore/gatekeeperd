@@ -24,7 +24,6 @@ import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.decodeFromJsonElement
 import com.gatekeeper.db.repositories.IntegrationOutboxRepository
-import com.gatekeeper.db.repositories.ProjectAdjustmentRepository
 import com.gatekeeper.db.tables.AdjustmentType
 import io.ktor.client.statement.bodyAsText
 
@@ -213,7 +212,7 @@ object ScribedIntegrationClient {
         val apiToken = AppConfig.scribedApiToken.trim()
         if (base.isBlank() || secret.isBlank() || apiToken.isBlank()) return HttpStatusCode.ServiceUnavailable to null
 
-        val adjustments = ProjectAdjustmentRepository.findByProjectId(project.id)
+        val adjustments = balances.projectAdjustments(project.id)
             .map { ScribedLedgerAdjustment(it.id.toString(), it.type.name, it.amount.toPlainString(), it.reason, it.actor) }
         val ledgerPayload = ScribedLedgerPayload(
             project.id.toString(), project.slug, "receipt-${payment.id}",
@@ -305,7 +304,7 @@ object ScribedIntegrationClient {
     fun notifyLedger(project: ProjectRepository.ProjectRecord, ledgerVersion: String, balances: ProjectBalanceAdapter) {
         val base = AppConfig.scribedCallbackUrl.trim().trimEnd('/')
         if (base.isBlank() || AppConfig.scribedIntegrationSecret.trim().isBlank()) return
-        val adjustments = ProjectAdjustmentRepository.findByProjectId(project.id).map { ScribedLedgerAdjustment(it.id.toString(), it.type.name, it.amount.toPlainString(), it.reason, it.actor) }
+        val adjustments = balances.projectAdjustments(project.id).map { ScribedLedgerAdjustment(it.id.toString(), it.type.name, it.amount.toPlainString(), it.reason, it.actor) }
         val payload = ScribedLedgerPayload(project.id.toString(), project.slug, ledgerVersion,
             balances.originalCharge(project).toPlainString(),
             balances.additionalCharges(project).toPlainString(),
@@ -315,10 +314,10 @@ object ScribedIntegrationClient {
         IntegrationOutboxRepository.enqueue("ledger", "ledger:${project.id}:$ledgerVersion", json.encodeToString(payload))
     }
 
-    fun notifyServiceLedger(serviceId: java.util.UUID, ledgerVersion: String) {
+    fun notifyServiceLedger(serviceId: java.util.UUID, ledgerVersion: String, balances: ProjectBalanceAdapter) {
         val base = AppConfig.scribedCallbackUrl.trim().trimEnd('/')
         if (base.isBlank() || AppConfig.scribedIntegrationSecret.trim().isBlank()) return
-        val adjustments = ProjectAdjustmentRepository.findByServiceId(serviceId).map {
+        val adjustments = balances.serviceAdjustments(serviceId).map {
             ScribedLedgerAdjustment(it.id.toString(), it.type.name, it.amount.toPlainString(), it.reason, it.actor)
         }
         val payload = ScribedServiceLedgerPayload(serviceId.toString(), adjustments)

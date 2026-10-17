@@ -13,6 +13,8 @@ class ProjectBalanceAdapter(private val payments: PaymentRepository, private val
     fun originalCharge(project: ProjectRepository.ProjectRecord): BigDecimal = project.baseAmount ?: project.amountDue ?: BigDecimal.ZERO
     fun additionalCharges(project: ProjectRepository.ProjectRecord): BigDecimal = adjustments.totalForProject(project.id, AdjustmentType.ADDITIONAL_CHARGE)
     fun discounts(project: ProjectRepository.ProjectRecord): BigDecimal = adjustments.totalForProject(project.id, AdjustmentType.DISCOUNT)
+    fun projectAdjustments(projectId: java.util.UUID) = adjustments.findByProjectId(projectId)
+    fun serviceAdjustments(serviceId: java.util.UUID) = adjustments.findByServiceId(serviceId)
     fun successfulPayments(project: ProjectRepository.ProjectRecord): BigDecimal = payments.successfulAmountForProject(project.id)
 
     fun financials(project: ProjectRepository.ProjectRecord): ProjectFinancials {
