@@ -113,7 +113,7 @@ private val applicationModule = module {
     single { PaymentProjectAdapter() }
     single { PaymentServiceAdapter() }
     single { PaymentBalanceAdapter(get<PaymentDomainRepository>(), get(), get()) }
-    single<PaymentEffects> { PaymentEffectsAdapter(get()) }
+    single<PaymentEffects> { PaymentEffectsAdapter(get(), get()) }
     single { ApplyWebhookEvent(get(), get()) }
     single<PaymentGateway>(named("paystackGateway")) { PaystackGateway() }
     single<PaymentGateway>(named("mpesaGateway")) { MpesaGateway }
