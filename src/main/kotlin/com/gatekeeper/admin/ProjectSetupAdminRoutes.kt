@@ -158,7 +158,8 @@ data class ProjectSetupStatusResponse(
     val activeDeploymentId: String? = null,
     val activeDeploymentStatus: String? = null,
     val latestDeploymentId: String? = null,
-    val latestDeploymentStatus: String? = null
+    val latestDeploymentStatus: String? = null,
+    val serviceId: String? = null
 )
 
 @Serializable
@@ -481,7 +482,7 @@ fun Application.configureProjectSetupAdminRoutes() {
                     projectId.toString(), project.slug, project.name, project.domain,
                     config?.toSetupResponse(), credential != null, credential?.version,
                     service?.domain?.let { ProjectSetupGatewayResponse(it, "domain_saved", serviceId.toString(), bindings.firstOrNull { binding -> binding.domain == it }?.containerPort, bindings) },
-                    active?.id?.toString(), active?.status, latest?.first?.toString(), latest?.second
+                    active?.id?.toString(), active?.status, latest?.first?.toString(), latest?.second, serviceId.toString()
                 ))
             }
 
