@@ -4,7 +4,7 @@ import com.gatekeeper.api.respondError
 import com.gatekeeper.config.AppConfig
 import com.gatekeeper.db.repositories.DeploymentJobRepository
 import com.gatekeeper.db.repositories.GitHubWebhookRepository
-import com.gatekeeper.db.repositories.AuditRepository
+import com.gatekeeper.feature.audit.domain.repository.AuditRepository as AuditRepositoryPort
 import com.gatekeeper.db.repositories.GitHubCredentialRepository
 import com.gatekeeper.deployment.CreateDeploymentRequest
 import io.ktor.http.*
@@ -20,11 +20,13 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.Serializable
+import org.koin.ktor.ext.get
 
 @Serializable
 private data class GitHubWebhookResponse(val status: String, val event: String, val deploymentsQueued: Int)
 
 fun Application.configureGitHubWebhookRoutes() {
+    val auditRepository = get<AuditRepositoryPort>()
     routing {
         post("/api/integrations/github/webhook") {
             val secret = runCatching { GitHubCredentialRepository.webhookSecret() }.getOrNull()
@@ -53,7 +55,7 @@ fun Application.configureGitHubWebhookRoutes() {
             }
             val queued = if (event == "push") queuePushDeployments(body) else 0
             GitHubWebhookRepository.setQueuedCount(delivery, queued)
-            AuditRepository.write(null, "github_webhook_received", "github:$delivery", "event=$event repository=${repository ?: "unknown"} queued=$queued")
+            auditRepository.write(null, "github_webhook_received", "github:$delivery", "event=$event repository=${repository ?: "unknown"} queued=$queued")
             call.respond(HttpStatusCode.Accepted, GitHubWebhookResponse("received", event, queued))
         }
     }

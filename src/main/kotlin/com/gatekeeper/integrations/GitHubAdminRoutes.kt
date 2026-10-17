@@ -4,7 +4,7 @@ import com.gatekeeper.api.respondError
 import com.gatekeeper.config.AppConfig
 import com.gatekeeper.db.repositories.GitHubAppInstallationRepository
 import com.gatekeeper.db.repositories.GitHubCredentialRepository
-import com.gatekeeper.db.repositories.AuditRepository
+import com.gatekeeper.feature.audit.domain.repository.AuditRepository as AuditRepositoryPort
 import com.gatekeeper.security.SecretValueCipher
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.*
@@ -15,6 +15,7 @@ import io.ktor.server.request.receive
 import io.ktor.server.routing.*
 import java.util.UUID
 import kotlinx.serialization.Serializable
+import org.koin.ktor.ext.get
 
 @Serializable
 private data class GitHubCredentialRequest(val value: String)
@@ -34,6 +35,7 @@ private data class GitHubStatusResponse(
 private data class GitHubInstallUrlResponse(val url: String, val callbackUrl: String? = null)
 
 fun Application.configureGitHubAdminRoutes() {
+    val auditRepository = get<AuditRepositoryPort>()
     routing {
         authenticate("auth-jwt") {
             put("/api/admin/github/credentials/{type}") {
@@ -55,7 +57,7 @@ fun Application.configureGitHubAdminRoutes() {
                     return@put
                 }
                 val credential = GitHubCredentialRepository.save(type!!, body.value)
-                AuditRepository.write(null, "github_credential_updated", "admin", "type=$type version=${credential.version}")
+                auditRepository.write(null, "github_credential_updated", "admin", "type=$type version=${credential.version}")
                 call.respond(mapOf(
                     "id" to credential.id.toString(), "type" to type, "configured" to true,
                     "version" to credential.version, "writeOnly" to true
