@@ -84,7 +84,7 @@ class DockerService(dockerSocketPath: String) : DockerGateway {
             .collect(Collectors.toList())
     }
 
-    fun getContainer(containerNameOrId: String): ContainerInfo? {
+    override fun getContainer(containerNameOrId: String): ContainerInfo? {
         return try {
             inspectContainer(containerNameOrId)
         } catch (e: Exception) {
@@ -177,7 +177,7 @@ class DockerService(dockerSocketPath: String) : DockerGateway {
     }
 
     /** Force-removes an exactly named container if present; Docker/list failures propagate. */
-    fun removeContainerIfPresent(containerName: String): Boolean {
+    override fun removeContainerIfPresent(containerName: String): Boolean {
         val container = client.listContainersCmd()
             .withShowAll(true)
             .exec()
@@ -209,7 +209,7 @@ class DockerService(dockerSocketPath: String) : DockerGateway {
         val runtimeOptions: ContainerRuntimeOptions
     )
 
-    fun adoptionDetails(containerIdOrName: String): AdoptionDetails? = try {
+    override fun adoptionDetails(containerIdOrName: String): AdoptionDetails? = try {
         val listed = client.listContainersCmd().withShowAll(true).exec().firstOrNull { container ->
             container.id.startsWith(containerIdOrName) || container.names.orEmpty().any { it.removePrefix("/") == containerIdOrName }
         } ?: return null

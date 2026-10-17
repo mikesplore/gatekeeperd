@@ -2,6 +2,7 @@ package com.gatekeeper.deployment
 
 import com.gatekeeper.db.repositories.DeploymentJobRepository
 import com.gatekeeper.db.repositories.DeploymentJobRecord
+import com.gatekeeper.core.ports.DeploymentLock
 import com.gatekeeper.feature.deployment.domain.repository.DeploymentPortAllocationRepository
 import com.gatekeeper.feature.audit.domain.repository.AuditRepository
 import com.gatekeeper.db.repositories.RegistryCredentialRepository
@@ -32,7 +33,9 @@ class DeploymentWorker(
     private val portAllocationRepository: DeploymentPortAllocationRepository,
     private val sourceFetcher: SourceFetcher,
     private val imageBuilder: ImageBuilder,
-    private val auditRepository: AuditRepository
+    private val auditRepository: AuditRepository,
+    private val deploymentQueue: DeploymentQueue,
+    private val deploymentLock: DeploymentLock
 ) {
     private val logger = LoggerFactory.getLogger("com.gatekeeper.deployment.DeploymentWorker")
     private val started = AtomicBoolean(false)
@@ -123,15 +126,15 @@ class DeploymentWorker(
     }
 
     private suspend fun processNext() {
-        val job = DeploymentJobRepository.claimNext() ?: return
+        val job = deploymentQueue.claimNext() ?: return
         val claimToken = requireNotNull(job.claimToken) { "Claim token missing for deployment ${job.id}" }
         DeploymentJobRecovery.executeClaimed(
             RecoverableDeploymentJob(job.id, job.serviceId, job.environment, claimToken),
-            withLock = { key, block -> DistributedLock.withLock(key, block) },
-            ownsClaim = { DeploymentJobRepository.ownsClaim(job.id, claimToken) },
+            withLock = { key, block -> deploymentLock.withLock(key, block) },
+            ownsClaim = { deploymentQueue.ownsClaim(job.id, claimToken) },
             process = { runBlocking { processClaimedJob(job) } },
             release = { error ->
-                DeploymentJobRepository.releaseClaim(
+                deploymentQueue.releaseClaim(
                     job.id,
                     claimToken,
                     "Deployment worker attempt interrupted: ${error.message ?: error::class.simpleName}"
@@ -142,15 +145,15 @@ class DeploymentWorker(
 
     private fun recoverStaleJobs() {
         val cutoff = LocalDateTime.now().minusMinutes(AppConfig.deploymentStaleMinutes)
-        val staleJobs = DeploymentJobRepository.staleRunningJobs(cutoff)
+        val staleJobs = deploymentQueue.staleRunningJobs(cutoff)
         DeploymentJobRecovery.recoverStale(
             staleJobs.map { RecoverableDeploymentJob(it.id, it.serviceId, it.environment, it.claimToken) },
             cutoff,
             LocalDateTime.now(),
-            tryWithLock = { key, block -> DistributedLock.tryWithLock(key, block) },
+            tryWithLock = { key, block -> deploymentLock.tryWithLock(key, block) },
             recover = { recoverable, staleBefore, recoveredAt ->
                 val current = staleJobs.first { it.id == recoverable.id }
-                DeploymentJobRepository.recoverStale(
+                deploymentQueue.recoverStale(
                     current,
                     staleBefore,
                     recoveredAt,
@@ -192,7 +195,7 @@ class DeploymentWorker(
                         error = "Cutover failed and gateway route restoration requires operator repair: ${error.message}"
                     )
                 } else {
-                    val requeued = DeploymentJobRepository.requeueReadyCutover(
+                    val requeued = deploymentQueue.requeueReadyCutover(
                         job.id,
                         requireNotNull(job.claimToken),
                         error.message ?: "Cutover failed"
@@ -257,25 +260,25 @@ class DeploymentWorker(
                 update(job, "checked_out", "Repository checked out", commitSha = commit)
                 image = registryImage(job.registry, job.imageName, job.imageTag)
             }
-            DeploymentJobRepository.registryCredentialForDeployment(job.id)?.let { credential ->
+            deploymentQueue.registryCredentialForDeployment(job.id)?.let { credential ->
                 imageBuilder.authenticate(job.registry, credential.username, credential.password) {
                     ensureNotCancelled(job.id, requireNotNull(job.claimToken))
                 }
-                DeploymentJobRepository.update(job.id, requireNotNull(job.claimToken), "registry_authenticated", "Authenticated to registry ${job.registry}")
+                deploymentQueue.update(job.id, requireNotNull(job.claimToken), "registry_authenticated", "Authenticated to registry ${job.registry}")
             }
             if (rollbackArtifact == null && !job.repository.isNullOrBlank()) {
                 update(job, "building", "Building $image")
                 imageBuilder.build(image, workspace, { ensureNotCancelled(job.id, requireNotNull(job.claimToken)) }) { line ->
-                    DeploymentJobRepository.update(job.id, requireNotNull(job.claimToken), log = line)
+                    deploymentQueue.update(job.id, requireNotNull(job.claimToken), log = line)
                 }
                 update(job, "pushing", "Pushing $image")
                 imageBuilder.push(image, workspace, { ensureNotCancelled(job.id, requireNotNull(job.claimToken)) }) { line ->
-                    DeploymentJobRepository.update(job.id, requireNotNull(job.claimToken), log = line)
+                    deploymentQueue.update(job.id, requireNotNull(job.claimToken), log = line)
                 }
             }
             update(job, "pulling", "Pulling $image on the deployment host")
             imageBuilder.pull(image, workspace, { ensureNotCancelled(job.id, requireNotNull(job.claimToken)) }) { line ->
-                DeploymentJobRepository.update(job.id, requireNotNull(job.claimToken), log = line)
+                deploymentQueue.update(job.id, requireNotNull(job.claimToken), log = line)
             }
             update(job, "starting_container", "Starting application container")
             ensureNotCancelled(job.id, requireNotNull(job.claimToken))

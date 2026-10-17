@@ -3,7 +3,7 @@ package com.gatekeeper.admin
 import com.gatekeeper.api.respondError
 import com.gatekeeper.api.respondErrorWithData
 import com.gatekeeper.config.AppConfig
-import com.gatekeeper.docker.DockerService
+import com.gatekeeper.docker.DockerGateway
 import com.gatekeeper.nginx.CertificateInstallRequest
 import com.gatekeeper.nginx.CertificateListResponse
 import com.gatekeeper.nginx.CertificateResponse
@@ -187,7 +187,7 @@ private fun computeNginxEnablePlan(
     activeRuntimeTarget: DeploymentUpstreamResolver.Target?,
     request: NginxEnableRequest,
     nginxService: NginxService,
-    dockerService: DockerService?
+    dockerService: DockerGateway?
 ): NginxPlanResult {
     val explicitPort = request.port
     if (explicitPort != null && explicitPort !in 1..65535) {
@@ -362,18 +362,9 @@ fun Application.configureNginxAdminRoutes() {
     val nginxService = get<NginxService>()
     val nginxAdminService = get<NginxAdminService>()
     val auditRepository = get<AuditRepositoryPort>()
-    val dockerService: DockerService? = try {
-        DockerService(AppConfig.dockerSocket)
-    } catch (e: Exception) {
-        logger.warn("Docker not available for nginx upstream validation (non-fatal): ${e.message}")
-        null
-    }
+    val dockerService: DockerGateway = get()
 
     routing {
-        Runtime.getRuntime().addShutdownHook(Thread {
-            runCatching { dockerService?.close() }
-        })
-
         authenticate("auth-jwt") {
 
             get("/api/admin/nginx/upstream-migration") {
@@ -467,20 +458,13 @@ fun Application.configureNginxAdminRoutes() {
                     ?: return@post call.respondError(HttpStatusCode.Conflict, "host_port_missing", "Active runtime has no published primary port")
                 val containerName = active.name
                     ?: return@post call.respondError(HttpStatusCode.Conflict, "active_container_missing", "Active runtime has no Docker container identity")
-                val docker = runCatching { DockerService(AppConfig.dockerSocket) }.getOrElse {
-                    return@post call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is unavailable")
+                if (dockerService.containerHealth(containerName) != "running") {
+                    return@post call.respondError(HttpStatusCode.Conflict, "active_container_not_running", "The active runtime container is not running; restore or redeploy it before repairing nginx")
                 }
-                try {
-                    if (docker.containerHealth(containerName) != "running") {
-                        return@post call.respondError(HttpStatusCode.Conflict, "active_container_not_running", "The active runtime container is not running; restore or redeploy it before repairing nginx")
-                    }
-                    val runtime = docker.adoptionDetails(containerName)
-                        ?: return@post call.respondError(HttpStatusCode.Conflict, "active_container_missing", "The active runtime container no longer exists")
-                    if (runtime.ports[primaryPort] != hostPort) {
-                        return@post call.respondError(HttpStatusCode.Conflict, "active_port_mismatch", "The active container no longer exposes the persisted host port; redeploy or adopt the runtime before repairing nginx")
-                    }
-                } finally {
-                    docker.close()
+                val runtime = dockerService.adoptionDetails(containerName)
+                    ?: return@post call.respondError(HttpStatusCode.Conflict, "active_container_missing", "The active runtime container no longer exists")
+                if (runtime.ports[primaryPort] != hostPort) {
+                    return@post call.respondError(HttpStatusCode.Conflict, "active_port_mismatch", "The active container no longer exposes the persisted host port; redeploy or adopt the runtime before repairing nginx")
                 }
                 if (!nginxService.repairDeploymentUpstream(serviceId, site.domain, site.tlsMode != TlsMode.HTTP_ONLY, hostPort)) {
                     return@post call.respondError(HttpStatusCode.BadGateway, "upstream_repair_failed", "Nginx upstream repair or probe failed")

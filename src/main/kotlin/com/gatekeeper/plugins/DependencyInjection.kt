@@ -17,12 +17,16 @@ import com.gatekeeper.docker.DockerService
 import com.gatekeeper.docker.DockerCleanupService
 import com.gatekeeper.core.ports.FileStore
 import com.gatekeeper.core.ports.PortProbe
+import com.gatekeeper.core.ports.HttpPortProbe
 import com.gatekeeper.core.ports.ProcessRunner
 import com.gatekeeper.core.ports.TransactionRunner
+import com.gatekeeper.core.ports.DeploymentLock
 import com.gatekeeper.infrastructure.ExposedTransactionRunner
 import com.gatekeeper.infrastructure.LocalFileStore
 import com.gatekeeper.infrastructure.ProcessRunnerImpl
+import com.gatekeeper.infrastructure.DistributedDeploymentLock
 import com.gatekeeper.infrastructure.TcpPortProbe
+import com.gatekeeper.infrastructure.TcpHttpPortProbe
 import com.gatekeeper.feature.payment.data.persistence.ExposedPaymentRepository
 import com.gatekeeper.feature.payment.data.persistence.ExposedPaymentEventRepository
 import com.gatekeeper.feature.payment.data.persistence.PaymentEffectsAdapter
@@ -84,6 +88,8 @@ import com.gatekeeper.feature.deployment.domain.repository.DeploymentPortAllocat
 import com.gatekeeper.feature.deployment.data.persistence.ExposedDeploymentPortAllocationRepository
 import com.gatekeeper.feature.deployment.domain.repository.EnvironmentSetRepository as EnvironmentSetStore
 import com.gatekeeper.feature.deployment.data.persistence.ExposedEnvironmentSetRepository
+import com.gatekeeper.deployment.DeploymentQueue
+import com.gatekeeper.feature.deployment.data.persistence.ExposedDeploymentQueue
 import com.gatekeeper.feature.project.domain.repository.ProjectAdjustmentRepository as ProjectAdjustmentStore
 import com.gatekeeper.feature.project.data.persistence.ExposedProjectAdjustmentRepository
 import com.gatekeeper.feature.deployment.domain.port.DeploymentCommandRunner
@@ -106,6 +112,7 @@ private val applicationModule = module {
     single { DockerCleanupService(get<DockerService>(), get<AuditRepository>()) }
     single<ProcessRunner> { ProcessRunnerImpl() }
     single<PortProbe> { TcpPortProbe() }
+    single<HttpPortProbe> { TcpHttpPortProbe() }
     single<FileStore> { LocalFileStore() }
     single<TransactionRunner> { ExposedTransactionRunner() }
     single { NginxCommandRunner(get<ProcessRunner>()) }
@@ -123,12 +130,14 @@ private val applicationModule = module {
     single { GitHubAppClient(get(), get()) }
     single<DeploymentPortAllocationPort> { ExposedDeploymentPortAllocationRepository() }
     single<EnvironmentSetStore> { ExposedEnvironmentSetRepository() }
+    single<DeploymentQueue> { ExposedDeploymentQueue() }
     single<ProjectAdjustmentStore> { ExposedProjectAdjustmentRepository() }
     single<DeploymentCommandRunner> { HostDeploymentCommandRunner() }
     single<GitHubTokenProvider> { GitHubTokenProvider { get<GitHubAppClient>().installationToken() } }
     single { SourceFetcher(get<DeploymentCommandRunner>(), get<GitHubTokenProvider>()) }
     single { ImageBuilder(get<DeploymentCommandRunner>()) }
-    single { DeploymentWorker(get(), get(), get(), get()) }
+    single<DeploymentLock> { DistributedDeploymentLock() }
+    single { DeploymentWorker(get(), get(), get(), get(), get(), get()) }
     single<ProjectQueryRepository> { ExposedProjectQueryRepository() }
     single<SupportRequestRepository> { ExposedSupportRequestRepository() }
     single { CustomerApplicationService(get<ProjectQueryRepository>(), get(), get(), get<SupportRequestRepository>()) }
