@@ -9,6 +9,7 @@ import com.gatekeeper.customer.configureCustomerRoutes
 import com.gatekeeper.db.tables.Users
 import com.gatekeeper.db.ServiceIdentityBackfill
 import com.gatekeeper.deployment.DeploymentWorker
+import com.gatekeeper.integrations.GitHubAppClient
 import com.gatekeeper.gate.configureGateRoutes
 import com.gatekeeper.integrations.configureGitHubAdminRoutes
 import com.gatekeeper.integrations.configureGitHubWebhookRoutes
@@ -164,6 +165,7 @@ fun Application.module() {
     get<DeploymentWorker>().start(appScope)
 
     monitor.subscribe(ApplicationStopping) {
+        runCatching { get<GitHubAppClient>().close() }
         runCatching { get<DockerService>().close() }
         runCatching { PaystackClient.close() }
         runCatching { MpesaGateway.close() }

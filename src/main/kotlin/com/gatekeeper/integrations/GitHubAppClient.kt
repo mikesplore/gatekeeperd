@@ -1,8 +1,8 @@
 package com.gatekeeper.integrations
 
 import com.gatekeeper.config.AppConfig
-import com.gatekeeper.db.repositories.GitHubAppInstallationRepository
-import com.gatekeeper.db.repositories.GitHubCredentialRepository
+import com.gatekeeper.feature.integrations.domain.repository.GitHubCredentialStore
+import com.gatekeeper.feature.integrations.domain.repository.GitHubInstallationStore
 import io.ktor.client.*
 import io.ktor.client.call.*
 import io.ktor.client.request.*
@@ -20,32 +20,36 @@ import java.security.Signature
 import java.security.spec.PKCS8EncodedKeySpec
 import java.time.Instant
 import java.util.Base64
+import java.io.Closeable
 
 @Serializable private data class InstallationTokenResponse(val token: String, val expires_at: String)
 @Serializable private data class InstallationRepositoriesResponse(val repositories: List<GitHubRepository>)
 @Serializable private data class PublicRepositorySearchResponse(val items: List<GitHubRepository>)
 @Serializable data class GitHubRepository(val full_name: String, @SerialName("private") val isPrivate: Boolean, val updated_at: String = "")
 
-object GitHubAppClient {
-    private val http = HttpClient { install(ContentNegotiation) { json(Json { ignoreUnknownKeys = true }) } }
+class GitHubAppClient(
+    private val credentials: GitHubCredentialStore,
+    private val installations: GitHubInstallationStore,
+    private val http: HttpClient = HttpClient { install(ContentNegotiation) { json(Json { ignoreUnknownKeys = true }) } }
+) : Closeable {
 
     fun isConfigured(): Boolean {
         val hasInstallation = AppConfig.githubAppInstallationId != null ||
-            runCatching { GitHubAppInstallationRepository.find() }.getOrNull() != null
-        val hasPrivateKey = runCatching { GitHubCredentialRepository.privateKeyPem() != null }.getOrDefault(false) ||
+            runCatching { installations.find() }.getOrNull() != null
+        val hasPrivateKey = runCatching { credentials.privateKeyPem() != null }.getOrDefault(false) ||
             AppConfig.githubAppPrivateKeyPath.isNotBlank()
         return AppConfig.githubAppId != null && hasInstallation && hasPrivateKey
     }
 
     fun hasPrivateKeyConfigured(): Boolean =
-        runCatching { GitHubCredentialRepository.privateKeyPem() != null }.getOrDefault(false) ||
+        runCatching { credentials.privateKeyPem() != null }.getOrDefault(false) ||
             AppConfig.githubAppPrivateKeyPath.isNotBlank()
 
     suspend fun installationToken(): String {
         val appId = AppConfig.githubAppId ?: error("GITHUB_APP_ID is not configured")
         // Prefer the installation selected through the GitHub connection flow.
         // The environment value is only a bootstrap fallback and may be stale.
-        val installationId = GitHubAppInstallationRepository.find()?.installationId
+        val installationId = installations.find()?.installationId
             ?: AppConfig.githubAppInstallationId
             ?: error("No GitHub App installation is configured")
         val key = loadPrivateKey()
@@ -102,7 +106,7 @@ object GitHubAppClient {
     }
 
     private fun loadPrivateKey(): PrivateKey {
-        val pem = GitHubCredentialRepository.privateKeyPem()
+        val pem = credentials.privateKeyPem()
             ?: Files.readString(java.nio.file.Path.of(AppConfig.githubAppPrivateKeyPath))
         val normalized = pem.replace("-----BEGIN PRIVATE KEY-----", "")
             .replace("-----END PRIVATE KEY-----", "")
@@ -130,4 +134,6 @@ object GitHubAppClient {
     }
 
     private fun base64Url(value: String) = Base64.getUrlEncoder().withoutPadding().encodeToString(value.toByteArray())
+
+    override fun close() = http.close()
 }

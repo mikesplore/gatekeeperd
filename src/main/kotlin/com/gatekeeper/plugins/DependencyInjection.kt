@@ -113,9 +113,10 @@ private val applicationModule = module {
     single<ProviderCredentialStore> { get<ExposedProviderCredentialRepository>() }
     single { ExposedProviderCredentialRepository() }
     single<RegistryCredentialStore> { ExposedRegistryCredentialRepository(get<ProviderCredentialStore>()) }
+    single { GitHubAppClient(get(), get()) }
     single<DeploymentPortAllocationPort> { ExposedDeploymentPortAllocationRepository() }
     single<DeploymentCommandRunner> { HostDeploymentCommandRunner() }
-    single<GitHubTokenProvider> { GitHubTokenProvider { GitHubAppClient.installationToken() } }
+    single<GitHubTokenProvider> { GitHubTokenProvider { get<GitHubAppClient>().installationToken() } }
     single { SourceFetcher(get<DeploymentCommandRunner>(), get<GitHubTokenProvider>()) }
     single { ImageBuilder(get<DeploymentCommandRunner>()) }
     single { DeploymentWorker(get(), get(), get(), get()) }

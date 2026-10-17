@@ -38,6 +38,7 @@ fun Application.configureGitHubAdminRoutes() {
     val auditRepository = get<AuditRepositoryPort>()
     val credentialStore = get<GitHubCredentialStore>()
     val installationStore = get<GitHubInstallationStore>()
+    val githubAppClient = get<GitHubAppClient>()
     routing {
         authenticate("auth-jwt") {
             put("/api/admin/github/credentials/{type}") {
@@ -69,10 +70,10 @@ fun Application.configureGitHubAdminRoutes() {
                 val installation = installationStore.find()
                 call.respond(
                     GitHubStatusResponse(
-                        configured = GitHubAppClient.isConfigured(),
+                        configured = githubAppClient.isConfigured(),
                         // Environment credentials configure the worker, but do not prove
                         // that this admin completed the GitHub App installation flow.
-                        connected = installation != null && GitHubAppClient.isConfigured(),
+                        connected = installation != null && githubAppClient.isConfigured(),
                         appId = AppConfig.githubAppId,
                         installationId = installation?.installationId ?: AppConfig.githubAppInstallationId,
                         accountLogin = installation?.accountLogin,
@@ -83,7 +84,7 @@ fun Application.configureGitHubAdminRoutes() {
             }
             get("/api/admin/github/repositories") {
                 val query = call.request.queryParameters["q"].orEmpty()
-                val repositories = runCatching { GitHubAppClient.repositories(query) }.getOrElse {
+                val repositories = runCatching { githubAppClient.repositories(query) }.getOrElse {
                     application.log.warn("GitHub repository lookup failed", it)
                     call.respondError(HttpStatusCode.BadGateway, "github_repository_lookup_failed", "Unable to load GitHub repositories")
                     return@get
@@ -109,15 +110,15 @@ fun Application.configureGitHubAdminRoutes() {
         }
 
         get("/api/admin/github/callback") {
-            handleGitHubCallback(call, installationStore)
+            handleGitHubCallback(call, installationStore, githubAppClient)
         }
         get("/api/integrations/github/callback") {
-            handleGitHubCallback(call, installationStore)
+            handleGitHubCallback(call, installationStore, githubAppClient)
         }
     }
 }
 
-private suspend fun handleGitHubCallback(call: ApplicationCall, installationStore: GitHubInstallationStore) {
+private suspend fun handleGitHubCallback(call: ApplicationCall, installationStore: GitHubInstallationStore, githubAppClient: GitHubAppClient) {
             val installationId = call.request.queryParameters["installation_id"]?.toLongOrNull()
             val setupAction = call.request.queryParameters["setup_action"]
             val state = call.request.queryParameters["state"]
@@ -130,7 +131,7 @@ private suspend fun handleGitHubCallback(call: ApplicationCall, installationStor
                 call.respondRedirect("$redirect?github=cancelled")
                 return
             }
-            if (AppConfig.githubAppId == null || !GitHubAppClient.hasPrivateKeyConfigured()) {
+            if (AppConfig.githubAppId == null || !githubAppClient.hasPrivateKeyConfigured()) {
                 call.respondRedirect("$redirect?github=unconfigured")
                 return
             }
