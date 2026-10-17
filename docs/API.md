@@ -658,7 +658,7 @@ Requires `{"confirm":true}`. Creates a timestamped backup, preserves the config 
 This is a separate confirmed step and only accepts an already-disabled manual config. It creates another timestamped backup, deletes the config from `sites-available`, and verifies `nginx -t`; if validation fails, it restores the source file.
 
 ### GET /api/admin/nginx/wizard/context/{slug}
-Fetch nginx state for a project's selected service, its active deployment's resolved upstream host/port and runtime health, and certificate options. Pass `serviceId` as a query parameter; when omitted, the default service is used. `configuredPort` is the Docker-published host port nginx should use, not the container port. `domain` is null when the selected service has no saved gateway domain; Gatekeeper does not substitute the project domain.
+Fetch nginx state for a project's selected service, its active deployment's resolved upstream host/port and runtime health, and certificate options. Pass `serviceId` as a query parameter; when omitted, the default service is used. `configuredPort` is the Docker-published host port nginx should use, not the container port. `configuredContainerPort` identifies the selected container-side port, and `publishedPorts` contains all available container-to-host bindings. To route a service with multiple published ports, send `containerPort` in the enable/validate request; Gatekeeper validates it against the running container and persists the selection for future redeploys. `domain` is null when the selected service has no saved gateway domain; Gatekeeper does not substitute the project domain.
 
 **Response:**
 ```json
@@ -669,6 +669,8 @@ Fetch nginx state for a project's selected service, its active deployment's reso
   "nginxEnabled": false,
   "resolvedUpstreamHost": "127.0.0.1",
   "configuredPort": 32768,
+  "configuredContainerPort": 8000,
+  "publishedPorts": {"8000": 32768, "8765": 32769},
   "runtimeHealth": "running",
   "installedCertificates": ["example.com"],
   "resolvedCertificateDomain": "example.com"

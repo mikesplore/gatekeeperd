@@ -734,7 +734,7 @@ class NginxService(
         val site = SiteRepository.findByServiceId(serviceId) ?: return true
         val previousContent = inspectSite(slug).content
         val previousPort = site.upstreamExplicitPort
-        val containerPort = site.upstreamExplicitPort ?: port
+        val containerPort = site.upstreamContainerPort ?: port
         return switchDeploymentUpstream(serviceId, slug, host, containerPort, port)
     }
 

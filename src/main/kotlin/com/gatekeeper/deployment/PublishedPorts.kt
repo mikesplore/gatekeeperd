@@ -11,8 +11,9 @@ object PublishedPorts {
         return mapOf(validContainerPort to validHostPort)
     }
 
-    fun applicationPort(containerPort: Int?, ports: Map<Int, Int>): Int? {
-        val selectedContainerPort = containerPort?.takeIf { it in 1..65535 }
+    fun applicationPort(containerPort: Int?, ports: Map<Int, Int>, preferredContainerPort: Int? = null): Int? {
+        val selectedContainerPort = preferredContainerPort?.takeIf { it in 1..65535 }
+            ?: containerPort?.takeIf { it in 1..65535 }
             ?: ports.keys.singleOrNull()?.takeIf { it in 1..65535 }
             ?: return null
         return ports[selectedContainerPort]?.takeIf { it in 1..65535 }

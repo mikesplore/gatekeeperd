@@ -24,6 +24,19 @@ class DeploymentUpstreamResolverTest {
     }
 
     @Test
+    fun `docker site resolves an explicitly selected secondary container port`() {
+        val site = dockerSite.copy(containerPort = 8765)
+        val runtime = DeploymentUpstreamResolver.RuntimeTarget(
+            serviceId, "production", true, "candidate-container", 8000, mapOf(8000 to 32004, 8765 to 32005)
+        )
+
+        assertEquals(
+            DeploymentUpstreamResolver.Target("127.0.0.1", 32005, "candidate-container", 8765),
+            DeploymentUpstreamResolver.resolve(serviceId, "production", site, runtime)
+        )
+    }
+
+    @Test
     fun `service runtime resolves port without a saved nginx site`() {
         val runtime = DeploymentUpstreamResolver.RuntimeTarget(
             serviceId, "production", true, "mtaaniwatch-container", 9002, mapOf(9002 to 32940)

@@ -9,7 +9,13 @@ import java.util.UUID
 /** Resolves a service's desired gateway target without changing persisted site configuration. */
 object DeploymentUpstreamResolver {
     data class Target(val host: String, val port: Int, val containerName: String? = null, val containerPort: Int? = null)
-    data class SiteTarget(val mode: UpstreamMode, val host: String, val explicitPort: Int?, val upstreamKind: String? = null)
+    data class SiteTarget(
+        val mode: UpstreamMode,
+        val host: String,
+        val explicitPort: Int?,
+        val upstreamKind: String? = null,
+        val containerPort: Int? = null
+    )
     data class RuntimeTarget(
         val serviceId: UUID?, val environment: String, val usable: Boolean,
         val containerName: String?, val containerPort: Int?, val publishedPorts: Map<Int, Int>
@@ -24,16 +30,20 @@ object DeploymentUpstreamResolver {
         val runtime = activeRuntime?.takeIf {
             it.serviceId == serviceId && it.environment == environment && it.usable
         }
-        if (site.mode == UpstreamMode.EXPLICIT_PORT && site.upstreamKind != "DEPLOYMENT_MANAGED") {
+        if (site.mode == UpstreamMode.EXPLICIT_PORT &&
+            site.upstreamKind != "DEPLOYMENT_MANAGED" &&
+            site.containerPort == null
+        ) {
             val port = site.explicitPort?.takeIf { it in 1..65535 } ?: return null
             return Target(site.host, port)
         }
 
         val selectedRuntime = runtime ?: return null
         val containerName = selectedRuntime.containerName?.takeIf(String::isNotBlank) ?: return null
-        val hostPort = PublishedPorts.applicationPort(selectedRuntime.containerPort, selectedRuntime.publishedPorts)
+        val selectedContainerPort = site.containerPort ?: selectedRuntime.containerPort
+        val hostPort = PublishedPorts.applicationPort(selectedRuntime.containerPort, selectedRuntime.publishedPorts, selectedContainerPort)
             ?: return null
-        return Target("127.0.0.1", hostPort, containerName, selectedRuntime.containerPort)
+        return Target("127.0.0.1", hostPort, containerName, selectedContainerPort)
     }
 
     fun resolve(
@@ -44,7 +54,7 @@ object DeploymentUpstreamResolver {
     ): Target? = resolve(
         serviceId,
         environment,
-        SiteTarget(site.upstreamMode, site.upstreamHost, site.upstreamExplicitPort, site.upstreamKind),
+        SiteTarget(site.upstreamMode, site.upstreamHost, site.upstreamExplicitPort, site.upstreamKind, site.upstreamContainerPort),
         activeRuntime?.let {
             RuntimeTarget(
                 it.serviceId, it.environment,

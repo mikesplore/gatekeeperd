@@ -85,6 +85,8 @@ data class NginxWizardContextResponse(
     val nginxEnabled: Boolean,
     val resolvedUpstreamHost: String? = null,
     val configuredPort: Int? = null,
+    val configuredContainerPort: Int? = null,
+    val publishedPorts: Map<Int, Int> = emptyMap(),
     val runtimeHealth: String? = null,
     val installedCertificates: List<String> = emptyList(),
     val resolvedCertificateDomain: String? = null
@@ -107,6 +109,7 @@ private data class NginxEnablePlan(
     val slug: String,
     val domain: String,
     val appPort: Int,
+    val containerPort: Int?,
     val upstreamScheme: String,
     val resolvedCertificate: ResolvedCertificate?
 ) {
@@ -128,7 +131,7 @@ private fun renderModelFromSite(
     site: SiteRepository.SiteRecord,
     nginxService: NginxService
 ): NginxSiteRenderModel {
-    val (upstreamHost, port) = if (site.upstreamKind == "DEPLOYMENT_MANAGED") {
+    val (upstreamHost, port) = if (site.upstreamKind == "DEPLOYMENT_MANAGED" || site.upstreamContainerPort != null) {
         val target = site.serviceId?.let { DeploymentUpstreamResolver.resolveRuntime(it, "production") }
             ?: error("Could not resolve the active deployment upstream for managed site $slug")
         target.host to target.port
@@ -190,6 +193,10 @@ private fun computeNginxEnablePlan(
     dockerService: DockerGateway?
 ): NginxPlanResult {
     val explicitPort = request.port
+    val requestedContainerPort = request.containerPort
+    if (requestedContainerPort != null && requestedContainerPort !in 1..65535) {
+        return NginxPlanResult.Err(HttpStatusCode.BadRequest, "invalid_request", "containerPort must be between 1 and 65535")
+    }
     if (explicitPort != null && explicitPort !in 1..65535) {
         return NginxPlanResult.Err(HttpStatusCode.BadRequest, "invalid_request", "port must be between 1 and 65535")
     }
@@ -210,11 +217,13 @@ private fun computeNginxEnablePlan(
     }
     val dockerPublishedHostPorts = dockerPublishedPorts?.values?.toSet()
 
-    val actualRuntimeHostPort = activeRuntimeTarget?.containerPort?.let { dockerPublishedPorts?.get(it) }
+    val selectedContainerPort = requestedContainerPort ?: activeRuntimeTarget?.containerPort
+    val actualRuntimeHostPort = selectedContainerPort?.let { dockerPublishedPorts?.get(it) }
         ?: dockerPublishedHostPorts?.singleOrNull()
     // Docker's current binding is authoritative when the recorded host port has gone stale,
     // which can happen if an adopted/recreated container receives a new dynamic host port.
     val appPort = when {
+        requestedContainerPort != null && actualRuntimeHostPort != null -> explicitPort ?: actualRuntimeHostPort
         actualRuntimeHostPort != null && (explicitPort == null || explicitPort == activeRuntimeTarget?.port || explicitPort !in dockerPublishedHostPorts.orEmpty()) -> actualRuntimeHostPort
         explicitPort != null -> explicitPort
         else -> activeRuntimeTarget?.port?.takeIf { it in 1..65535 } ?: actualRuntimeHostPort
@@ -247,6 +256,13 @@ private fun computeNginxEnablePlan(
 
     // Prefer Docker-based validation: works even when gatekeeperd runs in a container (127.0.0.1 differs).
     if (dockerPublishedHostPorts != null) {
+        if (requestedContainerPort != null && requestedContainerPort !in dockerPublishedPorts.orEmpty()) {
+            return NginxPlanResult.Err(
+                HttpStatusCode.BadRequest,
+                "container_port_not_published",
+                "Container '$configuredContainerName' does not publish container port $requestedContainerPort (published: ${dockerPublishedPorts.keys.sorted().joinToString(", ")})."
+            )
+        }
         if (dockerPublishedHostPorts.isNotEmpty() && appPort !in dockerPublishedHostPorts) {
             return NginxPlanResult.Err(
                 HttpStatusCode.BadRequest,
@@ -352,6 +368,7 @@ private fun computeNginxEnablePlan(
             slug = slug,
             domain = domain,
             appPort = appPort,
+            containerPort = selectedContainerPort,
             upstreamScheme = upstreamScheme,
             resolvedCertificate = resolvedCertificate
         )
@@ -452,7 +469,8 @@ fun Application.configureNginxAdminRoutes() {
                 }
                 val active = DeploymentApplicationService.activeRuntime(serviceId, environment)
                     ?: return@post call.respondError(HttpStatusCode.Conflict, "active_runtime_missing", "No active runtime is available as a repair target")
-                val primaryPort = active.containerPort ?: active.ports.keys.singleOrNull()
+                val selectedPort = site.upstreamContainerPort
+                val primaryPort = selectedPort ?: active.containerPort ?: active.ports.keys.singleOrNull()
                     ?: return@post call.respondError(HttpStatusCode.Conflict, "primary_port_missing", "Active runtime has no unambiguous primary container port")
                 val hostPort = active.ports[primaryPort] ?: active.hostPort
                     ?: return@post call.respondError(HttpStatusCode.Conflict, "host_port_missing", "Active runtime has no published primary port")
@@ -509,8 +527,7 @@ fun Application.configureNginxAdminRoutes() {
                 val configuredPort = resolvedTarget?.port
 
                 val dockerHealth = runCatching {
-                    if (dockerService == null || activeRuntime?.containerName == null) null
-                    else dockerService.containerHealth(activeRuntime.containerName)
+                    activeRuntime?.containerName?.let(dockerService::containerHealth)
                 }.getOrNull()
 
                 val installedCerts = nginxService.listInstalledCertificates().map { it.certificateDomain }.sorted()
@@ -527,6 +544,8 @@ fun Application.configureNginxAdminRoutes() {
                         nginxEnabled = nginxEnabled,
                         resolvedUpstreamHost = resolvedTarget?.host,
                         configuredPort = configuredPort,
+                        configuredContainerPort = site?.upstreamContainerPort ?: activeRuntime?.containerPort,
+                        publishedPorts = activeRuntime?.publishedPorts ?: emptyMap(),
                         runtimeHealth = dockerHealth,
                         installedCertificates = installedCerts,
                         resolvedCertificateDomain = resolvedCert?.certificateDomain
@@ -807,8 +826,11 @@ fun Application.configureNginxAdminRoutes() {
                 val responseSslEnabled: Boolean
                 val responseCertificateDomain: String?
                 var siteToPersist: NginxSiteRenderModel? = null
-                val config = if (site != null && site.domain == serviceDomain) {
-                    runCatching { renderModelFromSite(site.projectSlug ?: siteSlug, site, nginxService) }
+                val siteForRender = if (site != null && body.containerPort != null) {
+                    site.copy(upstreamContainerPort = body.containerPort)
+                } else site
+                val config = if (siteForRender != null && siteForRender.domain == serviceDomain) {
+                    runCatching { renderModelFromSite(siteForRender.projectSlug ?: siteSlug, siteForRender, nginxService) }
                         .getOrElse {
                             call.respondError(HttpStatusCode.UnprocessableEntity, "site_configuration_invalid", it.message ?: "Stored Site configuration is invalid")
                             return@post
@@ -816,7 +838,7 @@ fun Application.configureNginxAdminRoutes() {
                         .also {
                             responseAppPort = it.appPort
                             responseSslEnabled = it.tlsMode != TlsRenderMode.HTTP_ONLY
-                            responseCertificateDomain = if (site.certMode == CertMode.AUTO_RESOLVE) nginxService.resolveCertificateForDomain(site.domain)?.certificateDomain else "explicit"
+                            responseCertificateDomain = if (siteForRender.certMode == CertMode.AUTO_RESOLVE) nginxService.resolveCertificateForDomain(siteForRender.domain)?.certificateDomain else "explicit"
                         }
                         .let { nginxService.generateNginxConfig(it) }
                 } else {
@@ -899,14 +921,15 @@ fun Application.configureNginxAdminRoutes() {
                 }
 
                 if (siteToPersist != null) {
-                    val model = siteToPersist!!
+                    val model = requireNotNull(siteToPersist)
                     val persisted = runCatching {
-                        if (site == null) SiteRepository.create(project.id, model.copy(slug = enabledSlug))
+                        if (site == null) SiteRepository.create(project.id, model.copy(slug = enabledSlug), body.containerPort)
                         else SiteRepository.updateDashboard(site.id, SiteRepository.SiteDashboardUpdate(
                             domain = model.domain,
                             upstreamHost = model.upstreamHost,
                             upstreamMode = model.upstreamMode,
                             upstreamExplicitPort = model.appPort,
+                            upstreamContainerPort = body.containerPort ?: site.upstreamContainerPort,
                             tlsMode = when (model.tlsMode) {
                                 TlsRenderMode.HTTP_ONLY -> TlsMode.HTTP_ONLY
                                 TlsRenderMode.HTTPS -> TlsMode.HTTPS
@@ -1103,7 +1126,7 @@ fun Application.configureNginxAdminRoutes() {
 private fun activeDeploymentTarget(site: SiteRepository.SiteRecord): DeploymentUpstreamResolver.Target? {
     val serviceId = site.serviceId ?: return null
     val active = DeploymentApplicationService.activeRuntime(serviceId, "production") ?: return null
-    val containerPort = site.upstreamExplicitPort ?: active.containerPort ?: active.ports.keys.singleOrNull() ?: return null
+    val containerPort = site.upstreamContainerPort ?: active.containerPort ?: active.ports.keys.singleOrNull() ?: return null
     val hostPort = active.ports[containerPort]
         ?: active.hostPort?.takeIf { active.containerPort == containerPort }
         ?: return null

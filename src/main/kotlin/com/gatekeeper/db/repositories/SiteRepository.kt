@@ -49,6 +49,7 @@ object SiteRepository {
     data class SiteRecord(
         val id: UUID, val projectId: UUID, val domain: String, val upstreamHost: String,
         val upstreamMode: UpstreamMode, val upstreamExplicitPort: Int?,
+         val upstreamContainerPort: Int? = null,
         val tlsMode: TlsMode, val certMode: CertMode, val certExplicitPath: String?, val gateEnabled: Boolean,
         val configVersion: Int, val createdAt: LocalDateTime, val updatedAt: LocalDateTime,
         val bypassPaths: List<String> = DEFAULT_GATEKEEPER_BYPASS_PATHS,
@@ -184,7 +185,7 @@ object SiteRepository {
         }
     }
 
-    fun create(projectId: UUID, model: com.gatekeeper.nginx.NginxSiteRenderModel): SiteRecord = transaction {
+    fun create(projectId: UUID, model: com.gatekeeper.nginx.NginxSiteRenderModel, containerPort: Int? = null): SiteRecord = transaction {
         val id = UUID.randomUUID()
         val serviceId = model.serviceId ?: defaultServiceId(projectId)
         check(Services.selectAll().where { (Services.id eq serviceId) and (Services.projectId eq projectId) }.count() == 1L) {
@@ -203,6 +204,7 @@ object SiteRepository {
             it[Sites.upstreamMode] = model.upstreamMode
             it[Sites.upstreamKind] = model.upstreamKind ?: if (model.upstreamMode == UpstreamMode.EXPLICIT_PORT) "EXPLICIT_PORT" else null
             it[Sites.upstreamExplicitPort] = if (model.upstreamMode == UpstreamMode.EXPLICIT_PORT) model.appPort else null
+            it[Sites.upstreamContainerPort] = containerPort
             it[Sites.tlsMode] = when (model.tlsMode) {
                 com.gatekeeper.nginx.TlsRenderMode.HTTP_ONLY -> TlsMode.HTTP_ONLY
                 com.gatekeeper.nginx.TlsRenderMode.HTTPS -> TlsMode.HTTPS
@@ -235,6 +237,7 @@ object SiteRepository {
             update.upstreamHost?.let { value -> it[Sites.upstreamHost] = value }
             update.upstreamMode?.let { value -> it[Sites.upstreamMode] = value }
             update.upstreamExplicitPort?.let { value -> it[Sites.upstreamExplicitPort] = value }
+            update.upstreamContainerPort?.let { value -> it[Sites.upstreamContainerPort] = value }
             update.tlsMode?.let { value -> it[Sites.tlsMode] = value }
             update.certMode?.let { value -> it[Sites.certMode] = value }
             update.certExplicitPath?.let { value -> it[Sites.certExplicitPath] = value }
@@ -306,6 +309,7 @@ object SiteRepository {
             it[Sites.upstreamHost] = site.upstreamHost
             it[Sites.upstreamMode] = site.upstreamMode
             it[Sites.upstreamExplicitPort] = site.upstreamExplicitPort
+            it[Sites.upstreamContainerPort] = site.upstreamContainerPort
             it[Sites.upstreamKind] = site.upstreamKind
             it[Sites.configVersion] = existing[Sites.configVersion] + 1
             it[Sites.updatedAt] = LocalDateTime.now()
@@ -319,6 +323,7 @@ object SiteRepository {
             it[Sites.upstreamHost] = site.upstreamHost
             it[Sites.upstreamMode] = site.upstreamMode
             it[Sites.upstreamExplicitPort] = site.upstreamExplicitPort
+            it[Sites.upstreamContainerPort] = site.upstreamContainerPort
             it[Sites.upstreamKind] = site.upstreamKind
             it[Sites.configVersion] = existing[Sites.configVersion] + 1
             it[Sites.updatedAt] = LocalDateTime.now()
@@ -329,6 +334,7 @@ object SiteRepository {
     data class SiteDashboardUpdate(
         val domain: String? = null, val upstreamHost: String? = null, val upstreamMode: UpstreamMode? = null,
         val upstreamExplicitPort: Int? = null,
+         val upstreamContainerPort: Int? = null,
         val tlsMode: TlsMode? = null, val certMode: CertMode? = null, val certExplicitPath: String? = null,
         val gateEnabled: Boolean? = null, val bypassPaths: List<String>? = null,
         val customNginxLocations: List<NginxCustomLocation>? = null
@@ -344,7 +350,7 @@ object SiteRepository {
 
     private fun ResultRow.toRecord(projectSlug: String? = null) = SiteRecord(
         this[Sites.id], this[Sites.projectId], this[Sites.domain], this[Sites.upstreamHost],
-        this[Sites.upstreamMode], this[Sites.upstreamExplicitPort],
+        this[Sites.upstreamMode], this[Sites.upstreamExplicitPort], this[Sites.upstreamContainerPort],
         this[Sites.tlsMode], this[Sites.certMode], this[Sites.certExplicitPath], this[Sites.gateEnabled],
         this[Sites.configVersion], this[Sites.createdAt], this[Sites.updatedAt],
         runCatching { Json.decodeFromString<List<String>>(this[Sites.bypassPaths]) }.getOrDefault(DEFAULT_GATEKEEPER_BYPASS_PATHS),

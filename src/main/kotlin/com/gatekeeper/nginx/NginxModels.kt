@@ -7,6 +7,7 @@ import kotlinx.serialization.SerialName
 data class NginxEnableRequest(
     val serviceId: String? = null,
     val port: Int? = null,
+    val containerPort: Int? = null,
     val domain: String? = null,
     val upstreamScheme: String? = null,
     val certificateDomain: String? = null,
