@@ -11,6 +11,7 @@ import com.gatekeeper.nginx.NginxService
 import com.gatekeeper.nginx.requireValidHostname
 import com.gatekeeper.security.SecretValueCipher
 import com.gatekeeper.feature.payment.data.persistence.ProjectBalanceAdapter
+import com.gatekeeper.feature.audit.domain.repository.AuditRepository as AuditRepositoryPort
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.Application
 import io.ktor.server.auth.authenticate
@@ -343,6 +344,7 @@ data class AdoptContainerResponse(
 )
 
 fun Application.configureProjectSetupAdminRoutes() {
+    val auditRepository = get<AuditRepositoryPort>()
     routing {
         authenticate("auth-jwt") {
             get("/api/admin/project-setup/containers") {
@@ -530,7 +532,7 @@ fun Application.configureProjectSetupAdminRoutes() {
                     DeploymentApplicationService.transition(adopted.deploymentId, com.gatekeeper.db.tables.DeploymentStatus.FAILED, "Active deployment changed during container adoption")
                     return@post call.respondError(HttpStatusCode.Conflict, "container_adoption_conflict", "Project runtime changed while the container was being attached; its gateway route was restored")
                 }
-                AuditRepository.write(projectId, "container_adopted", actor, "deployment=${adopted.deploymentId} container=${details.name}")
+                auditRepository.write(projectId, "container_adopted", actor, "deployment=${adopted.deploymentId} container=${details.name}")
                 call.respond(HttpStatusCode.Created, AdoptContainerResponse(
                     adopted.deploymentId.toString(), details.name, environmentVariableCount = details.environment.size,
                     message = if (details.environment.isNotEmpty()) {
@@ -826,7 +828,7 @@ fun Application.configureProjectSetupAdminRoutes() {
                 if (!item.canCancel) return@post call.respondError(HttpStatusCode.Conflict, "deployment_cancel_unavailable", "Deployment is no longer in a cancellable state")
                 if (!get<DeploymentWorker>().cancel(id)) return@post call.respondError(HttpStatusCode.Conflict, "deployment_cancel_unavailable", "Deployment could not be cancelled because its state changed")
                 val actor = call.principal<io.ktor.server.auth.jwt.JWTPrincipal>()?.payload?.subject ?: "admin"
-                AuditRepository.write(project.id, "deployment_cancelled", actor, "deployment=$id")
+                auditRepository.write(project.id, "deployment_cancelled", actor, "deployment=$id")
                 call.respond(ProjectSetupCancelResponse(id.toString()))
             }
 

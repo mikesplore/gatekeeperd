@@ -10,7 +10,7 @@ import com.gatekeeper.api.InputValidators
 import com.gatekeeper.config.AppConfig
 import com.gatekeeper.api.respondError
 import com.gatekeeper.api.respondErrorWithData
-import com.gatekeeper.db.repositories.AuditRepository
+import com.gatekeeper.feature.audit.domain.repository.AuditRepository as AuditRepositoryPort
 import com.gatekeeper.feature.payment.domain.repository.PaymentRepository as PaymentDomainRepository
 import com.gatekeeper.feature.payment.domain.usecase.ListProjectPayments
 import com.gatekeeper.feature.payment.domain.usecase.GetPayment
@@ -120,6 +120,7 @@ data class TransferProjectRequest(
 )
 
 fun Application.configureProjectAdminRoutes() {
+    val auditRepository = get<AuditRepositoryPort>()
     routing {
         authenticate("auth-jwt") {
             get("/api/admin/projects") {
@@ -173,7 +174,7 @@ fun Application.configureProjectAdminRoutes() {
                     return@get
                 }.items
                 val adjustments = ProjectAdjustmentRepository.findByProjectId(project.id)
-                val auditLog = AuditRepository.findByProjectId(project.id)
+                val auditLog = auditRepository.findByProjectId(project.id)
                 call.respond(
                     ProjectDetailResponse(
                         project = project.toResponse(call.application.get<ProjectBalanceAdapter>().financials(project)),
@@ -486,7 +487,7 @@ fun Application.configureProjectAdminRoutes() {
                     return@post
                 }
                 val newBalance = projectBalances.outstandingBalance(project)
-                AuditRepository.write(
+                auditRepository.write(
                     project.id,
                     "project_adjustment",
                     actor,
@@ -667,9 +668,9 @@ fun Application.configureProjectAdminRoutes() {
                 val query = call.request.queryParameters["q"]
                 val action = call.request.queryParameters["action"]
                 val sort = call.request.queryParameters["sort"] ?: "createdAt"
-                val direction = if (call.request.queryParameters["direction"]?.lowercase() == "asc") org.jetbrains.exposed.sql.SortOrder.ASC else org.jetbrains.exposed.sql.SortOrder.DESC
-                val total = AuditRepository.count(query, action)
-                val entries = AuditRepository.findPage(limit, offset, query, action, sort, direction).map { it.toResponse() }
+                val direction = if (call.request.queryParameters["direction"]?.lowercase() == "asc") AuditRepositoryPort.SortDirection.ASC else AuditRepositoryPort.SortDirection.DESC
+                val total = auditRepository.count(query, action)
+                val entries = auditRepository.findPage(limit, offset, query, action, sort, direction).map { it.toResponse() }
                 call.respond(AuditLogPageResponse(entries, total, limit, offset, offset + entries.size < total))
             }
 
@@ -684,7 +685,7 @@ fun Application.configureProjectAdminRoutes() {
                     call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
                     return@get
                 }
-                val auditLog = AuditRepository.findByProjectId(project.id).map { it.toResponse() }
+                val auditLog = auditRepository.findByProjectId(project.id).map { it.toResponse() }
                 call.respond(auditLog)
             }
 
