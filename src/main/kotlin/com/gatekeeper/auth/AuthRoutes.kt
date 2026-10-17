@@ -4,7 +4,7 @@ import com.gatekeeper.api.InputValidators
 import com.gatekeeper.api.respondError
 import com.gatekeeper.db.tables.Users
 import com.gatekeeper.db.tables.PasswordResetTokens
-import com.gatekeeper.db.repositories.AuditRepository
+import com.gatekeeper.feature.audit.domain.repository.AuditRepository as AuditRepositoryPort
 import com.gatekeeper.integrations.ResendClient
 import com.gatekeeper.config.AppConfig
 import com.gatekeeper.plugins.JwtConfig
@@ -26,6 +26,7 @@ import org.jetbrains.exposed.sql.deleteWhere
 import org.jetbrains.exposed.sql.insert
 import org.jetbrains.exposed.sql.selectAll
 import org.jetbrains.exposed.sql.update
+import org.koin.ktor.ext.get
 import org.jetbrains.exposed.sql.andWhere
 import org.jetbrains.exposed.sql.lowerCase
 import org.jetbrains.exposed.sql.transactions.transaction
@@ -94,6 +95,7 @@ private fun Throwable.isUniqueConstraintViolation(): Boolean = generateSequence(
     .any { it.sqlState == "23505" }
 
 fun Application.configureAuthRoutes() {
+    val auditRepository = get<AuditRepositoryPort>()
     routing {
         post("/api/auth/forgot-password") {
             val body = runCatching { call.receive<ForgotPasswordRequest>() }.getOrNull()
@@ -269,9 +271,9 @@ fun Application.configureAuthRoutes() {
                     val matched = user[Users.recoveryCodes].indexOfFirst { RecoveryCodeHasher.matches(body.code, it) }
                     if (matched >= 0) { recoveryUsed = true; valid = true; transaction { Users.update({ Users.id eq user[Users.id] }) { it[Users.recoveryCodes] = user[Users.recoveryCodes].filterIndexed { index, _ -> index != matched } } } }
                 }
-                if (!valid) { val attempts = RedisService.incrementWithExpiry("auth:2fa:fail:$email", TWO_FACTOR_LOCK_SECONDS); if (attempts >= TWO_FACTOR_FAILURE_LIMIT) RedisService.setRequired("auth:2fa:lock:$email", "1", TWO_FACTOR_LOCK_SECONDS); AuditRepository.write(null, "2FA Verification Failed", email, "Invalid authenticator or recovery code ${auditContext(call)}"); call.respondError(HttpStatusCode.Unauthorized, "invalid_two_factor_code", "The verification code is invalid"); return@post }
+                if (!valid) { val attempts = RedisService.incrementWithExpiry("auth:2fa:fail:$email", TWO_FACTOR_LOCK_SECONDS); if (attempts >= TWO_FACTOR_FAILURE_LIMIT) RedisService.setRequired("auth:2fa:lock:$email", "1", TWO_FACTOR_LOCK_SECONDS); auditRepository.write(null, "2FA Verification Failed", email, "Invalid authenticator or recovery code ${auditContext(call)}"); call.respondError(HttpStatusCode.Unauthorized, "invalid_two_factor_code", "The verification code is invalid"); return@post }
                 RedisService.delete(key)
-                if (recoveryUsed) AuditRepository.write(null, "2FA Recovery Code Used", email, "A recovery code was used ${auditContext(call)}")
+                if (recoveryUsed) auditRepository.write(null, "2FA Recovery Code Used", email, "A recovery code was used ${auditContext(call)}")
                 val token = JwtConfig.createToken(email, role); val refreshToken = newRefreshToken()
                 RedisService.setRequired("auth:refresh:${resetTokenHash(refreshToken)}", "$email|$role", REFRESH_TTL_SECONDS)
                 call.respond(LoginResponse(token, refreshToken))
@@ -284,9 +286,9 @@ fun Application.configureAuthRoutes() {
                 if (user == null || !BCrypt.checkpw(body.currentPassword, user[Users.passwordHash])) { call.respondError(HttpStatusCode.BadRequest, "invalid_credentials", "Current password is incorrect"); return@post }
                 val secret = user[Users.totpSecret]?.let { SecretValueCipher.decrypt(it) }; var valid = secret != null && Totp.verify(secret, body.code)
                 if (!valid) valid = user[Users.recoveryCodes].any { RecoveryCodeHasher.matches(body.code, it) }
-                if (!valid) { AuditRepository.write(null, "2FA Disable Failed", email, "Invalid authenticator or recovery code"); call.respondError(HttpStatusCode.BadRequest, "invalid_two_factor_code", "The verification code is invalid"); return@post }
+                if (!valid) { auditRepository.write(null, "2FA Disable Failed", email, "Invalid authenticator or recovery code"); call.respondError(HttpStatusCode.BadRequest, "invalid_two_factor_code", "The verification code is invalid"); return@post }
                 transaction { Users.update({ Users.id eq user[Users.id] }) { it[Users.totpSecret] = null; it[Users.totpEnabled] = false; it[Users.recoveryCodes] = emptyList() } }
-                AuditRepository.write(null, "2FA Disabled", email, "Authenticator-based two-factor authentication disabled")
+                auditRepository.write(null, "2FA Disabled", email, "Authenticator-based two-factor authentication disabled")
                 call.respond(mapOf("status" to "two_factor_disabled"))
             }
 
@@ -297,10 +299,10 @@ fun Application.configureAuthRoutes() {
                 if (user == null || !BCrypt.checkpw(body.currentPassword, user[Users.passwordHash])) { call.respondError(HttpStatusCode.BadRequest, "invalid_credentials", "Current password is incorrect"); return@post }
                 val secret = user[Users.totpSecret]?.let { SecretValueCipher.decrypt(it) }; var valid = secret != null && Totp.verify(secret, body.code)
                 if (!valid) valid = user[Users.recoveryCodes].any { RecoveryCodeHasher.matches(body.code, it) }
-                if (!valid) { AuditRepository.write(null, "2FA Recovery Regeneration Failed", email, "Invalid authenticator or recovery code ${auditContext(call)}"); call.respondError(HttpStatusCode.BadRequest, "invalid_two_factor_code", "The verification code is invalid"); return@post }
+                if (!valid) { auditRepository.write(null, "2FA Recovery Regeneration Failed", email, "Invalid authenticator or recovery code ${auditContext(call)}"); call.respondError(HttpStatusCode.BadRequest, "invalid_two_factor_code", "The verification code is invalid"); return@post }
                 val codes = List(8) { recoveryCode() }; val hashes = codes.map(RecoveryCodeHasher::hash)
                 transaction { Users.update({ Users.id eq user[Users.id] }) { it[Users.recoveryCodes] = hashes } }
-                AuditRepository.write(null, "2FA Recovery Codes Regenerated", email, "Recovery codes replaced ${auditContext(call)}")
+                auditRepository.write(null, "2FA Recovery Codes Regenerated", email, "Recovery codes replaced ${auditContext(call)}")
                 call.respond(mapOf("recoveryCodes" to codes))
             }
 
@@ -327,10 +329,10 @@ fun Application.configureAuthRoutes() {
                 val pending = RedisService.get(pendingTotpKey(user[Users.id])); val separator = pending?.indexOf('|') ?: -1
                 if (pending.isNullOrBlank() || separator < 1) { call.respondError(HttpStatusCode.BadRequest, "two_factor_setup_expired", "Start two-factor setup again"); return@post }
                 val secret = SecretValueCipher.decrypt(pending.substring(0, separator))
-                if (!Totp.verify(secret, body.code)) { AuditRepository.write(null, "2FA Enable Failed", email, "Invalid verification code"); call.respondError(HttpStatusCode.BadRequest, "invalid_two_factor_code", "The verification code is invalid"); return@post }
+                if (!Totp.verify(secret, body.code)) { auditRepository.write(null, "2FA Enable Failed", email, "Invalid verification code"); call.respondError(HttpStatusCode.BadRequest, "invalid_two_factor_code", "The verification code is invalid"); return@post }
                 val hashes = pending.substring(separator + 1).split(',').filter(String::isNotBlank)
                 transaction { Users.update({ Users.id eq user[Users.id] }) { it[Users.totpSecret] = SecretValueCipher.encrypt(secret); it[Users.totpEnabled] = true; it[Users.recoveryCodes] = hashes } }
-                RedisService.delete(pendingTotpKey(user[Users.id])); AuditRepository.write(null, "2FA Enabled", email, "Authenticator-based two-factor authentication enabled")
+                RedisService.delete(pendingTotpKey(user[Users.id])); auditRepository.write(null, "2FA Enabled", email, "Authenticator-based two-factor authentication enabled")
                 call.respond(mapOf("status" to "two_factor_enabled"))
             }
 
@@ -356,7 +358,7 @@ fun Application.configureAuthRoutes() {
                 transaction {
                     Users.update({ Users.email eq email }) { it[Users.passwordHash] = hash }
                 }
-                AuditRepository.write(null, "Password Changed", email, "Account password changed")
+                auditRepository.write(null, "Password Changed", email, "Account password changed")
                 call.respond(mapOf("status" to "password_changed"))
             }
 
@@ -400,7 +402,7 @@ fun Application.configureAuthRoutes() {
                         it[Users.displayName] = body.displayName?.trim()?.takeIf(String::isNotBlank)
                     }
                 }
-                AuditRepository.write(null, "Profile Updated", email, "Display name changed")
+                auditRepository.write(null, "Profile Updated", email, "Display name changed")
                 call.respond(mapOf("status" to "profile_updated"))
             }
 
@@ -486,7 +488,7 @@ fun Application.configureAuthRoutes() {
                     }
                     return@post
                 }
-                AuditRepository.write(null, "Admin User Created", principal.payload.subject, "email=$newEmail role=$newRole two_factor_enabled=false")
+                auditRepository.write(null, "Admin User Created", principal.payload.subject, "email=$newEmail role=$newRole two_factor_enabled=false")
                 call.respond(HttpStatusCode.Created, AdminUserResponse(created.toString(), newEmail, newRole, false, LocalDateTime.now().toString()))
             }
 
@@ -511,7 +513,7 @@ fun Application.configureAuthRoutes() {
                     throw error
                 }
                 if (updated == 0) { call.respondError(HttpStatusCode.NotFound, "user_not_found", "User not found"); return@patch }
-                AuditRepository.write(null, "Admin User Updated", actor, "user_id=$id email=${email ?: "unchanged"} role=${role ?: "unchanged"} active=${body.active ?: "unchanged"}")
+                auditRepository.write(null, "Admin User Updated", actor, "user_id=$id email=${email ?: "unchanged"} role=${role ?: "unchanged"} active=${body.active ?: "unchanged"}")
                 call.respond(mapOf("status" to "user_updated"))
             }
 
@@ -526,7 +528,7 @@ fun Application.configureAuthRoutes() {
                 if (target[Users.email] == actor) { call.respondError(HttpStatusCode.Conflict, "cannot_delete_self", "You cannot delete your own account"); return@delete }
                 if (target[Users.role] == "admin" && transaction { Users.selectAll().count { it[Users.role] == "admin" } } <= 1) { call.respondError(HttpStatusCode.Conflict, "last_admin", "The last administrator cannot be deleted"); return@delete }
                 transaction { Users.deleteWhere { Users.id eq id } }
-                AuditRepository.write(null, "Admin User Deleted", actor, "user_id=$id email=${target[Users.email]}")
+                auditRepository.write(null, "Admin User Deleted", actor, "user_id=$id email=${target[Users.email]}")
                 call.respond(mapOf("status" to "user_deleted"))
             }
         }
