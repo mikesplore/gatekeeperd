@@ -2,9 +2,9 @@ package com.gatekeeper.integrations
 
 import com.gatekeeper.api.respondError
 import com.gatekeeper.config.AppConfig
-import com.gatekeeper.db.repositories.GitHubAppInstallationRepository
-import com.gatekeeper.db.repositories.GitHubCredentialRepository
 import com.gatekeeper.feature.audit.domain.repository.AuditRepository as AuditRepositoryPort
+import com.gatekeeper.feature.integrations.domain.repository.GitHubCredentialStore
+import com.gatekeeper.feature.integrations.domain.repository.GitHubInstallationStore
 import com.gatekeeper.security.SecretValueCipher
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.*
@@ -36,14 +36,16 @@ private data class GitHubInstallUrlResponse(val url: String, val callbackUrl: St
 
 fun Application.configureGitHubAdminRoutes() {
     val auditRepository = get<AuditRepositoryPort>()
+    val credentialStore = get<GitHubCredentialStore>()
+    val installationStore = get<GitHubInstallationStore>()
     routing {
         authenticate("auth-jwt") {
             put("/api/admin/github/credentials/{type}") {
                 val type = call.parameters["type"]
                 val body = runCatching { call.receive<GitHubCredentialRequest>() }.getOrNull()
                 val validValue = when (type) {
-                    GitHubCredentialRepository.WEBHOOK_SECRET -> body?.value?.isNotBlank() == true && body.value.length <= 4096
-                    GitHubCredentialRepository.APP_PRIVATE_KEY -> body?.value?.let {
+                    GitHubCredentialStore.WEBHOOK_SECRET -> body?.value?.isNotBlank() == true && body.value.length <= 4096
+                    GitHubCredentialStore.APP_PRIVATE_KEY -> body?.value?.let {
                         (it.contains("BEGIN PRIVATE KEY") || it.contains("BEGIN RSA PRIVATE KEY")) && it.length <= 65536
                     } == true
                     else -> false
@@ -56,7 +58,7 @@ fun Application.configureGitHubAdminRoutes() {
                     call.respondError(HttpStatusCode.ServiceUnavailable, "secrets_unconfigured", "Secret encryption is not configured")
                     return@put
                 }
-                val credential = GitHubCredentialRepository.save(type!!, body.value)
+                val credential = credentialStore.save(type!!, body.value)
                 auditRepository.write(null, "github_credential_updated", "admin", "type=$type version=${credential.version}")
                 call.respond(mapOf(
                     "id" to credential.id.toString(), "type" to type, "configured" to true,
@@ -64,7 +66,7 @@ fun Application.configureGitHubAdminRoutes() {
                 ))
             }
             get("/api/admin/github/status") {
-                val installation = GitHubAppInstallationRepository.find()
+                val installation = installationStore.find()
                 call.respond(
                     GitHubStatusResponse(
                         configured = GitHubAppClient.isConfigured(),
@@ -96,26 +98,26 @@ fun Application.configureGitHubAdminRoutes() {
                     return@get
                 }
                 val state = UUID.randomUUID().toString()
-                GitHubAppInstallationRepository.createPendingState(state)
+                installationStore.createPendingState(state)
                 val separator = if (url.contains("?")) "&" else "?"
                 call.respond(GitHubInstallUrlResponse("$url${separator}state=$state", AppConfig.githubCallbackUrl.takeIf { it.isNotBlank() }))
             }
             delete("/api/admin/github/installation") {
-                GitHubAppInstallationRepository.clear()
+                installationStore.clear()
                 call.respond(mapOf("status" to "unlinked"))
             }
         }
 
         get("/api/admin/github/callback") {
-            handleGitHubCallback(call)
+            handleGitHubCallback(call, installationStore)
         }
         get("/api/integrations/github/callback") {
-            handleGitHubCallback(call)
+            handleGitHubCallback(call, installationStore)
         }
     }
 }
 
-private suspend fun handleGitHubCallback(call: ApplicationCall) {
+private suspend fun handleGitHubCallback(call: ApplicationCall, installationStore: GitHubInstallationStore) {
             val installationId = call.request.queryParameters["installation_id"]?.toLongOrNull()
             val setupAction = call.request.queryParameters["setup_action"]
             val state = call.request.queryParameters["state"]
@@ -124,7 +126,7 @@ private suspend fun handleGitHubCallback(call: ApplicationCall) {
                 .takeIf { it.isNotBlank() }
                 ?.let { "$it/app/settings/profile" }
                 ?: "/app/settings/profile"
-            if (installationId == null || setupAction == "cancel" || state == null || !GitHubAppInstallationRepository.consumePendingState(state)) {
+            if (installationId == null || setupAction == "cancel" || state == null || !installationStore.consumePendingState(state)) {
                 call.respondRedirect("$redirect?github=cancelled")
                 return
             }
@@ -132,6 +134,6 @@ private suspend fun handleGitHubCallback(call: ApplicationCall) {
                 call.respondRedirect("$redirect?github=unconfigured")
                 return
             }
-            GitHubAppInstallationRepository.save(installationId, call.request.queryParameters["account_login"], call.request.queryParameters["account_type"])
+            installationStore.save(installationId, call.request.queryParameters["account_login"], call.request.queryParameters["account_type"])
             call.respondRedirect("$redirect?github=authorized&installation_id=$installationId")
 }

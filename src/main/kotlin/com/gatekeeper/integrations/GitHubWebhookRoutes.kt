@@ -3,9 +3,9 @@ package com.gatekeeper.integrations
 import com.gatekeeper.api.respondError
 import com.gatekeeper.config.AppConfig
 import com.gatekeeper.db.repositories.DeploymentJobRepository
-import com.gatekeeper.db.repositories.GitHubWebhookRepository
 import com.gatekeeper.feature.audit.domain.repository.AuditRepository as AuditRepositoryPort
-import com.gatekeeper.db.repositories.GitHubCredentialRepository
+import com.gatekeeper.feature.integrations.domain.repository.GitHubCredentialStore
+import com.gatekeeper.feature.integrations.domain.repository.GitHubWebhookStore
 import com.gatekeeper.deployment.CreateDeploymentRequest
 import io.ktor.http.*
 import io.ktor.server.application.*
@@ -27,9 +27,11 @@ private data class GitHubWebhookResponse(val status: String, val event: String, 
 
 fun Application.configureGitHubWebhookRoutes() {
     val auditRepository = get<AuditRepositoryPort>()
+    val credentialStore = get<GitHubCredentialStore>()
+    val webhookStore = get<GitHubWebhookStore>()
     routing {
         post("/api/integrations/github/webhook") {
-            val secret = runCatching { GitHubCredentialRepository.webhookSecret() }.getOrNull()
+            val secret = runCatching { credentialStore.webhookSecret() }.getOrNull()
                 ?: AppConfig.githubWebhookSecret
             if (secret.isBlank()) {
                 call.respondError(HttpStatusCode.ServiceUnavailable, "github_webhook_unconfigured", "GitHub webhook secret is not configured")
@@ -49,12 +51,12 @@ fun Application.configureGitHubWebhookRoutes() {
                 return@post
             }
             val repository = runCatching { Json.parseToJsonElement(body).jsonObject["repository"]?.jsonObject?.get("full_name")?.jsonPrimitive?.content }.getOrNull()
-            if (!GitHubWebhookRepository.claim(delivery, event, repository)) {
+            if (!webhookStore.claim(delivery, event, repository)) {
                 call.respond(HttpStatusCode.Accepted, GitHubWebhookResponse("duplicate", event, 0))
                 return@post
             }
             val queued = if (event == "push") queuePushDeployments(body) else 0
-            GitHubWebhookRepository.setQueuedCount(delivery, queued)
+            webhookStore.setQueuedCount(delivery, queued)
             auditRepository.write(null, "github_webhook_received", "github:$delivery", "event=$event repository=${repository ?: "unknown"} queued=$queued")
             call.respond(HttpStatusCode.Accepted, GitHubWebhookResponse("received", event, queued))
         }

@@ -68,6 +68,12 @@ import com.gatekeeper.feature.certificate.domain.repository.CertificateRepositor
 import com.gatekeeper.feature.certificate.data.persistence.ExposedCertificateRepository
 import com.gatekeeper.feature.integrations.domain.repository.IntegrationOutboxRepository as IntegrationOutboxRepositoryPort
 import com.gatekeeper.feature.integrations.data.persistence.ExposedIntegrationOutboxRepository
+import com.gatekeeper.feature.integrations.domain.repository.GitHubCredentialStore
+import com.gatekeeper.feature.integrations.domain.repository.GitHubInstallationStore
+import com.gatekeeper.feature.integrations.domain.repository.GitHubWebhookStore
+import com.gatekeeper.feature.integrations.data.persistence.ExposedGitHubCredentialStore
+import com.gatekeeper.feature.integrations.data.persistence.ExposedGitHubInstallationStore
+import com.gatekeeper.feature.integrations.data.persistence.ExposedGitHubWebhookStore
 import com.gatekeeper.feature.deployment.domain.repository.DeploymentPortAllocationRepository as DeploymentPortAllocationPort
 import com.gatekeeper.feature.deployment.data.persistence.ExposedDeploymentPortAllocationRepository
 import com.gatekeeper.feature.deployment.domain.port.DeploymentCommandRunner
@@ -97,6 +103,9 @@ private val applicationModule = module {
     single<AuditRepository> { ExposedAuditRepository(get()) }
     single<CertificateRepository> { ExposedCertificateRepository() }
     single<IntegrationOutboxRepositoryPort> { ExposedIntegrationOutboxRepository() }
+    single<GitHubCredentialStore> { ExposedGitHubCredentialStore() }
+    single<GitHubInstallationStore> { ExposedGitHubInstallationStore() }
+    single<GitHubWebhookStore> { ExposedGitHubWebhookStore() }
     single<DeploymentPortAllocationPort> { ExposedDeploymentPortAllocationRepository() }
     single<DeploymentCommandRunner> { HostDeploymentCommandRunner() }
     single<GitHubTokenProvider> { GitHubTokenProvider { GitHubAppClient.installationToken() } }
