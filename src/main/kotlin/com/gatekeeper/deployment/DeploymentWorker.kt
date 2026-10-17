@@ -11,7 +11,6 @@ import com.gatekeeper.docker.CreateContainerRequest
 import com.gatekeeper.docker.DockerService
 import com.gatekeeper.infrastructure.TcpPortProbe
 import com.gatekeeper.infrastructure.TcpHttpPortProbe
-import com.gatekeeper.docker.DockerCleanupService
 import com.gatekeeper.nginx.NginxService
 import com.gatekeeper.nginx.DeploymentUpstreamIncludes
 import com.gatekeeper.deployment.DurableCutoverFiles

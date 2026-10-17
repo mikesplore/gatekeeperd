@@ -1,13 +1,16 @@
 package com.gatekeeper.docker
 
-import com.gatekeeper.db.repositories.AuditRepository
+import com.gatekeeper.feature.audit.domain.repository.AuditRepository
 
 data class DockerCleanupItem(val reference: String, val sizeBytes: Long, val reason: String)
 data class DockerCleanupResult(val dryRun: Boolean, val inspected: Int, val removed: List<DockerCleanupItem>, val reclaimedBytes: Long)
 
 /** Reference-aware cleanup. It never invokes docker system prune. */
-object DockerCleanupService {
-    fun pruneProjectImages(projectImagePrefix: String?, preservedImages: Set<String>, dryRun: Boolean, actor: String, docker: DockerService): DockerCleanupResult {
+class DockerCleanupService(
+    private val docker: DockerService,
+    private val auditRepository: AuditRepository
+) {
+    fun pruneProjectImages(projectImagePrefix: String?, preservedImages: Set<String>, dryRun: Boolean, actor: String): DockerCleanupResult {
         val referenced = docker.referencedImageNames() + preservedImages
             val candidates = docker.listImages().filter { image ->
                 image.tags.isNotEmpty() &&
@@ -23,7 +26,7 @@ object DockerCleanupService {
                 }
             }
             val result = DockerCleanupResult(dryRun, docker.listImages().size, items, items.sumOf { it.sizeBytes })
-            AuditRepository.write(null, "docker_cleanup", actor, "dryRun=$dryRun removed=${items.size} reclaimedBytes=${result.reclaimedBytes} items=${items.joinToString { it.reference }}")
+            auditRepository.write(null, "docker_cleanup", actor, "dryRun=$dryRun removed=${items.size} reclaimedBytes=${result.reclaimedBytes} items=${items.joinToString { it.reference }}")
         return result
     }
 

@@ -12,6 +12,7 @@ import com.gatekeeper.config.AppConfig
 import com.gatekeeper.config.AppSettings
 import com.gatekeeper.docker.DockerGateway
 import com.gatekeeper.docker.DockerService
+import com.gatekeeper.docker.DockerCleanupService
 import com.gatekeeper.core.ports.FileStore
 import com.gatekeeper.core.ports.PortProbe
 import com.gatekeeper.core.ports.ProcessRunner
@@ -86,6 +87,7 @@ private val applicationModule = module {
     single { AppSettings.fromEnv() }
     single { DockerService(get<AppSettings>()["DOCKER_SOCKET"] ?: AppConfig.dockerSocket) }
     single<DockerGateway> { get<DockerService>() }
+    single { DockerCleanupService(get<DockerService>(), get<AuditRepository>()) }
     single<ProcessRunner> { ProcessRunnerImpl() }
     single<PortProbe> { TcpPortProbe() }
     single<FileStore> { LocalFileStore() }
