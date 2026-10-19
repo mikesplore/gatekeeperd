@@ -330,15 +330,11 @@ Renames or repoints an existing binding. The same port validation and pending be
 
 #### DELETE /api/admin/projects/{projectId}/services/{serviceId}/domains/{bindingId}
 
-Removes a binding. The service's legacy primary-domain projection is recalculated.
-
-#### POST /api/admin/projects/{projectId}/services/{serviceId}/domains/{bindingId}/primary
-
-Sets a bound domain as the service's primary-domain projection. Nginx enablement and TLS remain separate operations.
+Removes a binding. Bindings only map hostnames to exposed container ports; there is no primary-domain concept.
 
 #### PUT /api/admin/project-setup/projects/{projectId}/domain-gateway
 
-Add a service domain binding. Accepts `domain`, optional `serviceId` (omitted selects `default`), and optional `containerPort`. A single published runtime port is attached automatically. When multiple container ports are published, `containerPort` is required. The response includes the binding list and its lifecycle status. Bindings remain pending before deployment and become `port_unavailable` if a later deployment drops their port. The service's legacy `domain` field projects its primary binding. Enabling nginx remains a separate action.
+Add a service domain binding. Accepts `domain`, optional `serviceId` (omitted selects `default`), and optional `containerPort`. A single published runtime port is attached automatically. When multiple container ports are published, `containerPort` is required. The response includes the binding list and its lifecycle status. Bindings remain pending before deployment and become `port_unavailable` if a later deployment drops their port. Enabling nginx remains a separate action.
 
 #### POST /api/admin/project-setup/projects/{projectId}/deploy?serviceId={uuid}
 

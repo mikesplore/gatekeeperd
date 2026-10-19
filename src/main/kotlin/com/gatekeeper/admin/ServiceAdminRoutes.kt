@@ -66,7 +66,7 @@ data class ServiceDomainBindingRequest(val domain: String, val containerPort: In
 @Serializable
 data class ServiceDomainBindingView(
     val id: String, val serviceId: String, val domain: String,
-    val containerPort: Int?, val status: String, val primary: Boolean
+    val containerPort: Int?, val status: String
 )
 
 @Serializable
@@ -171,7 +171,7 @@ fun Application.configureServiceAdminRoutes() {
                 call.respond(ServiceDomainBindingsResponse(
                     serviceId = service.id.toString(),
                     publishedPorts = runtimePorts.sorted(),
-                    bindings = ServiceDomainRepository.reconcilePorts(service.id, runtimePorts).map { it.toView(service.domain) },
+                    bindings = ServiceDomainRepository.reconcilePorts(service.id, runtimePorts).map { it.toView() },
                     unboundPorts = ServiceDomainRepository.unboundPorts(service.id, runtimePorts)
                 ))
             }
@@ -199,7 +199,7 @@ fun Application.configureServiceAdminRoutes() {
                     return@post call.respondError(HttpStatusCode.Conflict, "domain_in_use", "Domain is already bound")
                 }
                 val binding = ServiceDomainRepository.add(service.id, domain, body.containerPort ?: ports.singleOrNull())
-                call.respond(HttpStatusCode.Created, binding.toView(service.domain))
+                call.respond(HttpStatusCode.Created, binding.toView())
             }
 
             put("/api/admin/projects/{projectId}/services/{serviceId}/domains/{bindingId}") {
@@ -223,7 +223,7 @@ fun Application.configureServiceAdminRoutes() {
                 }
                 val binding = ServiceDomainRepository.update(bindingId, service.id, domain, body.containerPort ?: ports.singleOrNull())
                     ?: return@put call.respondError(HttpStatusCode.NotFound, "domain_not_bound", "Domain binding was not found")
-                call.respond(binding.toView(service.domain))
+                call.respond(binding.toView())
             }
 
             delete("/api/admin/projects/{projectId}/services/{serviceId}/domains/{bindingId}") {
@@ -236,18 +236,6 @@ fun Application.configureServiceAdminRoutes() {
                     return@delete call.respondError(HttpStatusCode.NotFound, "domain_not_bound", "Domain binding was not found")
                 }
                 call.respond(mapOf("status" to "domain_removed", "bindingId" to bindingId.toString()))
-            }
-
-            post("/api/admin/projects/{projectId}/services/{serviceId}/domains/{bindingId}/primary") {
-                val (projectId, serviceId) = call.serviceCoordinates() ?: return@post
-                val service = ServiceRepository.findByProjectAndId(projectId, serviceId)
-                    ?: return@post call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
-                val bindingId = runCatching { UUID.fromString(call.parameters["bindingId"]) }.getOrNull()
-                    ?: return@post call.respondError(HttpStatusCode.BadRequest, "invalid_binding_id", "Binding ID is invalid")
-                if (!ServiceDomainRepository.setPrimary(service.id, bindingId)) {
-                    return@post call.respondError(HttpStatusCode.NotFound, "domain_not_bound", "Domain binding was not found")
-                }
-                call.respond(mapOf("status" to "primary_domain_set", "bindingId" to bindingId.toString()))
             }
 
             post("/api/admin/projects/{projectId}/services/{serviceId}/invoice") {
@@ -491,13 +479,12 @@ private fun ServiceRepository.ServiceRecord.toView() = ServiceAdminView(
     blockReasonCode?.value, blockReasonNote, domain
 )
 
-private fun ServiceDomainRepository.Binding.toView(primaryDomain: String?) = ServiceDomainBindingView(
+private fun ServiceDomainRepository.Binding.toView() = ServiceDomainBindingView(
     id = id.toString(),
     serviceId = serviceId.toString(),
     domain = domain,
     containerPort = containerPort,
-    status = status,
-    primary = domain == primaryDomain
+    status = status
 )
 private fun EnvironmentVersionMetadata.toView() = EnvironmentVersionView(id.toString(), version, environment, keys, createdAt.toString(), createdBy)
 private fun ActiveDeploymentInspection.toView() = ActiveDeploymentInspectionView(

@@ -3098,14 +3098,6 @@ paths:
       responses:
         '200':
           description: Domain binding deleted
-  /api/admin/projects/{projectId}/services/{serviceId}/domains/{bindingId}/primary:
-    post:
-      tags:
-      - Services and deployments
-      summary: Set the primary service domain
-      responses:
-        '200':
-          description: Primary domain updated
   /api/admin/projects/{slug}:
     get:
       tags:

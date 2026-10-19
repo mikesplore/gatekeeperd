@@ -2,7 +2,6 @@ package com.gatekeeper.db.repositories
 
 import com.gatekeeper.db.tables.ServiceDomainStatus
 import com.gatekeeper.db.tables.ServiceDomains
-import com.gatekeeper.db.tables.Services
 import org.jetbrains.exposed.sql.ResultRow
 import org.jetbrains.exposed.sql.SortOrder
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
@@ -72,7 +71,6 @@ object ServiceDomainRepository {
             it[ServiceDomains.createdAt] = now
             it[ServiceDomains.updatedAt] = now
         }
-        projectPrimaryDomain(serviceId)
         val status = if (containerPort == null) {
             ServiceDomainStatus.PENDING.value
         } else {
@@ -101,7 +99,6 @@ object ServiceDomainRepository {
             it[ServiceDomains.updatedAt] = LocalDateTime.now()
         }
         if (updated == 0) return@transaction null
-        projectPrimaryDomain(serviceId)
         findById(serviceId, id)
     }
 
@@ -118,7 +115,6 @@ object ServiceDomainRepository {
             (ServiceDomains.serviceId eq serviceId) and (ServiceDomains.domain eq domain)
         }
 
-        if (deleted > 0) projectPrimaryDomain(serviceId)
         deleted > 0
     }
 
@@ -126,14 +122,7 @@ object ServiceDomainRepository {
         val deleted = ServiceDomains.deleteWhere {
             (ServiceDomains.serviceId eq serviceId) and (ServiceDomains.id eq id)
         }
-        if (deleted > 0) projectPrimaryDomain(serviceId)
         deleted > 0
-    }
-
-    fun setPrimary(serviceId: UUID, id: UUID): Boolean = transaction {
-        val binding = findById(serviceId, id) ?: return@transaction false
-        Services.update({ Services.id eq serviceId }) { it[Services.domain] = binding.domain }
-        true
     }
 
     fun reconcilePorts(serviceId: UUID, publishedContainerPorts: Set<Int>): List<Binding> = transaction {
@@ -141,7 +130,6 @@ object ServiceDomainRepository {
             listByService(serviceId)
                 .filter { it.containerPort != null && it.status == ServiceDomainStatus.BOUND.value }
                 .forEach { markPortUnavailable(it.id) }
-            projectPrimaryDomain(serviceId)
             return@transaction listByService(serviceId)
         }
         if (publishedContainerPorts.size == 1) {
@@ -156,7 +144,6 @@ object ServiceDomainRepository {
                 attachPort(binding.id, port)
             }
         }
-        projectPrimaryDomain(serviceId)
         listByService(serviceId)
     }
 
@@ -169,18 +156,6 @@ object ServiceDomainRepository {
             .mapNotNull { it[ServiceDomains.containerPort] }
             .toSet()
         (publishedContainerPorts - bound).sorted()
-    }
-
-    private fun projectPrimaryDomain(serviceId: UUID) {
-        val bindings = ServiceDomains.selectAll()
-            .where { ServiceDomains.serviceId eq serviceId }
-            .orderBy(ServiceDomains.createdAt, SortOrder.ASC)
-            .map { it.toBinding() }
-        val primary = bindings.firstOrNull { it.status == ServiceDomainStatus.BOUND.value }
-            ?: bindings.firstOrNull()
-        Services.update({ Services.id eq serviceId }) {
-            it[Services.domain] = primary?.domain
-        }
     }
 
     private fun ResultRow.toBinding() = Binding(
