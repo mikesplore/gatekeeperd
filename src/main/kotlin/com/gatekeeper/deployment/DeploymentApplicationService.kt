@@ -364,6 +364,20 @@ object DeploymentApplicationService {
         } == 1
     }
 
+    fun clearCandidateRuntimeAfterCutoverRecovery(id: UUID): Boolean = transaction {
+        Deployments.update({
+            (Deployments.id eq id) and
+                    (Deployments.status inList listOf(DeploymentStatus.READY, DeploymentStatus.FAILED))
+        }) {
+            it[Deployments.runtimeContainerName] = null
+            it[Deployments.runtimeHostPort] = null
+            it[Deployments.runtimePortsJson] = "{}"
+            it[Deployments.runtimePortHostIpsJson] = "{}"
+            it[Deployments.runtimeNetworksJson] = "[]"
+            it[updatedAt] = LocalDateTime.now()
+        } == 1
+    }
+
     data class CandidateRuntime(
         val projectId: UUID, val projectSlug: String?, val name: String?, val hostPort: Int?,
         val ports: Map<Int, Int>, val status: DeploymentStatus

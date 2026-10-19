@@ -62,6 +62,31 @@ class DeploymentWorker(
         }
     }
 
+    private fun cleanupInterruptedCandidate(deploymentId: UUID, candidateName: String?, reason: String): Boolean {
+        if (candidateName.isNullOrBlank()) return true
+        return runCatching {
+            val cleanupDocker = DockerService(AppConfig.dockerSocket)
+            try {
+                cleanupDocker.removeContainerIfPresent(candidateName)
+            } finally {
+                cleanupDocker.close()
+            }
+        }.onSuccess { removed ->
+            if (removed) {
+                DeploymentApplicationService.clearCandidateRuntimeAfterCutoverRecovery(deploymentId)
+                auditRepository.write(
+                    null,
+                    "deployment_candidate_cleaned_up",
+                    "deployment-worker",
+                    "deployment=$deploymentId container=$candidateName reason=$reason"
+                )
+            }
+        }.getOrElse { error ->
+            logger.error("Could not remove interrupted deployment candidate {} during recovery", candidateName, error)
+            false
+        }
+    }
+
     private fun recoverInterruptedCutovers() {
         for ((deploymentId, recovery) in DeploymentApplicationService.pendingCutovers()) {
             val serviceId = recovery.serviceId ?: continue
@@ -69,11 +94,12 @@ class DeploymentWorker(
             DistributedLock.tryWithLock(lockKey) {
                 val site = SiteRepository.findByServiceId(serviceId)
                 val files = recovery.files
+                val candidate = DeploymentApplicationService.candidateRuntime(deploymentId)
                 if (site == null || files == null) {
+                    cleanupInterruptedCandidate(deploymentId, candidate?.name, "missing recovery data or site")
                     DeploymentApplicationService.updateCutoverState(deploymentId, "repair_required", "Pending upstream recovery data or site is missing")
                     return@tryWithLock
                 }
-                val candidate = DeploymentApplicationService.candidateRuntime(deploymentId)
                 val docker = runCatching { DockerService(AppConfig.dockerSocket) }.getOrNull()
                 val candidateRunning = try {
                     candidate?.name?.let { docker?.containerHealth(it) == "running" } == true
@@ -88,26 +114,31 @@ class DeploymentWorker(
                     NginxService.InterruptedCutoverResult.TARGET_RELOADED,
                     NginxService.InterruptedCutoverResult.PREVIOUS_RESTORED -> {
                         if (restoringFailedCutover && result == NginxService.InterruptedCutoverResult.PREVIOUS_RESTORED) {
-                            val removed = candidate?.name?.let { name ->
-                                runCatching {
-                                    val cleanupDocker = DockerService(AppConfig.dockerSocket)
-                                    try {
-                                        cleanupDocker.removeContainerIfPresent(name)
-                                    } finally {
-                                        cleanupDocker.close()
-                                    }
-                                }.getOrElse { error ->
-                                    logger.error("Could not remove failed deployment candidate {} during recovery", name, error)
-                                    false
-                                }
-                            } ?: true
+                            val removed = cleanupInterruptedCandidate(
+                                deploymentId,
+                                candidate?.name,
+                                "repair-required cutover recovery"
+                            )
                             if (removed) {
                                 DeploymentApplicationService.updateCutoverState(
                                     deploymentId, "restored", "Previous gateway route restored and failed candidate removed"
                                 )
-                                auditRepository.write(
-                                    null, "deployment_candidate_cleaned_up", "deployment-worker",
-                                    "deployment=$deploymentId reason=repair-required cutover recovery"
+                            }
+                        } else if (result == NginxService.InterruptedCutoverResult.PREVIOUS_RESTORED) {
+                            val removed = cleanupInterruptedCandidate(
+                                deploymentId,
+                                candidate?.name,
+                                "interrupted cutover restored previous route"
+                            )
+                            if (removed) {
+                                DeploymentJobRepository.failInterruptedCutover(
+                                    deploymentId,
+                                    "Interrupted cutover restored the previous gateway route; discarded ready candidate to avoid stale port conflicts"
+                                )
+                                DeploymentApplicationService.updateCutoverState(
+                                    deploymentId,
+                                    "restored",
+                                    "Previous gateway route restored and interrupted candidate removed"
                                 )
                             }
                         } else if (candidateRunning) {

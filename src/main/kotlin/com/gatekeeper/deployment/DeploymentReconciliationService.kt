@@ -4,15 +4,15 @@ import com.gatekeeper.db.repositories.ProjectRepository
 import com.gatekeeper.db.repositories.SiteRepository
 import com.gatekeeper.db.tables.DeploymentStatus
 import com.gatekeeper.db.tables.Deployments
-import com.gatekeeper.db.tables.DeploymentExecutions
 import com.gatekeeper.db.tables.Projects
 import com.gatekeeper.db.tables.UpstreamMode
 import com.gatekeeper.docker.DockerService
 import com.gatekeeper.nginx.NginxService
 import com.gatekeeper.nginx.DeploymentUpstreamResolver
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
+import org.jetbrains.exposed.sql.and
+import org.jetbrains.exposed.sql.or
 import org.jetbrains.exposed.sql.selectAll
 import org.jetbrains.exposed.sql.transactions.transaction
 import java.util.UUID
@@ -69,16 +69,27 @@ class DeploymentReconciliationService(
         val environment: String,
         val containerName: String?,
         val hostPort: Int?,
-        val ports: Map<Int, Int>
+        val ports: Map<Int, Int>,
+        val status: DeploymentStatus,
+        val cutoverState: String
     )
 
     private fun readActiveDeployments(errors: MutableList<String>): List<ActiveDeployment> = try {
         transaction {
-            Deployments.selectAll().where { Deployments.status eq DeploymentStatus.ACTIVE }
+            Deployments.selectAll().where {
+                (Deployments.status eq DeploymentStatus.ACTIVE) or
+                        ((Deployments.status eq DeploymentStatus.READY) and
+                                (Deployments.cutoverState inList listOf(
+                                    "prepared",
+                                    "route_switched",
+                                    "draining",
+                                    "retiring_previous",
+                                    "previous_retired",
+                                    "repair_required"
+                                )))
+            }
                 .map { row ->
-                    val execution = DeploymentExecutions.selectAll()
-                        .where { DeploymentExecutions.id eq row[Deployments.executionId] }.singleOrNull()
-                    val projectId = row[Deployments.projectId] ?: error("Active deployment has no project_id")
+                    val projectId = row[Deployments.projectId] ?: error("Deployment has no project_id")
                     val project = run {
                         Projects.selectAll().where { Projects.id eq projectId }.singleOrNull()
                     }
@@ -93,7 +104,9 @@ class DeploymentReconciliationService(
                         serviceId = row[Deployments.serviceId],
                         slug = project?.get(Projects.slug),
                         environment = row[Deployments.environment], containerName = row[Deployments.runtimeContainerName],
-                        hostPort = row[Deployments.runtimeHostPort], ports = ports
+                        hostPort = row[Deployments.runtimeHostPort], ports = ports,
+                        status = row[Deployments.status],
+                        cutoverState = row[Deployments.cutoverState]
                     )
                 }
         }
@@ -108,6 +121,13 @@ class DeploymentReconciliationService(
         var observedPorts: String? = null
         var gatewayTarget: String? = null
         val slug = deployment.slug
+
+        if (deployment.status == DeploymentStatus.READY && deployment.cutoverState in pendingCutoverStates) {
+            drift += DeploymentDriftItem(
+                "ready_cutover_pending",
+                "Deployment is READY but cutover state is '${deployment.cutoverState}'; runtime '${deployment.containerName ?: "missing"}' may be an orphaned candidate"
+            )
+        }
 
         val containerName = deployment.containerName
         if (containerName.isNullOrBlank()) {
@@ -227,6 +247,15 @@ class DeploymentReconciliationService(
     }
 
     companion object {
+        private val pendingCutoverStates = setOf(
+            "prepared",
+            "route_switched",
+            "draining",
+            "retiring_previous",
+            "previous_retired",
+            "repair_required"
+        )
+
         fun production(docker: DockerService): DeploymentReconciliationService {
             return DeploymentReconciliationService(docker, NginxService.configured())
         }

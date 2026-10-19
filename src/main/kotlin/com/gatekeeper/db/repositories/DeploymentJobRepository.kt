@@ -60,7 +60,7 @@ object DeploymentJobRepository {
             AutoDeployTarget(
                 projectId, savedRepository, row[DeploymentConfigurations.gitRef],
                 row[DeploymentConfigurations.registry], row[DeploymentConfigurations.imageName],
-                row[DeploymentConfigurations.imageTag], row[DeploymentConfigurations.environment] ?: "production",
+                row[DeploymentConfigurations.imageTag], row[DeploymentConfigurations.environment],
                 row[DeploymentConfigurations.serviceId] ?: defaultServiceId(projectId),
                 row[DeploymentConfigurations.registryCredentialId]
             )
@@ -116,7 +116,7 @@ object DeploymentJobRepository {
             (DeploymentConfigurations.projectId eq projectId) and
                     ((DeploymentConfigurations.serviceId eq defaultServiceId) or DeploymentConfigurations.serviceId.isNull())
         }.toList()
-            .filter { (it[DeploymentConfigurations.environment] ?: "production") == environment }
+            .filter { it[DeploymentConfigurations.environment] == environment }
             .maxByOrNull { it[DeploymentConfigurations.serviceId] == defaultServiceId }?.get(DeploymentConfigurations.id)
     }
 
@@ -124,7 +124,7 @@ object DeploymentJobRepository {
         DeploymentConfigurations.selectAll().where {
             (DeploymentConfigurations.projectId eq projectId) and (DeploymentConfigurations.serviceId eq serviceId)
         }.toList()
-            .filter { (it[DeploymentConfigurations.environment] ?: "production") == environment }
+            .filter { it[DeploymentConfigurations.environment] == environment }
             .maxWithOrNull(compareBy<ResultRow> { it[DeploymentConfigurations.updatedAt] }
                 .thenBy { it[DeploymentConfigurations.createdAt] })
             ?.get(DeploymentConfigurations.id)
@@ -152,7 +152,7 @@ object DeploymentJobRepository {
             (DeploymentConfigurations.projectId eq projectId) and
                 ((DeploymentConfigurations.serviceId eq serviceId) or
                     (if (service[Services.isDefault]) DeploymentConfigurations.serviceId.isNull() else org.jetbrains.exposed.sql.Op.FALSE))
-        }.toList().firstOrNull { (it[DeploymentConfigurations.environment] ?: "production") == environment }
+        }.toList().firstOrNull { it[DeploymentConfigurations.environment] == environment }
         val updatedValues = if (replaceExisting) values else {
             val previousValues = if (row == null) {
                 latestServiceSecretSet(projectId, serviceId, environment)?.let(::serviceEnvironmentValues).orEmpty()
@@ -256,7 +256,7 @@ object DeploymentJobRepository {
             sharedEnvironmentSetVersion = row[DeploymentConfigurations.sharedEnvironmentSetVersion],
             volumes = Json.decodeFromString(row[DeploymentConfigurations.volumesJson]),
             createNetworkIfMissing = row[DeploymentConfigurations.createNetworkIfMissing],
-            environment = row[DeploymentConfigurations.environment] ?: "production",
+            environment = row[DeploymentConfigurations.environment],
             readinessType = row[DeploymentConfigurations.readinessType], readinessTarget = row[DeploymentConfigurations.readinessTarget],
             readinessTimeoutSeconds = row[DeploymentConfigurations.readinessTimeoutSeconds],
             readinessIntervalSeconds = row[DeploymentConfigurations.readinessIntervalSeconds],
@@ -394,7 +394,7 @@ object DeploymentJobRepository {
         val configurationId = configurationIdForProject(projectId) ?: return@transaction null
         val row = DeploymentConfigurations.selectAll().where { DeploymentConfigurations.id eq configurationId }.singleOrNull()
             ?: return@transaction null
-        val environment = row[DeploymentConfigurations.environment] ?: "production"
+        val environment = row[DeploymentConfigurations.environment]
         val serviceId = row[DeploymentConfigurations.serviceId] ?: defaultServiceId(projectId)
         val secretSet = createSecretSetVersion(projectId, environment, secretEnv, actor, serviceId)
         val sharedSet = row[DeploymentConfigurations.sharedEnvironmentSetId]?.let { sharedId ->
@@ -425,7 +425,7 @@ object DeploymentJobRepository {
                 imageTag = saved[DeploymentConfigurations.imageTag],
                 hostPort = saved[DeploymentConfigurations.hostPort], containerPort = saved[DeploymentConfigurations.containerPort],
                 network = saved[DeploymentConfigurations.network], restartPolicy = saved[DeploymentConfigurations.restartPolicy],
-                projectId = saved[DeploymentConfigurations.projectId]?.toString(), autoDeploy = saved[DeploymentConfigurations.autoDeploy],
+                projectId = saved[DeploymentConfigurations.projectId].toString(), autoDeploy = saved[DeploymentConfigurations.autoDeploy],
                 triggerSource = "secret_rotation",
                 env = emptyMap(), secretEnv = emptyMap(),
                 sharedEnvironmentSetId = sharedSet?.id?.toString(), sharedEnvironmentSetVersion = sharedSet?.version,
@@ -451,7 +451,7 @@ object DeploymentJobRepository {
         validateReadiness(request.readinessType, request.readinessTarget, request.readinessTimeoutSeconds, request.readinessIntervalSeconds, request.readinessProbeTimeoutMillis)
         check(DeploymentConfigurations.selectAll().where {
             (DeploymentConfigurations.projectId eq projectId) and (DeploymentConfigurations.serviceId eq serviceId)
-        }.none { (it[DeploymentConfigurations.environment] ?: "production") == environment }) {
+        }.none { it[DeploymentConfigurations.environment] == environment }) {
             "Service already has a deployment configuration for this environment"
         }
         val id = UUID.randomUUID()
@@ -620,7 +620,7 @@ object DeploymentJobRepository {
         val projectId = row[DeploymentConfigurations.projectId]
         val volumesJson = request.volumes?.let(Json::encodeToString)
         val environment = request.environment?.let(::requireEnvironment)
-        val currentEnvironment = row[DeploymentConfigurations.environment] ?: "production"
+        val currentEnvironment = row[DeploymentConfigurations.environment]
         val targetEnvironment = environment ?: currentEnvironment
         val environmentChanged = targetEnvironment != currentEnvironment
         val currentServiceRef = row[DeploymentConfigurations.secretSetId]?.let { setId ->
@@ -703,7 +703,7 @@ object DeploymentJobRepository {
             request.readinessTimeoutSeconds?.let { value -> it[DeploymentJobs.readinessTimeoutSeconds] = value }
             request.readinessIntervalSeconds?.let { value -> it[DeploymentJobs.readinessIntervalSeconds] = value }
             request.readinessProbeTimeoutMillis?.let { value -> it[DeploymentJobs.readinessProbeTimeoutMillis] = value }
-            projectId?.let { value -> it[DeploymentJobs.projectId] = value }
+            projectId.let { value -> it[DeploymentJobs.projectId] = value }
             it[DeploymentJobs.serviceId] = serviceId
             it[updatedAt] = LocalDateTime.now()
         }
@@ -722,7 +722,16 @@ object DeploymentJobRepository {
     fun redeployConfiguration(id: UUID): UUID? {
         val prepared = transaction {
             val row = DeploymentConfigurations.selectAll().where { DeploymentConfigurations.id eq id }.singleOrNull() ?: return@transaction null
-            val projectId = row[DeploymentConfigurations.projectId] ?: error("Deployment configuration has no project_id")
+            val projectId = row[DeploymentConfigurations.projectId]
+            val serviceId = row[DeploymentConfigurations.serviceId] ?: defaultServiceId(projectId)
+            val environment = row[DeploymentConfigurations.environment]
+            val activeRuntime = DeploymentApplicationService.activeRuntime(serviceId, environment)
+            val activeContainerPort = activeRuntime?.containerPort
+                ?: activeRuntime?.ports?.keys?.singleOrNull()
+                ?: row[DeploymentConfigurations.containerPort]
+            val activeHostPort = activeContainerPort?.let { activeRuntime?.ports?.get(it) }
+                ?: activeRuntime?.hostPort
+                ?: row[DeploymentConfigurations.hostPort]
             var serviceSet = row[DeploymentConfigurations.secretSetId]?.let { setId ->
                 row[DeploymentConfigurations.secretSetVersion]?.let { version -> SecretSetReference(setId, version) }
             }
@@ -733,12 +742,12 @@ object DeploymentJobRepository {
                 registryCredentialId = row[DeploymentConfigurations.registryCredentialId]?.toString(),
                 imageName = row[DeploymentConfigurations.imageName],
                 imageTag = row[DeploymentConfigurations.imageTag],
-                hostPort = row[DeploymentConfigurations.hostPort],
-                containerPort = row[DeploymentConfigurations.containerPort],
+                hostPort = activeHostPort,
+                containerPort = activeContainerPort,
                 network = row[DeploymentConfigurations.network],
                 restartPolicy = row[DeploymentConfigurations.restartPolicy],
                 projectId = projectId.toString(), autoDeploy = row[DeploymentConfigurations.autoDeploy],
-                serviceId = row[DeploymentConfigurations.serviceId]?.toString(),
+                serviceId = serviceId.toString(),
                 triggerSource = "manual_redeploy",
                 env = if (serviceSet == null) runCatching { Json.decodeFromString<Map<String, String>>(row[DeploymentConfigurations.envJson]) }.getOrDefault(emptyMap()) else emptyMap(),
                 secretEnv = if (serviceSet == null) row[DeploymentConfigurations.secretEnvEncrypted]?.let { encrypted ->
@@ -748,7 +757,7 @@ object DeploymentJobRepository {
                 sharedEnvironmentSetVersion = row[DeploymentConfigurations.sharedEnvironmentSetVersion],
                 volumes = runCatching { Json.decodeFromString<List<VolumeMount>>(row[DeploymentConfigurations.volumesJson]) }.getOrDefault(emptyList()),
                 createNetworkIfMissing = row[DeploymentConfigurations.createNetworkIfMissing],
-                environment = row[DeploymentConfigurations.environment] ?: "production",
+                environment = environment,
                 readinessType = row[DeploymentConfigurations.readinessType],
                 readinessTarget = row[DeploymentConfigurations.readinessTarget],
                 readinessTimeoutSeconds = row[DeploymentConfigurations.readinessTimeoutSeconds],
@@ -756,7 +765,7 @@ object DeploymentJobRepository {
                 readinessProbeTimeoutMillis = row[DeploymentConfigurations.readinessProbeTimeoutMillis]
             )
             if (serviceSet == null && (request.env.isNotEmpty() || request.secretEnv.isNotEmpty())) {
-                val createdSecretSet = createSecretSetVersion(projectId, request.environment, request.env + request.secretEnv, "manual_redeploy")
+                val createdSecretSet = createSecretSetVersion(projectId, request.environment, request.env + request.secretEnv, "manual_redeploy", serviceId)
                 serviceSet = createdSecretSet
                 DeploymentConfigurations.update({ DeploymentConfigurations.id eq id }) {
                     it[DeploymentConfigurations.secretSetId] = createdSecretSet.id
@@ -766,11 +775,6 @@ object DeploymentJobRepository {
             request to serviceSet
         } ?: return null
         return create(prepared.first, prepared.second)
-    }
-
-    fun latestForProject(projectId: UUID): DeploymentJobRecord? = transaction {
-        val serviceId = defaultServiceId(projectId)
-        latestForService(projectId, serviceId)
     }
 
     fun latestForService(projectId: UUID, serviceId: UUID, environment: String = "production"): DeploymentJobRecord? = transaction {
@@ -1121,7 +1125,7 @@ object DeploymentJobRepository {
             ?: error("Deployment execution $executionId not found")
         val projectId = execution[DeploymentExecutions.projectId]
         val serviceId = execution[DeploymentExecutions.serviceId]
-        val environment = execution[DeploymentExecutions.environment] ?: "production"
+        val environment = execution[DeploymentExecutions.environment]
         val sharedId = execution[DeploymentExecutions.sharedEnvironmentSetId]
         val sharedVersion = execution[DeploymentExecutions.sharedEnvironmentSetVersion]
         val sharedValues = if (sharedId != null) {
@@ -1158,10 +1162,6 @@ object DeploymentJobRepository {
         }
         ResolvedEnvironment(sharedValues + serviceValues, sources)
     }
-
-    /** Backward-compatible name retained for callers that expect only the environment map. */
-    fun resolveSecretEnvForExecution(executionId: UUID): Map<String, String> =
-        resolveEnvironmentForExecution(executionId).values
 
     fun claimNext(): DeploymentJobRecord? = transaction {
         val now = LocalDateTime.now()
