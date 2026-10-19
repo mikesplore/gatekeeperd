@@ -3998,6 +3998,36 @@ paths:
             schema:
               type: object
               additionalProperties: true
+  /api/admin/system/deploy:
+    post:
+      tags:
+      - Operations
+      summary: Start an immediate deployment check
+      description: 'Implementation: `com/gatekeeper/admin/SystemAdminRoutes.kt:26`. Starts the
+        root-owned deployment checker asynchronously; query `/api/version` to inspect the result.'
+      operationId: PostApiAdminSystemDeploy
+      responses:
+        '200':
+          description: Deployment check started
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - started
+                - message
+                properties:
+                  started:
+                    type: boolean
+                  message:
+                    type: string
+        default:
+          description: Deployment checker could not be started.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      x-code-location: com/gatekeeper/admin/SystemAdminRoutes.kt:26
   /api/admin/users:
     get:
       tags:
