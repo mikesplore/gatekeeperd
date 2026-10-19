@@ -3334,6 +3334,38 @@ paths:
             schema:
               type: object
               additionalProperties: true
+  /api/admin/projects/{slug}/deployments/{id}:
+    delete:
+      tags:
+      - Projects
+      summary: Delete projects by slug deployments by id
+      description: 'Implementation: `com/gatekeeper/admin/ProjectSetupAdminRoutes.kt`. Deletes only unreferenced terminal deployment records.'
+      operationId: DeleteApiAdminProjectsByslugDeploymentsByid
+      responses:
+        '204':
+          description: Deployment deleted.
+        default:
+          description: Operation-specific error response. The API uses the standard error object when applicable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      parameters:
+      - name: slug
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: environment
+        in: query
+        required: false
+        schema:
+          type: string
   /api/admin/projects/{slug}/deployments/{id}/redeploy:
     post:
       tags:

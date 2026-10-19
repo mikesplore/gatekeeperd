@@ -352,6 +352,10 @@ Returns sectioned project state: `accessLifecycle`, `desiredConfiguration`, `cur
 
 Returns canonical deployment history for a project (optional `environment`, default `production`). Optional `serviceId` filters the list to one service owned by the project. Each item includes source commit, image digest, trigger metadata, status, readiness result, failure reason, credential and secret-set ID/version references, and available `rollback`/`redeploy` actions. Redeploy is available for active deployments and the latest failed attempt for each service. It never returns encrypted payloads or plaintext values. Actor is `null` until deployments store a separate authenticated actor field.
 
+### DELETE /api/admin/projects/{slug}/deployments/{id}
+
+Permanently deletes a deployment history record. Only terminal deployments (`failed`, `cancelled`, `superseded`, or `rolled-back`) with no attached runtime and no rollback/replacement references may be deleted. Active, in-progress, runtime-attached, and referenced deployments are rejected with `409 Conflict`. The associated execution and legacy job snapshots are removed; the desired configuration snapshot is retained for future deployments. Successful deletion returns `204 No Content` and writes a `deployment_deleted` audit entry.
+
 ### POST /api/admin/projects/{projectId}/secret-sets/rotate-and-deploy
 
 Creates an immutable secret-set version, updates the desired configuration reference, and queues a deployment in one database transaction. Request is `{ "secretEnv": { "KEY": "value" } }`. Returns `202 Accepted` with the queued deployment ID. Values are write-only and are not echoed in the response.

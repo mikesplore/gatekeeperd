@@ -912,6 +912,34 @@ fun Application.configureProjectSetupAdminRoutes() {
                 call.respond(ProjectSetupCancelResponse(id.toString()))
             }
 
+            delete("/api/admin/projects/{slug}/deployments/{id}") {
+                val slug = call.parameters["slug"] ?: return@delete call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing project slug")
+                val project = ProjectRepository.findBySlug(slug)
+                    ?: return@delete call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
+                val id = call.parameters["id"]?.let { runCatching { UUID.fromString(it) }.getOrNull() }
+                    ?: return@delete call.respondError(HttpStatusCode.BadRequest, "invalid_deployment_id", "Invalid deployment ID")
+                val item = DeploymentApplicationService.deploymentHistory(project.id, call.request.queryParameters["environment"]?.trim()?.takeIf(String::isNotEmpty) ?: "production")
+                    .firstOrNull { it.id == id }
+                    ?: return@delete call.respondError(HttpStatusCode.NotFound, "deployment_not_found", "Deployment not found for project")
+                when (DeploymentApplicationService.deleteDeployment(id)) {
+                    DeploymentApplicationService.DeleteDeploymentResult.DELETED -> {
+                        val actor = call.principal<io.ktor.server.auth.jwt.JWTPrincipal>()?.payload?.subject ?: "admin"
+                        auditRepository.write(project.id, "deployment_deleted", actor, "deployment=$id")
+                        call.respond(HttpStatusCode.NoContent)
+                    }
+                    DeploymentApplicationService.DeleteDeploymentResult.ACTIVE ->
+                        call.respondError(HttpStatusCode.Conflict, "deployment_delete_unavailable", "Active deployments cannot be deleted")
+                    DeploymentApplicationService.DeleteDeploymentResult.NOT_TERMINAL ->
+                        call.respondError(HttpStatusCode.Conflict, "deployment_delete_unavailable", "Only terminal deployments can be deleted")
+                    DeploymentApplicationService.DeleteDeploymentResult.RUNTIME_ATTACHED ->
+                        call.respondError(HttpStatusCode.Conflict, "deployment_delete_unavailable", "Deployments with an attached runtime cannot be deleted")
+                    DeploymentApplicationService.DeleteDeploymentResult.REFERENCED ->
+                        call.respondError(HttpStatusCode.Conflict, "deployment_delete_unavailable", "Deployments referenced by another deployment cannot be deleted")
+                    DeploymentApplicationService.DeleteDeploymentResult.NOT_FOUND ->
+                        call.respondError(HttpStatusCode.NotFound, "deployment_not_found", "Deployment not found for project")
+                }
+            }
+
             post("/api/admin/projects/{slug}/deployments/{id}/rollback") {
                 val slug = call.parameters["slug"] ?: return@post call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing project slug")
                 val project = ProjectRepository.findBySlug(slug)

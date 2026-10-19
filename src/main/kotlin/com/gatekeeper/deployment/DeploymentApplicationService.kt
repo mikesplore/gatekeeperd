@@ -6,8 +6,11 @@ import com.gatekeeper.db.tables.AuditLog
 import com.gatekeeper.db.tables.Services
 import org.jetbrains.exposed.sql.insert
 import org.jetbrains.exposed.sql.and
+import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
+import org.jetbrains.exposed.sql.or
 import org.jetbrains.exposed.sql.selectAll
 import org.jetbrains.exposed.sql.update
+import org.jetbrains.exposed.sql.deleteWhere
 import org.jetbrains.exposed.sql.transactions.transaction
 import java.time.LocalDateTime
 import java.util.UUID
@@ -29,6 +32,48 @@ data class DurableCutoverFiles(
 
 /** The only writer of canonical deployment lifecycle state. */
 object DeploymentApplicationService {
+    enum class DeleteDeploymentResult {
+        DELETED,
+        NOT_FOUND,
+        ACTIVE,
+        NOT_TERMINAL,
+        RUNTIME_ATTACHED,
+        REFERENCED
+    }
+
+    /**
+     * Permanently removes an unreferenced terminal deployment and its private
+     * execution/job snapshots. Active, running, runtime-attached, and
+     * rollback-related records are intentionally retained.
+     */
+    fun deleteDeployment(id: UUID): DeleteDeploymentResult = transaction {
+        val deployment = Deployments.selectAll().where { Deployments.id eq id }.singleOrNull()
+            ?: return@transaction DeleteDeploymentResult.NOT_FOUND
+        val status = deployment[Deployments.status]
+        if (status == DeploymentStatus.ACTIVE) return@transaction DeleteDeploymentResult.ACTIVE
+        if (status !in setOf(DeploymentStatus.FAILED, DeploymentStatus.CANCELLED, DeploymentStatus.SUPERSEDED, DeploymentStatus.ROLLED_BACK)) {
+            return@transaction DeleteDeploymentResult.NOT_TERMINAL
+        }
+        if (deployment[Deployments.runtimeContainerName] != null) {
+            return@transaction DeleteDeploymentResult.RUNTIME_ATTACHED
+        }
+        if (Deployments.selectAll().where {
+                (Deployments.replacesDeploymentId eq id) or (Deployments.rolledBackToDeploymentId eq id)
+            }.count() > 0) {
+            return@transaction DeleteDeploymentResult.REFERENCED
+        }
+
+        val executionId = deployment[Deployments.executionId]
+        Deployments.deleteWhere { Deployments.id eq id }
+        com.gatekeeper.db.tables.DeploymentExecutions.deleteWhere {
+            com.gatekeeper.db.tables.DeploymentExecutions.id eq executionId
+        }
+        com.gatekeeper.db.tables.DeploymentJobs.deleteWhere {
+            com.gatekeeper.db.tables.DeploymentJobs.id eq id
+        }
+        DeleteDeploymentResult.DELETED
+    }
+
     private fun defaultServiceId(projectId: UUID): UUID = Services.selectAll().where {
         (Services.projectId eq projectId) and (Services.isDefault eq true)
     }.singleOrNull()?.get(Services.id) ?: error("Default service not found for project $projectId")
