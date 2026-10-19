@@ -723,6 +723,32 @@ fun Application.configureProjectSetupAdminRoutes() {
                 call.respond(ProjectSetupGatewayResponse(domain, "domain_saved", serviceId.toString(), savedBinding.containerPort, bindings))
             }
 
+            delete("/api/admin/project-setup/projects/{projectId}/domain-gateway") {
+                val projectId = call.setupProjectId() ?: return@delete
+                val project = ProjectRepository.findActiveById(projectId)
+                    ?: return@delete call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
+                val body = runCatching { call.receive<ProjectSetupGatewayRequest>() }.getOrNull()
+                    ?: return@delete call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid domain/gateway configuration")
+                val domain = runCatching { requireValidHostname(body.domain) }.getOrElse {
+                    return@delete call.respondError(HttpStatusCode.BadRequest, "invalid_domain", it.message ?: "Domain is invalid")
+                }
+                val serviceId = body.serviceId?.let { raw -> runCatching { UUID.fromString(raw) }.getOrNull() }
+                    ?: if (body.serviceId == null) DeploymentJobRepository.defaultServiceIdForProject(projectId)
+                    else return@delete call.respondError(HttpStatusCode.BadRequest, "invalid_service_id", "Service ID is invalid")
+                val service = ServiceRepository.findByProjectAndId(projectId, serviceId)
+                    ?: return@delete call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
+                val removed = ServiceDomainRepository.remove(serviceId, domain)
+                if (!removed) {
+                    return@delete call.respondError(HttpStatusCode.NotFound, "domain_not_bound", "Domain is not bound to this service")
+                }
+                val actor = call.principal<io.ktor.server.auth.jwt.JWTPrincipal>()?.payload?.subject ?: "admin"
+                auditRepository.write(projectId, "domain_binding_removed", actor, "service=${serviceId} domain=$domain")
+                val bindings = ServiceDomainRepository.listByService(serviceId).map {
+                    ProjectSetupDomainBinding(it.id.toString(), it.serviceId.toString(), it.containerPort, it.domain, it.status)
+                }
+                call.respond(ProjectSetupGatewayResponse(domain, "domain_removed", serviceId.toString(), null, bindings))
+            }
+
             post("/api/admin/project-setup/projects/{projectId}/deploy") {
                 val projectId = call.setupProjectId() ?: return@post
                 if (ProjectRepository.findActiveById(projectId) == null) {
