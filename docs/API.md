@@ -495,7 +495,9 @@ Service adjustments are synchronized through Scribed's authenticated `POST /inte
 Download the current Scribed invoice PDF. If no invoice exists yet, Gatekeeperd creates or links one and queues a ledger/payment sync before returning the PDF.
 
 ### POST /api/admin/projects/{slug}/invoice/resync
-Ensure the project has a Scribed invoice, then queue the current project ledger and replay successful payments. This refreshes invoice totals, retries failed or dead-lettered payment deliveries, and generates missing receipts idempotently.
+Ensure the project has a Scribed invoice, synchronously reapply the current Gatekeeperd ledger and all successful payments, and verify Scribed's amount, paid total, and balance. Existing Scribed payments and adjustments are matched idempotently using the Gatekeeper project ID and provider references. After verification, related project ledger/payment outbox events are marked delivered; unrelated integration events remain queued for the automatic worker.
+
+The automatic integration outbox continues to deliver new events in the background. A failed sync returns the Scribed error and leaves the related events available for retry.
 
 ### GET /api/admin/projects/{slug}/payments/{paymentId}/receipt
 Ensure the Scribed invoice and receipt exist for a successful Gatekeeper payment, then return the receipt PDF. The path `paymentId` is the Gatekeeper payment UUID; repeated requests are idempotent.

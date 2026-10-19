@@ -20,6 +20,7 @@ interface IntegrationOutboxRepository {
     fun claim(limit: Int = 50): List<Event>
     fun pending(limit: Int = 100): List<Event>
     fun markDelivered(id: UUID)
+    fun markProjectEventsDelivered(projectId: UUID)
     fun markFailed(id: UUID, error: String, attempts: Int)
     fun replayAndClaim(id: UUID): Event?
 }

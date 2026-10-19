@@ -15,6 +15,7 @@ object IntegrationOutboxRepository {
     fun claim(limit: Int = 50) = delegate.claim(limit)
     fun pending(limit: Int = 100) = delegate.pending(limit)
     fun markDelivered(id: UUID) = delegate.markDelivered(id)
+    fun markProjectEventsDelivered(projectId: UUID) = delegate.markProjectEventsDelivered(projectId)
     fun markFailed(id: UUID, error: String, attempts: Int) = delegate.markFailed(id, error, attempts)
     fun replayAndClaim(id: UUID) = delegate.replayAndClaim(id)
 }

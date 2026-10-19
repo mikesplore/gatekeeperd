@@ -71,6 +71,18 @@ class ExposedIntegrationOutboxRepository : IntegrationOutboxRepository {
         }
     } }
 
+    override fun markProjectEventsDelivered(projectId: UUID) { transaction {
+        IntegrationOutbox.update({
+            IntegrationOutbox.deliveredAt.isNull() and
+                (IntegrationOutbox.eventType inList listOf("ledger", "payment")) and
+                (IntegrationOutbox.payload like "%\"project_id\":\"$projectId\"%")
+        }) {
+            it[IntegrationOutbox.deliveredAt] = LocalDateTime.now()
+            it[IntegrationOutbox.status] = "delivered"
+            it[IntegrationOutbox.leaseUntil] = null
+        }
+    } }
+
     override fun markFailed(id: UUID, error: String, attempts: Int) { transaction {
         val delayMinutes = (1L shl attempts.coerceAtMost(8)).coerceAtMost(240)
         IntegrationOutbox.update({ IntegrationOutbox.id eq id }) {

@@ -347,8 +347,19 @@ fun Application.configureProjectAdminRoutes() {
                     call.respondError(HttpStatusCode.BadGateway, "invoice_sync_failed", "Scribed could not create or locate the project invoice")
                     return@post
                 }
-                val syncedPayments = ScribedIntegrationClient.syncProject(project, call.application.get<PaymentDomainRepository>(), projectBalances)
-                call.respond(HttpStatusCode.Accepted, mapOf("status" to "queued", "project" to project.slug, "paymentsQueued" to syncedPayments))
+                val result = ScribedIntegrationClient.syncProjectNow(project, call.application.get<PaymentDomainRepository>(), projectBalances)
+                if (!result.ledgerSynced) {
+                    call.respondError(HttpStatusCode.BadGateway, "invoice_sync_failed", result.error ?: "Scribed invoice synchronization failed")
+                    return@post
+                }
+                call.application.get<com.gatekeeper.feature.integrations.domain.repository.IntegrationOutboxRepository>()
+                    .markProjectEventsDelivered(project.id)
+                call.respond(HttpStatusCode.OK, mapOf(
+                    "status" to "synchronized",
+                    "project" to project.slug,
+                    "paymentsSynced" to result.paymentsSynced,
+                    "invoice" to result.invoice
+                ))
             }
 
             patch("/api/admin/projects/{slug}") {

@@ -67,6 +67,12 @@ object ScribedIntegrationClient {
     data class InvoiceLookupResult(val status: HttpStatusCode?, val body: JsonObject? = null, val error: String? = null)
 
     data class InvoiceCreateResult(val status: HttpStatusCode?, val error: String? = null, val created: Boolean? = null)
+    data class InvoiceSyncResult(
+        val ledgerSynced: Boolean,
+        val paymentsSynced: Int,
+        val invoice: JsonObject?,
+        val error: String? = null
+    )
 
     suspend fun createInvoice(project: ProjectRepository.ProjectRecord, description: String, amount: String, balances: ProjectBalanceAdapter): InvoiceCreateResult {
         val base = AppConfig.scribedCallbackUrl.trim().trimEnd('/')
@@ -340,6 +346,81 @@ object ScribedIntegrationClient {
             )
         }
         return successfulPayments.size
+    }
+
+    suspend fun syncProjectNow(
+        project: ProjectRepository.ProjectRecord,
+        payments: PaymentDomainRepository,
+        balances: ProjectBalanceAdapter
+    ): InvoiceSyncResult {
+        if (!ensureInvoice(project, balances)) {
+            return InvoiceSyncResult(false, 0, null, "Could not create or locate the Scribed invoice")
+        }
+        val base = AppConfig.scribedCallbackUrl.trim().trimEnd('/')
+        val secret = AppConfig.scribedIntegrationSecret.trim()
+        if (base.isBlank() || secret.isBlank() || AppConfig.scribedApiToken.trim().isBlank()) {
+            return InvoiceSyncResult(false, 0, null, "Scribed integration is not configured")
+        }
+        val ledgerVersion = "sync-${java.util.UUID.randomUUID()}"
+        val adjustments = balances.projectAdjustments(project.id).map {
+            ScribedLedgerAdjustment(it.id.toString(), it.type.name, it.amount.toPlainString(), it.reason, it.actor)
+        }
+        val ledger = ScribedLedgerPayload(
+            project.id.toString(), project.slug, ledgerVersion,
+            balances.originalCharge(project).toPlainString(),
+            balances.additionalCharges(project).toPlainString(),
+            balances.discounts(project).toPlainString(),
+            balances.successfulPayments(project).toPlainString(),
+            balances.outstandingBalance(project).toPlainString(), project.currency, adjustments
+        )
+        val ledgerResponse = runCatching {
+            http.post("$base/integrations/gatekeeper/ledger") {
+                contentType(ContentType.Application.Json)
+                header(HttpHeaders.Authorization, "******")
+                header("X-Gatekeeper-Secret", secret)
+                header("Idempotency-Key", "ledger:${project.id}:$ledgerVersion")
+                setBody(ledger)
+            }
+        }.getOrElse { return InvoiceSyncResult(false, 0, null, it.message ?: it::class.simpleName) }
+        if (!ledgerResponse.status.isSuccess()) {
+            return InvoiceSyncResult(false, 0, null, "Ledger sync failed: ${ledgerResponse.status} ${ledgerResponse.bodyAsText().take(500)}")
+        }
+        var synced = 0
+        payments.findByProjectId(project.id).filter { it.status == "success" }
+            .sortedBy { it.paidAt ?: it.createdAt ?: java.time.LocalDateTime.MIN }
+            .forEach { payment ->
+                val payload = ScribedPaymentPayload(
+                    project.id.toString(), project.slug, payment.provider,
+                    payment.providerReference, payment.amount.toPlainString(), project.currency,
+                    (payment.paidAt ?: payment.createdAt ?: java.time.LocalDateTime.MIN).toString()
+                )
+                val response = runCatching {
+                    http.post("$base/integrations/gatekeeper/payments") {
+                        contentType(ContentType.Application.Json)
+                        header(HttpHeaders.Authorization, "******")
+                        header("X-Gatekeeper-Secret", secret)
+                        header("Idempotency-Key", "payment:${project.id}:${payment.provider}:${payment.providerReference}")
+                        setBody(payload)
+                    }
+                }.getOrElse { return InvoiceSyncResult(false, synced, null, it.message ?: it::class.simpleName) }
+                if (!response.status.isSuccess()) {
+                    return InvoiceSyncResult(false, synced, null, "Payment ${payment.providerReference} sync failed: ${response.status} ${response.bodyAsText().take(500)}")
+                }
+                synced++
+            }
+        val verified = invoiceStatus(project.id.toString())
+        val invoice = verified.body?.get("invoice")?.jsonObject
+        if (invoice == null) {
+            return InvoiceSyncResult(false, synced, verified.body, "Scribed invoice verification failed: ${verified.status} ${verified.error ?: ""}".trim())
+        }
+        val expectedAmount = balances.originalCharge(project) + balances.additionalCharges(project) - balances.discounts(project)
+        val expectedPaid = balances.successfulPayments(project)
+        val expectedOutstanding = balances.outstandingBalance(project)
+        val matches = invoice["amount"]?.jsonPrimitive?.content == expectedAmount.toPlainString() &&
+            invoice["paid"]?.jsonPrimitive?.content == expectedPaid.toPlainString() &&
+            invoice["balance"]?.jsonPrimitive?.content == expectedOutstanding.toPlainString()
+        return if (matches) InvoiceSyncResult(true, synced, verified.body)
+        else InvoiceSyncResult(false, synced, verified.body, "Scribed totals do not match Gatekeeperd after synchronization")
     }
 
     suspend fun ensureInvoice(project: ProjectRepository.ProjectRecord, balances: ProjectBalanceAdapter, description: String = "Services for ${project.name}"): Boolean {
