@@ -50,6 +50,12 @@ object ServiceDomainRepository {
             .singleOrNull()?.toBinding()
     }
 
+    fun findById(serviceId: UUID, id: UUID): Binding? = transaction {
+        ServiceDomains.selectAll()
+            .where { (ServiceDomains.serviceId eq serviceId) and (ServiceDomains.id eq id) }
+            .singleOrNull()?.toBinding()
+    }
+
     fun add(serviceId: UUID, domain: String, containerPort: Int?): Binding = transaction {
         val id = UUID.randomUUID()
         val now = LocalDateTime.now()
@@ -81,7 +87,22 @@ object ServiceDomainRepository {
             it[ServiceDomains.status] = ServiceDomainStatus.BOUND.value
             it[ServiceDomains.updatedAt] = LocalDateTime.now()
         }
+
         updated > 0
+    }
+
+    fun update(id: UUID, serviceId: UUID, domain: String, containerPort: Int?): Binding? = transaction {
+        val updated = ServiceDomains.update({
+            (ServiceDomains.id eq id) and (ServiceDomains.serviceId eq serviceId)
+        }) {
+            it[ServiceDomains.domain] = domain
+            it[ServiceDomains.containerPort] = containerPort
+            it[ServiceDomains.status] = if (containerPort == null) ServiceDomainStatus.PENDING.value else ServiceDomainStatus.BOUND.value
+            it[ServiceDomains.updatedAt] = LocalDateTime.now()
+        }
+        if (updated == 0) return@transaction null
+        projectPrimaryDomain(serviceId)
+        findById(serviceId, id)
     }
 
     fun markPortUnavailable(id: UUID): Boolean = transaction {
@@ -96,8 +117,23 @@ object ServiceDomainRepository {
         val deleted = ServiceDomains.deleteWhere {
             (ServiceDomains.serviceId eq serviceId) and (ServiceDomains.domain eq domain)
         }
+
         if (deleted > 0) projectPrimaryDomain(serviceId)
         deleted > 0
+    }
+
+    fun removeById(serviceId: UUID, id: UUID): Boolean = transaction {
+        val deleted = ServiceDomains.deleteWhere {
+            (ServiceDomains.serviceId eq serviceId) and (ServiceDomains.id eq id)
+        }
+        if (deleted > 0) projectPrimaryDomain(serviceId)
+        deleted > 0
+    }
+
+    fun setPrimary(serviceId: UUID, id: UUID): Boolean = transaction {
+        val binding = findById(serviceId, id) ?: return@transaction false
+        Services.update({ Services.id eq serviceId }) { it[Services.domain] = binding.domain }
+        true
     }
 
     fun reconcilePorts(serviceId: UUID, publishedContainerPorts: Set<Int>): List<Binding> = transaction {

@@ -4,6 +4,9 @@ import com.gatekeeper.api.respondError
 import com.gatekeeper.db.repositories.DeploymentJobRepository
 import com.gatekeeper.db.repositories.ProjectRepository
 import com.gatekeeper.db.repositories.ServiceRepository
+import com.gatekeeper.db.repositories.ServiceDomainRepository
+import com.gatekeeper.deployment.DeploymentApplicationService
+import com.gatekeeper.nginx.requireValidHostname
 import com.gatekeeper.feature.project.domain.repository.ProjectAdjustmentRepository as ProjectAdjustmentStore
 import com.gatekeeper.feature.audit.domain.repository.AuditRepository as AuditRepositoryPort
 import com.gatekeeper.feature.payment.data.persistence.ProjectBalanceAdapter
@@ -55,6 +58,23 @@ data class UpdateServiceRequest(
     val name: String? = null, val accessStatus: String? = null, val blockReason: String? = null,
     val blockReasonCode: String? = null, val blockReasonNote: String? = null,
     val isDefault: Boolean? = null, val serviceType: String? = null
+)
+
+@Serializable
+data class ServiceDomainBindingRequest(val domain: String, val containerPort: Int? = null)
+
+@Serializable
+data class ServiceDomainBindingView(
+    val id: String, val serviceId: String, val domain: String,
+    val containerPort: Int?, val status: String, val primary: Boolean
+)
+
+@Serializable
+data class ServiceDomainBindingsResponse(
+    val serviceId: String,
+    val publishedPorts: List<Int>,
+    val bindings: List<ServiceDomainBindingView>,
+    val unboundPorts: List<Int>
 )
 
 @Serializable
@@ -141,6 +161,93 @@ fun Application.configureServiceAdminRoutes() {
                 val service = ServiceRepository.findByProjectAndId(projectId, serviceId)
                     ?: return@get call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
                 call.respond(service.toView())
+            }
+
+            get("/api/admin/projects/{projectId}/services/{serviceId}/domains") {
+                val (projectId, serviceId) = call.serviceCoordinates() ?: return@get
+                val service = ServiceRepository.findByProjectAndId(projectId, serviceId)
+                    ?: return@get call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
+                val runtimePorts = DeploymentApplicationService.activeRuntime(service.id, "production")?.ports?.keys.orEmpty()
+                call.respond(ServiceDomainBindingsResponse(
+                    serviceId = service.id.toString(),
+                    publishedPorts = runtimePorts.sorted(),
+                    bindings = ServiceDomainRepository.reconcilePorts(service.id, runtimePorts).map { it.toView(service.domain) },
+                    unboundPorts = ServiceDomainRepository.unboundPorts(service.id, runtimePorts)
+                ))
+            }
+
+            post("/api/admin/projects/{projectId}/services/{serviceId}/domains") {
+                val (projectId, serviceId) = call.serviceCoordinates() ?: return@post
+                val service = ServiceRepository.findByProjectAndId(projectId, serviceId)
+                    ?: return@post call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
+                val body = runCatching { call.receive<ServiceDomainBindingRequest>() }.getOrNull()
+                    ?: return@post call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid domain binding request")
+                val domain = runCatching { requireValidHostname(body.domain) }.getOrElse {
+                    return@post call.respondError(HttpStatusCode.BadRequest, "invalid_domain", it.message ?: "Domain is invalid")
+                }
+                val ports = DeploymentApplicationService.activeRuntime(service.id, "production")?.ports?.keys.orEmpty()
+                if (ports.size > 1 && body.containerPort == null) {
+                    return@post call.respondError(HttpStatusCode.BadRequest, "container_port_required", "Select a container port")
+                }
+                if (body.containerPort != null && body.containerPort !in 1..65535) {
+                    return@post call.respondError(HttpStatusCode.BadRequest, "invalid_container_port", "containerPort must be between 1 and 65535")
+                }
+                if (body.containerPort != null && body.containerPort !in ports) {
+                    return@post call.respondError(HttpStatusCode.BadRequest, "container_port_not_published", "Selected container port is not published")
+                }
+                if (ServiceDomainRepository.findByDomain(domain) != null) {
+                    return@post call.respondError(HttpStatusCode.Conflict, "domain_in_use", "Domain is already bound")
+                }
+                val binding = ServiceDomainRepository.add(service.id, domain, body.containerPort ?: ports.singleOrNull())
+                call.respond(HttpStatusCode.Created, binding.toView(service.domain))
+            }
+
+            put("/api/admin/projects/{projectId}/services/{serviceId}/domains/{bindingId}") {
+                val (projectId, serviceId) = call.serviceCoordinates() ?: return@put
+                val service = ServiceRepository.findByProjectAndId(projectId, serviceId)
+                    ?: return@put call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
+                val bindingId = runCatching { UUID.fromString(call.parameters["bindingId"]) }.getOrNull()
+                    ?: return@put call.respondError(HttpStatusCode.BadRequest, "invalid_binding_id", "Binding ID is invalid")
+                val body = runCatching { call.receive<ServiceDomainBindingRequest>() }.getOrNull()
+                    ?: return@put call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid domain binding request")
+                val domain = runCatching { requireValidHostname(body.domain) }.getOrElse {
+                    return@put call.respondError(HttpStatusCode.BadRequest, "invalid_domain", it.message ?: "Domain is invalid")
+                }
+                val existing = ServiceDomainRepository.findByDomain(domain)
+                if (existing != null && existing.id != bindingId) {
+                    return@put call.respondError(HttpStatusCode.Conflict, "domain_in_use", "Domain is already bound")
+                }
+                val ports = DeploymentApplicationService.activeRuntime(service.id, "production")?.ports?.keys.orEmpty()
+                if (body.containerPort != null && body.containerPort !in ports) {
+                    return@put call.respondError(HttpStatusCode.BadRequest, "container_port_not_published", "Selected container port is not published")
+                }
+                val binding = ServiceDomainRepository.update(bindingId, service.id, domain, body.containerPort ?: ports.singleOrNull())
+                    ?: return@put call.respondError(HttpStatusCode.NotFound, "domain_not_bound", "Domain binding was not found")
+                call.respond(binding.toView(service.domain))
+            }
+
+            delete("/api/admin/projects/{projectId}/services/{serviceId}/domains/{bindingId}") {
+                val (projectId, serviceId) = call.serviceCoordinates() ?: return@delete
+                val service = ServiceRepository.findByProjectAndId(projectId, serviceId)
+                    ?: return@delete call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
+                val bindingId = runCatching { UUID.fromString(call.parameters["bindingId"]) }.getOrNull()
+                    ?: return@delete call.respondError(HttpStatusCode.BadRequest, "invalid_binding_id", "Binding ID is invalid")
+                if (!ServiceDomainRepository.removeById(service.id, bindingId)) {
+                    return@delete call.respondError(HttpStatusCode.NotFound, "domain_not_bound", "Domain binding was not found")
+                }
+                call.respond(mapOf("status" to "domain_removed", "bindingId" to bindingId.toString()))
+            }
+
+            post("/api/admin/projects/{projectId}/services/{serviceId}/domains/{bindingId}/primary") {
+                val (projectId, serviceId) = call.serviceCoordinates() ?: return@post
+                val service = ServiceRepository.findByProjectAndId(projectId, serviceId)
+                    ?: return@post call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
+                val bindingId = runCatching { UUID.fromString(call.parameters["bindingId"]) }.getOrNull()
+                    ?: return@post call.respondError(HttpStatusCode.BadRequest, "invalid_binding_id", "Binding ID is invalid")
+                if (!ServiceDomainRepository.setPrimary(service.id, bindingId)) {
+                    return@post call.respondError(HttpStatusCode.NotFound, "domain_not_bound", "Domain binding was not found")
+                }
+                call.respond(mapOf("status" to "primary_domain_set", "bindingId" to bindingId.toString()))
             }
 
             post("/api/admin/projects/{projectId}/services/{serviceId}/invoice") {
@@ -382,6 +489,15 @@ private fun validEnvironmentValues(values: Map<String, String>) = values.all { (
 private fun ServiceRepository.ServiceRecord.toView() = ServiceAdminView(
     id.toString(), projectId.toString(), name, serviceType, accessStatus, isDefault, blockReason,
     blockReasonCode?.value, blockReasonNote, domain
+)
+
+private fun ServiceDomainRepository.Binding.toView(primaryDomain: String?) = ServiceDomainBindingView(
+    id = id.toString(),
+    serviceId = serviceId.toString(),
+    domain = domain,
+    containerPort = containerPort,
+    status = status,
+    primary = domain == primaryDomain
 )
 private fun EnvironmentVersionMetadata.toView() = EnvironmentVersionView(id.toString(), version, environment, keys, createdAt.toString(), createdBy)
 private fun ActiveDeploymentInspection.toView() = ActiveDeploymentInspectionView(

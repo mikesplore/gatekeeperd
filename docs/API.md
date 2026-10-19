@@ -316,6 +316,26 @@ Returns the active deployment's container name, image/commit metadata, and its s
 
 Returns the active runtime, or the latest ready candidate when no active deployment exists. The response includes its deployment `status`, container name, published port mappings (`containerPort` to `hostPort`), image/commit metadata, and shared/service environment version references. Port mappings come from the recorded deployment runtime so the UI can show them with the runtime response instead of making a later Docker lookup. A ready candidate has passed container readiness; it remains ready while an existing enabled managed Nginx site's upstream cutover is pending. If there is no enabled managed site, the deployment can become active without creating an Nginx config. Environment keys are represented only by their source and HMAC-SHA-256 fingerprint. No active or ready runtime returns `404 runtime_not_found`.
 
+#### GET /api/admin/projects/{projectId}/services/{serviceId}/domains
+
+Lists the service's domain bindings, published container ports, and currently unbound ports. Domain bindings are managed independently from deployment configuration; before a deployment, a binding may remain pending.
+
+#### POST /api/admin/projects/{projectId}/services/{serviceId}/domains
+
+Creates a binding with `{ "domain": "app.example.com", "containerPort": 8080 }`. The port is optional for a single-port or not-yet-deployed service, but is required when the active runtime publishes multiple ports.
+
+#### PUT /api/admin/projects/{projectId}/services/{serviceId}/domains/{bindingId}
+
+Renames or repoints an existing binding. The same port validation and pending behavior as creation apply.
+
+#### DELETE /api/admin/projects/{projectId}/services/{serviceId}/domains/{bindingId}
+
+Removes a binding. The service's legacy primary-domain projection is recalculated.
+
+#### POST /api/admin/projects/{projectId}/services/{serviceId}/domains/{bindingId}/primary
+
+Sets a bound domain as the service's primary-domain projection. Nginx enablement and TLS remain separate operations.
+
 #### PUT /api/admin/project-setup/projects/{projectId}/domain-gateway
 
 Add a service domain binding. Accepts `domain`, optional `serviceId` (omitted selects `default`), and optional `containerPort`. A single published runtime port is attached automatically. When multiple container ports are published, `containerPort` is required. The response includes the binding list and its lifecycle status. Bindings remain pending before deployment and become `port_unavailable` if a later deployment drops their port. The service's legacy `domain` field projects its primary binding. Enabling nginx remains a separate action.

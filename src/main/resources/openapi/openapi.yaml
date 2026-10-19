@@ -2499,6 +2499,13 @@ paths:
             schema:
               type: object
               additionalProperties: true
+    delete:
+      tags:
+      - Projects
+      summary: Remove a project setup domain binding
+      responses:
+        '200':
+          description: Domain binding removed
   /api/admin/project-setup/projects/{projectId}/source-runtime:
     put:
       tags:
@@ -3061,6 +3068,44 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
       operationId: GetApiAdminProjectsByprojectIdServicesByserviceIdRuntime
+  /api/admin/projects/{projectId}/services/{serviceId}/domains:
+    get:
+      tags:
+      - Services and deployments
+      summary: List service domain bindings
+      responses:
+        '200':
+          description: Domain bindings and published ports
+    post:
+      tags:
+      - Services and deployments
+      summary: Create a service domain binding
+      responses:
+        '201':
+          description: Domain binding created
+  /api/admin/projects/{projectId}/services/{serviceId}/domains/{bindingId}:
+    put:
+      tags:
+      - Services and deployments
+      summary: Update a service domain binding
+      responses:
+        '200':
+          description: Domain binding updated
+    delete:
+      tags:
+      - Services and deployments
+      summary: Delete a service domain binding
+      responses:
+        '200':
+          description: Domain binding deleted
+  /api/admin/projects/{projectId}/services/{serviceId}/domains/{bindingId}/primary:
+    post:
+      tags:
+      - Services and deployments
+      summary: Set the primary service domain
+      responses:
+        '200':
+          description: Primary domain updated
   /api/admin/projects/{slug}:
     get:
       tags:
