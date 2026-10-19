@@ -37,8 +37,7 @@ private val supportedServiceTypes = setOf("frontend", "backend", "worker", "data
 data class ServiceAdminView(
     val id: String, val projectId: String, val name: String, val serviceType: String, val accessStatus: String,
     val isDefault: Boolean,
-    val blockReason: String?, val blockReasonCode: String? = null, val blockReasonNote: String? = null,
-    val domain: String? = null
+    val blockReason: String?, val blockReasonCode: String? = null, val blockReasonNote: String? = null
 )
 
 @Serializable
@@ -476,7 +475,7 @@ private fun validEnvironmentValues(values: Map<String, String>) = values.all { (
 
 private fun ServiceRepository.ServiceRecord.toView() = ServiceAdminView(
     id.toString(), projectId.toString(), name, serviceType, accessStatus, isDefault, blockReason,
-    blockReasonCode?.value, blockReasonNote, domain
+    blockReasonCode?.value, blockReasonNote
 )
 
 private fun ServiceDomainRepository.Binding.toView() = ServiceDomainBindingView(
