@@ -47,6 +47,18 @@ class DeploymentVersionServiceTest {
     }
 
     @Test
+    fun `held latest deployment is reported after rollback`() {
+        write("source-commit.txt", running)
+        write("latest-successful-build.txt", "$latest\n${now.minusSeconds(60)}")
+        write("auto-deploy.hold", latest)
+
+        val result = DeploymentVersionService(directory, { now }).current()
+
+        assertEquals("deployment_failed", result.status)
+        assertEquals(false, result.upToDate)
+    }
+
+    @Test
     fun `old check is stale`() {
         write("source-commit.txt", running)
         write("latest-successful-build.txt", "$latest\n${now.minusSeconds(901)}")

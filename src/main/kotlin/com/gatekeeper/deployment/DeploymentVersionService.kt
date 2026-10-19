@@ -30,11 +30,12 @@ class DeploymentVersionService(
 
         val (latestCommit, checkedAt) = latest
         val failedCommit = readCommit(deploymentDirectory.resolve("auto-deploy-failed-commit.txt"))
+        val heldCommit = readCommit(deploymentDirectory.resolve("auto-deploy.hold"))
         val age = Duration.between(checkedAt, now())
         if (age.isNegative || age > maxCheckAge) {
             return DeploymentVersionStatus("check_stale", runningCommit, latestCommit, checkedAt.toString(), null)
         }
-        if (failedCommit == latestCommit && runningCommit != latestCommit) {
+        if ((failedCommit == latestCommit || heldCommit == latestCommit) && runningCommit != latestCommit) {
             return DeploymentVersionStatus("deployment_failed", runningCommit, latestCommit, checkedAt.toString(), false)
         }
         return if (runningCommit == latestCommit) {
