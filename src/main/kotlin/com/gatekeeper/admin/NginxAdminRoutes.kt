@@ -144,9 +144,17 @@ private fun renderModelFromSite(
     nginxService: NginxService
 ): NginxSiteRenderModel {
     val (upstreamHost, port) = if (site.upstreamKind == "DEPLOYMENT_MANAGED" || site.upstreamContainerPort != null) {
-        val target = site.serviceId?.let { DeploymentUpstreamResolver.resolveRuntime(it, "production") }
-            ?: error("Could not resolve the active deployment upstream for managed site $slug")
-        target.host to target.port
+        if (site.upstreamKind == "DEPLOYMENT_MANAGED") {
+            site.upstreamHost to (site.upstreamExplicitPort
+                ?: error("Site $slug has no persisted deployment upstream port"))
+        } else {
+            val target = site.serviceId?.let {
+                site.upstreamContainerPort?.let { containerPort ->
+                    DeploymentUpstreamResolver.resolveRuntime(it, containerPort, "production")
+                } ?: DeploymentUpstreamResolver.resolveRuntime(it, "production")
+            } ?: error("Could not resolve the active deployment upstream for managed site $slug")
+            target.host to target.port
+        }
     } else when (site.upstreamMode) {
         UpstreamMode.EXPLICIT_PORT -> site.upstreamHost to
             (site.upstreamExplicitPort ?: error("Site $slug has no explicit upstream port"))

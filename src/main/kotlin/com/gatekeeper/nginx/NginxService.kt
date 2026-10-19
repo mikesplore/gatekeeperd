@@ -795,7 +795,7 @@ class NginxService(
         )
         val config = generateNginxConfig(model)
         if (!enableProject(slug, config)) return false
-        if (SiteRepository.updateDeploymentUpstreamForSite(site.id, host, hostPort) != null) return true
+        if (SiteRepository.updateDeploymentUpstreamForSite(site.id, host, hostPort, containerPort) != null) return true
         previousContent?.let { restoreSiteConfiguration(slug, it) }
         previousPort?.let { SiteRepository.updateDeploymentUpstreamForSite(site.id, site.upstreamHost, it) }
         return false

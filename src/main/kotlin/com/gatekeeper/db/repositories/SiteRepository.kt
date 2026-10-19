@@ -314,9 +314,25 @@ object SiteRepository {
         Sites.selectAll().where { Sites.id eq site[Sites.id] }.singleOrNull()?.toRecord()
     }
 
-    fun updateDeploymentUpstreamForSite(siteId: UUID, host: String, port: Int): SiteRecord? = transaction {
-        val serviceId = Sites.selectAll().where { Sites.id eq siteId }.singleOrNull()?.get(Sites.serviceId) ?: return@transaction null
-        updateDeploymentUpstream(serviceId, host, port)
+    fun updateDeploymentUpstreamForSite(siteId: UUID, host: String, port: Int, containerPort: Int? = null): SiteRecord? = transaction {
+        require(host == "127.0.0.1") { "Deployment upstream host must be loopback" }
+        require(port in 1..65535) { "Deployment upstream port must be between 1 and 65535" }
+        require(containerPort == null || containerPort in 1..65535) {
+            "Deployment upstream container port must be between 1 and 65535"
+        }
+        val site = Sites.selectAll().where { Sites.id eq siteId }.singleOrNull() ?: return@transaction null
+        Sites.update({ Sites.id eq siteId }) {
+            it[Sites.upstreamHost] = host
+            it[Sites.upstreamMode] = UpstreamMode.EXPLICIT_PORT
+            it[Sites.upstreamExplicitPort] = port
+            containerPort?.let { value -> it[Sites.upstreamContainerPort] = value }
+            it[Sites.configVersion] = site[Sites.configVersion] + 1
+            it[Sites.reconciliationStatus] = ReconciliationStatus.HEALTHY
+            it[Sites.lastNginxError] = null
+            it[Sites.lastDockerError] = null
+            it[updatedAt] = LocalDateTime.now()
+        }
+        Sites.selectAll().where { Sites.id eq siteId }.singleOrNull()?.toRecord()
     }
 
     fun restoreDeploymentUpstream(serviceId: UUID, site: SiteRecord): SiteRecord? = transaction {

@@ -147,7 +147,11 @@ private fun dashboardUpstreamState(site: SiteRepository.SiteRecord, dockerServic
     val port = when (site.upstreamMode) {
         com.gatekeeper.db.tables.UpstreamMode.EXPLICIT_PORT -> site.upstreamExplicitPort ?: return "unknown"
         com.gatekeeper.db.tables.UpstreamMode.DOCKER_DISCOVERY -> {
-            val target = site.serviceId?.let { DeploymentUpstreamResolver.resolve(it, "production") } ?: return "unknown"
+            val target = site.serviceId?.let {
+                site.upstreamContainerPort?.let { containerPort ->
+                    DeploymentUpstreamResolver.resolve(it, containerPort, "production")
+                } ?: DeploymentUpstreamResolver.resolve(it, "production")
+            } ?: return "unknown"
             val docker = dockerService ?: return "unknown"
             val name = target.containerName ?: return "unknown"
             val container = runCatching { docker.getContainer(name) }.getOrNull() ?: return "down"
@@ -177,19 +181,29 @@ private fun dashboardSite(site: SiteRepository.SiteRecord, dockerService: Docker
     val selfDomainConfig = NginxSelfDomainExclusion(AppConfig.gatekeeperdSelfDomains).let { exclusion ->
         exclusion.excludesFile(availableFile) || exclusion.excludesFile(enabledFile)
     }
-    val resolved = site.serviceId?.let { DeploymentUpstreamResolver.resolve(it, "production") }
+    val resolved = site.serviceId?.let {
+        site.upstreamContainerPort?.let { containerPort ->
+            DeploymentUpstreamResolver.resolve(it, containerPort, "production")
+        } ?: DeploymentUpstreamResolver.resolve(it, "production")
+    }
+    val configuredHost = site.upstreamHost
+    val configuredPort = site.upstreamExplicitPort
+    val displayHost = if (site.upstreamMode == com.gatekeeper.db.tables.UpstreamMode.EXPLICIT_PORT) configuredHost else resolved?.host ?: configuredHost
+    val displayPort = if (site.upstreamMode == com.gatekeeper.db.tables.UpstreamMode.EXPLICIT_PORT) configuredPort else resolved?.port
     return DashboardSiteResponse(
         slug, site.projectId.toString(), customer?.id?.toString(), customer?.name, site.domain,
         site.reconciliationStatus.value,
         site.lastNginxError, site.lastDockerError, site.configVersion,
         !selfDomainConfig && availableFile.isFile,
         !selfDomainConfig && java.nio.file.Files.isSymbolicLink(enabledFile.toPath()),
-        resolved?.host ?: site.upstreamHost, site.upstreamMode.value, resolved?.port ?: site.upstreamExplicitPort,
+        displayHost, site.upstreamMode.value, displayPort,
         if (site.upstreamMode == com.gatekeeper.db.tables.UpstreamMode.DOCKER_DISCOVERY) {
             val name = resolved?.containerName
             if (name == null || dockerService == null) null else runCatching { dockerService.containerHealth(name) }.getOrNull()
         } else null,
-        resolved?.host, resolved?.port, site.tlsMode.value, site.gateEnabled, site.serviceId?.toString()
+        if (site.upstreamMode == com.gatekeeper.db.tables.UpstreamMode.EXPLICIT_PORT) configuredHost else resolved?.host,
+        if (site.upstreamMode == com.gatekeeper.db.tables.UpstreamMode.EXPLICIT_PORT) configuredPort else resolved?.port,
+        site.tlsMode.value, site.gateEnabled, site.serviceId?.toString()
     )
 }
 
