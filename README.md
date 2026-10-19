@@ -15,7 +15,7 @@ Admin dashboard (`gatekeeperd-frontend`) manages projects, blocking, payments, a
 | [docs/deployment-pipeline.md](docs/deployment-pipeline.md) | Deployment lifecycle and runtime behavior             |
 | [docs/nginx-client-gating.md](docs/nginx-client-gating.md) | Gate client sites with nginx                          |
 | [docs/staging-deployment.md](docs/staging-deployment.md)   | Build, push, and deploy to VPS                        |
-| [docs/system-design.md](docs/system-design.md)             | Local development setup and debugging                 |
+| [docs/system-design.md](docs/backend-system-guide)         | Local development setup and debugging                 |
 | [.env.example](.env.example)                               | Required environment variables                        |
 
 ## Quick start
