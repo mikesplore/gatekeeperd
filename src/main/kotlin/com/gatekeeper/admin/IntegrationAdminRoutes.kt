@@ -17,7 +17,7 @@ import org.koin.ktor.ext.get
 @Serializable
 private data class OutboxEventResponse(val id: String, val eventType: String, val idempotencyKey: String, val payload: String, val attempts: Int, val status: String, val lastError: String?)
 @Serializable
-private data class OutboxReplayResponse(val replayed: Boolean, val id: String, val status: String)
+private data class OutboxReplayResponse(val replayed: Boolean, val id: String, val status: String, val error: String? = null)
 
 fun Application.configureIntegrationAdminRoutes() {
     val outbox = get<IntegrationOutboxRepository>()
@@ -33,10 +33,10 @@ fun Application.configureIntegrationAdminRoutes() {
             if (id == null) { call.respondError(HttpStatusCode.BadRequest, "invalid_id", "Invalid outbox event id"); return@post }
             val event = outbox.replayAndClaim(id)
             if (event == null) { call.respondError(HttpStatusCode.NotFound, "outbox_event_not_found", "Undelivered outbox event not found"); return@post }
-            val delivered = ScribedIntegrationClient.deliver(event, call.application.get<PaymentRepository>(), call.application.get<ProjectBalanceAdapter>())
-            if (delivered) outbox.markDelivered(id)
-            else outbox.markFailed(id, "Scribed delivery failed", event.attempts)
-            call.respond(OutboxReplayResponse(delivered, id.toString(), if (delivered) "delivered" else "queued_for_retry"))
+            val result = ScribedIntegrationClient.deliverWithResult(event, call.application.get<PaymentRepository>(), call.application.get<ProjectBalanceAdapter>())
+            if (result.delivered) outbox.markDelivered(id)
+            else outbox.markFailed(id, result.error ?: "Integration delivery failed", event.attempts)
+            call.respond(OutboxReplayResponse(result.delivered, id.toString(), if (result.delivered) "delivered" else "queued_for_retry", result.error))
         }
     } }
 }

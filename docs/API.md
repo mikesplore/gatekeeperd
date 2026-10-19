@@ -499,6 +499,12 @@ Ensure the project has a Scribed invoice, synchronously reapply the current Gate
 
 The automatic integration outbox continues to deliver new events in the background. A failed sync returns the Scribed error and leaves the related events available for retry.
 
+### GET /api/admin/integrations/outbox
+Returns undelivered integration events, including `status`, `attempts`, and the latest sanitized `lastError` message when delivery failed. The error contains the remote HTTP status and message where available, but never a stack trace.
+
+### POST /api/admin/integrations/outbox/{id}/replay
+Retries one undelivered integration event. The response includes `replayed: false` and `error` when delivery fails; the same error is persisted on the event and remains visible in the Operations page.
+
 ### GET /api/admin/projects/{slug}/payments/{paymentId}/receipt
 Ensure the Scribed invoice and receipt exist for a successful Gatekeeper payment, then return the receipt PDF. The path `paymentId` is the Gatekeeper payment UUID; repeated requests are idempotent.
 

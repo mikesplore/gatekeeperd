@@ -73,6 +73,7 @@ object ScribedIntegrationClient {
         val invoice: JsonObject?,
         val error: String? = null
     )
+    data class DeliveryResult(val delivered: Boolean, val error: String? = null)
 
     suspend fun createInvoice(project: ProjectRepository.ProjectRecord, description: String, amount: String, balances: ProjectBalanceAdapter): InvoiceCreateResult {
         val base = AppConfig.scribedCallbackUrl.trim().trimEnd('/')
@@ -444,13 +445,18 @@ object ScribedIntegrationClient {
         return confirmed.body != null
     }
 
-    suspend fun deliver(event: IntegrationOutboxRepository.Event, payments: PaymentDomainRepository, balances: ProjectBalanceAdapter): Boolean {
+    suspend fun deliver(event: IntegrationOutboxRepository.Event, payments: PaymentDomainRepository, balances: ProjectBalanceAdapter): Boolean =
+        deliverWithResult(event, payments, balances).delivered
+
+    suspend fun deliverWithResult(event: IntegrationOutboxRepository.Event, payments: PaymentDomainRepository, balances: ProjectBalanceAdapter): DeliveryResult {
         val base = AppConfig.scribedCallbackUrl.trim().trimEnd('/'); val secret = AppConfig.scribedIntegrationSecret.trim()
         val apiToken = AppConfig.scribedApiToken.trim()
-        if (base.isBlank() || secret.isBlank() || apiToken.isBlank()) return false
+        if (base.isBlank() || secret.isBlank() || apiToken.isBlank()) return DeliveryResult(false, "Scribed integration is not configured")
         if (event.eventType == "service_ledger") {
-            val payload = runCatching { json.decodeFromString<ScribedServiceLedgerPayload>(event.payload) }.getOrNull() ?: return false
-            if (serviceInvoiceStatus(payload.service_id).body == null) return false
+            val payload = runCatching { json.decodeFromString<ScribedServiceLedgerPayload>(event.payload) }.getOrNull()
+                ?: return DeliveryResult(false, "Invalid service ledger payload")
+            val invoice = serviceInvoiceStatus(payload.service_id)
+            if (invoice.body == null) return DeliveryResult(false, invoiceError("Scribed service invoice is unavailable", invoice))
             return runCatching {
                 val response = http.post("$base/integrations/gatekeeper/services/${payload.service_id}/adjustments") {
                     contentType(ContentType.Application.Json)
@@ -459,9 +465,9 @@ object ScribedIntegrationClient {
                     header("Idempotency-Key", event.idempotencyKey)
                     setBody(payload)
                 }
-                if (!response.status.isSuccess()) logger.warn("Scribed service ledger rejected event={} status={}", event.id, response.status)
-                response.status.isSuccess()
-            }.getOrElse { logger.warn("Scribed service ledger delivery failed id=${event.id}: ${it.message}"); false }
+                if (response.status.isSuccess()) DeliveryResult(true)
+                else DeliveryResult(false, responseError(response.status, response.bodyAsText()))
+            }.getOrElse { DeliveryResult(false, localError(it)) }
         }
         if (event.eventType == "payment" || event.eventType == "ledger") {
             val projectId = runCatching {
@@ -469,9 +475,11 @@ object ScribedIntegrationClient {
                     "payment" -> json.decodeFromString<ScribedPaymentPayload>(event.payload).project_id
                     else -> json.decodeFromString<ScribedLedgerPayload>(event.payload).project_id
                 }
-            }.getOrNull() ?: return false
-            val projectUuid = runCatching { java.util.UUID.fromString(projectId) }.getOrNull() ?: return false
-            val project = ProjectRepository.findById(projectUuid) ?: return false
+            }.getOrNull() ?: return DeliveryResult(false, "Invalid project integration payload")
+            val projectUuid = runCatching { java.util.UUID.fromString(projectId) }.getOrNull()
+                ?: return DeliveryResult(false, "Invalid project id in integration payload")
+            val project = ProjectRepository.findById(projectUuid)
+                ?: return DeliveryResult(false, "Gatekeeper project not found")
             val serviceId = if (event.eventType == "payment") runCatching {
                 json.decodeFromString<ScribedPaymentPayload>(event.payload).service_id
             }.getOrNull() else null
@@ -479,16 +487,16 @@ object ScribedIntegrationClient {
                 val serviceInvoice = serviceInvoiceStatus(serviceId)
                 if (serviceInvoice.status == HttpStatusCode.NotFound || serviceInvoice.body == null) {
                     logger.warn("Scribed service invoice is unavailable before payment delivery service={}", serviceId)
-                    return false
+                    return DeliveryResult(false, invoiceError("Scribed service invoice is unavailable", serviceInvoice))
                 }
             } else {
             val beforeEnsure = invoiceStatus(projectId)
             if (beforeEnsure.status == HttpStatusCode.NotFound) {
-                if (!ensureInvoice(project, balances)) return false
+                if (!ensureInvoice(project, balances)) return DeliveryResult(false, "Scribed invoice could not be created")
                 if (event.eventType == "payment") syncProject(project, payments, balances)
             } else if (beforeEnsure.body == null) {
                 logger.warn("Scribed invoice check failed before ${event.eventType} delivery project=${project.id}: status=${beforeEnsure.status}, error=${beforeEnsure.error}")
-                return false
+                return DeliveryResult(false, invoiceError("Scribed invoice lookup failed", beforeEnsure))
             }
             }
         }
@@ -500,14 +508,31 @@ object ScribedIntegrationClient {
                     header("X-Gatekeeper-Secret", secret)
                     header("Idempotency-Key", event.idempotencyKey)
                 }
-                response.status.isSuccess()
-            }.getOrElse { logger.warn("Scribed invoice email failed id=${event.id}: ${it.message}"); false }
+                if (response.status.isSuccess()) DeliveryResult(true)
+                else DeliveryResult(false, responseError(response.status, response.bodyAsText()))
+            }.getOrElse { DeliveryResult(false, localError(it)) }
         }
         val path = when (event.eventType) { "payment" -> "/integrations/gatekeeper/payments"; "ledger" -> "/integrations/gatekeeper/ledger"; else -> "/integrations/gatekeeper/suspensions" }
         return runCatching {
             val response = http.post("$base$path") { contentType(ContentType.Application.Json); header(HttpHeaders.Authorization, "Bearer $apiToken"); header("X-Gatekeeper-Secret", secret); header("Idempotency-Key", event.idempotencyKey); setBody(event.payload) }
-            if (!response.status.isSuccess()) logger.warn("Scribed outbox delivery rejected id=${event.id} type=${event.eventType} status=${response.status} body=${response.bodyAsText().take(500)}")
-            response.status.isSuccess()
-        }.getOrElse { logger.warn("Scribed outbox delivery failed id=${event.id}: ${it.message}"); false }
+            if (response.status.isSuccess()) DeliveryResult(true)
+            else DeliveryResult(false, responseError(response.status, response.bodyAsText()))
+        }.getOrElse { DeliveryResult(false, localError(it)) }
     }
+
+    private fun localError(error: Throwable): String =
+        error.message?.takeIf { it.isNotBlank() } ?: error::class.simpleName ?: "Integration delivery failed"
+
+    private fun responseError(status: HttpStatusCode, body: String): String {
+        val message = runCatching {
+            val obj = Json.decodeFromString<JsonObject>(body)
+            listOf("detail", "message", "error").firstNotNullOfOrNull { key ->
+                obj[key]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
+            }
+        }.getOrNull()
+        return "${status.value} ${status.description}${message?.let { ": $it" } ?: ""}".take(2000)
+    }
+
+    private fun invoiceError(prefix: String, result: InvoiceLookupResult): String =
+        "$prefix${result.status?.let { " (${it.value} ${it.description})" } ?: ""}${result.error?.let { ": $it" } ?: ""}".take(2000)
 }
