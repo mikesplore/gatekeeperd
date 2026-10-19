@@ -10,6 +10,7 @@ interface DeploymentPortAllocationRepository {
         containerPorts: Set<Int>,
         dockerPortsInUse: Set<Int>,
         portRange: IntRange,
-        rejectedPorts: Set<Int> = emptySet()
+        rejectedPorts: Set<Int> = emptySet(),
+        preferredHostPorts: Map<Int, Int> = emptyMap()
     ): Map<Int, Int>
 }

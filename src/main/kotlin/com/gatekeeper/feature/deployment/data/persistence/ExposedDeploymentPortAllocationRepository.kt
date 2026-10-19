@@ -2,8 +2,10 @@ package com.gatekeeper.feature.deployment.data.persistence
 
 import com.gatekeeper.db.tables.DeploymentPortAllocations
 import com.gatekeeper.deployment.DeploymentHostPortPool
+import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
 import com.gatekeeper.feature.deployment.domain.repository.DeploymentPortAllocationRepository as DeploymentPortAllocationPort
 import org.jetbrains.exposed.sql.and
+import org.jetbrains.exposed.sql.deleteWhere
 import org.jetbrains.exposed.sql.insert
 import org.jetbrains.exposed.sql.selectAll
 import org.jetbrains.exposed.sql.update
@@ -19,7 +21,8 @@ class ExposedDeploymentPortAllocationRepository : DeploymentPortAllocationPort {
         containerPorts: Set<Int>,
         dockerPortsInUse: Set<Int>,
         portRange: IntRange,
-        rejectedPorts: Set<Int>
+        rejectedPorts: Set<Int>,
+        preferredHostPorts: Map<Int, Int>
     ): Map<Int, Int> = transaction {
         require(containerPorts.all { it in 1..65535 }) { "Container ports must be between 1 and 65535" }
         require(!portRange.isEmpty()) { "Deployment host-port range is empty" }
@@ -40,6 +43,11 @@ class ExposedDeploymentPortAllocationRepository : DeploymentPortAllocationPort {
         val slots = mutableMapOf<Int, MutableMap<Int, Int>>()
 
         // Reserve both blue/green slots up front so every exposed container port has a stable pair.
+        // The candidate slot must reuse the active slot's host ports so the gateway,
+        // nginx upstream, and Traefik ForwardAuth keep pointing at the same port as the
+        // container starts. This avoid the stale-port mismatch that surfaces as a
+        // "READY but not detected" cutover (the gateway wants the active port, the
+        // candidate published a random port, and reconciliation reports drift).
         for (slot in 0..1) {
             val slotPorts = linkedMapOf<Int, Int>()
             for (containerPort in containerPorts.sorted()) {
@@ -57,9 +65,33 @@ class ExposedDeploymentPortAllocationRepository : DeploymentPortAllocationPort {
                     continue
                 }
 
+                // Candidate slot: reuse the other slot's host port for this container
+                // port so the deployed container binds the same host port the gateway
+                // expects. Only allocate a truly new port when neither slot has one.
+                if (slot == candidateSlot && activeSlot != null) {
+                    val reuseCandidate = serviceAllocations.firstOrNull { row ->
+                        row[DeploymentPortAllocations.slot] == activeSlot &&
+                            row[DeploymentPortAllocations.containerPort] == containerPort
+                    }?.get(DeploymentPortAllocations.hostPort)
+                    if (reuseCandidate != null && reuseCandidate !in rejectedPorts &&
+                        !(reuseCandidate in dockerPortsInUse && !isActiveAssignment)
+                    ) {
+                        slotPorts[containerPort] = reuseCandidate
+                        continue
+                    }
+                }
+
                 val blocked = dockerPortsInUse + rejectedPorts
-                val hostPort = DeploymentHostPortPool.firstAvailable(portRange, allReserved, blocked)
-                    ?: error("Deployment host-port pool ${portRange.first}-${portRange.last} is exhausted")
+                val preferredHostPort = preferredHostPorts[containerPort]
+                val hostPort = if (preferredHostPort != null &&
+                    preferredHostPort !in blocked &&
+                    preferredHostPort !in allReserved &&
+                    preferredHostPort in portRange) {
+                    preferredHostPort
+                } else {
+                    DeploymentHostPortPool.firstAvailable(portRange, allReserved, blocked)
+                        ?: error("Deployment host-port pool ${portRange.first}-${portRange.last} is exhausted")
+                }
                 if (existing == null) {
                     DeploymentPortAllocations.insert {
                         it[DeploymentPortAllocations.id] = UUID.randomUUID()
@@ -81,5 +113,12 @@ class ExposedDeploymentPortAllocationRepository : DeploymentPortAllocationPort {
             slots[slot] = slotPorts
         }
         slots.getValue(candidateSlot)
+    }
+
+    fun clearAllocationForService(serviceId: UUID, environment: String) = transaction {
+        DeploymentPortAllocations.deleteWhere {
+            (DeploymentPortAllocations.serviceId eq serviceId) and
+                (DeploymentPortAllocations.environment eq environment)
+        }
     }
 }

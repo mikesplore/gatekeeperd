@@ -346,10 +346,11 @@ class DeploymentWorker(
                 )
                 val activePorts = DeploymentApplicationService.activeRuntime(job.serviceId, job.environment)?.ports.orEmpty()
                 val rejectedPorts = mutableSetOf<Int>()
-                var created: Pair<String, com.gatekeeper.docker.ContainerInfo>? = null
                 var reservedPorts = emptyMap<Int, Int>()
+                var created: Pair<String, com.gatekeeper.docker.ContainerInfo>? = null
                 for (attempt in 0 until 4) {
                     reservedPorts = if (dynamicContainerPorts.isEmpty()) emptyMap() else {
+                        val site = if (job.environment == "production") SiteRepository.findByServiceId(job.serviceId) else null
                         portAllocationRepository.allocateSlot(
                             serviceId = job.serviceId,
                             environment = job.environment,
@@ -357,7 +358,12 @@ class DeploymentWorker(
                             containerPorts = dynamicContainerPorts,
                             dockerPortsInUse = docker.hostPortsInUse() + HostPortListeners.read(),
                             portRange = AppConfig.deploymentHostPortRange,
-                            rejectedPorts = rejectedPorts
+                            rejectedPorts = rejectedPorts,
+                            preferredHostPorts = buildMap {
+                                val explicitPort = site?.upstreamExplicitPort
+                                val containerPort = job.containerPort
+                                if (explicitPort != null && containerPort != null) put(containerPort, explicitPort)
+                            }
                         )
                     }
                     if (reservedPorts.isNotEmpty()) {
