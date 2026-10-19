@@ -44,7 +44,8 @@ data class DeploymentJobRecord(
 object DeploymentJobRepository {
     data class AutoDeployTarget(
         val projectId: UUID, val repository: String, val gitRef: String, val registry: String,
-        val imageName: String, val imageTag: String, val environment: String
+        val imageName: String, val imageTag: String, val environment: String,
+        val serviceId: UUID, val registryCredentialId: UUID?
     )
 
     fun findAutoDeployTargets(repository: String, gitRef: String): List<AutoDeployTarget> = transaction {
@@ -59,7 +60,9 @@ object DeploymentJobRepository {
             AutoDeployTarget(
                 projectId, savedRepository, row[DeploymentConfigurations.gitRef],
                 row[DeploymentConfigurations.registry], row[DeploymentConfigurations.imageName],
-                row[DeploymentConfigurations.imageTag], row[DeploymentConfigurations.environment] ?: "production"
+                row[DeploymentConfigurations.imageTag], row[DeploymentConfigurations.environment] ?: "production",
+                row[DeploymentConfigurations.serviceId] ?: defaultServiceId(projectId),
+                row[DeploymentConfigurations.registryCredentialId]
             )
         }
     }
@@ -724,6 +727,7 @@ object DeploymentJobRepository {
                 repository = row[DeploymentConfigurations.repository],
                 gitRef = row[DeploymentConfigurations.gitRef],
                 registry = row[DeploymentConfigurations.registry],
+                registryCredentialId = row[DeploymentConfigurations.registryCredentialId]?.toString(),
                 imageName = row[DeploymentConfigurations.imageName],
                 imageTag = row[DeploymentConfigurations.imageTag],
                 hostPort = row[DeploymentConfigurations.hostPort],
@@ -763,14 +767,17 @@ object DeploymentJobRepository {
 
     fun latestForProject(projectId: UUID): DeploymentJobRecord? = transaction {
         val serviceId = defaultServiceId(projectId)
+        latestForService(projectId, serviceId)
+    }
+
+    fun latestForService(projectId: UUID, serviceId: UUID, environment: String = "production"): DeploymentJobRecord? = transaction {
         DeploymentJobs.selectAll().where {
             (DeploymentJobs.projectId eq projectId) and
-                ((DeploymentJobs.serviceId eq serviceId) or DeploymentJobs.serviceId.isNull())
+                (DeploymentJobs.serviceId eq serviceId) and
+                (DeploymentJobs.environment eq environment)
         }.toList()
-            .sortedWith(compareByDescending<ResultRow> {
-                it[DeploymentJobs.serviceId] == serviceId
-            }.thenByDescending { it[DeploymentJobs.createdAt] })
-            .firstOrNull()?.toRecord()
+            .maxByOrNull { it[DeploymentJobs.createdAt] }
+            ?.toRecord()
     }
     fun cancel(id: UUID): Boolean = transaction {
         val deployment = com.gatekeeper.db.tables.Deployments.selectAll()

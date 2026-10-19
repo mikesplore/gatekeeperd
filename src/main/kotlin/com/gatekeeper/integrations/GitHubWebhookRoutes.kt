@@ -66,15 +66,23 @@ fun Application.configureGitHubWebhookRoutes() {
 private fun queuePushDeployments(body: String): Int {
     val root = Json.parseToJsonElement(body).jsonObject
     val repository = root["repository"]?.jsonObject?.get("full_name")?.jsonPrimitive?.content ?: return 0
-    val ref = root["ref"]?.jsonPrimitive?.content?.removePrefix("refs/heads/") ?: return 0
+    val ref = root["ref"]?.jsonPrimitive?.content?.let { rawRef ->
+        when {
+            rawRef.startsWith("refs/heads/") -> rawRef.removePrefix("refs/heads/")
+            rawRef.startsWith("refs/tags/") -> rawRef.removePrefix("refs/tags/")
+            else -> rawRef
+        }
+    } ?: return 0
     return DeploymentJobRepository.findAutoDeployTargets(repository, ref).count { target ->
-        val saved = DeploymentJobRepository.latestForProject(target.projectId)
+        val saved = DeploymentJobRepository.latestForService(target.projectId, target.serviceId, target.environment)
         val request = if (saved != null) {
             CreateDeploymentRequest(
-                repository = saved.repository, gitRef = ref, registry = saved.registry,
-                imageName = saved.imageName, imageTag = saved.imageTag,
+                repository = target.repository, gitRef = target.gitRef, registry = target.registry,
+                registryCredentialId = target.registryCredentialId?.toString(),
+                imageName = target.imageName, imageTag = target.imageTag,
                 hostPort = saved.hostPort, containerPort = saved.containerPort, network = saved.network,
-                restartPolicy = saved.restartPolicy, projectId = target.projectId.toString(), triggerSource = "github_push",
+                restartPolicy = saved.restartPolicy, projectId = target.projectId.toString(),
+                serviceId = target.serviceId.toString(), triggerSource = "github_push",
                 env = saved.env, secretEnv = saved.secretEnv, volumes = saved.volumes,
                 createNetworkIfMissing = saved.createNetworkIfMissing, environment = target.environment,
                 autoDeploy = true
@@ -82,8 +90,10 @@ private fun queuePushDeployments(body: String): Int {
         } else {
             CreateDeploymentRequest(
                 repository = target.repository, gitRef = target.gitRef, registry = target.registry,
+                registryCredentialId = target.registryCredentialId?.toString(),
                 imageName = target.imageName, imageTag = target.imageTag, projectId = target.projectId.toString(),
-                triggerSource = "github_push", environment = target.environment, autoDeploy = true
+                serviceId = target.serviceId.toString(), triggerSource = "github_push",
+                environment = target.environment, autoDeploy = true
             )
         }
         DeploymentJobRepository.create(request)
