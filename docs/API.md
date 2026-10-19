@@ -84,6 +84,21 @@ Example response:
 }
 ```
 
+### POST /api/admin/system/deploy
+Start an immediate check for and deployment of the latest successful Gatekeeperd build (JWT required).
+
+The endpoint starts the same root-owned systemd service used by the five-minute automatic
+deployment timer and returns immediately; it does not wait for the JAR replacement or service
+restart. Query `GET /api/version` again after the deployment completes to verify the result.
+
+**Response:**
+```json
+{
+  "started": true,
+  "message": "Deployment check started; refresh deployment status shortly."
+}
+```
+
 `status` is `up_to_date`, `update_available`, `deployment_failed`, `check_stale`, or `unknown`. Commit values are nullable if marker files are missing or invalid. `check_stale` means the last GitHub check is older than 15 minutes; `unknown` means required metadata has not been recorded. This endpoint reveals commit identifiers and deployment status, but no secrets or workflow artifacts.
 
 ### GET /api/health/ready

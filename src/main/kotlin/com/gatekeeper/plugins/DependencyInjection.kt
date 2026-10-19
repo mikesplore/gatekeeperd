@@ -98,6 +98,7 @@ import com.gatekeeper.feature.deployment.domain.port.GitHubTokenProvider
 import com.gatekeeper.deployment.SourceFetcher
 import com.gatekeeper.deployment.ImageBuilder
 import com.gatekeeper.deployment.DeploymentWorker
+import com.gatekeeper.deployment.DeploymentTriggerService
 import com.gatekeeper.integrations.GitHubAppClient
 import org.koin.dsl.module
 import org.koin.core.qualifier.named
@@ -111,6 +112,7 @@ private val applicationModule = module {
     single<DockerGateway> { get<DockerService>() }
     single { DockerCleanupService(get<DockerService>(), get<AuditRepository>()) }
     single<ProcessRunner> { ProcessRunnerImpl() }
+    single { DeploymentTriggerService(get<ProcessRunner>()) }
     single<PortProbe> { TcpPortProbe() }
     single<HttpPortProbe> { TcpHttpPortProbe() }
     single<FileStore> { LocalFileStore() }

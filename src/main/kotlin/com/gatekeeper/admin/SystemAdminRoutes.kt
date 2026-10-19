@@ -2,6 +2,7 @@ package com.gatekeeper.admin
 
 import com.gatekeeper.api.respondError
 import com.gatekeeper.docker.DockerCleanupService
+import com.gatekeeper.deployment.DeploymentTriggerService
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.*
 import io.ktor.server.auth.authenticate
@@ -21,6 +22,23 @@ fun Application.configureSystemAdminRoutes() {
                 }
                 val result = get<DockerCleanupService>().pruneProjectImages(prefix, emptySet(), dryRun, "admin")
                 call.respond(result)
+            }
+            post("/api/admin/system/deploy") {
+                val result = get<DeploymentTriggerService>().trigger()
+                if (!result.started) {
+                    call.respondError(
+                        HttpStatusCode.ServiceUnavailable,
+                        "deployment_trigger_failed",
+                        result.error ?: "The deployment checker could not be started"
+                    )
+                    return@post
+                }
+                call.respond(
+                    mapOf(
+                        "started" to true,
+                        "message" to "Deployment check started; refresh deployment status shortly."
+                    )
+                )
             }
         }
     }

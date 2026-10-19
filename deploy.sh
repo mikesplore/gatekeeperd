@@ -147,6 +147,7 @@ else
   {
     printf '%s\n' "${SUDOERS_MARKER}"
     printf '%s ALL=(root) NOPASSWD: /usr/local/sbin/gatekeeperd-certbot *\n' "${SERVICE_USER}"
+    printf '%s ALL=(root) NOPASSWD: /bin/systemctl start --no-block gatekeeperd-auto-deploy.service\n' "${SERVICE_USER}"
   } >"${SUDOERS_TMP}"
   chmod 0440 "${SUDOERS_TMP}"
   sudo visudo -cf "${SUDOERS_TMP}"
