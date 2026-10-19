@@ -123,7 +123,10 @@ object DeploymentJobRepository {
     fun configurationIdForService(projectId: UUID, serviceId: UUID, environment: String = "production"): UUID? = transaction {
         DeploymentConfigurations.selectAll().where {
             (DeploymentConfigurations.projectId eq projectId) and (DeploymentConfigurations.serviceId eq serviceId)
-        }.toList().firstOrNull { it[DeploymentConfigurations.environment] == environment }
+        }.toList()
+            .filter { (it[DeploymentConfigurations.environment] ?: "production") == environment }
+            .maxWithOrNull(compareBy<ResultRow> { it[DeploymentConfigurations.updatedAt] }
+                .thenBy { it[DeploymentConfigurations.createdAt] })
             ?.get(DeploymentConfigurations.id)
     }
 

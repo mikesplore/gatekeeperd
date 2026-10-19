@@ -233,6 +233,7 @@ class DeploymentWorker(
             val rollbackArtifact = DeploymentApplicationService.rollbackArtifact(job.id)
             val commit: String?
             val image: String
+            var imageBuiltLocally = false
             if (rollbackArtifact != null) {
                 commit = rollbackArtifact.commitSha
                 image = rollbackArtifact.image
@@ -272,14 +273,19 @@ class DeploymentWorker(
                 imageBuilder.build(image, workspace, { ensureNotCancelled(job.id, requireNotNull(job.claimToken)) }) { line ->
                     deploymentQueue.update(job.id, requireNotNull(job.claimToken), log = line)
                 }
+                imageBuiltLocally = true
                 update(job, "pushing", "Pushing $image")
                 imageBuilder.push(image, workspace, { ensureNotCancelled(job.id, requireNotNull(job.claimToken)) }) { line ->
                     deploymentQueue.update(job.id, requireNotNull(job.claimToken), log = line)
                 }
             }
-            update(job, "pulling", "Pulling $image on the deployment host")
-            imageBuilder.pull(image, workspace, { ensureNotCancelled(job.id, requireNotNull(job.claimToken)) }) { line ->
-                deploymentQueue.update(job.id, requireNotNull(job.claimToken), log = line)
+            if (!imageBuiltLocally) {
+                update(job, "pulling", "Pulling $image on the deployment host")
+                imageBuilder.pull(image, workspace, { ensureNotCancelled(job.id, requireNotNull(job.claimToken)) }) { line ->
+                    deploymentQueue.update(job.id, requireNotNull(job.claimToken), log = line)
+                }
+            } else {
+                update(job, "image_ready", "Using image built during this deployment")
             }
             update(job, "starting_container", "Starting application container")
             ensureNotCancelled(job.id, requireNotNull(job.claimToken))
