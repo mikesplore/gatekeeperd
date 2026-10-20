@@ -56,6 +56,7 @@ data class ProjectResponse(
 data class PaymentResponse(
     val id: String,
     val projectId: String,
+    val serviceId: String? = null,
     val provider: String,
     val providerReference: String,
     val paystackReference: String,
@@ -225,6 +226,7 @@ fun ProjectRepository.ProjectRecord.toResponse(financials: ProjectFinancials): P
 
 fun Payment.toResponse(): PaymentResponse = PaymentResponse(
     id = id.toString(), projectId = projectId.toString(), provider = provider.lowercase(),
+    serviceId = serviceId?.toString(),
     providerReference = providerReference, paystackReference = providerReference,
     amount = amount.toDouble(), status = recordStatus, gatewayStatus = status,
     verifiedVia = verifiedVia, paidAt = paidAt?.toNairobiTimestamp(), rawWebhookPayload = rawPayload,

@@ -58,6 +58,7 @@ import com.gatekeeper.feature.payment.domain.usecase.RecordCashPayment
 import com.gatekeeper.feature.payment.domain.usecase.GetPaymentRevenue
 import com.gatekeeper.feature.payment.domain.usecase.PaymentCurrencyPort
 import com.gatekeeper.feature.payment.domain.usecase.ListProjectPayments
+import com.gatekeeper.feature.payment.domain.usecase.ListServicePayments
 import com.gatekeeper.feature.payment.domain.usecase.GetPayment
 import com.gatekeeper.feature.payment.domain.usecase.CompletePaystackCallback
 import com.gatekeeper.feature.payment.domain.usecase.ListPaymentsByProject
@@ -162,6 +163,7 @@ private val applicationModule = module {
     single { GetPaymentMethodAvailability(get()) }
     single { ListPayments(get()) }
     single { ListProjectPayments(get<PaymentProjectAdapter>(), get<PaymentDomainRepository>()) }
+    single { ListServicePayments(get<PaymentDomainRepository>()) }
     single { GetPayment(get<PaymentDomainRepository>()) }
     single { ListPaymentsByProject(get<PaymentDomainRepository>()) }
     single { GetLatestPaymentLink(get<PaymentDomainRepository>()) }

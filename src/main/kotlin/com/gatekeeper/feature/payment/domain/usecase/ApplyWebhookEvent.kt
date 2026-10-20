@@ -17,6 +17,7 @@ class ApplyWebhookEvent(
         val amount = command.amount ?: current?.amount ?: BigDecimal.ZERO
         if (command.status == "success") {
             if (amount <= BigDecimal.ZERO) return false
+            if (current?.serviceId == null && command.serviceId == null) return false
             val projectId = current?.projectId ?: command.projectId ?: return false
             if (!effects.acceptSuccessfulPayment(current, projectId, amount, command.currency)) return false
             if (current == null) current = payments.create(
