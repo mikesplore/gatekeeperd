@@ -193,6 +193,7 @@ class PaymentUseCasesTest {
             payment?.takeIf { it.projectId == projectId && it.status == "pending" }?.amount ?: BigDecimal.ZERO
         override fun findByProjectId(projectId: UUID) = listOfNotNull(payment?.takeIf { it.projectId == projectId })
         override fun findByProjectIdPage(projectId: UUID, limit: Int, offset: Int) = findByProjectId(projectId).drop(offset).take(limit) to findByProjectId(projectId).size.toLong()
+        override fun findByServiceIdPage(serviceId: UUID, limit: Int, offset: Int) = listOfNotNull(payment?.takeIf { it.serviceId == serviceId }).drop(offset).take(limit) to if (payment?.serviceId == serviceId) 1L else 0L
         override fun findAllFiltered(status: String?, projectSlug: String?, from: LocalDate?, until: LocalDate?, limit: Int, offset: Int): Pair<List<PaymentWithProject>, Long> = emptyList<PaymentWithProject>() to 0L
         override fun revenueTotals() = BigDecimal.ZERO to BigDecimal.ZERO
         override fun revenueByMonth(months: Int): List<PaymentRevenueMonth> = emptyList()
