@@ -16,22 +16,19 @@ class InitiatePayment(
 ) {
     suspend operator fun invoke(command: Command): Result<PaymentInitiation> = runCatching {
         if (command.projectSlug.isBlank()) invalid("missing_payment_details", "project is required")
+        val serviceId = command.serviceId ?: invalid("service_required", "Choose a service to pay for")
         val project = projects.find(command.projectSlug) ?: fail("project_not_found", "Project not found", FailureKind.NOT_FOUND)
-        if (command.serviceId != null && !services.belongsToProject(project.id, command.serviceId)) {
+        if (!services.belongsToProject(project.id, serviceId)) {
             fail("service_not_found", "Service not found for this project", FailureKind.NOT_FOUND)
         }
-        if (command.serviceId == null && (command.requireSuspendedProject || command.provider.equals("mpesa", ignoreCase = true)) &&
-            balance.requiresServiceScope(project.id)) {
-            invalid("service_required", "Choose a service to pay for this multi-service project")
-        }
-        if (command.requireSuspendedProject && command.serviceId == null && project.status?.lowercase() !in setOf("blocked", "manual_block")) {
+        if (command.requireSuspendedProject && project.status?.lowercase() !in setOf("blocked", "manual_block")) {
             invalid("project_active", "This project is not suspended")
         }
         if (command.currency.isNotBlank() && !project.currency.equals(command.currency, ignoreCase = true)) invalid("invalid_payment_amount", "Unsupported payment currency")
         val gateway = gateways[command.provider.lowercase()]
             ?: fail("payment_unavailable", "Payment provider is unavailable", FailureKind.PROVIDER_UNAVAILABLE)
         val amount = try {
-            balance.availableAmount(project.id, command.requestedAmount, command.serviceId)
+            balance.availableAmount(project.id, command.requestedAmount, serviceId)
         } catch (error: IllegalArgumentException) {
             invalid("invalid_payment_amount", error.message ?: "Invalid payment amount")
         } catch (error: IllegalStateException) {
@@ -48,11 +45,11 @@ class InitiatePayment(
                 ?: invalid("invalid_mpesa_phone", "Enter a valid Kenyan mobile number, such as 0712345678 or 254712345678")
         } else command.phone
         val initiated = gateway.initiate(
-            InitiatePaymentCommand(project.id, project.slug, command.email ?: project.customerEmail, phone, amount, project.currency, command.callbackUrl, command.serviceId)
+            InitiatePaymentCommand(project.id, project.slug, command.email ?: project.customerEmail, phone, amount, project.currency, command.callbackUrl, serviceId)
         ).getOrElse { error ->
             fail(if (gateway.provider == "mpesa") "mpesa_unavailable" else "paystack_error", error.message ?: "Payment provider could not initiate payment", FailureKind.PROVIDER_UNAVAILABLE)
         }
-        payments.create(project.id, gateway.provider, initiated.reference, amount, "pending", authorizationUrl = initiated.authorizationUrl, serviceId = command.serviceId)
+        payments.create(project.id, gateway.provider, initiated.reference, amount, "pending", authorizationUrl = initiated.authorizationUrl, serviceId = serviceId)
         PaymentInitiation(initiated.reference, initiated.authorizationUrl, amount)
     }
 

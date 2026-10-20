@@ -61,7 +61,7 @@ class ExposedDeploymentPortAllocationRepository : DeploymentPortAllocationPort {
                 val mustReallocate = oldHostPort == null || oldHostPort in rejectedPorts ||
                     (oldHostPort in dockerPortsInUse && !isActiveAssignment)
                 if (!mustReallocate) {
-                    slotPorts[containerPort] = requireNotNull(oldHostPort)
+                    slotPorts[containerPort] = oldHostPort
                     continue
                 }
 

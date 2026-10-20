@@ -133,6 +133,13 @@ class ExposedPaymentRepository : PaymentRepository {
             .map { it.toDomain() } to query.count()
     }
 
+    override fun findByServiceIdPage(serviceId: UUID, limit: Int, offset: Int): Pair<List<Payment>, Long> = transaction {
+        val query = Payments.selectAll().where { Payments.serviceId eq serviceId }
+        query.orderBy(Payments.createdAt, SortOrder.DESC)
+            .limit(limit.coerceIn(1, 500), offset.coerceAtLeast(0).toLong())
+            .map { it.toDomain() } to query.count()
+    }
+
     override fun findAllFiltered(
         status: String?, projectSlug: String?, from: LocalDate?, until: LocalDate?, limit: Int, offset: Int
     ): Pair<List<PaymentWithProject>, Long> = transaction {
