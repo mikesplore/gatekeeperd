@@ -472,7 +472,8 @@ Generate a Paystack payment link for a project.
 ```json
 {
   "email": "john@acme.com",
-  "amount": 2500.00
+  "amount": 2500.00,
+  "serviceId": "service-uuid"
 }
 ```
 
@@ -488,7 +489,7 @@ If pending provider transactions are the only thing reserving the requested bala
 ```
 
 **Notes:**
-- Uses the project's `amount_due` and `client_email` from the database if not overridden.
+- Uses the project's `amount_due` and `client_email` from the database if not overridden. When `serviceId` is provided, the amount is reserved against that service's Scribed invoice and the payment is attributed to that service.
 - Creates a pending `payments` row with the Paystack reference.
 - The client pays via the returned link. After successful payment, Paystack sends a webhook to `/api/paystack/webhook`, which activates the project.
 
@@ -552,7 +553,7 @@ Get the most recent audit log entries across all projects (JWT required).
 List all payments across projects with filters and pagination (JWT required).
 
 ### POST /api/admin/projects/{slug}/payments/cash
-Record a cash payment received by an administrator (JWT required). Partial payments are accepted, provided they do not exceed the project's remaining balance and use its currency. Successful capture contributes to the project balance; the project activates when the cumulative successful payments reach the configured amount due.
+Record a cash payment received by an administrator (JWT required). Partial payments are accepted, provided they do not exceed the selected scope's remaining balance and use its currency. Successful capture contributes to the project balance when no `serviceId` is supplied, or to the selected service invoice when `serviceId` is supplied.
 
 Request body:
 
@@ -562,11 +563,15 @@ Request body:
   "currency": "KES",
   "paidAt": "2026-09-20T10:30:00",
   "receiptNumber": "CASH-1001",
-  "notes": "Received in person"
+  "notes": "Received in person",
+  "serviceId": "service-uuid"
 }
 ```
 
 The response contains the generated cash reference and `status: "success"`. Reusing the same receipt number is rejected rather than creating a duplicate payment.
+
+### GET /api/admin/projects/{projectId}/services/{serviceId}/invoice
+Return the Scribed invoice and payment summary for a service. Admin payment capture screens use this endpoint to select a service and constrain the amount to its available balance. It returns `404 invoice_unavailable` when the service has no invoice yet.
 
 **Query parameters (all optional):**
 - `status` — filter by `gateway_status` (`pending`, `success`, `failed`, `abandoned`, `reversed`)
