@@ -32,6 +32,9 @@ fun Application.configurePaymentRoutes() {
             if (serviceIdText != null && serviceId == null) {
                 return@get call.respondError(HttpStatusCode.BadRequest, "invalid_service_id", "A valid service ID is required")
             }
+            if (serviceId == null) {
+                return@get call.respondError(HttpStatusCode.BadRequest, "service_required", "A service is required for payment")
+            }
             call.application.get<InitiatePayment>()(
                 InitiatePayment.Command("paystack", slug, amount, currency = "", requireSuspendedProject = true, serviceId = serviceId)
             ).fold(

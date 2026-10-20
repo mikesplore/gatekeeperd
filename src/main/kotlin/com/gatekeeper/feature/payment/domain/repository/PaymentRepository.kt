@@ -23,6 +23,7 @@ interface PaymentRepository {
     fun pendingAmountForServiceId(serviceId: UUID): BigDecimal = BigDecimal.ZERO
     fun findByProjectId(projectId: UUID): List<Payment>
     fun findByProjectIdPage(projectId: UUID, limit: Int, offset: Int): Pair<List<Payment>, Long>
+    fun findByServiceIdPage(serviceId: UUID, limit: Int, offset: Int): Pair<List<Payment>, Long>
     fun findAllFiltered(status: String?, projectSlug: String?, from: LocalDate?, until: LocalDate?, limit: Int, offset: Int): Pair<List<PaymentWithProject>, Long>
     fun revenueTotals(): Pair<BigDecimal, BigDecimal>
     fun revenueByMonth(months: Int): List<PaymentRevenueMonth>
