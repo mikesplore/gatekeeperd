@@ -13,6 +13,7 @@ class RecordCashPayment(
 ) {
     operator fun invoke(command: Command): Result<Payment> = runCatching {
         require(command.amount > BigDecimal.ZERO) { "Payment amount must be greater than zero" }
+        val serviceId = command.serviceId ?: error("A service is required for payment capture")
         val project = projects.find(command.projectSlug) ?: error("Project not found")
         val reference = command.receiptNumber?.trim()?.takeIf(String::isNotEmpty)?.let { "cash-$it" }
             ?: "cash-${UUID.randomUUID()}"
@@ -20,7 +21,7 @@ class RecordCashPayment(
             ApplyWebhookEvent.Command(
                 provider = "cash", reference = reference, status = "success", verifiedVia = "manual_cash",
                 amount = command.amount, currency = command.currency ?: project.currency,
-                paidAt = command.paidAt ?: LocalDateTime.now(), projectId = project.id,
+                paidAt = command.paidAt ?: LocalDateTime.now(), projectId = project.id, serviceId = serviceId,
                 rawPayload = command.notes?.trim()?.takeIf(String::isNotEmpty), actor = command.actor
             )
         )) { "Cash payment exceeds the project's remaining balance or has an invalid currency" }
@@ -34,6 +35,7 @@ class RecordCashPayment(
         val paidAt: LocalDateTime?,
         val receiptNumber: String?,
         val notes: String?,
-        val actor: String
+        val actor: String,
+        val serviceId: UUID? = null
     )
 }

@@ -10,6 +10,8 @@ import com.gatekeeper.nginx.requireValidHostname
 import com.gatekeeper.feature.project.domain.repository.ProjectAdjustmentRepository as ProjectAdjustmentStore
 import com.gatekeeper.feature.audit.domain.repository.AuditRepository as AuditRepositoryPort
 import com.gatekeeper.feature.payment.data.persistence.ProjectBalanceAdapter
+import com.gatekeeper.feature.payment.domain.repository.PaymentRepository as PaymentDomainRepository
+import com.gatekeeper.feature.payment.domain.usecase.GetPayment
 import com.gatekeeper.feature.deployment.domain.repository.EnvironmentSetRepository as EnvironmentSetStore
 import com.gatekeeper.feature.deployment.domain.repository.EnvironmentVersionMetadata
 import com.gatekeeper.feature.deployment.domain.repository.ActiveDeploymentInspection
@@ -24,9 +26,13 @@ import io.ktor.server.application.Application
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.request.receive
 import io.ktor.server.response.respond
+import io.ktor.server.response.respondBytes
+import io.ktor.server.response.header
 import io.ktor.server.auth.jwt.JWTPrincipal
 import io.ktor.server.routing.*
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonObject
 import java.util.UUID
 import java.math.BigDecimal
 import org.koin.ktor.ext.get
@@ -48,6 +54,9 @@ data class CreateServiceAdjustmentRequest(val type: String, val amount: Double, 
 
 @Serializable
 data class CreateServiceInvoiceRequest(val description: String, val amount: Double)
+
+@Serializable
+data class ServiceInvoiceResponse(val status: String, val serviceId: String, val invoice: JsonObject)
 
 @Serializable
 data class ServiceAdjustmentView(val id: String, val projectId: String, val serviceId: String, val type: String, val amount: Double, val reason: String, val actor: String, val createdAt: String)
@@ -266,10 +275,75 @@ fun Application.configureServiceAdminRoutes() {
                     return@post call.respondError(HttpStatusCode.BadGateway, "service_invoice_creation_failed", "The created service invoice could not be confirmed")
                 }
                 if (result.created == false) {
-                    return@post call.respond(HttpStatusCode.OK, mapOf("status" to "already_exists", "serviceId" to serviceId.toString(), "invoice" to confirmed.body))
+                    return@post call.respond(HttpStatusCode.OK, ServiceInvoiceResponse("already_exists", serviceId.toString(), confirmed.body))
                 }
                 auditRepository.write(projectId, "service_invoice_created", actor, "service=${service.name} amount=$amount ${project.currency}")
-                call.respond(HttpStatusCode.Created, mapOf("status" to "created", "serviceId" to serviceId.toString(), "invoice" to confirmed.body))
+                call.respond(HttpStatusCode.Created, ServiceInvoiceResponse("created", serviceId.toString(), confirmed.body))
+            }
+
+            get("/api/admin/projects/{projectId}/services/{serviceId}/invoice") {
+                val (projectId, serviceId) = call.serviceCoordinates() ?: return@get
+                if (ProjectRepository.findActiveById(projectId) == null) {
+                    return@get call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
+                }
+                if (ServiceRepository.findByProjectAndId(projectId, serviceId) == null) {
+                    return@get call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
+                }
+                val lookup = ScribedIntegrationClient.serviceInvoiceStatus(serviceId.toString())
+                if (lookup.status == HttpStatusCode.NotFound) {
+                    return@get call.respondError(HttpStatusCode.NotFound, "invoice_unavailable", "No invoice has been created for this service")
+                }
+                if (lookup.body == null || lookup.status == null || !lookup.status.isSuccess()) {
+                    return@get call.respondError(HttpStatusCode.BadGateway, "invoice_unavailable", "The service invoice could not be loaded")
+                }
+                call.respond(lookup.body)
+            }
+
+            get("/api/admin/projects/{projectId}/services/{serviceId}/invoice/download") {
+                val (projectId, serviceId) = call.serviceCoordinates() ?: return@get
+                val project = ProjectRepository.findActiveById(projectId)
+                    ?: return@get call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
+                if (ServiceRepository.findByProjectAndId(projectId, serviceId) == null) {
+                    return@get call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
+                }
+                val lookup = ScribedIntegrationClient.serviceInvoiceStatus(serviceId.toString())
+                if (lookup.status == HttpStatusCode.NotFound) {
+                    return@get call.respondError(HttpStatusCode.NotFound, "invoice_unavailable", "No invoice has been created for this service")
+                }
+                val invoiceId = lookup.body?.get("invoice")?.jsonObject?.get("id")?.toString()?.toLongOrNull()
+                if (lookup.status == null || !lookup.status.isSuccess() || invoiceId == null) {
+                    return@get call.respondError(HttpStatusCode.BadGateway, "invoice_download_failed", "The service invoice could not be loaded")
+                }
+                val (status, bytes) = ScribedIntegrationClient.invoicePdf(invoiceId)
+                if (bytes == null) {
+                    return@get call.respondError(HttpStatusCode.BadGateway, "invoice_download_failed", "Scribed could not retrieve the service invoice")
+                }
+                call.response.header(io.ktor.http.HttpHeaders.ContentDisposition, "attachment; filename=invoice-${project.slug}-service-$serviceId.pdf")
+                call.respondBytes(bytes, io.ktor.http.ContentType.Application.Pdf)
+            }
+
+            get("/api/admin/projects/{projectId}/services/{serviceId}/payments/{paymentId}/receipt") {
+                val (projectId, serviceId) = call.serviceCoordinates() ?: return@get
+                val project = ProjectRepository.findActiveById(projectId)
+                    ?: return@get call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
+                if (ServiceRepository.findByProjectAndId(projectId, serviceId) == null) {
+                    return@get call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
+                }
+                val paymentId = runCatching { UUID.fromString(call.parameters["paymentId"]) }.getOrNull()
+                    ?: return@get call.respondError(HttpStatusCode.BadRequest, "invalid_payment_id", "Invalid payment ID")
+                val payment = call.application.get<GetPayment>()(paymentId)?.takeIf { it.projectId == projectId && it.serviceId == serviceId }
+                    ?: return@get call.respondError(HttpStatusCode.NotFound, "payment_not_found", "Payment not found")
+                if (payment.gatewayStatus != "success") {
+                    return@get call.respondError(HttpStatusCode.Conflict, "payment_not_complete", "A receipt is available after successful payment")
+                }
+                val (status, bytes) = ScribedIntegrationClient.receiptPdfForServicePayment(
+                    project, serviceId, payment, call.application.get<PaymentDomainRepository>(), call.application.get<ProjectBalanceAdapter>()
+                )
+                if (bytes == null) {
+                    return@get call.respondError(if (status == HttpStatusCode.NotFound) status else HttpStatusCode.BadGateway, "receipt_download_failed", "Scribed could not generate or retrieve this receipt")
+                }
+                call.response.header(io.ktor.http.HttpHeaders.ContentDisposition, "inline; filename=receipt-${project.slug}-${payment.providerReference}.pdf")
+                call.respondBytes(bytes, io.ktor.http.ContentType.Application.Pdf)
             }
 
             post("/api/admin/projects/{projectId}/services/{serviceId}/adjustments") {
@@ -443,15 +517,15 @@ private suspend fun ApplicationCall.serviceProjectId(): UUID? {
         respondError(HttpStatusCode.BadRequest, "invalid_project_id", "Project ID is required")
         return null
     }
-    val projectId = runCatching { UUID.fromString(raw) }.getOrNull() ?: run {
-        respondError(HttpStatusCode.BadRequest, "invalid_project_id", "Project ID is invalid")
-        return null
-    }
-    if (ProjectRepository.findActiveById(projectId) == null) {
+    val project = runCatching { UUID.fromString(raw) }
+        .getOrNull()
+        ?.let(ProjectRepository::findActiveById)
+        ?: ProjectRepository.findBySlug(raw)
+    if (project == null) {
         respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
         return null
     }
-    return projectId
+    return project.id
 }
 
 private suspend fun ApplicationCall.serviceCoordinates(): Pair<UUID, UUID>? {
