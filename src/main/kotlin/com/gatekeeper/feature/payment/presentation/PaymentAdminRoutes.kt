@@ -20,13 +20,16 @@ import com.gatekeeper.feature.payment.domain.usecase.ReconcilePayment
 import com.gatekeeper.feature.payment.domain.usecase.RecordCashPayment
 import com.gatekeeper.feature.payment.domain.usecase.GetPaymentRevenue
 import com.gatekeeper.feature.payment.domain.usecase.ListProjectPayments
+import com.gatekeeper.feature.payment.domain.usecase.ListServicePayments
 import com.gatekeeper.feature.payment.domain.usecase.InitiatePayment
 import com.gatekeeper.feature.payment.domain.usecase.HandlePaystackWebhook
 import com.gatekeeper.feature.payment.domain.usecase.ReplayPaystackEvent
 import com.gatekeeper.feature.payment.domain.usecase.GetPaymentEventForReplay
 import com.gatekeeper.feature.payment.presentation.dto.PaystackWebhookPayload
+import com.gatekeeper.db.repositories.ServiceRepository
 import org.koin.ktor.ext.get
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.Contextual
 import kotlinx.serialization.json.Json
 
 @Serializable
@@ -35,7 +38,7 @@ data class CaptureCashPaymentRequest(
     val currency: String? = null,
     val paidAt: String? = null,
     val receiptNumber: String? = null,
-    val notes: String? = null
+    val notes: String? = null,
 )
 
 @Serializable
@@ -46,6 +49,9 @@ data class InitializePaymentResponse(val payment_link: String)
 
 @Serializable
 data class ProjectPaymentsPageResponse(val payments: List<PaymentResponse>, val total: Long, val limit: Int, val offset: Int, val hasMore: Boolean)
+
+@Serializable
+data class ReconcilePaymentResponse(val id: String, val reconciled: Boolean, val gatewayStatus: String?)
 
 fun Application.configurePaymentAdminRoutes() {
     routing {
@@ -73,7 +79,9 @@ fun Application.configurePaymentAdminRoutes() {
                 val id = runCatching { UUID.fromString(call.parameters["id"]) }.getOrNull()
                     ?: return@post call.respondError(HttpStatusCode.BadRequest, "invalid_payment_id", "Invalid payment ID")
                 call.application.get<ReconcilePayment>()(id).fold(
-                    onSuccess = { result -> call.respond(mapOf("id" to result.id.toString(), "reconciled" to result.reconciled, "gatewayStatus" to result.status)) },
+                    onSuccess = { result ->
+                        call.respond(ReconcilePaymentResponse(result.id.toString(), result.reconciled, result.status))
+                    },
                     onFailure = { error ->
                         if (error.message == "Payment not found") call.respondError(HttpStatusCode.NotFound, "payment_not_found", "Payment not found")
                         else call.respondError(HttpStatusCode.BadGateway, "payment_reconciliation_failed", "Payment could not be reconciled")
@@ -81,9 +89,11 @@ fun Application.configurePaymentAdminRoutes() {
                 )
             }
 
-            post("/api/admin/projects/{slug}/payments/cash") {
+            post("/api/admin/projects/{slug}/services/{serviceId}/payments/cash") {
                 val slug = call.parameters["slug"]
                     ?: return@post call.respondError(HttpStatusCode.BadRequest, "invalid_project_slug", "Project slug is required")
+                val serviceId = runCatching { UUID.fromString(call.parameters["serviceId"]) }.getOrNull()
+                    ?: return@post call.respondError(HttpStatusCode.BadRequest, "invalid_service_id", "Service ID is invalid")
                 val request = call.receive<CaptureCashPaymentRequest>()
                 if (request.amount <= 0.0 || !request.amount.isFinite()) {
                     return@post call.respondError(HttpStatusCode.BadRequest, "invalid_payment_amount", "Payment amount must be greater than zero")
@@ -91,7 +101,7 @@ fun Application.configurePaymentAdminRoutes() {
                 val paidAt = request.paidAt?.let { runCatching { LocalDateTime.parse(it) }.getOrNull() }
                 val actor = call.principal<io.ktor.server.auth.jwt.JWTPrincipal>()?.payload?.subject ?: "unknown"
                 call.application.get<RecordCashPayment>()(
-                    RecordCashPayment.Command(slug, BigDecimal.valueOf(request.amount), request.currency, paidAt, request.receiptNumber, request.notes, actor)
+                    RecordCashPayment.Command(slug, BigDecimal.valueOf(request.amount), request.currency, paidAt, request.receiptNumber, request.notes, actor, serviceId)
                 ).fold(
                     onSuccess = { payment -> call.respond(HttpStatusCode.Created, mapOf("provider" to payment.provider, "reference" to payment.providerReference, "status" to payment.status)) },
                     onFailure = { error ->
@@ -118,9 +128,25 @@ fun Application.configurePaymentAdminRoutes() {
                 )
             }
 
-            post("/api/admin/projects/{slug}/payment/initialize") {
+            get("/api/admin/projects/{projectId}/services/{serviceId}/payments") {
+                val projectId = runCatching { UUID.fromString(call.parameters["projectId"]) }.getOrNull()
+                    ?: return@get call.respondError(HttpStatusCode.BadRequest, "invalid_project_id", "Project ID is invalid")
+                val serviceId = runCatching { UUID.fromString(call.parameters["serviceId"]) }.getOrNull()
+                    ?: return@get call.respondError(HttpStatusCode.BadRequest, "invalid_service_id", "Service ID is invalid")
+                if (ServiceRepository.findByProjectAndId(projectId, serviceId) == null) {
+                    return@get call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
+                }
+                val limit = (call.request.queryParameters["limit"]?.toIntOrNull() ?: 25).coerceIn(1, 500)
+                val offset = (call.request.queryParameters["offset"]?.toIntOrNull() ?: 0).coerceAtLeast(0)
+                val page = call.application.get<ListServicePayments>()(ListServicePayments.Command(serviceId, limit, offset))
+                call.respond(ProjectPaymentsPageResponse(page.items.map { it.toResponse() }, page.total, limit, offset, offset + page.items.size < page.total))
+            }
+
+            post("/api/admin/projects/{slug}/services/{serviceId}/payment/initialize") {
                 val slug = call.parameters["slug"]
                     ?: return@post call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing slug path parameter")
+                val serviceId = runCatching { UUID.fromString(call.parameters["serviceId"]) }.getOrNull()
+                    ?: return@post call.respondError(HttpStatusCode.BadRequest, "invalid_service_id", "Service ID is invalid")
                 val body = runCatching { call.receive<InitializePaymentRequest>() }.getOrNull()
                     ?: return@post call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Email is required")
                 val email = body.email.trim().ifBlank { null }
@@ -132,7 +158,7 @@ fun Application.configurePaymentAdminRoutes() {
                     BigDecimal.valueOf(it)
                 }
                 call.application.get<InitiatePayment>()(
-                    InitiatePayment.Command("paystack", slug, requestedAmount, email = email, currency = "")
+                    InitiatePayment.Command("paystack", slug, requestedAmount, email = email, currency = "", serviceId = serviceId)
                 ).fold(
                     onSuccess = { initiated -> call.respond(InitializePaymentResponse(initiated.authorizationUrl.orEmpty())) },
                     onFailure = { error ->

@@ -3013,6 +3013,25 @@ paths:
           $ref: '#/components/responses/Unauthorized'
       operationId: PutApiAdminProjectsByprojectIdServicesByserviceIdEnvironment
   /api/admin/projects/{projectId}/services/{serviceId}/invoice:
+    get:
+      tags:
+      - Projects
+      summary: Get the invoice linked to a service
+      description: Return the service invoice and payment summary used for service-scoped payment capture.
+      operationId: GetApiAdminProjectsByprojectIdServicesByserviceIdInvoice
+      responses:
+        '200':
+          description: Service invoice status
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      x-code-location: com/gatekeeper/admin/ServiceAdminRoutes.kt:275
     post:
       tags:
       - Projects

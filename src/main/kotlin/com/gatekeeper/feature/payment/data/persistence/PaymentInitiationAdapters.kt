@@ -33,49 +33,14 @@ class PaymentBalanceAdapter(
     private val projectBalances: ProjectBalanceAdapter
 ) : PaymentBalancePort {
     override suspend fun requiresServiceScope(projectId: UUID): Boolean {
-        val services = ServiceRepository.listByProjectId(projectId)
-        if (services.size <= 1) return false
-        var serviceBillingFound = false
-        services.forEach { service ->
-            val lookup = ScribedIntegrationClient.serviceInvoiceStatus(service.id.toString())
-            when {
-                lookup.status == HttpStatusCode.NotFound -> Unit
-                lookup.status?.value in 200..299 -> serviceBillingFound = true
-                else -> error("Unable to determine billing scope for this project")
-            }
-        }
-        return serviceBillingFound
+        return true
     }
 
     override suspend fun availableAmount(projectId: UUID, requestedAmount: BigDecimal?): BigDecimal =
         availableAmount(projectId, requestedAmount, null)
 
     override suspend fun availableAmount(projectId: UUID, requestedAmount: BigDecimal?, serviceId: UUID?): BigDecimal {
-        if (serviceId != null) return availableServiceAmount(projectId, serviceId, requestedAmount)
-        var project = ProjectRepository.findById(projectId) ?: error("Project not found")
-        val initialOutstanding = projectBalances.outstandingBalance(project)
-        val initialPending = payments.pendingAmountForProject(projectId)
-        val initialAvailable = initialOutstanding - initialPending
-        val needsReconciliation = initialPending > BigDecimal.ZERO &&
-            (initialAvailable <= BigDecimal.ZERO || (requestedAmount != null && requestedAmount > initialAvailable))
-        if (needsReconciliation) {
-            payments.findPendingByProjectId(projectId).forEach { reconciliation.reconcile(it.provider, it.providerReference) }
-            project = ProjectRepository.findById(projectId) ?: project
-        }
-
-        val outstanding = projectBalances.outstandingBalance(project)
-        val pending = payments.pendingAmountForProject(projectId)
-        val available = outstanding - pending
-        if (pending > BigDecimal.ZERO && (requestedAmount == null || requestedAmount <= outstanding) &&
-            (available <= BigDecimal.ZERO || (requestedAmount != null && requestedAmount > available))) {
-            error("A payment for this balance is still pending. Try again after it is confirmed or canceled.")
-        }
-        val amount = requestedAmount ?: available
-        require(available > BigDecimal.ZERO) { "Project has no available outstanding balance" }
-        require(amount > BigDecimal.ZERO) { "Payment amount must be greater than zero" }
-        require(amount <= available) { "Payment amount exceeds the available outstanding balance" }
-        require(amount.scale().coerceAtLeast(0) <= 2) { "Payment amount cannot have more than two decimal places" }
-        return amount
+        return availableServiceAmount(projectId, serviceId ?: error("A service is required for payment"), requestedAmount)
     }
 
     private suspend fun availableServiceAmount(projectId: UUID, serviceId: UUID, requestedAmount: BigDecimal?): BigDecimal {

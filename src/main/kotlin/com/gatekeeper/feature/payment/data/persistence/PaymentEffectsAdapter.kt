@@ -22,16 +22,13 @@ class PaymentEffectsAdapter(
     override fun acceptSuccessfulPayment(payment: Payment?, projectId: java.util.UUID, amount: BigDecimal, currency: String?): Boolean {
         val project = ProjectRepository.findById(projectId) ?: return false
         if (!currency.isNullOrBlank() && !project.currency.equals(currency, ignoreCase = true)) return false
-        if (payment?.serviceId != null) {
-            val invoice = runBlocking { ScribedIntegrationClient.serviceInvoiceStatus(payment.serviceId.toString()) }
-            if (invoice.status?.value !in 200..299) return false
-            val invoiceData = invoice.body?.get("invoice")?.jsonObject ?: return false
-            val serviceCurrency = invoiceData["currency"]?.jsonPrimitive?.contentOrNull
-            if (!currency.isNullOrBlank() && !serviceCurrency.isNullOrBlank() && !currency.equals(serviceCurrency, ignoreCase = true)) return false
-            val outstanding = invoiceData["balance"]?.jsonPrimitive?.contentOrNull?.toBigDecimalOrNull() ?: return false
-            return outstanding > BigDecimal.ZERO && amount <= outstanding && (payment.status != "pending" || amount.compareTo(payment.amount) == 0)
-        }
-        val outstanding = projectBalances.outstandingBalance(project)
+        val serviceId = payment?.serviceId ?: return false
+        val invoice = runBlocking { ScribedIntegrationClient.serviceInvoiceStatus(serviceId.toString()) }
+        if (invoice.status?.value !in 200..299) return false
+        val invoiceData = invoice.body?.get("invoice")?.jsonObject ?: return false
+        val serviceCurrency = invoiceData["currency"]?.jsonPrimitive?.contentOrNull
+        if (!currency.isNullOrBlank() && !serviceCurrency.isNullOrBlank() && !currency.equals(serviceCurrency, ignoreCase = true)) return false
+        val outstanding = invoiceData["balance"]?.jsonPrimitive?.contentOrNull?.toBigDecimalOrNull() ?: return false
         return outstanding > BigDecimal.ZERO && amount <= outstanding &&
             (payment == null || payment.status != "pending" || amount.compareTo(payment.amount) == 0)
     }
@@ -47,13 +44,10 @@ class PaymentEffectsAdapter(
             ScribedIntegrationClient.notifyPayment(project, payment.provider, payment.reference, amount.toPlainString(), currency ?: project.currency, timestamp.toString(), payment.serviceId)
             return
         }
-        val remaining = projectBalances.outstandingBalance(project)
-        if (remaining <= BigDecimal.ZERO) ProjectRepository.setStatusAndClearDueDate(project.id, "active")
-        auditRepository.write(project.id, "payment_received", actor, "Payment ref=${payment.reference} provider=${payment.provider} amount=$amount remaining=$remaining verified via payment_use_case")
+        auditRepository.write(project.id, "payment_received", actor, "Payment ref=${payment.reference} provider=${payment.provider} amount=$amount verified via payment_use_case")
         ProjectRepository.invalidateCache(project.slug)
         val timestamp = paidAt ?: LocalDateTime.now()
-        ScribedIntegrationClient.notifyPayment(project, payment.provider, payment.reference, amount.toPlainString(), currency ?: project.currency, timestamp.toString())
-        ScribedIntegrationClient.notifyLedger(project, "payment-${payment.provider}-${payment.reference}", projectBalances)
+        ScribedIntegrationClient.notifyPayment(project, payment.provider, payment.reference, amount.toPlainString(), currency ?: project.currency, timestamp.toString(), payment.serviceId)
     }
 
     override fun paymentFailed(payment: Payment) {
