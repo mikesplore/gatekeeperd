@@ -1,6 +1,6 @@
 package com.gatekeeper.integrations
 
-import com.gatekeeper.config.AppConfig
+import com.gatekeeper.config.AppSettings
 import com.gatekeeper.feature.integrations.domain.repository.GitHubCredentialStore
 import com.gatekeeper.feature.integrations.domain.repository.GitHubInstallationStore
 import io.ktor.client.*
@@ -30,27 +30,28 @@ import java.io.Closeable
 class GitHubAppClient(
     private val credentials: GitHubCredentialStore,
     private val installations: GitHubInstallationStore,
+    private val settings: AppSettings.GitHubSettings,
     private val http: HttpClient = HttpClient { install(ContentNegotiation) { json(Json { ignoreUnknownKeys = true }) } }
 ) : Closeable {
 
     fun isConfigured(): Boolean {
-        val hasInstallation = AppConfig.githubAppInstallationId != null ||
+        val hasInstallation = settings.installationId != null ||
             runCatching { installations.find() }.getOrNull() != null
         val hasPrivateKey = runCatching { credentials.privateKeyPem() != null }.getOrDefault(false) ||
-            AppConfig.githubAppPrivateKeyPath.isNotBlank()
-        return AppConfig.githubAppId != null && hasInstallation && hasPrivateKey
+            settings.privateKeyPath.isNotBlank()
+        return settings.appId != null && hasInstallation && hasPrivateKey
     }
 
     fun hasPrivateKeyConfigured(): Boolean =
         runCatching { credentials.privateKeyPem() != null }.getOrDefault(false) ||
-            AppConfig.githubAppPrivateKeyPath.isNotBlank()
+            settings.privateKeyPath.isNotBlank()
 
     suspend fun installationToken(): String {
-        val appId = AppConfig.githubAppId ?: error("GITHUB_APP_ID is not configured")
+        val appId = settings.appId ?: error("GITHUB_APP_ID is not configured")
         // Prefer the installation selected through the GitHub connection flow.
         // The environment value is only a bootstrap fallback and may be stale.
         val installationId = installations.find()?.installationId
-            ?: AppConfig.githubAppInstallationId
+            ?: settings.installationId
             ?: error("No GitHub App installation is configured")
         val key = loadPrivateKey()
         val now = Instant.now().epochSecond
@@ -107,7 +108,7 @@ class GitHubAppClient(
 
     private fun loadPrivateKey(): PrivateKey {
         val pem = credentials.privateKeyPem()
-            ?: Files.readString(java.nio.file.Path.of(AppConfig.githubAppPrivateKeyPath))
+            ?: Files.readString(java.nio.file.Path.of(settings.privateKeyPath))
         val normalized = pem.replace("-----BEGIN PRIVATE KEY-----", "")
             .replace("-----END PRIVATE KEY-----", "")
             .replace("-----BEGIN RSA PRIVATE KEY-----", "")

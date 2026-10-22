@@ -1,7 +1,7 @@
 package com.gatekeeper.integrations
 
+import com.gatekeeper.config.AppSettings
 import com.gatekeeper.api.respondError
-import com.gatekeeper.config.AppConfig
 import com.gatekeeper.db.repositories.DeploymentJobRepository
 import com.gatekeeper.feature.audit.domain.repository.AuditRepository as AuditRepositoryPort
 import com.gatekeeper.feature.integrations.domain.repository.GitHubCredentialStore
@@ -29,10 +29,11 @@ fun Application.configureGitHubWebhookRoutes() {
     val auditRepository = get<AuditRepositoryPort>()
     val credentialStore = get<GitHubCredentialStore>()
     val webhookStore = get<GitHubWebhookStore>()
+    val fallbackWebhookSecret = get<AppSettings>().github.webhookSecret
     routing {
         post("/api/integrations/github/webhook") {
             val secret = runCatching { credentialStore.webhookSecret() }.getOrNull()
-                ?: AppConfig.githubWebhookSecret
+                ?: fallbackWebhookSecret
             if (secret.isBlank()) {
                 call.respondError(HttpStatusCode.ServiceUnavailable, "github_webhook_unconfigured", "GitHub webhook secret is not configured")
                 return@post
