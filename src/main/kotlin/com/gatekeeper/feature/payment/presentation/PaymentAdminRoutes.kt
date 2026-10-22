@@ -19,6 +19,7 @@ import com.gatekeeper.feature.payment.domain.usecase.ListPayments
 import com.gatekeeper.feature.payment.domain.usecase.ReconcilePayment
 import com.gatekeeper.feature.payment.domain.usecase.RecordCashPayment
 import com.gatekeeper.feature.payment.domain.usecase.GetPaymentRevenue
+import com.gatekeeper.feature.payment.domain.repository.ServiceMembershipRepository
 import com.gatekeeper.feature.payment.domain.usecase.ListProjectPayments
 import com.gatekeeper.feature.payment.domain.usecase.ListServicePayments
 import com.gatekeeper.feature.payment.domain.usecase.InitiatePayment
@@ -26,7 +27,6 @@ import com.gatekeeper.feature.payment.domain.usecase.HandlePaystackWebhook
 import com.gatekeeper.feature.payment.domain.usecase.ReplayPaystackEvent
 import com.gatekeeper.feature.payment.domain.usecase.GetPaymentEventForReplay
 import com.gatekeeper.feature.payment.presentation.dto.PaystackWebhookPayload
-import com.gatekeeper.db.repositories.ServiceRepository
 import org.koin.ktor.ext.get
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.Contextual
@@ -133,7 +133,7 @@ fun Application.configurePaymentAdminRoutes() {
                     ?: return@get call.respondError(HttpStatusCode.BadRequest, "invalid_project_id", "Project ID is invalid")
                 val serviceId = runCatching { UUID.fromString(call.parameters["serviceId"]) }.getOrNull()
                     ?: return@get call.respondError(HttpStatusCode.BadRequest, "invalid_service_id", "Service ID is invalid")
-                if (ServiceRepository.findByProjectAndId(projectId, serviceId) == null) {
+                if (!call.application.get<ServiceMembershipRepository>().exists(projectId, serviceId)) {
                     return@get call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
                 }
                 val limit = (call.request.queryParameters["limit"]?.toIntOrNull() ?: 25).coerceIn(1, 500)

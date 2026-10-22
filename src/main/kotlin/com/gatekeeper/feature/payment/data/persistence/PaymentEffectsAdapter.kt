@@ -5,6 +5,7 @@ import com.gatekeeper.db.repositories.ServiceRepository
 import com.gatekeeper.feature.payment.domain.model.Payment
 import com.gatekeeper.feature.payment.domain.usecase.PaymentEffects
 import com.gatekeeper.feature.audit.domain.repository.AuditRepository
+import com.gatekeeper.feature.integrations.domain.repository.IntegrationOutboxRepository
 import com.gatekeeper.integrations.ScribedIntegrationClient
 import java.math.BigDecimal
 import java.time.LocalDate
@@ -17,7 +18,8 @@ import kotlinx.serialization.json.contentOrNull
 /** Adapter for project state and integration effects owned by other features. */
 class PaymentEffectsAdapter(
     private val projectBalances: ProjectBalanceAdapter,
-    private val auditRepository: AuditRepository
+    private val auditRepository: AuditRepository,
+    private val outbox: IntegrationOutboxRepository
 ) : PaymentEffects {
     override fun acceptSuccessfulPayment(payment: Payment?, projectId: java.util.UUID, amount: BigDecimal, currency: String?): Boolean {
         val project = ProjectRepository.findById(projectId) ?: return false
@@ -41,13 +43,13 @@ class PaymentEffectsAdapter(
             if (balance != null && amount >= balance) ServiceRepository.clearAutoBlockForPayment(payment.serviceId)
             auditRepository.write(project.id, "payment_received", actor, "Service payment ref=${payment.reference} service=${payment.serviceId} amount=$amount")
             val timestamp = paidAt ?: LocalDateTime.now()
-            ScribedIntegrationClient.notifyPayment(project, payment.provider, payment.reference, amount.toPlainString(), currency ?: project.currency, timestamp.toString(), payment.serviceId)
+            ScribedIntegrationClient.notifyPayment(project, payment.provider, payment.reference, amount.toPlainString(), currency ?: project.currency, timestamp.toString(), outbox, payment.serviceId)
             return
         }
         auditRepository.write(project.id, "payment_received", actor, "Payment ref=${payment.reference} provider=${payment.provider} amount=$amount verified via payment_use_case")
         ProjectRepository.invalidateCache(project.slug)
         val timestamp = paidAt ?: LocalDateTime.now()
-        ScribedIntegrationClient.notifyPayment(project, payment.provider, payment.reference, amount.toPlainString(), currency ?: project.currency, timestamp.toString(), payment.serviceId)
+        ScribedIntegrationClient.notifyPayment(project, payment.provider, payment.reference, amount.toPlainString(), currency ?: project.currency, timestamp.toString(), outbox, payment.serviceId)
     }
 
     override fun paymentFailed(payment: Payment) {
@@ -61,7 +63,7 @@ class PaymentEffectsAdapter(
             ProjectRepository.setStatusAndDueDate(project.id, "blocked", LocalDate.now(), blockReason = "payment_reversed")
             auditRepository.write(project.id, "blocked", "system", "Payment reversed (ref=${payment.reference})")
             ProjectRepository.invalidateCache(project.slug)
-            ScribedIntegrationClient.notifySuspension(project.copy(status = "blocked", blockReason = "payment_reversed"), "payment_reversed")
+            ScribedIntegrationClient.notifySuspension(project.copy(status = "blocked", blockReason = "payment_reversed"), "payment_reversed", outbox)
         }
     }
 }
