@@ -2,11 +2,11 @@ package com.gatekeeper.admin
 
 import com.gatekeeper.deployment.DeploymentReconciliationService
 import com.gatekeeper.docker.DockerService
-import org.koin.ktor.ext.get
 import io.ktor.server.application.*
-import io.ktor.server.auth.authenticate
-import io.ktor.server.response.respond
+import io.ktor.server.auth.*
+import io.ktor.server.response.*
 import io.ktor.server.routing.*
+import org.koin.ktor.ext.get
 
 fun Application.configureDeploymentAdminRoutes() {
     routing {

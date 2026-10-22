@@ -1,5 +1,6 @@
 package com.gatekeeper.api
 
+import com.gatekeeper.config.AppSettings
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.response.respond
@@ -52,7 +53,10 @@ fun errorResponse(error: String, message: String): ErrorResponse = ErrorResponse
     timestamp = currentErrorTimestamp()
 )
 
-fun paymentRequiredResponse(paywall: com.gatekeeper.gate.PaywallInfo?): PaymentRequiredResponse {
+fun paymentRequiredResponse(
+    paywall: com.gatekeeper.gate.PaywallInfo?,
+    supportContactEmail: String
+): PaymentRequiredResponse {
     val dateFormatter = DateTimeFormatter.ISO_LOCAL_DATE
     return PaymentRequiredResponse(
         message = when (paywall?.blockReasonCode) {
@@ -70,7 +74,7 @@ fun paymentRequiredResponse(paywall: com.gatekeeper.gate.PaywallInfo?): PaymentR
         amount_due = paywall?.amountDue?.stripTrailingZeros()?.toPlainString().orEmpty(),
         currency = paywall?.currency.orEmpty(),
         due_date = paywall?.dueDate?.format(dateFormatter).orEmpty(),
-        contact = com.gatekeeper.config.AppConfig.supportContactEmail,
+        contact = supportContactEmail,
         block_reason = paywall?.blockReasonCode?.value.orEmpty(),
         reason_source = paywall?.reasonSource.orEmpty(),
         reason_note = paywall?.blockReasonNote,

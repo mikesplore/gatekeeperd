@@ -20,7 +20,7 @@ import com.github.dockerjava.core.DockerClientBuilder
 import com.github.dockerjava.core.DockerClientConfig
 import com.github.dockerjava.httpclient5.ApacheDockerHttpClient
 import org.slf4j.LoggerFactory
-import com.gatekeeper.config.AppConfig
+import com.gatekeeper.config.AppSettings
 import java.io.File
 import java.util.stream.Collectors
 import com.github.dockerjava.api.async.ResultCallback
@@ -57,7 +57,10 @@ internal fun <Handle, Result> createContainerWithCleanup(
     }
 }
 
-class DockerService(dockerSocketPath: String) : DockerGateway {
+class DockerService(
+    dockerSocketPath: String,
+    private val dockerSettings: AppSettings.DockerSettings = AppSettings.fromEnv().docker
+) : DockerGateway {
     private val client: DockerClient
 
     init {
@@ -698,14 +701,14 @@ class DockerService(dockerSocketPath: String) : DockerGateway {
     }
 
     private fun enforceSecurityPolicy(request: CreateContainerRequest) {
-        val registries = AppConfig.dockerAllowedRegistries
+        val registries = dockerSettings.allowedRegistries
         if (registries.isNotEmpty()) {
             val repository = request.image.substringBeforeLast(":").substringBefore("@")
             val firstPart = repository.substringBefore('/')
             val registry = if (firstPart.contains('.') || firstPart.contains(':') || firstPart == "localhost") firstPart else "docker.io"
             require(registry.lowercase() in registries) { "Docker registry '$registry' is not allowed" }
         }
-        val roots = AppConfig.dockerAllowedVolumeRoots.map { File(it).canonicalFile }
+        val roots = dockerSettings.allowedVolumeRoots.map { File(it).canonicalFile }
         if (roots.isNotEmpty()) {
             request.volumes.forEach { mount ->
                 val hostPath = File(mount.hostPath).canonicalFile
