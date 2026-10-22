@@ -366,12 +366,10 @@ fun Application.configureProjectSetupAdminRoutes() {
     val auditRepository = get<AuditRepositoryPort>()
     val providerCredentials = get<ProviderCredentialStore>()
     val registryCredentials = get<RegistryCredentialStore>()
+    val docker = get<DockerService>()
     routing {
         authenticate("auth-jwt") {
             get("/api/admin/project-setup/containers") {
-                val docker = runCatching { DockerService(AppConfig.dockerSocket) }.getOrElse {
-                    return@get call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is unavailable")
-                }
                 val containers = try {
                     docker.listContainers(all = false).mapNotNull { listed ->
                         val details = docker.adoptionDetails(listed.id) ?: return@mapNotNull null
@@ -384,8 +382,6 @@ fun Application.configureProjectSetupAdminRoutes() {
                     }
                 } catch (_: Exception) {
                     return@get call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Unable to list running Docker containers")
-                } finally {
-                    docker.close()
                 }
                 call.respond(containers)
             }
@@ -504,10 +500,7 @@ fun Application.configureProjectSetupAdminRoutes() {
                 if (ServiceRepository.findByProjectAndId(projectId, serviceId) == null) {
                     return@post call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
                 }
-                val docker = runCatching { DockerService(AppConfig.dockerSocket) }.getOrElse {
-                    return@post call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is unavailable")
-                }
-                val details = try { docker.adoptionDetails(request.containerId) } finally { docker.close() }
+                val details = docker.adoptionDetails(request.containerId)
                     ?: return@post call.respondError(HttpStatusCode.NotFound, "container_not_found", "Running container was not found")
                 if (!details.state.equals("running", ignoreCase = true)) {
                     return@post call.respondError(HttpStatusCode.Conflict, "container_not_running", "Only running containers can be adopted")
@@ -814,8 +807,7 @@ fun Application.configureProjectSetupAdminRoutes() {
                 val publicExposure = com.gatekeeper.deployment.adoptedRuntimeHasPublicBinding(activeRuntime?.triggerSource, activeRuntime?.portHostIps)
                 val dockerHealth = active?.containerName?.let { name ->
                     runCatching {
-                        val docker = DockerService(AppConfig.dockerSocket)
-                        try { docker.containerHealth(name) } finally { docker.close() }
+                        docker.containerHealth(name)
                     }.getOrDefault("unknown")
                 } ?: "not_deployed"
                 val upstream = DeploymentUpstreamResolver.resolve(serviceId, "production")

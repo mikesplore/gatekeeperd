@@ -19,7 +19,7 @@ import com.gatekeeper.db.tables.AdjustmentType
 import com.gatekeeper.db.tables.AccessBlockReason
 import com.gatekeeper.integrations.ScribedIntegrationClient
 import com.gatekeeper.docker.ContainerCreatePlanResult
-import com.gatekeeper.docker.DockerService
+import com.gatekeeper.docker.DockerGateway
 import com.gatekeeper.docker.ContainerWizardContextResponse
 import com.gatekeeper.docker.CreateContainerRequest
 import com.gatekeeper.docker.ContainerWizardValidateResponse
@@ -112,6 +112,7 @@ data class TransferProjectRequest(
 
 fun Application.configureProjectAdminRoutes() {
     val auditRepository = get<AuditRepositoryPort>()
+    val dockerService = get<DockerGateway>()
     routing {
         authenticate("auth-jwt") {
             get("/api/admin/projects") {
@@ -318,7 +319,7 @@ fun Application.configureProjectAdminRoutes() {
                     actor,
                     "${type.name} amount=$amount oldBalance=$oldBalance newBalance=$newBalance reason=${body.reason.trim()}"
                 )
-                ScribedIntegrationClient.notifyLedger(project, "adjustment-${adjustment.id}", call.application.get<ProjectBalanceAdapter>())
+                ScribedIntegrationClient.notifyLedger(project, "adjustment-${adjustment.id}", call.application.get<ProjectBalanceAdapter>(), call.application.get())
                 ProjectRepository.invalidateCache(slug)
                 call.respond(ProjectAdjustmentResponse(adjustment.id.toString(), project.id.toString(), type.name, amount.toDouble(), adjustment.reason, actor, adjustment.createdAt.toString(), oldBalance.toDouble(), newBalance.toDouble()))
             }
@@ -445,7 +446,7 @@ fun Application.configureProjectAdminRoutes() {
                     blockReasonNote = body.blockReasonNote?.takeIf { it.isNotBlank() } ?: reason
                 )
                 ProjectRepository.invalidateCache(slug)
-                ScribedIntegrationClient.notifySuspension(project.copy(status = "manual_block", blockReason = "manual"), "manual_block: $reason")
+                ScribedIntegrationClient.notifySuspension(project.copy(status = "manual_block", blockReason = "manual"), "manual_block: $reason", call.application.get())
 
                 logger.info("Project blocked: $slug by $actor")
                 call.respond(StatusChangeResponse(status = "blocked", slug = slug))
@@ -524,14 +525,6 @@ fun Application.configureProjectAdminRoutes() {
                     return@post
                 }
 
-                val dockerService = try {
-                    DockerService(AppConfig.dockerSocket)
-                } catch (e: Exception) {
-                    logger.warn("Docker not available for container create (non-fatal): ${e.message}")
-                    call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available")
-                    return@post
-                }
-
                 try {
                     val inspect = object : DockerWizardInspect {
                         override fun imageExists(imageRef: String) = dockerService.imageExists(imageRef)
@@ -550,7 +543,6 @@ fun Application.configureProjectAdminRoutes() {
                             } else {
                                 call.respondError(planResult.status, planResult.code, planResult.message)
                             }
-                            dockerService.close()
                             return@post
                         }
 
@@ -578,8 +570,6 @@ fun Application.configureProjectAdminRoutes() {
                                 } catch (e: Exception) {
                                     ContainerCreationTracker.update(operation.id, "failed", e.message ?: "Container creation failed")
                                     logger.error("Failed to create container in background: ${body.name}", e)
-                                } finally {
-                                    dockerService.close()
                                 }
                             }
                             call.respond(HttpStatusCode.Accepted, mapOf("id" to operation.id, "status" to "queued", "name" to plan.normalizedRequest.name))
@@ -593,7 +583,7 @@ fun Application.configureProjectAdminRoutes() {
                         "docker_error",
                         e.message ?: "Failed to create container"
                     )
-                }
+                    }
             }
 
             get("/api/admin/containers/creation/{id}") {
@@ -605,27 +595,15 @@ fun Application.configureProjectAdminRoutes() {
 
             // Wizard helpers: validate early stages before attempting full container creation.
             get("/api/admin/containers/wizard/context") {
-                val dockerService = try {
-                    DockerService(AppConfig.dockerSocket)
-                } catch (e: Exception) {
-                    logger.warn("Docker not available for wizard context (non-fatal): ${e.message}")
-                    call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available")
-                    return@get
-                }
-
-                try {
-                    val networks = dockerService.listNetworks().map { it.name }.sorted()
-                    val internal = AppConfig.internalNetwork
-                    call.respond(
-                        ContainerWizardContextResponse(
-                            internalNetwork = internal,
-                            internalNetworkExists = internal in networks,
-                            networks = networks
-                        )
+                val networks = dockerService.listNetworks().map { it.name }.sorted()
+                val internal = AppConfig.internalNetwork
+                call.respond(
+                    ContainerWizardContextResponse(
+                        internalNetwork = internal,
+                        internalNetworkExists = internal in networks,
+                        networks = networks
                     )
-                } finally {
-                    dockerService.close()
-                }
+                )
             }
 
             post("/api/admin/containers/wizard/validate") {
@@ -636,26 +614,17 @@ fun Application.configureProjectAdminRoutes() {
                     return@post
                 }
 
-                val dockerService = try {
-                    DockerService(AppConfig.dockerSocket)
-                } catch (e: Exception) {
-                    logger.warn("Docker not available for wizard validate (non-fatal): ${e.message}")
-                    call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available")
-                    return@post
-                }
-
-                try {
-                    val inspect = object : DockerWizardInspect {
+                val inspect = object : DockerWizardInspect {
                         override fun imageExists(imageRef: String) = dockerService.imageExists(imageRef)
                         override fun containerExists(name: String) = dockerService.getContainer(name) != null
                         override fun listNetworkNames() = dockerService.listNetworks().map { it.name }.toSet()
                         override fun hostPortsInUse() = dockerService.hostPortsInUse()
                     }
-                    when (val planResult = computeContainerCreatePlan(
+                when (val planResult = computeContainerCreatePlan(
                         request = body,
                         internalNetwork = AppConfig.internalNetwork,
                         docker = inspect
-                    )) {
+                )) {
                         is ContainerCreatePlanResult.Err -> {
                             if (planResult.data != null) {
                                 call.respondErrorWithData(planResult.status, planResult.code, planResult.message, planResult.data)
@@ -679,9 +648,6 @@ fun Application.configureProjectAdminRoutes() {
                                 )
                             )
                         }
-                    }
-                } finally {
-                    dockerService.close()
                 }
             }
 
@@ -703,20 +669,8 @@ fun Application.configureProjectAdminRoutes() {
                     return@post
                 }
 
-                val dockerService = try {
-                    DockerService(AppConfig.dockerSocket)
-                } catch (e: Exception) {
-                    logger.warn("Docker not available for image status (non-fatal): ${e.message}")
-                    call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available")
-                    return@post
-                }
-
-                try {
-                    val normalized = parsed.normalized
-                    call.respond(ImageStatusResponse(image = normalized, exists = dockerService.imageExists(normalized)))
-                } finally {
-                    dockerService.close()
-                }
+                val normalized = parsed.normalized
+                call.respond(ImageStatusResponse(image = normalized, exists = dockerService.imageExists(normalized)))
             }
 
             post("/api/admin/containers/wizard/ports/check") {
@@ -733,26 +687,14 @@ fun Application.configureProjectAdminRoutes() {
                     return@post
                 }
 
-                val dockerService = try {
-                    DockerService(AppConfig.dockerSocket)
-                } catch (e: Exception) {
-                    logger.warn("Docker not available for ports check (non-fatal): ${e.message}")
-                    call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available")
-                    return@post
-                }
-
-                try {
-                    val inUse = dockerService.hostPortsInUse()
-                    val conflicts = ports.intersect(inUse).sorted()
-                    call.respond(
-                        PortsAvailabilityResponse(
-                            ok = conflicts.isEmpty(),
-                            conflicts = conflicts
-                        )
+                val inUse = dockerService.hostPortsInUse()
+                val conflicts = ports.intersect(inUse).sorted()
+                call.respond(
+                    PortsAvailabilityResponse(
+                        ok = conflicts.isEmpty(),
+                        conflicts = conflicts
                     )
-                } finally {
-                    dockerService.close()
-                }
+                )
             }
 
             // Docker image deletion
@@ -771,9 +713,7 @@ fun Application.configureProjectAdminRoutes() {
                 }
 
                 try {
-                    val dockerService = DockerService(AppConfig.dockerSocket)
                     dockerService.deleteImage(body.image, body.tag, body.force)
-                    dockerService.close()
                     
                     logger.info("Image deleted via API: ${body.image}:${body.tag}")
                     call.respond(DeleteImageResponse(
@@ -799,9 +739,7 @@ fun Application.configureProjectAdminRoutes() {
                 }
 
                 try {
-                    val dockerService = DockerService(AppConfig.dockerSocket)
                     dockerService.deleteContainer(name)
-                    dockerService.close()
                     
                     logger.info("Container deleted via API: $name")
                     call.respond(mapOf("status" to "deleted", "container" to name))
