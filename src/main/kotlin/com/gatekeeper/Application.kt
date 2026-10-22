@@ -79,8 +79,16 @@ private fun operationalCommand(command: String, args: Array<String>) {
                 AppConfig.dbUser,
                 AppConfig.dbPassword
             ); try {
-                NginxBackfillRunner.run(args.firstOrNull { !it.startsWith("--") }
-                    ?: AppConfig.nginxSitesAvailablePath, args.contains("--dry-run"))
+                val docker = DockerService(AppSettings.fromEnv().docker.socket)
+                try {
+                    NginxBackfillRunner.run(
+                        args.firstOrNull { !it.startsWith("--") } ?: AppConfig.nginxSitesAvailablePath,
+                        args.contains("--dry-run"),
+                        docker
+                    )
+                } finally {
+                    docker.close()
+                }
             } finally {
                 DatabaseFactory.close()
             }
@@ -159,7 +167,7 @@ fun Application.module() {
     seedInitialAdmin()
 
     val appScope = CoroutineScope(SupervisorJob())
-    AutoBlockerJob.start(appScope)
+    AutoBlockerJob.start(appScope, get())
     ReconciliationJob.start(appScope, get<ReconcilePayments>())
     IntegrationOutboxJob.start(appScope, get(), get<PaymentDomainRepository>(), get<ProjectBalanceAdapter>())
     get<DeploymentWorker>().start(appScope)

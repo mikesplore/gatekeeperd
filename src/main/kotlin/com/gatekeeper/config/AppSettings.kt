@@ -11,7 +11,120 @@ import io.github.cdimascio.dotenv.dotenv
 class AppSettings private constructor(
     private val values: Map<String, String>
 ) {
+    data class DbSettings(
+        val url: String,
+        val user: String,
+        val password: String,
+        val migrationBaselineVersion: String
+    )
+
+    data class RedisSettings(val host: String, val port: Int)
+
+    data class DockerSettings(
+        val socket: String,
+        val internalNetwork: String,
+        val pullViaCli: Boolean,
+        val allowedRegistries: List<String>,
+        val allowedVolumeRoots: List<String>
+    )
+
+    data class NginxSettings(
+        val deploymentUpstreamsEnabled: Boolean,
+        val sitesAvailablePath: String,
+        val sitesEnabledPath: String,
+        val upstreamIncludeDirectory: String,
+        val sslCertPath: String,
+        val selfDomains: List<String>
+    )
+
+    data class AuthSettings(val jwtSecret: String, val issuer: String, val audience: String)
+
+    data class PaymentSettings(
+        val paystackSecretKey: String,
+        val paystackPublicKey: String,
+        val mpesaConsumerKey: String,
+        val mpesaConsumerSecret: String,
+        val mpesaShortCode: String,
+        val mpesaPasskey: String,
+        val mpesaCallbackUrl: String,
+        val mpesaEnvironment: String
+    )
+
+    data class SchedulerSettings(
+        val defaultGracePeriodDays: Int,
+        val autoBlockerIntervalMinutes: Long,
+        val reconciliationStaleMinutes: Long,
+        val reconciliationIntervalMinutes: Long,
+        val deploymentStaleMinutes: Long,
+        val deploymentHostPortRange: IntRange,
+        val deploymentDrainDelaySeconds: Long
+    )
+
+    val db: DbSettings by lazy {
+        DbSettings(
+            required("DB_URL"),
+            required("DB_USER"),
+            required("DB_PASSWORD"),
+            optional("DB_MIGRATION_BASELINE_VERSION", "0")
+        )
+    }
+
+    val redis: RedisSettings by lazy { RedisSettings(required("REDIS_HOST"), optional("REDIS_PORT", "6379").toInt()) }
+    val docker: DockerSettings by lazy {
+        DockerSettings(
+            optional("DOCKER_SOCKET", "unix:///var/run/docker.sock"),
+            optional("GATEKEEPER_INTERNAL_NETWORK", "gatekeeper-internal"),
+            boolean("DOCKER_PULL_VIA_CLI", false),
+            csv("DOCKER_ALLOWED_REGISTRIES", lowercase = true),
+            csv("DOCKER_ALLOWED_VOLUME_ROOTS")
+        )
+    }
+    val nginx: NginxSettings by lazy {
+        NginxSettings(
+            boolean("NGINX_DEPLOYMENT_UPSTREAMS_ENABLED", true),
+            optional("NGINX_SITES_AVAILABLE", "/etc/nginx/sites-available"),
+            optional("NGINX_SITES_ENABLED", "/etc/nginx/sites-enabled"),
+            optional("NGINX_UPSTREAM_INCLUDE_DIR", "/etc/nginx/conf.d/gatekeeperd-upstreams"),
+            optional("NGINX_SSL_CERT_PATH", "/etc/letsencrypt/live"),
+            required("GATEKEEPERD_SELF_DOMAIN").split(',').map { it.trim().trimEnd('.').lowercase() }
+        )
+    }
+    val auth: AuthSettings by lazy { AuthSettings(required("JWT_SECRET"), optional("JWT_ISSUER", "gatekeeperd"), optional("JWT_AUDIENCE", "gatekeeperd-admin")) }
+    val payment: PaymentSettings by lazy {
+        PaymentSettings(
+            optional("PAYSTACK_SECRET_KEY", ""), optional("PAYSTACK_PUBLIC_KEY", ""),
+            optional("MPESA_CONSUMER_KEY", ""), optional("MPESA_CONSUMER_SECRET", ""),
+            optional("MPESA_SHORT_CODE", optional("MPESA_SHORTCODE", "")), optional("MPESA_PASSKEY", ""),
+            optional("MPESA_CALLBACK_URL", ""), optional("MPESA_ENVIRONMENT", "sandbox")
+        )
+    }
+    val scheduler: SchedulerSettings by lazy {
+        SchedulerSettings(
+            optional("DEFAULT_GRACE_PERIOD_DAYS", "3").toInt(),
+            optional("AUTOBLOCKER_INTERVAL_MINUTES", "60").toLong(),
+            optional("RECONCILIATION_STALE_MINUTES", "30").toLong(),
+            optional("RECONCILIATION_INTERVAL_MINUTES", "15").toLong(),
+            optional("DEPLOYMENT_STALE_MINUTES", "30").toLong(),
+            parsePortRange(optional("DEPLOYMENT_HOST_PORT_RANGE", "32000-40000")),
+            optional("DEPLOYMENT_DRAIN_DELAY_SECONDS", "5").toLong()
+        )
+    }
+
     operator fun get(key: String): String? = values[key]?.takeIf { it.isNotBlank() }
+
+    private fun required(key: String): String = get(key) ?: error("Missing required configuration '$key'")
+    private fun optional(key: String, default: String): String = get(key) ?: default
+    private fun boolean(key: String, default: Boolean): Boolean = optional(key, default.toString()).lowercase() in setOf("true", "1", "yes")
+    private fun csv(key: String, lowercase: Boolean = false): List<String> = optional(key, "").split(',').map { it.trim() }.filter { it.isNotBlank() }.map { if (lowercase) it.lowercase() else it }
+
+    private fun parsePortRange(raw: String): IntRange {
+        val parts = raw.split('-', limit = 2)
+        require(parts.size == 2) { "DEPLOYMENT_HOST_PORT_RANGE must use START-END format" }
+        val start = parts[0].toIntOrNull() ?: error("DEPLOYMENT_HOST_PORT_RANGE start must be an integer")
+        val end = parts[1].toIntOrNull() ?: error("DEPLOYMENT_HOST_PORT_RANGE end must be an integer")
+        require(start in 1024..65535 && end in 1024..65535 && start <= end) { "DEPLOYMENT_HOST_PORT_RANGE must be an ordered range between 1024 and 65535" }
+        return start..end
+    }
 
     companion object {
         fun fromEnv(env: Map<String, String> = System.getenv()): AppSettings {
