@@ -1,6 +1,6 @@
 package com.gatekeeper.nginx
 
-import com.gatekeeper.config.AppConfig
+import com.gatekeeper.config.AppSettings
 import org.slf4j.LoggerFactory
 import java.io.File
 import java.net.InetSocketAddress
@@ -42,12 +42,12 @@ class NginxService(
 ) {
     enum class InterruptedCutoverResult { TARGET_RELOADED, PREVIOUS_RESTORED, CONFLICT }
     companion object {
-        fun configured(commands: NginxCommandRunner = NginxCommandRunner()): NginxService = NginxService(
-            sitesAvailablePath = AppConfig.nginxSitesAvailablePath,
-            sitesEnabledPath = AppConfig.nginxSitesEnabledPath,
-            sslCertPath = AppConfig.nginxSslCertPath,
-            upstreamIncludeDirectory = AppConfig.nginxUpstreamIncludeDirectory,
-            selfDomainExclusion = NginxSelfDomainExclusion(AppConfig.gatekeeperdSelfDomains),
+        fun configured(settings: AppSettings.NginxSettings, commands: NginxCommandRunner): NginxService = NginxService(
+            sitesAvailablePath = settings.sitesAvailablePath,
+            sitesEnabledPath = settings.sitesEnabledPath,
+            sslCertPath = settings.sslCertPath,
+            upstreamIncludeDirectory = settings.upstreamIncludeDirectory,
+            selfDomainExclusion = NginxSelfDomainExclusion(settings.selfDomains),
             nginxTestRunner = commands::test,
             nginxReloadRunner = commands::reload,
             nginxConfigDumpRunner = commands::dumpConfig
