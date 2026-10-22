@@ -163,8 +163,8 @@ fun Application.module() {
     monitor.subscribe(ApplicationStopping) {
         runCatching { get<GitHubAppClient>().close() }
         runCatching { get<DockerService>().close() }
-        runCatching { PaystackClient.close() }
-        runCatching { MpesaGateway.close() }
+        runCatching { get<PaystackClient>().close() }
+        runCatching { get<MpesaGateway>().close() }
         runCatching { org.koin.core.context.stopKoin() }
         runCatching { Telemetry.close() }
     }

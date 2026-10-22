@@ -131,7 +131,7 @@ private val applicationModule = module {
     single<ProviderCredentialStore> { get<ExposedProviderCredentialRepository>() }
     single { ExposedProviderCredentialRepository() }
     single<RegistryCredentialStore> { ExposedRegistryCredentialRepository(get<ProviderCredentialStore>()) }
-    single { GitHubAppClient(get(), get()) }
+    single { GitHubAppClient(get(), get(), get<AppSettings>().github) }
     single<DeploymentPortAllocationPort> { ExposedDeploymentPortAllocationRepository() }
     single<EnvironmentSetStore> { ExposedEnvironmentSetRepository() }
     single<DeploymentQueue> { ExposedDeploymentQueue() }
@@ -148,7 +148,6 @@ private val applicationModule = module {
     single { GateService(get<ProjectQueryRepository>(), get<GetLatestPaymentLink>(), get(), get<AppSettings>().application) }
     single { GateApplicationService(get<ProjectQueryRepository>(), get<GateService>()) }
     single { NginxService.configured(get<AppSettings>().nginx, get<NginxCommandRunner>()) }
-    single { GitHubAppClient(get(), get(), settings = get<AppSettings>().github) }
     single { ExposedCertificateStore(get<CertificateRepository>()) }
     single { NginxAdminService(get(), get<ExposedCertificateStore>()) }
     single<PaymentDomainRepository> { ExposedPaymentRepository() }
@@ -160,9 +159,11 @@ private val applicationModule = module {
     single { PaymentBalanceAdapter(get<PaymentDomainRepository>(), get(), get()) }
     single<PaymentEffects> { PaymentEffectsAdapter(get(), get(), get()) }
     single { ApplyWebhookEvent(get(), get()) }
-    single<PaymentGateway>(named("paystackGateway")) { PaystackGateway() }
-    single<PaymentGateway>(named("mpesaGateway")) { MpesaGateway }
-    single<PaymentProviderReadiness> { PaymentProviderReadinessAdapter() }
+    single { PaystackClient(get<AppSettings>().payment) }
+    single<PaymentGateway>(named("paystackGateway")) { PaystackGateway(get<AppSettings>().payment, get<AppSettings>().integrations, get()) }
+    single<MpesaGateway> { MpesaGateway(get<AppSettings>().payment) }
+    single<PaymentGateway>(named("mpesaGateway")) { get<MpesaGateway>() }
+    single<PaymentProviderReadiness> { PaymentProviderReadinessAdapter(get<AppSettings>().payment, get()) }
     single { GetPaymentMethodAvailability(get()) }
     single { ListPayments(get()) }
     single { ListProjectPayments(get<PaymentProjectAdapter>(), get<PaymentDomainRepository>()) }
