@@ -1,7 +1,6 @@
 package com.gatekeeper.admin
 
 import com.gatekeeper.api.respondError
-import com.gatekeeper.config.AppConfig
 import com.gatekeeper.feature.audit.domain.repository.AuditRepository as AuditRepositoryPort
 import com.gatekeeper.feature.integrations.domain.repository.ProviderCredentialMetadata
 import com.gatekeeper.feature.integrations.domain.repository.ProviderCredentialStore

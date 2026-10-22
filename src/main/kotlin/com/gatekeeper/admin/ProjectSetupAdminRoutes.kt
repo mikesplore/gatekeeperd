@@ -2,7 +2,6 @@ package com.gatekeeper.admin
 
 import com.gatekeeper.api.InputValidators
 import com.gatekeeper.api.respondError
-import com.gatekeeper.config.AppConfig
 import com.gatekeeper.db.repositories.*
 import com.gatekeeper.deployment.*
 import com.gatekeeper.docker.DockerService
@@ -520,7 +519,7 @@ fun Application.configureProjectSetupAdminRoutes() {
                         return@post call.respondError(HttpStatusCode.Conflict, "container_adoption_failed", error.message ?: "Container could not be adopted")
                     }
                 val site = SiteRepository.findByServiceId(adopted.serviceId)
-                val nginx = if (site != null) NginxService.configured() else null
+                val nginx = if (site != null) get<NginxService>() else null
                 val siteSlug = site?.projectSlug ?: project.slug
                 val previous = DeploymentApplicationService.activeRuntime(adopted.serviceId, "production")
                 val previousConfig = if (site != null) runCatching { nginx?.inspectSite(siteSlug)?.content }.getOrNull() else null
