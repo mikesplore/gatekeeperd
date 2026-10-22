@@ -256,8 +256,8 @@ class DeploymentReconciliationService(
             "repair_required"
         )
 
-        fun production(docker: DockerService): DeploymentReconciliationService {
-            return DeploymentReconciliationService(docker, NginxService.configured())
+        fun production(docker: DockerService, nginx: NginxService): DeploymentReconciliationService {
+            return DeploymentReconciliationService(docker, nginx)
         }
     }
 }

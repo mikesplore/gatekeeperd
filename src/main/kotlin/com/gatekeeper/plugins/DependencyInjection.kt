@@ -67,6 +67,7 @@ import com.gatekeeper.feature.payment.domain.usecase.GetLatestPaymentLink
 import com.gatekeeper.feature.payment.domain.usecase.GetPaymentDashboardData
 import com.gatekeeper.feature.payment.domain.usecase.PaymentProviderReadiness
 import com.gatekeeper.feature.payment.data.provider.PaystackGateway
+import com.gatekeeper.feature.payment.data.provider.PaystackClient
 import com.gatekeeper.feature.payment.data.provider.MpesaGateway
 import com.gatekeeper.feature.audit.domain.repository.AuditRepository
 import com.gatekeeper.feature.audit.data.persistence.ExposedAuditRepository
@@ -145,7 +146,7 @@ private val applicationModule = module {
     single { SourceFetcher(get<DeploymentCommandRunner>(), get<GitHubTokenProvider>()) }
     single { ImageBuilder(get<DeploymentCommandRunner>()) }
     single<DeploymentLock> { DistributedDeploymentLock() }
-    single { DeploymentWorker(get(), get(), get(), get(), get(), get(), get(), get<AppSettings>().scheduler, get<AppSettings>().nginx) }
+    single { DeploymentWorker(get(), get(), get(), get(), get(), get(), get(), get<AppSettings>().scheduler, get<AppSettings>().nginx, get()) }
     single<ProjectQueryRepository> { ExposedProjectQueryRepository() }
     single<SupportRequestRepository> { ExposedSupportRequestRepository() }
     single { CustomerApplicationService(get<ProjectQueryRepository>(), get(), get(), get<SupportRequestRepository>()) }

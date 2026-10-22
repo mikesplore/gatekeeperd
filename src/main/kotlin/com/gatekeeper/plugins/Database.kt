@@ -18,7 +18,7 @@ object DatabaseFactory {
         url: String,
         user: String,
         password: String,
-        migrationBaselineVersion: String = AppSettings.fromEnv().db.migrationBaselineVersion,
+        migrationBaselineVersion: String,
         driver: String = "org.postgresql.Driver"
     ) {
         val config = HikariConfig().apply {
