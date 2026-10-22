@@ -1,6 +1,6 @@
 package com.gatekeeper.integrations
 
-import com.gatekeeper.config.AppConfig
+import com.gatekeeper.config.AppSettings
 import com.gatekeeper.db.repositories.ProjectRepository
 import com.gatekeeper.feature.payment.domain.model.Payment
 import com.gatekeeper.feature.payment.domain.repository.PaymentRepository as PaymentDomainRepository
@@ -60,7 +60,7 @@ import io.ktor.client.statement.bodyAsText
     val amount_paid: String = "0"
 )
 
-object ScribedIntegrationClient {
+class ScribedIntegrationClient(private val settings: AppSettings.IntegrationSettings) {
     private val logger = LoggerFactory.getLogger("com.gatekeeper.integrations.ScribedIntegrationClient")
     private val http = HttpClient { install(ContentNegotiation) { json(Json { ignoreUnknownKeys = true }) } }
     private val json = Json { encodeDefaults = true }
@@ -77,9 +77,9 @@ object ScribedIntegrationClient {
     data class DeliveryResult(val delivered: Boolean, val error: String? = null)
 
     suspend fun createInvoice(project: ProjectRepository.ProjectRecord, description: String, amount: String, balances: ProjectBalanceAdapter): InvoiceCreateResult {
-        val base = AppConfig.scribedCallbackUrl.trim().trimEnd('/')
-        val secret = AppConfig.scribedIntegrationSecret.trim()
-        val apiToken = AppConfig.scribedApiToken.trim()
+        val base = settings.scribedCallbackUrl.trim().trimEnd('/')
+        val secret = settings.scribedIntegrationSecret.trim()
+        val apiToken = settings.scribedApiToken.trim()
         if (base.isBlank() || secret.isBlank() || apiToken.isBlank()) {
             return InvoiceCreateResult(null, "Scribed integration is not configured")
         }
@@ -116,9 +116,9 @@ object ScribedIntegrationClient {
         description: String,
         amount: String
     ): InvoiceCreateResult {
-        val base = AppConfig.scribedCallbackUrl.trim().trimEnd('/')
-        val secret = AppConfig.scribedIntegrationSecret.trim()
-        val apiToken = AppConfig.scribedApiToken.trim()
+        val base = settings.scribedCallbackUrl.trim().trimEnd('/')
+        val secret = settings.scribedIntegrationSecret.trim()
+        val apiToken = settings.scribedApiToken.trim()
         if (base.isBlank() || secret.isBlank() || apiToken.isBlank()) {
             return InvoiceCreateResult(null, "Scribed integration is not configured")
         }
@@ -153,9 +153,9 @@ object ScribedIntegrationClient {
     }
 
     suspend fun invoiceStatus(projectId: String): InvoiceLookupResult {
-        val base = AppConfig.scribedCallbackUrl.trim().trimEnd('/')
-        val secret = AppConfig.scribedIntegrationSecret.trim()
-        val apiToken = AppConfig.scribedApiToken.trim()
+        val base = settings.scribedCallbackUrl.trim().trimEnd('/')
+        val secret = settings.scribedIntegrationSecret.trim()
+        val apiToken = settings.scribedApiToken.trim()
         if (base.isBlank() || secret.isBlank() || apiToken.isBlank()) {
             return InvoiceLookupResult(null, error = "Scribed integration is not configured")
         }
@@ -174,9 +174,9 @@ object ScribedIntegrationClient {
     }
 
     suspend fun serviceInvoiceStatus(serviceId: String): InvoiceLookupResult {
-        val base = AppConfig.scribedCallbackUrl.trim().trimEnd('/')
-        val secret = AppConfig.scribedIntegrationSecret.trim()
-        val apiToken = AppConfig.scribedApiToken.trim()
+        val base = settings.scribedCallbackUrl.trim().trimEnd('/')
+        val secret = settings.scribedIntegrationSecret.trim()
+        val apiToken = settings.scribedApiToken.trim()
         if (base.isBlank() || secret.isBlank() || apiToken.isBlank()) {
             return InvoiceLookupResult(null, error = "Scribed integration is not configured")
         }
@@ -195,9 +195,9 @@ object ScribedIntegrationClient {
     }
 
     suspend fun invoicePdf(invoiceId: Long): Pair<HttpStatusCode, ByteArray?> {
-        val base = AppConfig.scribedCallbackUrl.trim().trimEnd('/')
-        val secret = AppConfig.scribedIntegrationSecret.trim()
-        val apiToken = AppConfig.scribedApiToken.trim()
+        val base = settings.scribedCallbackUrl.trim().trimEnd('/')
+        val secret = settings.scribedIntegrationSecret.trim()
+        val apiToken = settings.scribedApiToken.trim()
         if (base.isBlank() || secret.isBlank() || apiToken.isBlank()) return HttpStatusCode.ServiceUnavailable to null
         return runCatching {
             val response = http.get("$base/invoices/$invoiceId") {
@@ -215,9 +215,9 @@ object ScribedIntegrationClient {
         balances: ProjectBalanceAdapter
     ): Pair<HttpStatusCode, ByteArray?> {
         if (!ensureInvoice(project, balances = balances)) return HttpStatusCode.BadGateway to null
-        val base = AppConfig.scribedCallbackUrl.trim().trimEnd('/')
-        val secret = AppConfig.scribedIntegrationSecret.trim()
-        val apiToken = AppConfig.scribedApiToken.trim()
+        val base = settings.scribedCallbackUrl.trim().trimEnd('/')
+        val secret = settings.scribedIntegrationSecret.trim()
+        val apiToken = settings.scribedApiToken.trim()
         if (base.isBlank() || secret.isBlank() || apiToken.isBlank()) return HttpStatusCode.ServiceUnavailable to null
 
         val adjustments = balances.projectAdjustments(project.id)
@@ -279,9 +279,9 @@ object ScribedIntegrationClient {
         payments: PaymentDomainRepository,
         balances: ProjectBalanceAdapter
     ): Pair<HttpStatusCode, ByteArray?> {
-        val base = AppConfig.scribedCallbackUrl.trim().trimEnd('/')
-        val secret = AppConfig.scribedIntegrationSecret.trim()
-        val apiToken = AppConfig.scribedApiToken.trim()
+        val base = settings.scribedCallbackUrl.trim().trimEnd('/')
+        val secret = settings.scribedIntegrationSecret.trim()
+        val apiToken = settings.scribedApiToken.trim()
         if (base.isBlank() || secret.isBlank() || apiToken.isBlank()) return HttpStatusCode.ServiceUnavailable to null
 
         val adjustmentPayload = ScribedServiceLedgerPayload(
@@ -338,9 +338,9 @@ object ScribedIntegrationClient {
         payments: PaymentDomainRepository,
         balances: ProjectBalanceAdapter
     ): Pair<HttpStatusCode, ByteArray?> {
-        val base = AppConfig.scribedCallbackUrl.trim().trimEnd('/')
-        val secret = AppConfig.scribedIntegrationSecret.trim()
-        val apiToken = AppConfig.scribedApiToken.trim()
+        val base = settings.scribedCallbackUrl.trim().trimEnd('/')
+        val secret = settings.scribedIntegrationSecret.trim()
+        val apiToken = settings.scribedApiToken.trim()
         if (base.isBlank() || secret.isBlank() || apiToken.isBlank()) return HttpStatusCode.ServiceUnavailable to null
 
         val adjustments = ScribedServiceLedgerPayload(
@@ -398,9 +398,9 @@ object ScribedIntegrationClient {
     }
 
     suspend fun receiptPdf(paymentId: Long): Pair<HttpStatusCode, ByteArray?> {
-        val base = AppConfig.scribedCallbackUrl.trim().trimEnd('/')
-        val secret = AppConfig.scribedIntegrationSecret.trim()
-        val apiToken = AppConfig.scribedApiToken.trim()
+        val base = settings.scribedCallbackUrl.trim().trimEnd('/')
+        val secret = settings.scribedIntegrationSecret.trim()
+        val apiToken = settings.scribedApiToken.trim()
         if (base.isBlank() || secret.isBlank() || apiToken.isBlank()) return HttpStatusCode.ServiceUnavailable to null
         return runCatching {
             val response = http.get("$base/payments/$paymentId/receipt") {
@@ -412,23 +412,23 @@ object ScribedIntegrationClient {
     }
     fun notifySuspension(project: ProjectRepository.ProjectRecord, reason: String, outbox: IntegrationOutboxRepository) {
         runBlocking {
-        val base = AppConfig.scribedCallbackUrl.trim().trimEnd('/')
-        val secret = AppConfig.scribedIntegrationSecret.trim()
+        val base = settings.scribedCallbackUrl.trim().trimEnd('/')
+        val secret = settings.scribedIntegrationSecret.trim()
         if (base.isBlank() || secret.isBlank()) return@runBlocking
         outbox.enqueue("suspension", "suspension:${project.id}:$reason", json.encodeToString(ScribedSuspensionPayload(project.id.toString(), project.slug, project.status, reason, java.time.OffsetDateTime.now().toString())))
         }
     }
 
     fun notifyPayment(project: ProjectRepository.ProjectRecord, provider: String, reference: String, amount: String, currency: String, paidAt: String, outbox: IntegrationOutboxRepository, serviceId: java.util.UUID? = null) {
-        val base = AppConfig.scribedCallbackUrl.trim().trimEnd('/'); val secret = AppConfig.scribedIntegrationSecret.trim()
+        val base = settings.scribedCallbackUrl.trim().trimEnd('/'); val secret = settings.scribedIntegrationSecret.trim()
         if (base.isBlank() || secret.isBlank()) return
         val ownerKey = serviceId?.toString() ?: project.id.toString()
         outbox.enqueue("payment", "payment:$ownerKey:$provider:$reference", json.encodeToString(ScribedPaymentPayload(project.id.toString(), project.slug, provider, reference, amount, currency, paidAt, service_id = serviceId?.toString())))
     }
 
     fun notifyLedger(project: ProjectRepository.ProjectRecord, ledgerVersion: String, balances: ProjectBalanceAdapter, outbox: IntegrationOutboxRepository) {
-        val base = AppConfig.scribedCallbackUrl.trim().trimEnd('/')
-        if (base.isBlank() || AppConfig.scribedIntegrationSecret.trim().isBlank()) return
+        val base = settings.scribedCallbackUrl.trim().trimEnd('/')
+        if (base.isBlank() || settings.scribedIntegrationSecret.trim().isBlank()) return
         val adjustments = balances.projectAdjustments(project.id).map { ScribedLedgerAdjustment(it.id.toString(), it.type.name, it.amount.toPlainString(), it.reason, it.actor) }
         val payload = ScribedLedgerPayload(project.id.toString(), project.slug, ledgerVersion,
             balances.originalCharge(project).toPlainString(),
@@ -440,8 +440,8 @@ object ScribedIntegrationClient {
     }
 
     fun notifyServiceLedger(serviceId: java.util.UUID, ledgerVersion: String, balances: ProjectBalanceAdapter, outbox: IntegrationOutboxRepository) {
-        val base = AppConfig.scribedCallbackUrl.trim().trimEnd('/')
-        if (base.isBlank() || AppConfig.scribedIntegrationSecret.trim().isBlank()) return
+        val base = settings.scribedCallbackUrl.trim().trimEnd('/')
+        if (base.isBlank() || settings.scribedIntegrationSecret.trim().isBlank()) return
         val adjustments = balances.serviceAdjustments(serviceId).map {
             ScribedLedgerAdjustment(it.id.toString(), it.type.name, it.amount.toPlainString(), it.reason, it.actor)
         }
@@ -476,9 +476,9 @@ object ScribedIntegrationClient {
         if (!ensureInvoice(project, balances)) {
             return InvoiceSyncResult(false, 0, null, "Could not create or locate the Scribed invoice")
         }
-        val base = AppConfig.scribedCallbackUrl.trim().trimEnd('/')
-        val secret = AppConfig.scribedIntegrationSecret.trim()
-        val apiToken = AppConfig.scribedApiToken.trim()
+        val base = settings.scribedCallbackUrl.trim().trimEnd('/')
+        val secret = settings.scribedIntegrationSecret.trim()
+        val apiToken = settings.scribedApiToken.trim()
         if (base.isBlank() || secret.isBlank() || apiToken.isBlank()) {
             return InvoiceSyncResult(false, 0, null, "Scribed integration is not configured")
         }
@@ -569,8 +569,8 @@ object ScribedIntegrationClient {
         deliverWithResult(event, payments, balances, outbox).delivered
 
     suspend fun deliverWithResult(event: IntegrationOutboxRepository.Event, payments: PaymentDomainRepository, balances: ProjectBalanceAdapter, outbox: IntegrationOutboxRepository): DeliveryResult {
-        val base = AppConfig.scribedCallbackUrl.trim().trimEnd('/'); val secret = AppConfig.scribedIntegrationSecret.trim()
-        val apiToken = AppConfig.scribedApiToken.trim()
+        val base = settings.scribedCallbackUrl.trim().trimEnd('/'); val secret = settings.scribedIntegrationSecret.trim()
+        val apiToken = settings.scribedApiToken.trim()
         if (base.isBlank() || secret.isBlank() || apiToken.isBlank()) return DeliveryResult(false, "Scribed integration is not configured")
         if (event.eventType == "service_ledger") {
             val payload = runCatching { json.decodeFromString<ScribedServiceLedgerPayload>(event.payload) }.getOrNull()

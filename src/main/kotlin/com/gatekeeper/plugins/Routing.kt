@@ -1,7 +1,7 @@
 package com.gatekeeper.plugins
 
 import com.gatekeeper.api.respondError
-import com.gatekeeper.config.AppConfig
+import com.gatekeeper.config.AppSettings
 import com.gatekeeper.docker.DockerService
 import com.gatekeeper.docker.PullImageRequest
 import com.gatekeeper.docker.ContainersListResponse
@@ -38,7 +38,7 @@ private suspend fun ApplicationCall.requireContainerName(): String? {
 }
 
 fun Application.configureRouting() {
-    val internalNetwork = AppConfig.internalNetwork
+    val internalNetwork = get<AppSettings>().docker.internalNetwork
 
     // Initialize Docker lazily — may not be available in all environments
     val dockerService: DockerService? = try {
@@ -283,8 +283,9 @@ fun Application.configureRouting() {
                 val tag = body.tag.trim().ifBlank { "latest" }
                 try {
                     val fullRef = "$image:$tag"
-                    if (body.pullViaCli || AppConfig.dockerPullViaCli) {
-                        dockerService.pullImageViaCli(fullRef, AppConfig.dockerSocket)
+                    val dockerSettings = get<AppSettings>().docker
+                    if (body.pullViaCli || dockerSettings.pullViaCli) {
+                        dockerService.pullImageViaCli(fullRef, dockerSettings.socket)
                     } else {
                         dockerService.pullImage(image, tag)
                     }
