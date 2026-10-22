@@ -1,6 +1,6 @@
 package com.gatekeeper.feature.payment.data.provider
 
-import com.gatekeeper.config.AppConfig
+import com.gatekeeper.config.AppSettings
 import io.ktor.client.*
 import io.ktor.client.call.*
 import io.ktor.client.plugins.contentnegotiation.*
@@ -13,7 +13,7 @@ import org.slf4j.LoggerFactory
 import java.math.BigDecimal
 import java.time.LocalDateTime
 
-object PaystackClient {
+class PaystackClient(settings: AppSettings.PaymentSettings) {
 
     private val logger = LoggerFactory.getLogger("com.gatekeeper.feature.payment.PaystackClient")
     private val baseUrl = "https://api.paystack.co"
@@ -28,7 +28,7 @@ object PaystackClient {
             )
         }
         defaultRequest {
-            header("Authorization", "Bearer ${AppConfig.paystackSecretKey}")
+            header("Authorization", "Bearer ${settings.paystackSecretKey}")
         }
     }
 

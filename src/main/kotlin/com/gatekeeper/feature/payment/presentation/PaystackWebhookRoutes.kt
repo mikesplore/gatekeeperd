@@ -1,7 +1,7 @@
 package com.gatekeeper.feature.payment.presentation
 
+import com.gatekeeper.config.AppSettings
 import com.gatekeeper.api.respondError
-import com.gatekeeper.config.AppConfig
 import com.gatekeeper.feature.payment.presentation.dto.PaystackWebhookPayload
 import org.koin.ktor.ext.get
 import io.ktor.http.*
@@ -22,6 +22,7 @@ private val json = Json { ignoreUnknownKeys = true }
 
 fun Application.configurePaystackWebhookRoutes() {
     val handlePaystackWebhook = get<HandlePaystackWebhook>()
+    val paystackSecret = get<AppSettings>().payment.paystackSecretKey
     routing {
         post("/api/paystack/webhook") {
             Metrics.increment("webhook.received")
@@ -40,13 +41,13 @@ fun Application.configurePaystackWebhookRoutes() {
                 return@post
             }
 
-            if (AppConfig.paystackSecretKey.isBlank()) {
+            if (paystackSecret.isBlank()) {
                 logger.error("Webhook received but PAYSTACK_SECRET_KEY is not configured")
                 call.respondError(HttpStatusCode.ServiceUnavailable, "paystack_not_configured", "Paystack is not configured")
                 return@post
             }
 
-            if (!verifySignature(rawBody, signature, AppConfig.paystackSecretKey)) {
+            if (!verifySignature(rawBody, signature, paystackSecret)) {
                 logger.warn("Webhook signature verification failed")
                 call.respondError(HttpStatusCode.Unauthorized, "invalid_signature", "Webhook signature verification failed")
                 return@post
