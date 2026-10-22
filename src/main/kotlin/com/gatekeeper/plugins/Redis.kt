@@ -1,6 +1,7 @@
 package com.gatekeeper.plugins
 
-import com.gatekeeper.config.AppConfig
+import com.gatekeeper.config.AppSettings
+import org.koin.ktor.ext.get
 import io.ktor.server.application.*
 import org.slf4j.LoggerFactory
 import redis.clients.jedis.JedisPool
@@ -103,7 +104,8 @@ object RedisService {
 class RedisUnavailableException : RuntimeException("Redis is unavailable")
 
 fun Application.configureRedis() {
-    RedisService.init(AppConfig.redisHost, AppConfig.redisPort)
+    val redis = get<AppSettings>().redis
+    RedisService.init(redis.host, redis.port)
 
     environment.monitor.subscribe(ApplicationStopping) {
         RedisService.close()

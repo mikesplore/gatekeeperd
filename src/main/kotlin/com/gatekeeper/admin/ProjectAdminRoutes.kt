@@ -7,7 +7,7 @@ import com.gatekeeper.api.dto.ProjectsListResponse
 import com.gatekeeper.api.dto.StatusChangeResponse
 import com.gatekeeper.api.dto.toResponse
 import com.gatekeeper.api.InputValidators
-import com.gatekeeper.config.AppConfig
+import com.gatekeeper.config.AppSettings
 import com.gatekeeper.api.respondError
 import com.gatekeeper.api.respondErrorWithData
 import com.gatekeeper.feature.audit.domain.repository.AuditRepository as AuditRepositoryPort
@@ -113,6 +113,7 @@ data class TransferProjectRequest(
 fun Application.configureProjectAdminRoutes() {
     val auditRepository = get<AuditRepositoryPort>()
     val dockerService = get<DockerGateway>()
+    val dockerSettings = get<AppSettings>().docker
     routing {
         authenticate("auth-jwt") {
             get("/api/admin/projects") {
@@ -534,7 +535,7 @@ fun Application.configureProjectAdminRoutes() {
                     }
                     when (val planResult = computeContainerCreatePlan(
                         request = body,
-                        internalNetwork = AppConfig.internalNetwork,
+                        internalNetwork = dockerSettings.internalNetwork,
                         docker = inspect
                     )) {
                         is ContainerCreatePlanResult.Err -> {
@@ -553,15 +554,15 @@ fun Application.configureProjectAdminRoutes() {
                                 try {
                                     if (plan.willPullImage) {
                                         ContainerCreationTracker.update(operation.id, "pulling")
-                                        val useCliPull = plan.normalizedRequest.pullViaCli || AppConfig.dockerPullViaCli
+                                        val useCliPull = plan.normalizedRequest.pullViaCli || dockerSettings.pullViaCli
                                         if (useCliPull) {
-                                            dockerService.pullImageViaCli(plan.normalizedRequest.image, AppConfig.dockerSocket)
+                                            dockerService.pullImageViaCli(plan.normalizedRequest.image, dockerSettings.socket)
                                         } else {
                                             dockerService.pullImage(plan.parsedImage.repository, plan.parsedImage.tag)
                                         }
                                     }
                                     if (plan.willCreateInternalNetworkIfMissing) {
-                                        dockerService.createNetworkIfMissing(AppConfig.internalNetwork)
+                                        dockerService.createNetworkIfMissing(dockerSettings.internalNetwork)
                                     }
                                     ContainerCreationTracker.update(operation.id, "creating")
                                     val container = dockerService.createContainer(plan.normalizedRequest)
@@ -596,7 +597,7 @@ fun Application.configureProjectAdminRoutes() {
             // Wizard helpers: validate early stages before attempting full container creation.
             get("/api/admin/containers/wizard/context") {
                 val networks = dockerService.listNetworks().map { it.name }.sorted()
-                val internal = AppConfig.internalNetwork
+                val internal = dockerSettings.internalNetwork
                 call.respond(
                     ContainerWizardContextResponse(
                         internalNetwork = internal,
@@ -622,7 +623,7 @@ fun Application.configureProjectAdminRoutes() {
                     }
                 when (val planResult = computeContainerCreatePlan(
                         request = body,
-                        internalNetwork = AppConfig.internalNetwork,
+                        internalNetwork = dockerSettings.internalNetwork,
                         docker = inspect
                 )) {
                         is ContainerCreatePlanResult.Err -> {
