@@ -1,15 +1,13 @@
 package com.gatekeeper.deployment
 
-import com.gatekeeper.db.repositories.DeploymentJobRepository
 import com.gatekeeper.db.repositories.DeploymentJobRecord
 import com.gatekeeper.core.ports.DeploymentLock
 import com.gatekeeper.feature.deployment.domain.repository.DeploymentPortAllocationRepository
 import com.gatekeeper.feature.audit.domain.repository.AuditRepository
-import com.gatekeeper.db.repositories.RegistryCredentialRepository
-import com.gatekeeper.config.AppConfig
+import com.gatekeeper.config.AppSettings
 import com.gatekeeper.plugins.DistributedLock
 import com.gatekeeper.docker.CreateContainerRequest
-import com.gatekeeper.docker.DockerService
+import com.gatekeeper.docker.DockerGateway
 import com.gatekeeper.infrastructure.TcpPortProbe
 import com.gatekeeper.infrastructure.TcpHttpPortProbe
 import com.gatekeeper.nginx.NginxService
@@ -36,7 +34,10 @@ class DeploymentWorker(
     private val imageBuilder: ImageBuilder,
     private val auditRepository: AuditRepository,
     private val deploymentQueue: DeploymentQueue,
-    private val deploymentLock: DeploymentLock
+    private val deploymentLock: DeploymentLock,
+    private val docker: DockerGateway,
+    private val schedulerSettings: AppSettings.SchedulerSettings,
+    private val nginxSettings: AppSettings.NginxSettings
 ) {
     private val logger = LoggerFactory.getLogger("com.gatekeeper.deployment.DeploymentWorker")
     private val started = AtomicBoolean(false)
@@ -65,12 +66,7 @@ class DeploymentWorker(
     private fun cleanupInterruptedCandidate(deploymentId: UUID, candidateName: String?, reason: String): Boolean {
         if (candidateName.isNullOrBlank()) return true
         return runCatching {
-            val cleanupDocker = DockerService(AppConfig.dockerSocket)
-            try {
-                cleanupDocker.removeContainerIfPresent(candidateName)
-            } finally {
-                cleanupDocker.close()
-            }
+            docker.removeContainerIfPresent(candidateName)
         }.onSuccess { removed ->
             if (removed) {
                 DeploymentApplicationService.clearCandidateRuntimeAfterCutoverRecovery(deploymentId)
@@ -100,12 +96,7 @@ class DeploymentWorker(
                     DeploymentApplicationService.updateCutoverState(deploymentId, "repair_required", "Pending upstream recovery data or site is missing")
                     return@tryWithLock
                 }
-                val docker = runCatching { DockerService(AppConfig.dockerSocket) }.getOrNull()
-                val candidateRunning = try {
-                    candidate?.name?.let { docker?.containerHealth(it) == "running" } == true
-                } finally {
-                    runCatching { docker?.close() }
-                }
+                val candidateRunning = candidate?.name?.let { docker.containerHealth(it) == "running" } == true
                 val restoringFailedCutover = recovery.state == "repair_required"
                 val result = NginxService.configured().recoverInterruptedUpstream(
                     site, files, candidateRunning && !restoringFailedCutover
@@ -131,7 +122,7 @@ class DeploymentWorker(
                                 "interrupted cutover restored previous route"
                             )
                             if (removed) {
-                                DeploymentJobRepository.failInterruptedCutover(
+                                deploymentQueue.failInterruptedCutover(
                                     deploymentId,
                                     "Interrupted cutover restored the previous gateway route; discarded ready candidate to avoid stale port conflicts"
                                 )
@@ -142,9 +133,9 @@ class DeploymentWorker(
                                 )
                             }
                         } else if (candidateRunning) {
-                            DeploymentJobRepository.requeueInterruptedCutover(deploymentId)
+                            deploymentQueue.requeueInterruptedCutover(deploymentId)
                         } else {
-                            DeploymentJobRepository.failInterruptedCutover(
+                            deploymentQueue.failInterruptedCutover(
                                 deploymentId, "Candidate runtime was not running during startup cutover recovery"
                             )
                         }
@@ -176,7 +167,7 @@ class DeploymentWorker(
     }
 
     private fun recoverStaleJobs() {
-        val cutoff = LocalDateTime.now().minusMinutes(AppConfig.deploymentStaleMinutes)
+        val cutoff = LocalDateTime.now().minusMinutes(schedulerSettings.deploymentStaleMinutes)
         val staleJobs = deploymentQueue.staleRunningJobs(cutoff)
         DeploymentJobRecovery.recoverStale(
             staleJobs.map { RecoverableDeploymentJob(it.id, it.serviceId, it.environment, it.claimToken) },
@@ -189,7 +180,7 @@ class DeploymentWorker(
                     current,
                     staleBefore,
                     recoveredAt,
-                    "Recovered abandoned deployment after ${AppConfig.deploymentStaleMinutes} minutes without progress"
+                    "Recovered abandoned deployment after ${schedulerSettings.deploymentStaleMinutes} minutes without progress"
                 )
             }
         )
@@ -208,7 +199,6 @@ class DeploymentWorker(
             return
         }
         if (job.currentStep == "readiness_succeeded" || job.currentStep == "cutover_in_progress") {
-            val docker = DockerService(AppConfig.dockerSocket)
             var routeRollback: (() -> Boolean)? = null
             try {
                 cutover(job, docker, auditRepository) { rollback -> routeRollback = rollback }
@@ -235,8 +225,6 @@ class DeploymentWorker(
                     if (!requeued) logger.warn("Deployment {} cutover retry was not queued because its claim changed", job.id)
                 }
                 auditRepository.write(null, "deployment_cutover_failed", "deployment-worker", "job=${job.id} error=${error.message}")
-            } finally {
-                docker.close()
             }
             return
         }
@@ -249,17 +237,12 @@ class DeploymentWorker(
         var routeRollback: (() -> Boolean)? = null
         try {
             val recordedCandidateName = DeploymentApplicationService.candidateContainerName(job.id)
-            val cleanupDocker = DockerService(AppConfig.dockerSocket)
-            try {
-                CandidateRetryRecovery.prepareForRetry(
-                    deterministicName = deterministicCandidateName,
-                    recordedName = recordedCandidateName,
-                    containers = CandidateContainerBoundary { name -> cleanupDocker.removeContainerIfPresent(name) },
-                    clearRecordedRuntime = { DeploymentApplicationService.clearCandidateRuntime(job.id) }
-                )
-            } finally {
-                cleanupDocker.close()
-            }
+            CandidateRetryRecovery.prepareForRetry(
+                deterministicName = deterministicCandidateName,
+                recordedName = recordedCandidateName,
+                containers = CandidateContainerBoundary { name -> docker.removeContainerIfPresent(name) },
+                clearRecordedRuntime = { DeploymentApplicationService.clearCandidateRuntime(job.id) }
+            )
             ensureNotCancelled(job.id, requireNotNull(job.claimToken))
             val rollbackArtifact = DeploymentApplicationService.rollbackArtifact(job.id)
             val commit: String?
@@ -320,9 +303,7 @@ class DeploymentWorker(
             }
             update(job, "starting_container", "Starting application container")
             ensureNotCancelled(job.id, requireNotNull(job.claimToken))
-            val docker = DockerService(AppConfig.dockerSocket)
-            try {
-                val digest = docker.imageDigest(image)
+            val digest = docker.imageDigest(image)
                 val immutableImageReference = docker.immutableImageReference(image)
                     ?: error("Docker could not determine an immutable image identity for deployment recovery")
                 update(job, log = "Image digest: ${digest ?: "unavailable"}", imageDigest = digest)
@@ -357,7 +338,7 @@ class DeploymentWorker(
                             activePorts = activePorts,
                             containerPorts = dynamicContainerPorts,
                             dockerPortsInUse = docker.hostPortsInUse() + HostPortListeners.read(),
-                            portRange = AppConfig.deploymentHostPortRange,
+                            portRange = schedulerSettings.deploymentHostPortRange,
                             rejectedPorts = rejectedPorts,
                             preferredHostPorts = buildMap {
                                 val explicitPort = site?.upstreamExplicitPort
@@ -381,7 +362,7 @@ class DeploymentWorker(
                             portHostIp = "127.0.0.1",
                             network = job.network,
                             restartPolicy = job.restartPolicy,
-                            env = DeploymentJobRepository.resolveEnvironmentForExecution(job.id).values,
+                            env = deploymentQueue.resolveEnvironmentForExecution(job.id).values,
                             volumes = job.volumes,
                             pullImage = false
                         ))
@@ -434,16 +415,15 @@ class DeploymentWorker(
                     candidateName = null
                     candidateContainerId = null
                 }
-            } finally { docker.close() }
         } catch (error: CancellationException) {
             candidateContainerId?.let { id -> removeCandidatePreservingFailure(null, id, error) }
-            if (DeploymentJobRepository.isCancelled(job.id)) {
+            if (deploymentQueue.isCancelled(job.id)) {
                 logger.info("Deployment {} cancelled", job.id)
             } else {
                 throw error
             }
         } catch (error: Exception) {
-            val candidateIsReady = DeploymentJobRepository.find(job.id)?.currentStep in setOf("readiness_succeeded", "cutover_in_progress")
+            val candidateIsReady = deploymentQueue.find(job.id)?.currentStep in setOf("readiness_succeeded", "cutover_in_progress")
             val routeRestored = routeRollback?.let { rollback -> runCatching(rollback).getOrDefault(false) } ?: true
             if (candidateIsReady && !routeRestored) {
                 DeploymentApplicationService.updateCutoverState(job.id, "repair_required", "Gateway restoration failed after cutover error")
@@ -459,7 +439,7 @@ class DeploymentWorker(
                 return
             }
             if (candidateIsReady) {
-                val requeued = DeploymentJobRepository.requeueReadyCutover(
+                val requeued = deploymentQueue.requeueReadyCutover(
                     job.id,
                     requireNotNull(job.claimToken),
                     error.message ?: "Cutover failed"
@@ -474,7 +454,7 @@ class DeploymentWorker(
                 "Deployment {} cutover failed; previous route was restored and ready candidate retained for retry",
                 job.id
             )
-            if (!DeploymentJobRepository.isCancelled(job.id) && !candidateIsReady) {
+            if (!deploymentQueue.isCancelled(job.id) && !candidateIsReady) {
                 auditRepository.write(null, "deployment_failed", "deployment-worker", "job=${job.id} error=${error.message}")
                 update(job, "failed", error.message ?: "Deployment failed", status = "failed", error = error.message ?: "Deployment failed")
             }
@@ -484,19 +464,18 @@ class DeploymentWorker(
     }
 
     private fun removeCandidatePreservingFailure(
-        existingDocker: DockerService?,
+        existingDocker: DockerGateway?,
         containerId: String,
         failure: Throwable
     ) {
         var cleanupDocker = existingDocker
         try {
-            if (cleanupDocker == null) cleanupDocker = DockerService(AppConfig.dockerSocket)
+            if (cleanupDocker == null) cleanupDocker = docker
             cleanupDocker.removeContainerByIdIfPresent(containerId)
         } catch (cleanupFailure: Throwable) {
             if (cleanupFailure !== failure) failure.addSuppressed(cleanupFailure)
             logger.warn("Could not remove failed deployment candidate {}", containerId, cleanupFailure)
         } finally {
-            if (existingDocker == null) runCatching { cleanupDocker?.close() }
         }
     }
 
@@ -520,7 +499,7 @@ class DeploymentWorker(
         return "$normalizedServiceName-${deploymentId.toString().take(8)}"
     }
 
-    private fun cutover(job: DeploymentJobRecord, docker: DockerService, auditRepository: AuditRepository, onRouteRollback: ((() -> Boolean)?) -> Unit) {
+    private fun cutover(job: DeploymentJobRecord, docker: DockerGateway, auditRepository: AuditRepository, onRouteRollback: ((() -> Boolean)?) -> Unit) {
         var durableState = DeploymentApplicationService.cutoverRecovery(job.id)
             ?: error("Cutover state is missing for deployment ${job.id}")
         if (durableState.state == "activated") {
@@ -561,7 +540,7 @@ class DeploymentWorker(
         }
         val durableCutoverFiles = managedRoute?.let { route ->
             val serviceId = job.serviceId
-            val includes = DeploymentUpstreamIncludes(File(AppConfig.nginxUpstreamIncludeDirectory))
+            val includes = DeploymentUpstreamIncludes(File(nginxSettings.upstreamIncludeDirectory))
             val oldInclude = includes.file(serviceId).takeIf { it.isFile }?.readText()
             val candidateInclude = includes.render(serviceId, route.second)
             DurableCutoverFiles(
@@ -645,7 +624,7 @@ class DeploymentWorker(
             }
             check(DeploymentApplicationService.updateCutoverState(job.id, "route_switched")) { "Unable to persist route cutover state" }
             check(DeploymentApplicationService.updateCutoverState(job.id, "draining")) { "Unable to persist deployment drain state" }
-            if (AppConfig.deploymentDrainDelaySeconds > 0) Thread.sleep(TimeUnit.SECONDS.toMillis(AppConfig.deploymentDrainDelaySeconds))
+            if (schedulerSettings.deploymentDrainDelaySeconds > 0) Thread.sleep(TimeUnit.SECONDS.toMillis(schedulerSettings.deploymentDrainDelaySeconds))
             val postDrain = activeSiteService.verifyAfterDrain(
                 job.serviceId, managedSite.domain,
                 managedSite.tlsMode != com.gatekeeper.db.tables.TlsMode.HTTP_ONLY,
@@ -718,12 +697,12 @@ class DeploymentWorker(
         deploymentId: UUID,
         previous: DeploymentApplicationService.ActiveRuntime?,
         previousNginxConfig: String?,
-        docker: DockerService,
+        docker: DockerGateway,
         nginx: NginxService?,
         ownerSlug: String?,
         site: SiteRepository.SiteRecord?
     ) {
-        val secretValues = previous?.let { DeploymentJobRepository.resolveEnvironmentForExecution(it.executionId).values }.orEmpty()
+        val secretValues = previous?.let { deploymentQueue.resolveEnvironmentForExecution(it.executionId).values }.orEmpty()
         val image = previous?.let { runtime ->
             runtime.image ?: runtime.name?.let(docker::containerImageId)?.also {
                 check(DeploymentApplicationService.recordRuntimeImageReference(runtime.id, it)) { "Unable to persist immutable previous image identity" }
@@ -797,7 +776,7 @@ class DeploymentWorker(
     }
 
     fun rollback(id: java.util.UUID): UUID? {
-        return runCatching { DeploymentJobRepository.createRollback(id) }
+        return runCatching { deploymentQueue.createRollback(id) }
             .onFailure { logger.warn("Unable to queue rollback deployment for {}", id, it) }
             .getOrNull()
     }
@@ -811,7 +790,7 @@ class DeploymentWorker(
         status: String? = null,
         error: String? = null
     ) {
-        DeploymentJobRepository.update(
+        deploymentQueue.update(
             job.id,
             requireNotNull(job.claimToken) { "Claim token missing for deployment ${job.id}" },
             step,
@@ -824,12 +803,11 @@ class DeploymentWorker(
     }
 
     fun cancel(id: UUID): Boolean {
-        val changed = DeploymentJobRepository.cancel(id)
+        val changed = deploymentQueue.cancel(id)
         if (changed) {
             DeploymentApplicationService.candidateContainerName(id)?.let { candidate ->
                 runCatching {
-                    val docker = DockerService(AppConfig.dockerSocket)
-                    try { docker.deleteContainer(candidate) } finally { docker.close() }
+                    docker.deleteContainer(candidate)
                 }
                     .onFailure { logger.warn("Unable to remove cancelled candidate {}", candidate, it) }
             }
@@ -838,12 +816,12 @@ class DeploymentWorker(
     }
 
     private fun ensureNotCancelled(id: UUID, claimToken: UUID) {
-        if (!DeploymentJobRepository.ownsClaim(id, claimToken)) {
+        if (!deploymentQueue.ownsClaim(id, claimToken)) {
             throw CancellationException("Deployment was cancelled or this worker no longer owns its claim")
         }
     }
 
-    private fun awaitHealthy(docker: DockerService, name: String, portMappings: Map<Int, Int>, job: DeploymentJobRecord): ReadinessResult? {
+    private fun awaitHealthy(docker: DockerGateway, name: String, portMappings: Map<Int, Int>, job: DeploymentJobRecord): ReadinessResult? {
         return DeploymentReadiness.await(
             timeoutNanos = job.readinessTimeoutSeconds * 1_000_000_000L,
             intervalMillis = job.readinessIntervalSeconds * 1000L,

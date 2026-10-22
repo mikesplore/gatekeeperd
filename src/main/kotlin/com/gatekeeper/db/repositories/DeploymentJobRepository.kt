@@ -17,31 +17,22 @@ import com.gatekeeper.db.tables.DeploymentStatus
 import com.gatekeeper.db.tables.ProjectSecretSetVersions
 import com.gatekeeper.db.tables.Services
 import com.gatekeeper.db.tables.ProjectSharedEnvironmentVersions
+import com.gatekeeper.feature.integrations.data.persistence.ExposedProviderCredentialRepository
+import com.gatekeeper.feature.integrations.data.persistence.ExposedRegistryCredentialRepository
+import com.gatekeeper.feature.integrations.domain.repository.RegistryCredentialRecord
+import com.gatekeeper.feature.deployment.domain.repository.DeploymentJobRecord as DeploymentJobRecordModel
+import com.gatekeeper.feature.deployment.domain.repository.ResolvedDeploymentEnvironment
+import com.gatekeeper.feature.deployment.domain.repository.StaleDeploymentJob
 
 private data class SecretSetReference(val id: UUID, val version: Int)
 private data class SharedEnvironmentSetReference(val id: UUID, val version: Int)
 
-data class DeploymentJobRecord(
-    val id: UUID, val repository: String?, val gitRef: String, val registry: String,
-    val imageName: String, val imageTag: String, val hostPort: Int?, val containerPort: Int?, val network: String, val restartPolicy: String, val env: Map<String, String>, val secretEnv: Map<String, String>, val volumes: List<VolumeMount>, val createNetworkIfMissing: Boolean,
-    val status: String, val currentStep: String,
-    val logs: String, val commitSha: String?, val imageDigest: String?, val errorMessage: String?,
-    val createdAt: LocalDateTime, val startedAt: LocalDateTime?, val completedAt: LocalDateTime?, val updatedAt: LocalDateTime,
-    val projectId: UUID, val triggerSource: String,
-    val environment: String = "production",
-    val readinessType: String? = null,
-    val readinessTarget: String? = null,
-    val readinessTimeoutSeconds: Int = 60,
-    val readinessIntervalSeconds: Int = 2,
-    val readinessProbeTimeoutMillis: Int = 1000,
-    val secretSetId: UUID? = null,
-    val secretSetVersion: Int? = null,
-    val serviceId: UUID,
-    val serviceName: String = "default",
-    val claimToken: UUID? = null
-)
+typealias DeploymentJobRecord = DeploymentJobRecordModel
 
 object DeploymentJobRepository {
+    typealias ResolvedEnvironment = ResolvedDeploymentEnvironment
+    typealias StaleJobLockKey = StaleDeploymentJob
+    private val registryCredentials = ExposedRegistryCredentialRepository(ExposedProviderCredentialRepository())
     data class AutoDeployTarget(
         val projectId: UUID, val repository: String, val gitRef: String, val registry: String,
         val imageName: String, val imageTag: String, val environment: String,
@@ -73,15 +64,15 @@ object DeploymentJobRepository {
         val job = DeploymentJobs.selectAll().where { DeploymentJobs.id eq id }.singleOrNull() ?: return@transaction null
         val registry = job[DeploymentJobs.registry]
         if (credentialId != null) {
-            val selected = RegistryCredentialRepository.findByCredentialId(credentialId)
+            val selected = registryCredentials.findByCredentialId(credentialId)
                 ?: error("Selected registry credential no longer exists")
             require(selected.registry == registry) { "Selected registry credential does not match deployment registry" }
             selected
-        } else RegistryCredentialRepository.find(registry)
+        } else registryCredentials.find(registry)
     }
 
     private fun requireRegistryCredential(id: UUID, registry: String) {
-        val metadata = ProviderCredentialRepository.findMetadata(id)
+        val metadata = ExposedProviderCredentialRepository().findMetadata(id)
             ?: error("Selected registry credential does not exist")
         require(metadata.provider == "docker" && metadata.credentialType == "registry") {
             "Selected provider credential is not a registry credential"
@@ -1117,8 +1108,6 @@ object DeploymentJobRepository {
         DeploymentJobs.selectAll().where { DeploymentJobs.id eq id }.singleOrNull()?.toRecord()
     }
 
-    data class ResolvedEnvironment(val values: Map<String, String>, val sourceByKey: Map<String, String>)
-
     /** Resolve pinned shared and service versions for the worker without persisting their values in the snapshot. */
     fun resolveEnvironmentForExecution(executionId: UUID): ResolvedEnvironment = transaction {
         val execution = DeploymentExecutions.selectAll().where { DeploymentExecutions.id eq executionId }.singleOrNull()
@@ -1275,8 +1264,6 @@ object DeploymentJobRepository {
         }
         changed == 1
     }
-
-    data class StaleJobLockKey(val id: UUID, val serviceId: UUID, val environment: String, val claimToken: UUID?)
 
     fun staleRunningJobs(cutoff: LocalDateTime): List<StaleJobLockKey> = transaction {
         DeploymentJobs.selectAll().where {
@@ -1442,3 +1429,5 @@ object DeploymentJobRepository {
     }
 
 }
+
+
