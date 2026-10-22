@@ -2,7 +2,7 @@ package com.gatekeeper.scheduler
 
 import com.gatekeeper.db.repositories.ProjectRepository
 import com.gatekeeper.db.repositories.ServiceRepository
-import com.gatekeeper.config.AppConfig
+import com.gatekeeper.config.AppSettings
 import org.slf4j.LoggerFactory
 import java.time.LocalDate
 import java.math.BigDecimal
@@ -18,10 +18,10 @@ import com.gatekeeper.feature.integrations.domain.repository.IntegrationOutboxRe
 object AutoBlockerJob {
 
     private val logger = LoggerFactory.getLogger("com.gatekeeper.scheduler.AutoBlockerJob")
-    fun start(scope: CoroutineScope, outbox: IntegrationOutboxRepository) {
+    fun start(scope: CoroutineScope, outbox: IntegrationOutboxRepository, settings: AppSettings.SchedulerSettings) {
         scope.launch {
             delay(10.seconds)
-            runWorkerLoop("auto-blocker", AppConfig.autoBlockerIntervalMinutes.coerceAtLeast(1) * 60_000, "worker:auto-blocker", logger) {
+            runWorkerLoop("auto-blocker", settings.autoBlockerIntervalMinutes.coerceAtLeast(1) * 60_000, "worker:auto-blocker", logger) {
                 runCatching {
                     val overdue = ProjectRepository.findPastDue(LocalDate.now())
                     overdue.forEach { project ->

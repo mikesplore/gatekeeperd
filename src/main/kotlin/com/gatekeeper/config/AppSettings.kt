@@ -39,6 +39,40 @@ class AppSettings private constructor(
 
     data class AuthSettings(val jwtSecret: String, val issuer: String, val audience: String)
 
+    data class GitHubSettings(
+        val appId: Long?,
+        val installationId: Long?,
+        val clientId: String,
+        val appSlug: String,
+        val installUrl: String,
+        val callbackUrl: String,
+        val privateKeyPath: String,
+        val webhookSecret: String
+    )
+
+    data class IntegrationSettings(
+        val publicBaseUrl: String,
+        val frontendBaseUrl: String,
+        val supportContactEmail: String,
+        val resendApiKey: String,
+        val resendFromEmail: String,
+        val passwordResetUrl: String,
+        val scribedCallbackUrl: String,
+        val scribedIntegrationSecret: String,
+        val scribedApiToken: String
+    )
+
+    data class ApplicationSettings(
+        val adminEmail: String,
+        val adminPassword: String,
+        val deploymentSecretsKey: String,
+        val failMode: String,
+        val corsAllowedHosts: List<CorsHost>,
+        val defaultGracePeriodDays: Int
+    )
+
+    data class CorsHost(val host: String, val schemes: List<String>)
+
     data class PaymentSettings(
         val paystackSecretKey: String,
         val paystackPublicKey: String,
@@ -90,6 +124,31 @@ class AppSettings private constructor(
         )
     }
     val auth: AuthSettings by lazy { AuthSettings(required("JWT_SECRET"), optional("JWT_ISSUER", "gatekeeperd"), optional("JWT_AUDIENCE", "gatekeeperd-admin")) }
+    val github: GitHubSettings by lazy {
+        GitHubSettings(
+            optional("GITHUB_APP_ID", "").toLongOrNull(),
+            optional("GITHUB_APP_INSTALLATION_ID", "").toLongOrNull()?.takeIf { it > 0 },
+            optional("GITHUB_CLIENT_ID", ""), optional("GITHUB_APP_SLUG", ""),
+            optional("GITHUB_APP_INSTALL_URL", ""), optional("GITHUB_CALLBACK_URL", ""),
+            optional("GITHUB_APP_PRIVATE_KEY_PATH", ""), optional("GITHUB_WEBHOOK_SECRET", "")
+        )
+    }
+    val integrations: IntegrationSettings by lazy {
+        IntegrationSettings(
+            optional("GATEKEEPER_PUBLIC_URL", ""), optional("GATEKEEPER_FRONTEND_URL", ""),
+            optional("SUPPORT_CONTACT_EMAIL", "support@gatekeeper.local"), optional("RESEND_API_KEY", ""),
+            optional("RESEND_FROM_EMAIL", ""), optional("PASSWORD_RESET_URL", ""),
+            optional("SCRIBED_CALLBACK_URL", ""), optional("SCRIBED_INTEGRATION_SECRET", ""),
+            optional("SCRIBED_API_TOKEN", "")
+        )
+    }
+    val application: ApplicationSettings by lazy {
+        ApplicationSettings(
+            optional("ADMIN_EMAIL", ""), optional("ADMIN_PASSWORD", ""),
+            optional("DEPLOYMENT_SECRETS_KEY", ""), optional("FAIL_MODE", "open"), corsHosts(),
+            optional("DEFAULT_GRACE_PERIOD_DAYS", "3").toInt()
+        )
+    }
     val payment: PaymentSettings by lazy {
         PaymentSettings(
             optional("PAYSTACK_SECRET_KEY", ""), optional("PAYSTACK_PUBLIC_KEY", ""),
@@ -124,6 +183,23 @@ class AppSettings private constructor(
         val end = parts[1].toIntOrNull() ?: error("DEPLOYMENT_HOST_PORT_RANGE end must be an integer")
         require(start in 1024..65535 && end in 1024..65535 && start <= end) { "DEPLOYMENT_HOST_PORT_RANGE must be an ordered range between 1024 and 65535" }
         return start..end
+    }
+
+    private fun corsHosts(): List<CorsHost> = optional(
+        "CORS_ALLOWED_ORIGINS",
+        "https://gatekeeperd.mikesplore.me,http://localhost:5173,http://localhost:8080"
+    ).split(',').map { it.trim() }.filter { it.isNotEmpty() }.map { origin ->
+        if (origin.contains("://")) {
+            val uri = java.net.URI(origin)
+            val port = uri.port
+            val host = when {
+                port <= 0 -> uri.host
+                (uri.scheme == "http" && port == 80) -> uri.host
+                (uri.scheme == "https" && port == 443) -> uri.host
+                else -> "${uri.host}:$port"
+            }
+            CorsHost(host, listOf(uri.scheme))
+        } else CorsHost(origin, listOf("http", "https"))
     }
 
     companion object {

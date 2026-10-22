@@ -6,8 +6,6 @@ import com.gatekeeper.db.repositories.ProjectRepository
 import com.gatekeeper.feature.project.domain.repository.ProjectAdjustmentRepository
 import com.gatekeeper.feature.payment.domain.model.ProjectFinancials
 import kotlinx.serialization.Serializable
-
-import java.math.BigDecimal
 import java.time.LocalDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter

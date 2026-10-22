@@ -3,7 +3,6 @@ package com.gatekeeper
 import com.gatekeeper.admin.*
 import com.gatekeeper.api.InputValidators
 import com.gatekeeper.auth.configureAuthRoutes
-import com.gatekeeper.config.AppConfig
 import com.gatekeeper.config.AppSettings
 import com.gatekeeper.customer.configureCustomerRoutes
 import com.gatekeeper.db.tables.Users
@@ -28,6 +27,7 @@ import com.gatekeeper.feature.payment.domain.repository.PaymentRepository as Pay
 import com.gatekeeper.feature.payment.data.persistence.ProjectBalanceAdapter
 import org.koin.ktor.ext.get
 import com.gatekeeper.docker.DockerService
+import com.gatekeeper.docker.DockerGateway
 import com.gatekeeper.scheduler.AutoBlockerJob
 import com.gatekeeper.scheduler.IntegrationOutboxJob
 import com.gatekeeper.scheduler.ReconciliationJob
@@ -56,33 +56,27 @@ fun main(args: Array<String>) {
 }
 
 private fun operationalCommand(command: String, args: Array<String>) {
+    val settings = AppSettings.fromEnv()
+    val db = settings.db
     when (command) {
         "migrate" -> if (args.firstOrNull() == "baseline") {
             DatabaseMigrations.baseline(
-                AppConfig.dbUrl,
-                AppConfig.dbUser,
-                AppConfig.dbPassword,
-                AppConfig.dbMigrationBaselineVersion
+                db.url, db.user, db.password, db.migrationBaselineVersion
             )
         } else {
             DatabaseMigrations.migrate(
-                AppConfig.dbUrl,
-                AppConfig.dbUser,
-                AppConfig.dbPassword,
-                AppConfig.dbMigrationBaselineVersion
+                db.url, db.user, db.password, db.migrationBaselineVersion
             )
         }
 
         "backfill" -> {
             DatabaseFactory.init(
-                AppConfig.dbUrl,
-                AppConfig.dbUser,
-                AppConfig.dbPassword
+                db.url, db.user, db.password, db.migrationBaselineVersion
             ); try {
-                val docker = DockerService(AppSettings.fromEnv().docker.socket)
+                val docker = DockerService(settings.docker.socket)
                 try {
                     NginxBackfillRunner.run(
-                        args.firstOrNull { !it.startsWith("--") } ?: AppConfig.nginxSitesAvailablePath,
+                        args.firstOrNull { !it.startsWith("--") } ?: settings.nginx.sitesAvailablePath,
                         args.contains("--dry-run"),
                         docker
                     )
@@ -99,9 +93,7 @@ private fun operationalCommand(command: String, args: Array<String>) {
                 "service-backfill currently supports report-only mode; pass --dry-run"
             }
             val report = ServiceIdentityBackfill.report(
-                AppConfig.dbUrl,
-                AppConfig.dbUser,
-                AppConfig.dbPassword
+                db.url, db.user, db.password
             )
             println("projects_without_default_service=${report.projectsWithoutDefaultService}")
             println("planned_default_services=${report.projectsWithoutDefaultService}")
@@ -109,10 +101,8 @@ private fun operationalCommand(command: String, args: Array<String>) {
 
         "health-check" -> {
             DatabaseFactory.init(
-                AppConfig.dbUrl,
-                AppConfig.dbUser,
-                AppConfig.dbPassword
-            ); RedisService.init(AppConfig.redisHost, AppConfig.redisPort)
+                db.url, db.user, db.password, db.migrationBaselineVersion
+            ); RedisService.init(settings.redis.host, settings.redis.port)
             val ready =
                 DatabaseFactory.isHealthy() && RedisService.isHealthy() && DatabaseFactory.migrationsHealthy(); RedisService.close(); DatabaseFactory.close(); if (!ready) exitProcess(
                 1
@@ -127,21 +117,19 @@ private fun Array<String>.portArg(): Int? =
     firstOrNull { it.startsWith("-port=") }?.substringAfter("=")?.toIntOrNull()
 
 fun Application.module() {
-    AppConfig.logConfig()
-    AppConfig.warnIfDeploymentPortsOverlapEphemeralRange()
-
     configureSerialization()
     configureMonitoring()
     configureApiDocumentation()
+    configureDependencyInjection()
+    val settings = get<AppSettings>()
     configureDatabase()
-    if (AppConfig.nginxDeploymentUpstreamsEnabled) {
-        NginxService.configured().bootstrapDeploymentUpstreams()
+    if (settings.nginx.deploymentUpstreamsEnabled) {
+        get<NginxService>().bootstrapDeploymentUpstreams()
     } else {
         org.slf4j.LoggerFactory.getLogger("com.gatekeeper.Application")
             .warn("Nginx deployment upstream bootstrap is disabled; deployment cutovers require nginx configuration")
     }
     configureRedis()
-    configureDependencyInjection()
     configureSecurity()
     configureRouting()
     configureGateRoutes()
@@ -164,11 +152,11 @@ fun Application.module() {
     configureGitHubWebhookRoutes()
     configureGitHubAdminRoutes()
 
-    seedInitialAdmin()
+    seedInitialAdmin(settings.application)
 
     val appScope = CoroutineScope(SupervisorJob())
-    AutoBlockerJob.start(appScope, get())
-    ReconciliationJob.start(appScope, get<ReconcilePayments>())
+    AutoBlockerJob.start(appScope, get(), settings.scheduler)
+    ReconciliationJob.start(appScope, get<ReconcilePayments>(), settings.scheduler)
     IntegrationOutboxJob.start(appScope, get(), get<PaymentDomainRepository>(), get<ProjectBalanceAdapter>())
     get<DeploymentWorker>().start(appScope)
 
@@ -182,7 +170,7 @@ fun Application.module() {
     }
 }
 
-private fun seedInitialAdmin() {
+private fun seedInitialAdmin(applicationSettings: AppSettings.ApplicationSettings) {
     val logger = LoggerFactory.getLogger("com.gatekeeper.Application")
     try {
         val count: Long = transaction {
@@ -192,8 +180,8 @@ private fun seedInitialAdmin() {
             return
         }
 
-        val email = AppConfig.adminEmail.trim().lowercase()
-        val password = AppConfig.adminPassword
+        val email = applicationSettings.adminEmail.trim().lowercase()
+        val password = applicationSettings.adminPassword
 
         if (email.isBlank() || password.isBlank()) {
             logger.error(
