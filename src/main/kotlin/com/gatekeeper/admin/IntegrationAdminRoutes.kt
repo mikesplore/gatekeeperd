@@ -35,6 +35,7 @@ private data class OutboxReplayResponse(
 
 fun Application.configureIntegrationAdminRoutes() {
     val outbox = get<IntegrationOutboxRepository>()
+    val scribed = get<ScribedIntegrationClient>()
     routing {
         authenticate("auth-jwt") {
             get("/api/admin/integrations/outbox") {
@@ -64,7 +65,7 @@ fun Application.configureIntegrationAdminRoutes() {
                         "Undelivered outbox event not found"
                     ); return@post
                 }
-                val result = ScribedIntegrationClient.deliverWithResult(
+                val result = scribed.deliverWithResult(
                     event,
                     call.application.get<PaymentRepository>(),
                     call.application.get<ProjectBalanceAdapter>(),

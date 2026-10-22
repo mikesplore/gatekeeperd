@@ -9,11 +9,11 @@ import org.slf4j.LoggerFactory
 
 object IntegrationOutboxJob {
     private val logger = LoggerFactory.getLogger("com.gatekeeper.scheduler.IntegrationOutboxJob")
-    fun start(scope: CoroutineScope, outbox: IntegrationOutboxRepository, payments: PaymentRepository, balances: ProjectBalanceAdapter) { scope.launch {
+    fun start(scope: CoroutineScope, outbox: IntegrationOutboxRepository, payments: PaymentRepository, balances: ProjectBalanceAdapter, scribed: ScribedIntegrationClient) { scope.launch {
         runWorkerLoop("integration-outbox", 60_000, "worker:integration-outbox", logger) {
             run {
                 outbox.claim().forEach { event ->
-                    val result = ScribedIntegrationClient.deliverWithResult(event, payments, balances, outbox)
+                    val result = scribed.deliverWithResult(event, payments, balances, outbox)
                     if (result.delivered) outbox.markDelivered(event.id)
                     else outbox.markFailed(event.id, result.error ?: "Integration delivery failed", event.attempts)
                 }
