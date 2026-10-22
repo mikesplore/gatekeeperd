@@ -3,7 +3,7 @@ package com.gatekeeper.plugins
 import com.auth0.jwt.JWT
 import com.auth0.jwt.algorithms.Algorithm
 import com.gatekeeper.api.respondError
-import com.gatekeeper.config.AppConfig
+import com.gatekeeper.config.AppSettings
 import org.slf4j.LoggerFactory
 import io.ktor.http.*
 import io.ktor.server.application.*
@@ -12,6 +12,7 @@ import io.ktor.server.auth.jwt.*
 import io.ktor.server.plugins.cors.routing.*
 import io.ktor.server.plugins.defaultheaders.*
 import io.ktor.util.AttributeKey
+import org.koin.ktor.ext.get
 import java.util.*
 
 internal enum class JwtRevocationStatus {
@@ -25,19 +26,19 @@ private val revocationUnavailableKey = AttributeKey<Boolean>("jwt-revocation-una
 
 object JwtConfig {
     private val logger = LoggerFactory.getLogger("com.gatekeeper.plugins.JwtConfig")
-    val algorithm: Algorithm by lazy { Algorithm.HMAC256(AppConfig.jwtSecret) }
+    fun algorithm(settings: AppSettings.AuthSettings): Algorithm = Algorithm.HMAC256(settings.jwtSecret)
 
-    fun createToken(email: String, role: String = "admin"): String {
+    fun createToken(settings: AppSettings.AuthSettings, email: String, role: String = "admin"): String {
         val now = Date()
         return JWT.create()
             .withSubject(email)
-            .withIssuer(AppConfig.jwtIssuer)
-            .withAudience(AppConfig.jwtAudience)
+            .withIssuer(settings.issuer)
+            .withAudience(settings.audience)
             .withJWTId(UUID.randomUUID().toString())
             .withClaim("role", role)
             .withIssuedAt(now)
             .withExpiresAt(Date(now.time + 24 * 3600 * 1000))
-            .sign(algorithm)
+            .sign(algorithm(settings))
     }
 
     internal fun revocationStatus(
@@ -95,6 +96,7 @@ internal fun io.ktor.server.auth.AuthenticationConfig.configureAdminJwt(
 }
 
 fun Application.configureSecurity() {
+    val appSettings = get<AppSettings>()
     install(DefaultHeaders) {
         header("X-Engine", "Gatekeeperd")
     }
@@ -112,16 +114,16 @@ fun Application.configureSecurity() {
         allowCredentials = true
         allowNonSimpleContentTypes = true
 
-        AppConfig.corsAllowedHosts.forEach { entry ->
+        appSettings.application.corsAllowedHosts.forEach { entry ->
             allowHost(entry.host, schemes = entry.schemes)
         }
     }
 
     authentication {
         configureAdminJwt(
-            JwtConfig.algorithm,
-            AppConfig.jwtAudience,
-            AppConfig.jwtIssuer,
+            JwtConfig.algorithm(appSettings.auth),
+            appSettings.auth.audience,
+            appSettings.auth.issuer,
             RedisService::getRequired
         )
     }

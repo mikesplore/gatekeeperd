@@ -1,6 +1,6 @@
 package com.gatekeeper.security
 
-import com.gatekeeper.config.AppConfig
+import com.gatekeeper.config.AppSettings
 import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets
 import java.security.SecureRandom
@@ -15,7 +15,7 @@ object SecretValueCipher {
     private const val TAG_BITS = 128
     private val random = SecureRandom()
 
-    fun isConfigured() = AppConfig.deploymentSecretsKey.isNotBlank()
+    fun isConfigured() = AppSettings.fromEnv().application.deploymentSecretsKey.isNotBlank()
 
     fun encrypt(plaintext: String): String {
         val iv = ByteArray(IV_SIZE).also(random::nextBytes)
@@ -45,7 +45,7 @@ object SecretValueCipher {
         secrets.filter(String::isNotEmpty).fold(text) { result, secret -> result.replace(secret, "[REDACTED]") }
 
     private fun key(): SecretKeySpec {
-        val bytes = runCatching { Base64.getDecoder().decode(AppConfig.deploymentSecretsKey) }
+        val bytes = runCatching { Base64.getDecoder().decode(AppSettings.fromEnv().application.deploymentSecretsKey) }
             .getOrElse { throw IllegalStateException("DEPLOYMENT_SECRETS_KEY must be base64 encoded") }
         require(bytes.size == 32) { "DEPLOYMENT_SECRETS_KEY must decode to exactly 32 bytes" }
         return SecretKeySpec(bytes, "AES")
