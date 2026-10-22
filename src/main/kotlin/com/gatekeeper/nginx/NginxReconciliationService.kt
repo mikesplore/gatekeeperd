@@ -1,6 +1,6 @@
 package com.gatekeeper.nginx
 
-import com.gatekeeper.config.AppConfig
+import com.gatekeeper.config.AppSettings
 import com.gatekeeper.db.repositories.SiteRepository
 import com.gatekeeper.db.tables.ReconciliationStatus
 import com.gatekeeper.db.tables.UpstreamMode
@@ -33,7 +33,7 @@ class NginxReconciliationService(
     private val persist: (SiteRepository.SiteRecord, NginxReconciliationResult) -> Unit = { site, result ->
         SiteRepository.updateReconciliation(site.id, result.status, result.nginxError, result.dockerError)
     },
-    private val selfDomainExclusion: NginxSelfDomainExclusion = NginxSelfDomainExclusion(AppConfig.gatekeeperdSelfDomains)
+    private val selfDomainExclusion: NginxSelfDomainExclusion = NginxSelfDomainExclusion(AppSettings.fromEnv().nginx.selfDomains)
 ) {
     companion object {
         /** Docker-backed check used by production reconciliation wiring and integration tests. */

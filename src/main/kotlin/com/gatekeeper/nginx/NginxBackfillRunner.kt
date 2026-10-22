@@ -1,6 +1,6 @@
 package com.gatekeeper.nginx
 
-import com.gatekeeper.config.AppConfig
+import com.gatekeeper.config.AppSettings
 import com.gatekeeper.db.repositories.ProjectRepository
 import com.gatekeeper.db.repositories.SiteRepository
 import com.gatekeeper.feature.certificate.data.persistence.ExposedCertificateRepository
@@ -11,7 +11,7 @@ import java.io.File
 /** Manual production entry point. Call only after database and Docker are available. */
 object NginxBackfillRunner {
     fun run(
-        sitesAvailablePath: String = AppConfig.nginxSitesAvailablePath,
+        sitesAvailablePath: String = AppSettings.fromEnv().nginx.sitesAvailablePath,
         dryRun: Boolean = false,
         docker: DockerGateway? = null
     ): NginxBackfillReport {
@@ -52,7 +52,7 @@ object NginxBackfillRunner {
                 deleteSite = { project -> SiteRepository.deleteByProjectId(project.id) },
                 dryRun = dryRun,
                 log = ::println,
-                selfDomainExclusion = NginxSelfDomainExclusion(AppConfig.gatekeeperdSelfDomains)
+                selfDomainExclusion = NginxSelfDomainExclusion(AppSettings.fromEnv().nginx.selfDomains)
         ).run()
         if (report.failedDiff.isNotEmpty()) {
             report.failedDiff.forEach { (slug, diff) -> println("$slug: $diff") }
