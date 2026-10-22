@@ -33,7 +33,7 @@ class NginxReconciliationService(
     private val persist: (SiteRepository.SiteRecord, NginxReconciliationResult) -> Unit = { site, result ->
         SiteRepository.updateReconciliation(site.id, result.status, result.nginxError, result.dockerError)
     },
-    private val selfDomainExclusion: NginxSelfDomainExclusion = NginxSelfDomainExclusion(AppSettings.fromEnv().nginx.selfDomains)
+    private val selfDomainExclusion: NginxSelfDomainExclusion = NginxSelfDomainExclusion(emptyList())
 ) {
     companion object {
         /** Docker-backed check used by production reconciliation wiring and integration tests. */
