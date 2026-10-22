@@ -27,7 +27,7 @@ import com.github.dockerjava.api.async.ResultCallback
 
 private val logger = LoggerFactory.getLogger("com.gatekeeper.docker.DockerService")
 
-internal data class CreatedContainer(val id: String, val info: ContainerInfo)
+data class CreatedContainer(val id: String, val info: ContainerInfo)
 
 /** Cleans up only after create returned an identity for the resource this operation owns. */
 internal fun <Handle, Result> createContainerWithCleanup(
@@ -75,7 +75,7 @@ class DockerService(dockerSocketPath: String) : DockerGateway {
         logger.info("Docker client initialized (socket: $dockerSocketPath)")
     }
 
-    fun listContainers(all: Boolean): List<ContainerInfo> {
+    override fun listContainers(all: Boolean): List<ContainerInfo> {
         return client.listContainersCmd()
             .withShowAll(all)
             .exec()
@@ -287,7 +287,7 @@ class DockerService(dockerSocketPath: String) : DockerGateway {
         logger.info("Started container: $containerNameOrId")
     }
 
-    fun stopContainer(containerNameOrId: String, timeoutSeconds: Int = 10) {
+    override fun stopContainer(containerNameOrId: String, timeoutSeconds: Int) {
         client.stopContainerCmd(containerNameOrId).withTimeout(timeoutSeconds).exec()
         logger.info("Stopped container: $containerNameOrId")
     }
@@ -297,14 +297,14 @@ class DockerService(dockerSocketPath: String) : DockerGateway {
         logger.info("Restarted container: $containerNameOrId")
     }
 
-    fun pullImage(image: String, tag: String = "latest") {
+    override fun pullImage(image: String, tag: String) {
         val fullName = if (tag.isNotEmpty()) "$image:$tag" else image
         logger.info("Pulling image: $fullName")
         client.pullImageCmd(fullName).start().awaitCompletion()
         logger.info("Image pulled: $fullName")
     }
 
-    fun pullImageViaCli(imageRef: String, dockerHost: String? = null) {
+    override fun pullImageViaCli(imageRef: String, dockerHost: String?) {
         val ref = imageRef.trim()
         require(ref.isNotBlank()) { "imageRef must be non-blank" }
 
@@ -328,7 +328,7 @@ class DockerService(dockerSocketPath: String) : DockerGateway {
         logger.info("Image pulled via docker CLI: $ref")
     }
 
-    fun imageExists(imageRef: String): Boolean {
+    override fun imageExists(imageRef: String): Boolean {
         val ref = imageRef.trim()
         if (ref.isBlank()) return false
 
@@ -349,22 +349,22 @@ class DockerService(dockerSocketPath: String) : DockerGateway {
         }
     }
 
-    fun imageDigest(imageRef: String): String? = runCatching {
+    override fun imageDigest(imageRef: String): String? = runCatching {
         client.inspectImageCmd(imageRef).exec().repoDigests?.firstOrNull()
     }.getOrNull()
 
     /** Immutable local identity for recovery when the registry does not expose a repository digest. */
-    fun immutableImageReference(imageRef: String): String? = runCatching {
+    override fun immutableImageReference(imageRef: String): String? = runCatching {
         val image = client.inspectImageCmd(imageRef).exec()
         image.repoDigests?.firstOrNull() ?: image.id?.takeIf { it.startsWith("sha256:") }
     }.getOrNull()
 
-    fun containerImageId(containerNameOrId: String): String? = runCatching {
+    override fun containerImageId(containerNameOrId: String): String? = runCatching {
         client.inspectContainerCmd(containerNameOrId).exec().imageId
     }.getOrNull()
 
     /** Reuse only the expected immutable image at the exact recorded name; never delete a conflicting container. */
-    fun ensureRestoredContainer(request: CreateContainerRequest): ContainerInfo {
+    override fun ensureRestoredContainer(request: CreateContainerRequest): ContainerInfo {
         require(request.name.isNotBlank()) { "Restored runtime name must not be blank" }
         val expectedImageId = client.inspectImageCmd(request.image).exec().id
             ?: error("Immutable runtime image is unavailable")
@@ -463,7 +463,7 @@ class DockerService(dockerSocketPath: String) : DockerGateway {
     }
 
     /** TCP ports declared by the image's Docker metadata (Dockerfile EXPOSE). */
-    fun imageExposedTcpPorts(imageRef: String): List<Int> = client.inspectImageCmd(imageRef).exec()
+    override fun imageExposedTcpPorts(imageRef: String): List<Int> = client.inspectImageCmd(imageRef).exec()
         .config?.exposedPorts.orEmpty()
         .asSequence()
         .filter { it.protocol.toString().equals("tcp", ignoreCase = true) }
@@ -481,7 +481,7 @@ class DockerService(dockerSocketPath: String) : DockerGateway {
 
     fun referencedImageNames(): Set<String> = listContainers(true).map { it.image }.toSet()
 
-    fun hostPortsInUse(): Set<Int> {
+    override fun hostPortsInUse(): Set<Int> {
         return client.listContainersCmd()
             .withShowAll(true)
             .exec()
@@ -490,7 +490,7 @@ class DockerService(dockerSocketPath: String) : DockerGateway {
             .toSet()
     }
 
-    fun listNetworks(): List<NetworkInfo> {
+    override fun listNetworks(): List<NetworkInfo> {
         val containersByNetwork = client.listContainersCmd()
             .withShowAll(true)
             .exec()
@@ -530,7 +530,7 @@ class DockerService(dockerSocketPath: String) : DockerGateway {
             }
     }
 
-    fun createNetworkIfMissing(name: String) {
+    override fun createNetworkIfMissing(name: String) {
         val networks = client.listNetworksCmd().exec()
         val exists = networks.any { it.name == name }
 
@@ -607,9 +607,9 @@ class DockerService(dockerSocketPath: String) : DockerGateway {
         null
     }
 
-    fun createContainer(request: CreateContainerRequest): ContainerInfo = createContainerTracked(request).info
+    override fun createContainer(request: CreateContainerRequest): ContainerInfo = createContainerTracked(request).info
 
-    internal fun createContainerTracked(request: CreateContainerRequest): CreatedContainer {
+    override fun createContainerTracked(request: CreateContainerRequest): CreatedContainer {
         enforceSecurityPolicy(request)
         if (request.pullImage && !imageExists(request.image)) {
             val raw = request.image.trim()
@@ -689,7 +689,7 @@ class DockerService(dockerSocketPath: String) : DockerGateway {
     }
 
     /** Idempotently removes only a container with the exact Docker ID returned by create. */
-    internal fun removeContainerByIdIfPresent(containerId: String): Boolean {
+    override fun removeContainerByIdIfPresent(containerId: String): Boolean {
         val owned = client.listContainersCmd().withShowAll(true).exec()
             .firstOrNull { it.id == containerId } ?: return false
         client.removeContainerCmd(owned.id).withForce(true).exec()
@@ -716,7 +716,7 @@ class DockerService(dockerSocketPath: String) : DockerGateway {
         }
     }
 
-    fun deleteImage(image: String, tag: String = "latest", force: Boolean = true) {
+    override fun deleteImage(image: String, tag: String, force: Boolean) {
         val fullName = if (tag.isNotEmpty()) "$image:$tag" else image
         logger.info("Deleting image: $fullName (force=$force)")
         val removeCmd: RemoveImageCmd = client.removeImageCmd(fullName)
@@ -729,7 +729,7 @@ class DockerService(dockerSocketPath: String) : DockerGateway {
         client.removeImageCmd(reference).withForce(false).exec()
     }
 
-    fun deleteContainer(containerNameOrId: String, force: Boolean = true) {
+    override fun deleteContainer(containerNameOrId: String, force: Boolean) {
         val removeCmd: RemoveContainerCmd = client.removeContainerCmd(containerNameOrId)
             .withForce(force)
         removeCmd.exec()
