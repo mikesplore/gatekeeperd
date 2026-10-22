@@ -13,11 +13,12 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import com.gatekeeper.integrations.ScribedIntegrationClient
+import com.gatekeeper.feature.integrations.domain.repository.IntegrationOutboxRepository
 
 object AutoBlockerJob {
 
     private val logger = LoggerFactory.getLogger("com.gatekeeper.scheduler.AutoBlockerJob")
-    fun start(scope: CoroutineScope) {
+    fun start(scope: CoroutineScope, outbox: IntegrationOutboxRepository) {
         scope.launch {
             delay(10.seconds)
             runWorkerLoop("auto-blocker", AppConfig.autoBlockerIntervalMinutes.coerceAtLeast(1) * 60_000, "worker:auto-blocker", logger) {
@@ -25,8 +26,8 @@ object AutoBlockerJob {
                     val overdue = ProjectRepository.findPastDue(LocalDate.now())
                     overdue.forEach { project ->
                         ProjectRepository.updateStatus(project.id, "blocked", actor = "system", reason = "auto-block: payment overdue", blockReason = "overdue")
-                        ScribedIntegrationClient.notifySuspension(project.copy(status = "blocked", blockReason = "overdue"), "payment_overdue")
-                        ScribedIntegrationClient.notifyInvoiceDue(project)
+                        ScribedIntegrationClient.notifySuspension(project.copy(status = "blocked", blockReason = "overdue"), "payment_overdue", outbox)
+                        ScribedIntegrationClient.notifyInvoiceDue(project, outbox)
                         logger.warn("Auto-blocked project: ${project.slug} (due: ${project.dueDate}, grace: ${project.gracePeriodDays} days)")
                     }
 

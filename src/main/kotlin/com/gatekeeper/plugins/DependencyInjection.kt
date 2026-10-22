@@ -33,6 +33,8 @@ import com.gatekeeper.feature.payment.data.persistence.PaymentEffectsAdapter
 import com.gatekeeper.feature.payment.data.persistence.PaymentProjectAdapter
 import com.gatekeeper.feature.payment.data.persistence.PaymentBalanceAdapter
 import com.gatekeeper.feature.payment.data.persistence.PaymentServiceAdapter
+import com.gatekeeper.feature.payment.data.persistence.ExposedServiceMembershipRepository
+import com.gatekeeper.feature.payment.domain.repository.ServiceMembershipRepository
 import com.gatekeeper.feature.payment.data.persistence.ProjectBalanceAdapter
 import com.gatekeeper.feature.payment.data.provider.PaymentProviderReadinessAdapter
 import com.gatekeeper.feature.payment.data.provider.JsonMpesaCallbackDecoder
@@ -109,7 +111,7 @@ import io.ktor.server.application.install
 
 private val applicationModule = module {
     single { AppSettings.fromEnv() }
-    single { DockerService(get<AppSettings>()["DOCKER_SOCKET"] ?: AppConfig.dockerSocket) }
+    single { DockerService(get<AppSettings>().docker.socket) }
     single<DockerGateway> { get<DockerService>() }
     single { DockerCleanupService(get<DockerService>(), get<AuditRepository>()) }
     single<ProcessRunner> { ProcessRunnerImpl() }
@@ -140,7 +142,7 @@ private val applicationModule = module {
     single { SourceFetcher(get<DeploymentCommandRunner>(), get<GitHubTokenProvider>()) }
     single { ImageBuilder(get<DeploymentCommandRunner>()) }
     single<DeploymentLock> { DistributedDeploymentLock() }
-    single { DeploymentWorker(get(), get(), get(), get(), get(), get()) }
+    single { DeploymentWorker(get(), get(), get(), get(), get(), get(), get(), get<AppSettings>().scheduler, get<AppSettings>().nginx) }
     single<ProjectQueryRepository> { ExposedProjectQueryRepository() }
     single<SupportRequestRepository> { ExposedSupportRequestRepository() }
     single { CustomerApplicationService(get<ProjectQueryRepository>(), get(), get(), get<SupportRequestRepository>()) }
@@ -154,8 +156,9 @@ private val applicationModule = module {
     single<PaymentEventDomainRepository> { ExposedPaymentEventRepository() }
     single { PaymentProjectAdapter() }
     single { PaymentServiceAdapter() }
+    single<ServiceMembershipRepository> { ExposedServiceMembershipRepository() }
     single { PaymentBalanceAdapter(get<PaymentDomainRepository>(), get(), get()) }
-    single<PaymentEffects> { PaymentEffectsAdapter(get(), get()) }
+    single<PaymentEffects> { PaymentEffectsAdapter(get(), get(), get()) }
     single { ApplyWebhookEvent(get(), get()) }
     single<PaymentGateway>(named("paystackGateway")) { PaystackGateway() }
     single<PaymentGateway>(named("mpesaGateway")) { MpesaGateway }
