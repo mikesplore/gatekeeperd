@@ -1,8 +1,8 @@
 package com.gatekeeper.customer
 
+import com.gatekeeper.config.AppSettings
 import com.gatekeeper.api.InputValidators
 import com.gatekeeper.api.respondError
-import com.gatekeeper.config.AppConfig
 import com.gatekeeper.db.repositories.ProjectRepository
 import com.gatekeeper.db.tables.SupportRequests
 import io.ktor.http.*
@@ -72,12 +72,13 @@ data class CustomerReminderResponse(
     val frontendUrl: String? = null
 )
 
-private fun frontendUrl(path: String): String? {
-    val base = AppConfig.frontendBaseUrl.trim().trimEnd('/').takeIf { it.isNotBlank() } ?: return null
+private fun frontendUrl(path: String, settings: AppSettings.IntegrationSettings): String? {
+    val base = settings.frontendBaseUrl.trim().trimEnd('/').takeIf { it.isNotBlank() } ?: return null
     return "$base/${path.trimStart('/')}"
 }
 
 fun Application.configureCustomerRoutes() {
+    val settings = get<AppSettings>().integrations
     routing {
         get("/api/customer/projects/{slug}/status") {
             val slug = call.parameters["slug"] ?: return@get call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing project slug")
@@ -95,7 +96,7 @@ fun Application.configureCustomerRoutes() {
                 accessStatus = project.status, blockReason = project.blockReason,
                 amountDue = project.amountDue?.toDouble(), currency = project.currency,
                 dueDate = project.dueDate?.toString(), paymentUrl = "/api/gate/pay?project=$slug",
-                portalUrl = frontendUrl("portal/$slug") ?: "/api/customer/projects/$slug/status",
+                portalUrl = frontendUrl("portal/$slug", settings) ?: "/api/customer/projects/$slug/status",
                 supportUrl = "/api/customer/projects/$slug/support", payments = payments
             ))
         }
@@ -122,14 +123,14 @@ fun Application.configureCustomerRoutes() {
         get("/api/customer/projects/{slug}/portal") {
             val slug = call.parameters["slug"] ?: return@get call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing project slug")
             if (ProjectRepository.findBySlug(slug) == null) return@get call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
-            val url = frontendUrl("portal/$slug") ?: return@get call.respondError(HttpStatusCode.ServiceUnavailable, "frontend_not_configured", "Customer frontend URL is not configured")
+            val url = frontendUrl("portal/$slug", settings) ?: return@get call.respondError(HttpStatusCode.ServiceUnavailable, "frontend_not_configured", "Customer frontend URL is not configured")
             call.respondRedirect(url, permanent = false)
         }
 
         get("/api/customer/projects/{slug}/payment-success") {
             val slug = call.parameters["slug"] ?: return@get call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing project slug")
             if (ProjectRepository.findBySlug(slug) == null) return@get call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
-            val url = frontendUrl("payment/success?project=$slug&reference=${call.request.queryParameters["reference"].orEmpty()}")
+            val url = frontendUrl("payment/success?project=$slug&reference=${call.request.queryParameters["reference"].orEmpty()}", settings)
                 ?: return@get call.respondError(HttpStatusCode.ServiceUnavailable, "frontend_not_configured", "Customer frontend URL is not configured")
             call.respondRedirect(url, permanent = false)
         }
@@ -144,7 +145,7 @@ fun Application.configureCustomerRoutes() {
                 subject = "Payment required for ${project.name}",
                 message = "Access to ${project.domain} is currently ${project.status}. Please complete the outstanding payment to restore access.",
                 paymentUrl = "/api/gate/pay?project=$slug",
-                frontendUrl = frontendUrl("payment/$slug")
+                frontendUrl = frontendUrl("payment/$slug", settings)
             ))
         }
 

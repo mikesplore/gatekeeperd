@@ -1,6 +1,7 @@
 package com.gatekeeper.plugins
 
-import com.gatekeeper.config.AppConfig
+import com.gatekeeper.config.AppSettings
+import org.koin.ktor.ext.get
 import com.zaxxer.hikari.HikariConfig
 import com.zaxxer.hikari.HikariDataSource
 import io.ktor.server.application.*
@@ -13,7 +14,13 @@ object DatabaseFactory {
     lateinit var dataSource: HikariDataSource
         private set
 
-    fun init(url: String, user: String, password: String, driver: String = "org.postgresql.Driver") {
+    fun init(
+        url: String,
+        user: String,
+        password: String,
+        migrationBaselineVersion: String = AppSettings.fromEnv().db.migrationBaselineVersion,
+        driver: String = "org.postgresql.Driver"
+    ) {
         val config = HikariConfig().apply {
             this.driverClassName = driver
             this.jdbcUrl = url
@@ -29,7 +36,7 @@ object DatabaseFactory {
         Database.connect(dataSource)
         // Apply the schema before validating it so a freshly provisioned database
         // can be initialized by the deployed application artifact itself.
-        DatabaseMigrations.migrate(url, user, password, AppConfig.dbMigrationBaselineVersion)
+        DatabaseMigrations.migrate(url, user, password, migrationBaselineVersion)
         DatabaseMigrations.validate(url, user, password)
 
         logger.info("Database connected: $url")
@@ -106,7 +113,8 @@ object DatabaseFactory {
 }
 
 fun Application.configureDatabase() {
-    DatabaseFactory.init(AppConfig.dbUrl, AppConfig.dbUser, AppConfig.dbPassword)
+    val db = get<AppSettings>().db
+    DatabaseFactory.init(db.url, db.user, db.password, db.migrationBaselineVersion)
 
     environment.monitor.subscribe(ApplicationStopping) {
         DatabaseFactory.close()

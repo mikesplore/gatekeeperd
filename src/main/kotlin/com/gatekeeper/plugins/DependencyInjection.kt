@@ -10,7 +10,6 @@ import com.gatekeeper.nginx.NginxAdminService
 import com.gatekeeper.nginx.NginxService
 import com.gatekeeper.nginx.NginxCommandRunner
 import com.gatekeeper.nginx.ExposedCertificateStore
-import com.gatekeeper.config.AppConfig
 import com.gatekeeper.config.AppSettings
 import com.gatekeeper.docker.DockerGateway
 import com.gatekeeper.docker.DockerService
@@ -111,7 +110,7 @@ import io.ktor.server.application.install
 
 private val applicationModule = module {
     single { AppSettings.fromEnv() }
-    single { DockerService(get<AppSettings>().docker.socket) }
+    single { DockerService(get<AppSettings>().docker.socket, get<AppSettings>().docker) }
     single<DockerGateway> { get<DockerService>() }
     single { DockerCleanupService(get<DockerService>(), get<AuditRepository>()) }
     single<ProcessRunner> { ProcessRunnerImpl() }
@@ -146,9 +145,10 @@ private val applicationModule = module {
     single<ProjectQueryRepository> { ExposedProjectQueryRepository() }
     single<SupportRequestRepository> { ExposedSupportRequestRepository() }
     single { CustomerApplicationService(get<ProjectQueryRepository>(), get(), get(), get<SupportRequestRepository>()) }
-    single { GateService(get<ProjectQueryRepository>(), get<GetLatestPaymentLink>(), get()) }
+    single { GateService(get<ProjectQueryRepository>(), get<GetLatestPaymentLink>(), get(), get<AppSettings>().application) }
     single { GateApplicationService(get<ProjectQueryRepository>(), get<GateService>()) }
-    single { NginxService.configured(get<NginxCommandRunner>()) }
+    single { NginxService.configured(get<AppSettings>().nginx, get<NginxCommandRunner>()) }
+    single { GitHubAppClient(get(), get(), settings = get<AppSettings>().github) }
     single { ExposedCertificateStore(get<CertificateRepository>()) }
     single { NginxAdminService(get(), get<ExposedCertificateStore>()) }
     single<PaymentDomainRepository> { ExposedPaymentRepository() }
