@@ -71,7 +71,10 @@ class AppSettings private constructor(
         val failMode: String,
         val corsAllowedHosts: List<CorsHost>,
         val defaultGracePeriodDays: Int,
-        val nginxConfigLogEnabled: Boolean
+        val nginxConfigLogEnabled: Boolean,
+        val deploymentStaleMinutes: Long,
+        val deploymentHostPortRange: IntRange,
+        val deploymentDrainDelaySeconds: Long
     )
 
     data class CorsHost(val host: String, val schemes: List<String>)
@@ -151,7 +154,12 @@ class AppSettings private constructor(
             optional("ADMIN_EMAIL", ""), optional("ADMIN_PASSWORD", ""),
             optional("DEPLOYMENT_SECRETS_KEY", ""), optional("FAIL_MODE", "open"), corsHosts(),
             optional("DEFAULT_GRACE_PERIOD_DAYS", "3").toInt(),
-            boolean("NGINX_CONFIG_LOG_ENABLED", true)
+            boolean("NGINX_CONFIG_LOG_ENABLED", true),
+            optional("DEPLOYMENT_STALE_MINUTES", "30").toLong(),
+            parsePortRange(optional("DEPLOYMENT_HOST_PORT_RANGE", "32000-40000")),
+            optional("DEPLOYMENT_DRAIN_DELAY_SECONDS", "5").toLong().also {
+                require(it in 0..300) { "DEPLOYMENT_DRAIN_DELAY_SECONDS must be between 0 and 300" }
+            }
         )
     }
     val payment: PaymentSettings by lazy {

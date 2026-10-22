@@ -29,14 +29,14 @@ data class ResolvedCertificate(
 )
 
 class NginxService(
-    private val sitesAvailablePath: String = "/etc/nginx/sites-available",
-    private val sitesEnabledPath: String = "/etc/nginx/sites-enabled",
+    private val sitesAvailablePath: String,
+    private val sitesEnabledPath: String,
     private val gatekeeperPort: Int = 8080,
-    private val sslCertPath: String = "/etc/letsencrypt/live",
+    private val sslCertPath: String,
     private val nginxTestRunner: () -> NginxTestResult = { NginxCommandRunner().test() },
     private val nginxReloadRunner: () -> Boolean = { NginxCommandRunner().reload() },
     private val selfDomainExclusion: NginxSelfDomainExclusion = NginxSelfDomainExclusion(emptyList()),
-    private val upstreamIncludeDirectory: String = "/etc/nginx/conf.d/gatekeeperd-upstreams",
+    private val upstreamIncludeDirectory: String,
     private val localProbeRunner: (String, Boolean) -> Boolean = ::probeViaLocalNginx,
     private val nginxConfigDumpRunner: () -> String? = { NginxCommandRunner().dumpConfig() }
 ) {
