@@ -1,6 +1,6 @@
 package com.gatekeeper.nginx
 
-import com.gatekeeper.config.AppConfig
+import com.gatekeeper.config.AppSettings
 import com.gatekeeper.db.repositories.SiteRepository
 import com.gatekeeper.plugins.DistributedLock
 import com.gatekeeper.feature.certificate.domain.repository.CertificateRepository
@@ -83,7 +83,7 @@ class NginxAdminService(
         )
         certificates.linkSites(domain, record.id)
         return CertificateOperationResult.Success(
-            CertificateResponse(domain, nginx.isCertificateInstalled(domain), "${AppConfig.nginxSslCertPath}/$domain/fullchain.pem", "${AppConfig.nginxSslCertPath}/$domain/privkey.pem")
+            CertificateResponse(domain, nginx.isCertificateInstalled(domain), "${AppSettings.fromEnv().nginx.sslCertPath}/$domain/fullchain.pem", "${AppSettings.fromEnv().nginx.sslCertPath}/$domain/privkey.pem")
         )
     }
 
@@ -104,8 +104,8 @@ class NginxAdminService(
             CertificateResponse(
                 domain,
                 installed,
-                if (installed) "${AppConfig.nginxSslCertPath}/$domain/fullchain.pem" else null,
-                if (installed) "${AppConfig.nginxSslCertPath}/$domain/privkey.pem" else null
+                if (installed) "${AppSettings.fromEnv().nginx.sslCertPath}/$domain/fullchain.pem" else null,
+                if (installed) "${AppSettings.fromEnv().nginx.sslCertPath}/$domain/privkey.pem" else null
             )
         )
     }

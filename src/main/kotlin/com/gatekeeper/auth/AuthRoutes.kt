@@ -134,6 +134,7 @@ private fun Throwable.isUniqueConstraintViolation(): Boolean = generateSequence(
 fun Application.configureAuthRoutes() {
     val auditRepository = get<AuditRepositoryPort>()
     val settings = get<AppSettings>()
+    val resendClient = get<ResendClient>()
     routing {
         post("/api/auth/forgot-password") {
             val body = runCatching { call.receive<ForgotPasswordRequest>() }.getOrNull()
@@ -156,7 +157,7 @@ fun Application.configureAuthRoutes() {
                 }
                 val resetLink = "${settings.integrations.passwordResetUrl.trimEnd('/')}?token=$token"
                 call.application.launch(Dispatchers.IO) {
-                    ResendClient.sendPasswordReset(email, resetLink)
+                    resendClient.sendPasswordReset(email, resetLink)
                 }
             }
             call.respond(mapOf("status" to "reset_email_queued"))

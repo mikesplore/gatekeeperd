@@ -102,6 +102,7 @@ import com.gatekeeper.deployment.ImageBuilder
 import com.gatekeeper.deployment.DeploymentWorker
 import com.gatekeeper.deployment.DeploymentTriggerService
 import com.gatekeeper.integrations.GitHubAppClient
+import com.gatekeeper.integrations.ResendClient
 import org.koin.dsl.module
 import org.koin.core.qualifier.named
 import org.koin.ktor.plugin.Koin
@@ -132,6 +133,7 @@ private val applicationModule = module {
     single { ExposedProviderCredentialRepository() }
     single<RegistryCredentialStore> { ExposedRegistryCredentialRepository(get<ProviderCredentialStore>()) }
     single { GitHubAppClient(get(), get(), get<AppSettings>().github) }
+    single { ResendClient(get<AppSettings>().integrations) }
     single<DeploymentPortAllocationPort> { ExposedDeploymentPortAllocationRepository() }
     single<EnvironmentSetStore> { ExposedEnvironmentSetRepository() }
     single<DeploymentQueue> { ExposedDeploymentQueue() }
