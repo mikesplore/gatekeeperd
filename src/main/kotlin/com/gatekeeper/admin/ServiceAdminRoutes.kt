@@ -133,6 +133,7 @@ data class ActiveDeploymentInspectionView(
 fun Application.configureServiceAdminRoutes() {
     val auditRepository = get<AuditRepositoryPort>()
     val environmentSets = get<EnvironmentSetStore>()
+    val scribed = get<ScribedIntegrationClient>()
     routing {
         authenticate("auth-jwt") {
             get("/api/admin/projects/{projectId}/services") {
@@ -263,14 +264,14 @@ fun Application.configureServiceAdminRoutes() {
                     return@post call.respondError(HttpStatusCode.BadRequest, "invalid_invoice_amount", "Enter a service invoice amount greater than zero")
                 }
                 val actor = call.principal<JWTPrincipal>()?.payload?.subject ?: "unknown"
-                val result = ScribedIntegrationClient.createServiceInvoice(project, serviceId.toString(), service.name, description, amount.toPlainString())
+                val result = scribed.createServiceInvoice(project, serviceId.toString(), service.name, description, amount.toPlainString())
                 if (result.status == HttpStatusCode.Conflict) {
                     return@post call.respondError(HttpStatusCode.Conflict, "service_invoice_already_exists", "Scribed already has an invoice for this service")
                 }
                 if (result.status == null || !result.status.isSuccess()) {
                     return@post call.respondError(HttpStatusCode.BadGateway, "service_invoice_creation_failed", "Scribed could not create the service invoice")
                 }
-                val confirmed = ScribedIntegrationClient.serviceInvoiceStatus(serviceId.toString())
+                val confirmed = scribed.serviceInvoiceStatus(serviceId.toString())
                 if (confirmed.body == null) {
                     return@post call.respondError(HttpStatusCode.BadGateway, "service_invoice_creation_failed", "The created service invoice could not be confirmed")
                 }
@@ -289,7 +290,7 @@ fun Application.configureServiceAdminRoutes() {
                 if (ServiceRepository.findByProjectAndId(projectId, serviceId) == null) {
                     return@get call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
                 }
-                val lookup = ScribedIntegrationClient.serviceInvoiceStatus(serviceId.toString())
+                val lookup = scribed.serviceInvoiceStatus(serviceId.toString())
                 if (lookup.status == HttpStatusCode.NotFound) {
                     return@get call.respondError(HttpStatusCode.NotFound, "invoice_unavailable", "No invoice has been created for this service")
                 }
@@ -306,7 +307,7 @@ fun Application.configureServiceAdminRoutes() {
                 if (ServiceRepository.findByProjectAndId(projectId, serviceId) == null) {
                     return@get call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
                 }
-                val (status, bytes) = ScribedIntegrationClient.serviceInvoicePdf(
+                val (status, bytes) = scribed.serviceInvoicePdf(
                     project, serviceId, call.application.get<PaymentDomainRepository>(), call.application.get<ProjectBalanceAdapter>()
                 )
                 if (bytes == null) {
@@ -330,7 +331,7 @@ fun Application.configureServiceAdminRoutes() {
                 if (payment.gatewayStatus != "success") {
                     return@get call.respondError(HttpStatusCode.Conflict, "payment_not_complete", "A receipt is available after successful payment")
                 }
-                val (status, bytes) = ScribedIntegrationClient.receiptPdfForServicePayment(
+                val (status, bytes) = scribed.receiptPdfForServicePayment(
                     project, serviceId, payment, call.application.get<PaymentDomainRepository>(), call.application.get<ProjectBalanceAdapter>()
                 )
                 if (bytes == null) {
@@ -352,7 +353,7 @@ fun Application.configureServiceAdminRoutes() {
                 if (amount == null || amount <= BigDecimal.ZERO) return@post call.respondError(HttpStatusCode.BadRequest, "invalid_adjustment_amount", "amount must be greater than zero")
                 if (body.reason.isBlank()) return@post call.respondError(HttpStatusCode.BadRequest, "invalid_adjustment_reason", "reason is required")
                 if (body.reason.length > 500) return@post call.respondError(HttpStatusCode.BadRequest, "invalid_adjustment_reason", "reason must be at most 500 characters")
-                val invoice = ScribedIntegrationClient.serviceInvoiceStatus(serviceId.toString())
+                val invoice = scribed.serviceInvoiceStatus(serviceId.toString())
                 if (invoice.status == HttpStatusCode.NotFound) {
                     return@post call.respondError(HttpStatusCode.Conflict, "service_invoice_required", "Create a service invoice in Scribed before adding service charges")
                 }
@@ -361,7 +362,7 @@ fun Application.configureServiceAdminRoutes() {
                 val adjustment = try { call.application.get<ProjectAdjustmentStore>().create(projectId, type, amount, body.reason, actor, serviceId) }
                     catch (e: IllegalArgumentException) { return@post call.respondError(HttpStatusCode.BadRequest, "invalid_adjustment", e.message ?: "Invalid adjustment") }
                 auditRepository.write(projectId, "service_adjustment", actor, "service=${service.name} ${type.name} amount=$amount reason=${body.reason.trim()}")
-                ScribedIntegrationClient.notifyServiceLedger(serviceId, "adjustment-${adjustment.id}", call.application.get<ProjectBalanceAdapter>(), call.application.get())
+                scribed.notifyServiceLedger(serviceId, "adjustment-${adjustment.id}", call.application.get<ProjectBalanceAdapter>(), call.application.get())
                 call.respond(HttpStatusCode.Created, ServiceAdjustmentView(adjustment.id.toString(), projectId.toString(), serviceId.toString(), type.name, amount.toDouble(), adjustment.reason, actor, adjustment.createdAt.toString()))
             }
 
