@@ -1,8 +1,8 @@
 package com.gatekeeper.gate
 
+import com.gatekeeper.config.AppSettings
 import com.gatekeeper.api.PaymentRequiredResponse
 import com.gatekeeper.api.paymentRequiredResponse
-import com.gatekeeper.config.AppConfig
 import com.gatekeeper.feature.payment.domain.model.PaymentMethodAvailability
 import com.gatekeeper.db.tables.AccessBlockReason
 import java.math.BigDecimal
@@ -42,7 +42,8 @@ object PaywallTemplates {
         payEnabled: Boolean,
         paymentMethods: PaymentMethodAvailability,
         serviceInvoices: List<ServiceInvoiceDue> = emptyList(),
-        serviceBillingMode: Boolean = false
+        serviceBillingMode: Boolean = false,
+        integrationSettings: AppSettings.IntegrationSettings
     ): String {
         val amountLabel = formatAmount(info.amountDue, info.currency)
         val amountValue = info.amountDue?.stripTrailingZeros()?.toPlainString().orEmpty()
@@ -92,7 +93,7 @@ object PaywallTemplates {
             info.amountDue == null -> "No payment amount is configured for this project."
             info.amountDue <= BigDecimal.ZERO -> "This project has no outstanding balance."
             info.customerEmail.isNullOrBlank() -> "No billing email is configured for this project."
-            AppConfig.publicBaseUrl.isBlank() -> "Payment callback URL is not configured on the server."
+            integrationSettings.publicBaseUrl.isBlank() -> "Payment callback URL is not configured on the server."
             else -> null
         }
         val showPayButton = paymentBlock && payEnabled && payDisabledReason == null
@@ -136,7 +137,7 @@ object PaywallTemplates {
             val serviceMpesaUrl = "/api/mpesa/pay?project=${encode(info.slug)}$serviceParam"
             val due = invoice.dueDate?.format(dateFormatter)?.let { "<span class=\"due\">Due ${escapeHtml(it)}</span>" }.orEmpty()
             val payButtons = buildString {
-                val canPaystack = paystackAvailable && !info.customerEmail.isNullOrBlank() && AppConfig.publicBaseUrl.isNotBlank()
+                val canPaystack = paystackAvailable && !info.customerEmail.isNullOrBlank() && integrationSettings.publicBaseUrl.isNotBlank()
                 if (canPaystack && payEnabled) append("<a class=\"btn\" href=\"$servicePayUrl\">Pay ${escapeHtml(invoice.serviceName)} with Paystack</a>")
                 else if (paystackAvailable && payEnabled && info.customerEmail.isNullOrBlank()) append("<p class=\"helper helper-error\">Paystack is unavailable because no billing email is configured.</p>")
                 if (mpesaAvailable && payEnabled) {
@@ -204,7 +205,7 @@ object PaywallTemplates {
             else -> ""
         }
 
-        val contact = escapeHtml(AppConfig.supportContactEmail)
+        val contact = escapeHtml(integrationSettings.supportContactEmail)
         val contactLine = if (paymentBlock || serviceBillingMode) {
             """<p class="contact">Questions about this balance? Email <a href="mailto:$contact">$contact</a></p>"""
         } else {
@@ -230,8 +231,8 @@ object PaywallTemplates {
         )
     }
 
-    fun jsonBlocked(paywall: PaywallInfo?): PaymentRequiredResponse =
-        paymentRequiredResponse(paywall)
+    fun jsonBlocked(paywall: PaywallInfo?, integrationSettings: AppSettings.IntegrationSettings): PaymentRequiredResponse =
+        paymentRequiredResponse(paywall, integrationSettings.supportContactEmail)
 
     private fun pageShell(title: String, theme: String, body: String): String = """
 <!DOCTYPE html>

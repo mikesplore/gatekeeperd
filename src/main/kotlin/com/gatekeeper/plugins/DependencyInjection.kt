@@ -103,6 +103,7 @@ import com.gatekeeper.deployment.DeploymentWorker
 import com.gatekeeper.deployment.DeploymentTriggerService
 import com.gatekeeper.integrations.GitHubAppClient
 import com.gatekeeper.integrations.ResendClient
+import com.gatekeeper.integrations.ScribedIntegrationClient
 import org.koin.dsl.module
 import org.koin.core.qualifier.named
 import org.koin.ktor.plugin.Koin
@@ -134,6 +135,7 @@ private val applicationModule = module {
     single<RegistryCredentialStore> { ExposedRegistryCredentialRepository(get<ProviderCredentialStore>()) }
     single { GitHubAppClient(get(), get(), get<AppSettings>().github) }
     single { ResendClient(get<AppSettings>().integrations) }
+    single { ScribedIntegrationClient(get<AppSettings>().integrations) }
     single<DeploymentPortAllocationPort> { ExposedDeploymentPortAllocationRepository() }
     single<EnvironmentSetStore> { ExposedEnvironmentSetRepository() }
     single<DeploymentQueue> { ExposedDeploymentQueue() }
@@ -151,15 +153,15 @@ private val applicationModule = module {
     single { GateApplicationService(get<ProjectQueryRepository>(), get<GateService>()) }
     single { NginxService.configured(get<AppSettings>().nginx, get<NginxCommandRunner>()) }
     single { ExposedCertificateStore(get<CertificateRepository>()) }
-    single { NginxAdminService(get(), get<ExposedCertificateStore>()) }
+    single { NginxAdminService(get(), get<ExposedCertificateStore>(), get<AppSettings>().nginx.sslCertPath) }
     single<PaymentDomainRepository> { ExposedPaymentRepository() }
-    single { ProjectBalanceAdapter(get<PaymentDomainRepository>(), get<ProjectAdjustmentStore>()) }
+    single { ProjectBalanceAdapter(get<PaymentDomainRepository>(), get<ProjectAdjustmentStore>(), get()) }
     single<PaymentEventDomainRepository> { ExposedPaymentEventRepository() }
     single { PaymentProjectAdapter() }
     single { PaymentServiceAdapter() }
     single<ServiceMembershipRepository> { ExposedServiceMembershipRepository() }
-    single { PaymentBalanceAdapter(get<PaymentDomainRepository>(), get(), get()) }
-    single<PaymentEffects> { PaymentEffectsAdapter(get(), get(), get()) }
+    single { PaymentBalanceAdapter(get<PaymentDomainRepository>(), get(), get(), get()) }
+    single<PaymentEffects> { PaymentEffectsAdapter(get(), get(), get(), get()) }
     single { ApplyWebhookEvent(get(), get()) }
     single { PaystackClient(get<AppSettings>().payment) }
     single<PaymentGateway>(named("paystackGateway")) { PaystackGateway(get<AppSettings>().payment, get<AppSettings>().integrations, get()) }

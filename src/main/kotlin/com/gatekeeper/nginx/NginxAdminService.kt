@@ -11,7 +11,8 @@ import java.time.OffsetDateTime
 /** Application-level operations for nginx administration routes. */
 class NginxAdminService(
     private val nginx: NginxService,
-    private val certificates: CertificateStore
+    private val certificates: CertificateStore,
+    private val sslCertPath: String
 ) {
     fun updateCustomLocations(
         slug: String,
@@ -83,7 +84,7 @@ class NginxAdminService(
         )
         certificates.linkSites(domain, record.id)
         return CertificateOperationResult.Success(
-            CertificateResponse(domain, nginx.isCertificateInstalled(domain), "${AppSettings.fromEnv().nginx.sslCertPath}/$domain/fullchain.pem", "${AppSettings.fromEnv().nginx.sslCertPath}/$domain/privkey.pem")
+            CertificateResponse(domain, nginx.isCertificateInstalled(domain), "$sslCertPath/$domain/fullchain.pem", "$sslCertPath/$domain/privkey.pem")
         )
     }
 
@@ -104,8 +105,8 @@ class NginxAdminService(
             CertificateResponse(
                 domain,
                 installed,
-                if (installed) "${AppSettings.fromEnv().nginx.sslCertPath}/$domain/fullchain.pem" else null,
-                if (installed) "${AppSettings.fromEnv().nginx.sslCertPath}/$domain/privkey.pem" else null
+                if (installed) "$sslCertPath/$domain/fullchain.pem" else null,
+                if (installed) "$sslCertPath/$domain/privkey.pem" else null
             )
         )
     }
