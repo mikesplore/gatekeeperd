@@ -62,13 +62,16 @@ class AppSettings private constructor(
         val scribedApiToken: String
     )
 
+    data class TelemetrySettings(val otlpEndpoint: String?)
+
     data class ApplicationSettings(
         val adminEmail: String,
         val adminPassword: String,
         val deploymentSecretsKey: String,
         val failMode: String,
         val corsAllowedHosts: List<CorsHost>,
-        val defaultGracePeriodDays: Int
+        val defaultGracePeriodDays: Int,
+        val nginxConfigLogEnabled: Boolean
     )
 
     data class CorsHost(val host: String, val schemes: List<String>)
@@ -142,11 +145,13 @@ class AppSettings private constructor(
             optional("SCRIBED_API_TOKEN", "")
         )
     }
+    val telemetry: TelemetrySettings by lazy { TelemetrySettings(get("OTEL_EXPORTER_OTLP_ENDPOINT")) }
     val application: ApplicationSettings by lazy {
         ApplicationSettings(
             optional("ADMIN_EMAIL", ""), optional("ADMIN_PASSWORD", ""),
             optional("DEPLOYMENT_SECRETS_KEY", ""), optional("FAIL_MODE", "open"), corsHosts(),
-            optional("DEFAULT_GRACE_PERIOD_DAYS", "3").toInt()
+            optional("DEFAULT_GRACE_PERIOD_DAYS", "3").toInt(),
+            boolean("NGINX_CONFIG_LOG_ENABLED", true)
         )
     }
     val payment: PaymentSettings by lazy {

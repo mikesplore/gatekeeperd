@@ -18,7 +18,7 @@ import com.gatekeeper.feature.integrations.domain.repository.IntegrationOutboxRe
 object AutoBlockerJob {
 
     private val logger = LoggerFactory.getLogger("com.gatekeeper.scheduler.AutoBlockerJob")
-    fun start(scope: CoroutineScope, outbox: IntegrationOutboxRepository, settings: AppSettings.SchedulerSettings) {
+    fun start(scope: CoroutineScope, outbox: IntegrationOutboxRepository, settings: AppSettings.SchedulerSettings, scribed: ScribedIntegrationClient) {
         scope.launch {
             delay(10.seconds)
             runWorkerLoop("auto-blocker", settings.autoBlockerIntervalMinutes.coerceAtLeast(1) * 60_000, "worker:auto-blocker", logger) {
@@ -26,8 +26,8 @@ object AutoBlockerJob {
                     val overdue = ProjectRepository.findPastDue(LocalDate.now())
                     overdue.forEach { project ->
                         ProjectRepository.updateStatus(project.id, "blocked", actor = "system", reason = "auto-block: payment overdue", blockReason = "overdue")
-                        ScribedIntegrationClient.notifySuspension(project.copy(status = "blocked", blockReason = "overdue"), "payment_overdue", outbox)
-                        ScribedIntegrationClient.notifyInvoiceDue(project, outbox)
+                        scribed.notifySuspension(project.copy(status = "blocked", blockReason = "overdue"), "payment_overdue", outbox)
+                        scribed.notifyInvoiceDue(project, outbox)
                         logger.warn("Auto-blocked project: ${project.slug} (due: ${project.dueDate}, grace: ${project.gracePeriodDays} days)")
                     }
 
@@ -38,7 +38,7 @@ object AutoBlockerJob {
                     ServiceRepository.listAll().forEach { service ->
                         if (service.accessStatus != "active") return@forEach
                         val project = activeProjects[service.projectId] ?: return@forEach
-                        val lookup = ScribedIntegrationClient.serviceInvoiceStatus(service.id.toString())
+                        val lookup = scribed.serviceInvoiceStatus(service.id.toString())
                         if (lookup.status == HttpStatusCode.NotFound) return@forEach
                         if (lookup.status == null) {
                             logger.debug("Service invoice lookup unavailable: service={}, error={}", service.id, lookup.error)

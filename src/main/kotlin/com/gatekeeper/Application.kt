@@ -4,11 +4,13 @@ import com.gatekeeper.admin.*
 import com.gatekeeper.api.InputValidators
 import com.gatekeeper.auth.configureAuthRoutes
 import com.gatekeeper.config.AppSettings
+import com.gatekeeper.security.SecretValueCipher
 import com.gatekeeper.customer.configureCustomerRoutes
 import com.gatekeeper.db.tables.Users
 import com.gatekeeper.db.ServiceIdentityBackfill
 import com.gatekeeper.deployment.DeploymentWorker
 import com.gatekeeper.integrations.GitHubAppClient
+import com.gatekeeper.integrations.ScribedIntegrationClient
 import com.gatekeeper.gate.configureGateRoutes
 import com.gatekeeper.integrations.configureGitHubAdminRoutes
 import com.gatekeeper.integrations.configureGitHubWebhookRoutes
@@ -49,14 +51,16 @@ fun main(args: Array<String>) {
         operationalCommand(command, args.drop(1).toTypedArray())
         return
     }
-    Telemetry.init()
-    val port = args.portArg() ?: AppSettings.fromEnv()["PORT"]?.toIntOrNull() ?: 8080
+    val settings = AppSettings.fromEnv()
+    Telemetry.init(settings)
+    val port = args.portArg() ?: settings["PORT"]?.toIntOrNull() ?: 8080
     embeddedServer(Netty, port = port, host = "0.0.0.0", module = Application::module)
         .start(wait = true)
 }
 
 private fun operationalCommand(command: String, args: Array<String>) {
     val settings = AppSettings.fromEnv()
+    SecretValueCipher.configure(settings.application)
     val db = settings.db
     when (command) {
         "migrate" -> if (args.firstOrNull() == "baseline") {
@@ -73,12 +77,13 @@ private fun operationalCommand(command: String, args: Array<String>) {
             DatabaseFactory.init(
                 db.url, db.user, db.password, db.migrationBaselineVersion
             ); try {
-                val docker = DockerService(settings.docker.socket)
+                val docker = DockerService(settings.docker.socket, settings.docker)
                 try {
                     NginxBackfillRunner.run(
                         args.firstOrNull { !it.startsWith("--") } ?: settings.nginx.sitesAvailablePath,
                         args.contains("--dry-run"),
-                        docker
+                        docker,
+                        settings
                     )
                 } finally {
                     docker.close()
@@ -122,6 +127,7 @@ fun Application.module() {
     configureApiDocumentation()
     configureDependencyInjection()
     val settings = get<AppSettings>()
+    SecretValueCipher.configure(settings.application)
     configureDatabase()
     if (settings.nginx.deploymentUpstreamsEnabled) {
         get<NginxService>().bootstrapDeploymentUpstreams()
@@ -155,9 +161,9 @@ fun Application.module() {
     seedInitialAdmin(settings.application)
 
     val appScope = CoroutineScope(SupervisorJob())
-    AutoBlockerJob.start(appScope, get(), settings.scheduler)
+    AutoBlockerJob.start(appScope, get(), settings.scheduler, get())
     ReconciliationJob.start(appScope, get<ReconcilePayments>(), settings.scheduler)
-    IntegrationOutboxJob.start(appScope, get(), get<PaymentDomainRepository>(), get<ProjectBalanceAdapter>())
+    IntegrationOutboxJob.start(appScope, get(), get<PaymentDomainRepository>(), get<ProjectBalanceAdapter>(), get<ScribedIntegrationClient>())
     get<DeploymentWorker>().start(appScope)
 
     monitor.subscribe(ApplicationStopping) {
