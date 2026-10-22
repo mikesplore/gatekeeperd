@@ -1,6 +1,6 @@
 package com.gatekeeper.gate
 
-import com.gatekeeper.config.AppConfig
+import com.gatekeeper.config.AppSettings
 import com.gatekeeper.db.repositories.ProjectQueryRepository
 import com.gatekeeper.db.repositories.GateTarget
 import com.gatekeeper.db.tables.AccessBlockReason
@@ -15,7 +15,8 @@ private val logger = LoggerFactory.getLogger("com.gatekeeper.gate.GateService")
 class GateService(
     private val projects: ProjectQueryRepository,
     private val latestPaymentLink: GetLatestPaymentLink,
-    private val projectBalances: ProjectBalanceAdapter
+    private val projectBalances: ProjectBalanceAdapter,
+    private val applicationSettings: AppSettings.ApplicationSettings
 ) {
 
     companion object {
@@ -99,8 +100,8 @@ class GateService(
             logger.error("Postgres unavailable for gate check (slug=$slug): ${e.message}")
         }
 
-        logger.warn("Both Redis and Postgres unreachable for slug=$slug, applying FAIL_MODE=${AppConfig.failMode}")
-        return when (AppConfig.failMode.lowercase()) {
+        logger.warn("Both Redis and Postgres unreachable for slug=$slug, applying FAIL_MODE=${applicationSettings.failMode}")
+        return when (applicationSettings.failMode.lowercase()) {
             "open" -> {
                 Metrics.increment("gate.fail_open")
                 logger.error("CRITICAL: FAIL_MODE=open — allowing traffic for slug=$slug despite DB outage")
@@ -112,7 +113,7 @@ class GateService(
                 GateResult.Blocked(type = "backend", paymentLink = null, projectName = slug, paywall = null)
             }
             else -> {
-                logger.error("CRITICAL: Unknown FAIL_MODE=${AppConfig.failMode}, defaulting to closed")
+                logger.error("CRITICAL: Unknown FAIL_MODE=${applicationSettings.failMode}, defaulting to closed")
                 GateResult.Blocked(type = "backend", paymentLink = null, projectName = slug, paywall = null)
             }
         }

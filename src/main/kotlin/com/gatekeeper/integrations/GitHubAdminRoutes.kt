@@ -1,7 +1,7 @@
 package com.gatekeeper.integrations
 
+import com.gatekeeper.config.AppSettings
 import com.gatekeeper.api.respondError
-import com.gatekeeper.config.AppConfig
 import com.gatekeeper.feature.audit.domain.repository.AuditRepository as AuditRepositoryPort
 import com.gatekeeper.feature.integrations.domain.repository.GitHubCredentialStore
 import com.gatekeeper.feature.integrations.domain.repository.GitHubInstallationStore
@@ -39,6 +39,7 @@ fun Application.configureGitHubAdminRoutes() {
     val credentialStore = get<GitHubCredentialStore>()
     val installationStore = get<GitHubInstallationStore>()
     val githubAppClient = get<GitHubAppClient>()
+    val settings = get<AppSettings>()
     routing {
         authenticate("auth-jwt") {
             put("/api/admin/github/credentials/{type}") {
@@ -74,11 +75,11 @@ fun Application.configureGitHubAdminRoutes() {
                         // Environment credentials configure the worker, but do not prove
                         // that this admin completed the GitHub App installation flow.
                         connected = installation != null && githubAppClient.isConfigured(),
-                        appId = AppConfig.githubAppId,
-                        installationId = installation?.installationId ?: AppConfig.githubAppInstallationId,
+                        appId = settings.github.appId,
+                        installationId = installation?.installationId ?: settings.github.installationId,
                         accountLogin = installation?.accountLogin,
                         accountType = installation?.accountType,
-                        appSlug = AppConfig.githubAppSlug.takeIf { it.isNotBlank() },
+                        appSlug = settings.github.appSlug.takeIf { it.isNotBlank() },
                     )
                 )
             }
@@ -92,8 +93,8 @@ fun Application.configureGitHubAdminRoutes() {
                 call.respond(repositories)
             }
             get("/api/admin/github/install-url") {
-                val url = AppConfig.githubAppInstallUrl.takeIf { it.isNotBlank() }
-                    ?: AppConfig.githubAppSlug.takeIf { it.isNotBlank() }?.let { "https://github.com/apps/$it/installations/new" }
+                val url = settings.github.installUrl.takeIf { it.isNotBlank() }
+                    ?: settings.github.appSlug.takeIf { it.isNotBlank() }?.let { "https://github.com/apps/$it/installations/new" }
                 if (url == null) {
                     call.respondError(HttpStatusCode.ServiceUnavailable, "github_app_unconfigured", "GitHub App install URL is not configured")
                     return@get
@@ -101,7 +102,7 @@ fun Application.configureGitHubAdminRoutes() {
                 val state = UUID.randomUUID().toString()
                 installationStore.createPendingState(state)
                 val separator = if (url.contains("?")) "&" else "?"
-                call.respond(GitHubInstallUrlResponse("$url${separator}state=$state", AppConfig.githubCallbackUrl.takeIf { it.isNotBlank() }))
+                call.respond(GitHubInstallUrlResponse("$url${separator}state=$state", settings.github.callbackUrl.takeIf { it.isNotBlank() }))
             }
             delete("/api/admin/github/installation") {
                 installationStore.clear()
@@ -110,19 +111,19 @@ fun Application.configureGitHubAdminRoutes() {
         }
 
         get("/api/admin/github/callback") {
-            handleGitHubCallback(call, installationStore, githubAppClient)
+            handleGitHubCallback(call, installationStore, githubAppClient, settings)
         }
         get("/api/integrations/github/callback") {
-            handleGitHubCallback(call, installationStore, githubAppClient)
+            handleGitHubCallback(call, installationStore, githubAppClient, settings)
         }
     }
 }
 
-private suspend fun handleGitHubCallback(call: ApplicationCall, installationStore: GitHubInstallationStore, githubAppClient: GitHubAppClient) {
+private suspend fun handleGitHubCallback(call: ApplicationCall, installationStore: GitHubInstallationStore, githubAppClient: GitHubAppClient, settings: AppSettings) {
             val installationId = call.request.queryParameters["installation_id"]?.toLongOrNull()
             val setupAction = call.request.queryParameters["setup_action"]
             val state = call.request.queryParameters["state"]
-            val redirect = AppConfig.frontendBaseUrl
+            val redirect = settings.integrations.frontendBaseUrl
                 .trimEnd('/')
                 .takeIf { it.isNotBlank() }
                 ?.let { "$it/app/settings/profile" }
@@ -131,7 +132,7 @@ private suspend fun handleGitHubCallback(call: ApplicationCall, installationStor
                 call.respondRedirect("$redirect?github=cancelled")
                 return
             }
-            if (AppConfig.githubAppId == null || !githubAppClient.hasPrivateKeyConfigured()) {
+            if (settings.github.appId == null || !githubAppClient.hasPrivateKeyConfigured()) {
                 call.respondRedirect("$redirect?github=unconfigured")
                 return
             }
