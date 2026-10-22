@@ -2,7 +2,7 @@ package com.gatekeeper.admin
 
 import com.gatekeeper.api.respondError
 import com.gatekeeper.api.respondErrorWithData
-import com.gatekeeper.config.AppConfig
+import com.gatekeeper.config.AppSettings
 import com.gatekeeper.docker.DockerGateway
 import com.gatekeeper.nginx.CertificateInstallRequest
 import com.gatekeeper.nginx.CertificateListResponse
@@ -210,7 +210,8 @@ private fun computeNginxEnablePlan(
     activeRuntimeTarget: DeploymentUpstreamResolver.Target?,
     request: NginxEnableRequest,
     nginxService: NginxService,
-    dockerService: DockerGateway?
+    dockerService: DockerGateway?,
+    sslCertPath: String
 ): NginxPlanResult {
     val explicitPort = request.port
     val requestedContainerPort = request.containerPort
@@ -326,10 +327,10 @@ private fun computeNginxEnablePlan(
 
     val resolvedCertificate = when {
         explicitCertPath != null && explicitKeyPath != null -> {
-            val certPath = try { requireCertificatePath(explicitCertPath, AppConfig.nginxSslCertPath) } catch (e: IllegalArgumentException) {
+            val certPath = try { requireCertificatePath(explicitCertPath, sslCertPath) } catch (e: IllegalArgumentException) {
                 return NginxPlanResult.Err(HttpStatusCode.BadRequest, "invalid_certificate_path", e.message ?: "Invalid SSL certificate path")
             }
-            val keyPath = try { requireCertificatePath(explicitKeyPath, AppConfig.nginxSslCertPath) } catch (e: IllegalArgumentException) {
+            val keyPath = try { requireCertificatePath(explicitKeyPath, sslCertPath) } catch (e: IllegalArgumentException) {
                 return NginxPlanResult.Err(HttpStatusCode.BadRequest, "invalid_certificate_path", e.message ?: "Invalid SSL certificate path")
             }
             val certFile = java.io.File(certPath)
@@ -396,6 +397,7 @@ private fun computeNginxEnablePlan(
 }
 
 fun Application.configureNginxAdminRoutes() {
+    val nginxSettings = get<AppSettings>().nginx
     val nginxService = get<NginxService>()
     val nginxAdminService = get<NginxAdminService>()
     val auditRepository = get<AuditRepositoryPort>()
@@ -642,7 +644,8 @@ fun Application.configureNginxAdminRoutes() {
                         ?: DeploymentUpstreamResolver.resolve(selectedServiceId, "production"),
                     request = body,
                     nginxService = nginxService,
-                    dockerService = dockerService
+                    dockerService = dockerService,
+                    sslCertPath = nginxSettings.sslCertPath
                 )) {
                     is NginxPlanResult.Err -> {
                         if (result.data != null) {
@@ -710,8 +713,8 @@ fun Application.configureNginxAdminRoutes() {
                 call.respond(
                     NginxStatusResponse(
                         enabled = enabled,
-                        configPath = "${AppConfig.nginxSitesAvailablePath}/$slug",
-                        enabledPath = "${AppConfig.nginxSitesEnabledPath}/$slug",
+                        configPath = "${nginxSettings.sitesAvailablePath}/$slug",
+                        enabledPath = "${nginxSettings.sitesEnabledPath}/$slug",
                         port = DeploymentUpstreamResolver.resolveProjectDefault(project.id, "production")?.port,
                         sslEnabled = resolvedCert != null,
                         certificateDomain = resolvedCert?.certificateDomain,
@@ -925,9 +928,10 @@ fun Application.configureNginxAdminRoutes() {
                         projectDomain = requestedDomain,
                         activeRuntimeTarget = requestedContainerPort?.let { DeploymentUpstreamResolver.resolve(serviceId, it, "production") }
                             ?: DeploymentUpstreamResolver.resolve(serviceId, "production"),
-                    request = body,
-                    nginxService = nginxService,
-                    dockerService = dockerService
+                        request = body,
+                        nginxService = nginxService,
+                        dockerService = dockerService,
+                        sslCertPath = nginxSettings.sslCertPath
                 )) {
                     is NginxPlanResult.Err -> {
                         if (result.data != null) {

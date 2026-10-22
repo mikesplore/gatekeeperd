@@ -1,6 +1,6 @@
 package com.gatekeeper.feature.payment.data.provider
 
-import com.gatekeeper.config.AppConfig
+import com.gatekeeper.config.AppSettings
 import com.gatekeeper.feature.payment.domain.gateway.PaymentGateway
 import com.gatekeeper.feature.payment.domain.gateway.InitiatePaymentCommand
 import com.gatekeeper.feature.payment.domain.gateway.InitiatedPayment
@@ -20,28 +20,22 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.*
 
-object MpesaGateway : PaymentGateway {
+class MpesaGateway(private val settings: AppSettings.PaymentSettings) : PaymentGateway {
     override val provider = "mpesa"
     private val logger = LoggerFactory.getLogger("com.gatekeeper.feature.payment.MpesaGateway")
     private val http = HttpClient { install(ContentNegotiation) { json(Json { ignoreUnknownKeys = true }) } }
-    private val baseUrl get() = if (AppConfig.mpesaEnvironment.equals("production", true)) "https://api.safaricom.co.ke" else "https://sandbox.safaricom.co.ke"
-    fun isConfigured() = listOf(
-        AppConfig.mpesaConsumerKey,
-        AppConfig.mpesaConsumerSecret,
-        AppConfig.mpesaShortCode,
-        AppConfig.mpesaPasskey,
-        AppConfig.mpesaCallbackUrl
-    ).all { it.isNotBlank() }
+    private val baseUrl get() = if (settings.mpesaEnvironment.equals("production", true)) "https://api.safaricom.co.ke" else "https://sandbox.safaricom.co.ke"
+    fun isConfigured() = listOf(settings.mpesaConsumerKey, settings.mpesaConsumerSecret, settings.mpesaShortCode, settings.mpesaPasskey, settings.mpesaCallbackUrl).all { it.isNotBlank() }
 
     override suspend fun initiate(command: InitiatePaymentCommand): Result<InitiatedPayment> = runCatching {
         require(isConfigured()) { "M-Pesa is not configured" }
         require(command.currency.equals("KES", ignoreCase = true)) { "M-Pesa payments are only supported in KES" }
         val phone = command.phone ?: error("A phone number is required for M-Pesa payments")
         val timestamp = LocalDateTime.now(ZoneId.of("Africa/Nairobi")).format(DateTimeFormatter.ofPattern("yyyyMMddHHmmss"))
-        val password = Base64.getEncoder().encodeToString("${AppConfig.mpesaShortCode}${AppConfig.mpesaPasskey}$timestamp".toByteArray())
+        val password = Base64.getEncoder().encodeToString("${settings.mpesaShortCode}${settings.mpesaPasskey}$timestamp".toByteArray())
         val response = http.post("$baseUrl/mpesa/stkpush/v1/processrequest") {
             bearerAuth(token()); contentType(ContentType.Application.Json)
-            setBody(MpesaStkRequest(AppConfig.mpesaShortCode, password, timestamp, TransactionType = "CustomerPayBillOnline", Amount = command.amount.longValueExact(), PartyA = phone, PartyB = AppConfig.mpesaShortCode, PhoneNumber = phone, CallBackURL = AppConfig.mpesaCallbackUrl, AccountReference = command.projectSlug, TransactionDesc = "Gatekeeper payment"))
+            setBody(MpesaStkRequest(settings.mpesaShortCode, password, timestamp, TransactionType = "CustomerPayBillOnline", Amount = command.amount.longValueExact(), PartyA = phone, PartyB = settings.mpesaShortCode, PhoneNumber = phone, CallBackURL = settings.mpesaCallbackUrl, AccountReference = command.projectSlug, TransactionDesc = "Gatekeeper payment"))
         }
         val responseBody = response.bodyAsText()
         if (!response.status.isSuccess()) error("Daraja STK Push returned HTTP ${response.status.value}: ${responseBody.take(500)}")
@@ -49,12 +43,12 @@ object MpesaGateway : PaymentGateway {
         if (responseData.ResponseCode != null && responseData.ResponseCode != "0") error("Daraja STK Push rejected the request (code=${responseData.ResponseCode}): ${responseData.ResponseDescription ?: responseData.CustomerMessage ?: "no description"}")
         InitiatedPayment(responseData.CheckoutRequestID ?: error(responseData.ResponseDescription ?: responseData.CustomerMessage ?: "Daraja returned no CheckoutRequestID"))
     }.onFailure { error ->
-        val callbackHost = runCatching { java.net.URI(AppConfig.mpesaCallbackUrl).host }.getOrNull() ?: "invalid"
-        logger.error("M-Pesa STK initiation failed for project={} environment={} callbackHost={}: {}", command.projectSlug, AppConfig.mpesaEnvironment, callbackHost, error.message)
+        val callbackHost = runCatching { java.net.URI(settings.mpesaCallbackUrl).host }.getOrNull() ?: "invalid"
+        logger.error("M-Pesa STK initiation failed for project={} environment={} callbackHost={}: {}", command.projectSlug, settings.mpesaEnvironment, callbackHost, error.message)
     }
 
     private suspend fun token(): String {
-        val credentials = Base64.getEncoder().encodeToString("${AppConfig.mpesaConsumerKey}:${AppConfig.mpesaConsumerSecret}".toByteArray())
+        val credentials = Base64.getEncoder().encodeToString("${settings.mpesaConsumerKey}:${settings.mpesaConsumerSecret}".toByteArray())
         val response = http.get("$baseUrl/oauth/v1/generate?grant_type=client_credentials") {
             header(HttpHeaders.Authorization, "Basic $credentials")
         }
@@ -68,10 +62,10 @@ object MpesaGateway : PaymentGateway {
     override suspend fun verify(reference: String): Result<VerifiedPayment> = runCatching {
         // Daraja's STK query is the authoritative polling/reconciliation endpoint.
         val timestamp = LocalDateTime.now(ZoneId.of("Africa/Nairobi")).format(DateTimeFormatter.ofPattern("yyyyMMddHHmmss"))
-        val password = Base64.getEncoder().encodeToString("${AppConfig.mpesaShortCode}${AppConfig.mpesaPasskey}$timestamp".toByteArray())
+        val password = Base64.getEncoder().encodeToString("${settings.mpesaShortCode}${settings.mpesaPasskey}$timestamp".toByteArray())
         val response = http.post("$baseUrl/mpesa/stkpushquery/v1/query") {
             bearerAuth(token()); contentType(ContentType.Application.Json)
-            setBody(mapOf("BusinessShortCode" to AppConfig.mpesaShortCode, "Password" to password, "Timestamp" to timestamp, "CheckoutRequestID" to reference))
+            setBody(mapOf("BusinessShortCode" to settings.mpesaShortCode, "Password" to password, "Timestamp" to timestamp, "CheckoutRequestID" to reference))
         }.body<MpesaStkResponse>()
         val status = when (response.ResponseCode) { "0" -> "success"; "1032" -> "abandoned"; else -> "pending" }
         VerifiedPayment(status)

@@ -1,13 +1,11 @@
 package com.gatekeeper.admin
 
 import com.gatekeeper.api.respondError
-import io.ktor.http.HttpStatusCode
-import io.ktor.server.application.Application
-import io.ktor.server.auth.authenticate
-import io.ktor.server.response.respond
-import io.ktor.server.routing.get
-import io.ktor.server.routing.routing
-import io.ktor.server.request.*
+import io.ktor.http.*
+import io.ktor.server.application.*
+import io.ktor.server.auth.*
+import io.ktor.server.response.*
+import io.ktor.server.routing.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
@@ -109,10 +107,10 @@ internal object JournalLogReader {
         val level = structured?.string("level")?.uppercase()
             ?: priorityLevel(record.string("PRIORITY"))
         val timestamp = structured?.string("@timestamp") ?: structured?.string("timestamp")
-            ?: record.string("__REALTIME_TIMESTAMP")?.toLongOrNull()?.let { micros ->
-                Instant.ofEpochSecond(micros / 1_000_000, (micros % 1_000_000) * 1_000).toString()
-            }
-            ?: Instant.EPOCH.toString()
+        ?: record.string("__REALTIME_TIMESTAMP")?.toLongOrNull()?.let { micros ->
+            Instant.ofEpochSecond(micros / 1_000_000, (micros % 1_000_000) * 1_000).toString()
+        }
+        ?: Instant.EPOCH.toString()
         val cursor = record.string("__CURSOR") ?: "$timestamp:${safeMessage.hashCode()}"
 
         AdminLogEntry(
@@ -147,7 +145,15 @@ internal object JournalLogReader {
         if (level != null && !entry.level.equals(level, ignoreCase = true)) return false
         if (search.isNullOrBlank()) return true
         val query = search.trim()
-        return sequenceOf(entry.timestamp, entry.level, entry.logger, entry.thread, entry.message, entry.requestId, entry.stackTrace)
+        return sequenceOf(
+            entry.timestamp,
+            entry.level,
+            entry.logger,
+            entry.thread,
+            entry.message,
+            entry.requestId,
+            entry.stackTrace
+        )
             .filterNotNull()
             .any { it.contains(query, ignoreCase = true) }
     }
@@ -161,9 +167,9 @@ internal object JournalLogReader {
     private fun redact(value: String): String {
         val noAnsi = ansi.replace(value, "")
         return noAnsi
-            .replace(authorizationPattern, "\$1[REDACTED]")
-            .replace(secretPattern, "\$1[REDACTED]")
-            .replace(urlPasswordPattern, "\$1[REDACTED]@")
+            .replace(authorizationPattern, $$"$1[REDACTED]")
+            .replace(secretPattern, $$"$1[REDACTED]")
+            .replace(urlPasswordPattern, $$"$1[REDACTED]@")
     }
 
     private fun priorityLevel(priority: String?): String = when (priority?.toIntOrNull()) {
@@ -197,7 +203,11 @@ fun Application.configureLogAdminRoutes() {
                     return@get
                 }
                 if (requestedLevel != null && requestedLevel.uppercase() !in allowedLevels) {
-                    call.respondError(HttpStatusCode.BadRequest, "invalid_level", "level must be TRACE, DEBUG, INFO, WARN, ERROR, or FATAL")
+                    call.respondError(
+                        HttpStatusCode.BadRequest,
+                        "invalid_level",
+                        "level must be TRACE, DEBUG, INFO, WARN, ERROR, or FATAL"
+                    )
                     return@get
                 }
 
