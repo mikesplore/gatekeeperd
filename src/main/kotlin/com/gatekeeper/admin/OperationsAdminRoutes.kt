@@ -334,7 +334,7 @@ fun Application.configureOperationsAdminRoutes() {
                 }
                 val site = SiteRepository.findByProjectSlug(slug) ?: SiteRepository.findByDomain(slug)
                 ?: run { call.respondError(HttpStatusCode.NotFound, "site_not_found", "Site not found"); return@get }
-                val nginx = NginxService.configured()
+                val nginx = get<NginxService>()
                 val siteSlug = site.projectSlug ?: slug
                 val inspection = nginx.inspectSite(siteSlug)
                 val cert = nginx.resolveCertificateForDomain(site.domain)
@@ -403,7 +403,7 @@ fun Application.configureOperationsAdminRoutes() {
                         "Site not found"
                     ); return@patch
                 }
-                val nginx = NginxService.configured()
+                val nginx = get<NginxService>()
                 val resolved =
                     if (updated.upstreamMode == com.gatekeeper.db.tables.UpstreamMode.DOCKER_DISCOVERY) updated.serviceId?.let {
                         DeploymentUpstreamResolver.resolve(
@@ -495,7 +495,7 @@ fun Application.configureOperationsAdminRoutes() {
                         "Missing slug"
                     ); return@delete
                 }
-                val nginx = NginxService.configured()
+                val nginx = get<NginxService>()
                 val site = SiteRepository.findByProjectSlug(slug) ?: SiteRepository.findByDomain(slug)
                 val removed = site?.let(nginx::removeSiteArtifacts) ?: nginx.removeProject(slug)
                 if (!removed) {
@@ -516,7 +516,7 @@ fun Application.configureOperationsAdminRoutes() {
                 call.respond(DashboardSiteDeleteResponse(deleted = true, slug = slug))
             }
             get("/api/admin/nginx/configs") {
-                call.respond(NginxService.configured().listConfigArtifacts())
+                call.respond(get<NginxService>().listConfigArtifacts())
             }
             get("/api/admin/nginx/manual-configs/{filename}") {
                 val filename = call.parameters["filename"] ?: run {
@@ -527,7 +527,7 @@ fun Application.configureOperationsAdminRoutes() {
                     ); return@get
                 }
                 val detail =
-                    runCatching { NginxService.configured().inspectManualConfig(filename) }.getOrElse { error ->
+                    runCatching { get<NginxService>().inspectManualConfig(filename) }.getOrElse { error ->
                         val message = error.message ?: "Unable to inspect nginx config"
                         val status = if (message.contains(
                                 "not found",
@@ -561,7 +561,7 @@ fun Application.configureOperationsAdminRoutes() {
                         "Set confirm=true to back up and disable this manual config"
                     ); return@post
                 }
-                val nginx = NginxService.configured()
+                val nginx = get<NginxService>()
                 val artifact = nginx.listConfigArtifacts().firstOrNull { it.filename == filename }
                     ?: run {
                         call.respondError(
@@ -624,7 +624,7 @@ fun Application.configureOperationsAdminRoutes() {
                         "Set confirm=true to permanently delete this disabled manual config"
                     ); return@delete
                 }
-                val nginx = NginxService.configured()
+                val nginx = get<NginxService>()
                 val detail = runCatching { nginx.inspectManualConfig(filename) }.getOrElse { error ->
                     val message = error.message ?: "Unable to inspect nginx config"
                     val status = if (message.contains(
@@ -653,7 +653,7 @@ fun Application.configureOperationsAdminRoutes() {
                 call.respond(NginxManualConfigActionResponse(filename, backup, deleted = true))
             }
             get("/api/admin/dashboard/dead-configs") {
-                call.respond(NginxService.configured().listConfigArtifacts().filter { it.orphaned })
+                call.respond(get<NginxService>().listConfigArtifacts().filter { it.orphaned })
             }
             delete("/api/admin/dashboard/dead-configs/{filename}") {
                 val filename = call.parameters["filename"] ?: run {
@@ -684,7 +684,7 @@ fun Application.configureOperationsAdminRoutes() {
                         "Set confirm=true to move this dead config to backup"
                     ); return@delete
                 }
-                val nginx = NginxService.configured()
+                val nginx = get<NginxService>()
                 val artifact = nginx.listConfigArtifacts().firstOrNull { it.filename == filename }
                     ?: run {
                         call.respondError(
@@ -943,7 +943,7 @@ fun Application.configureOperationsAdminRoutes() {
                 val projects = ProjectRepository.findAll()
                 val paymentDashboard = call.application.get<GetPaymentDashboardData>()()
                 val outbox = integrationOutboxRepository.summary()
-                val nginxArtifacts = NginxService.configured().listConfigArtifacts()
+                val nginxArtifacts = get<NginxService>().listConfigArtifacts()
                 val available = nginxArtifacts.count { it.available }.toLong()
                 val enabled = nginxArtifacts.count { it.enabled }.toLong()
                 val selfDomains = nginxSettings.selfDomains.toSet()
@@ -1102,7 +1102,7 @@ fun Application.configureOperationsAdminRoutes() {
                         docker.containerHealth(name)
                     }.getOrNull()
                 }
-                val nginx = NginxService.configured()
+                val nginx = get<NginxService>()
                 val nginxEnabled = nginx.listConfigArtifacts().any { it.filename == slug && it.available && it.enabled }
                 val certificateInstalled = nginx.isCertificateInstalled(project.domain)
                 val ready =

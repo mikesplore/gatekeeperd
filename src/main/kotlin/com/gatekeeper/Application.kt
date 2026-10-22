@@ -52,7 +52,7 @@ fun main(args: Array<String>) {
         return
     }
     val settings = AppSettings.fromEnv()
-    Telemetry.init(settings)
+    Telemetry.init(settings.telemetry)
     val port = args.portArg() ?: settings["PORT"]?.toIntOrNull() ?: 8080
     embeddedServer(Netty, port = port, host = "0.0.0.0", module = Application::module)
         .start(wait = true)
