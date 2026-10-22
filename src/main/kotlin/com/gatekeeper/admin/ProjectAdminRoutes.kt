@@ -114,6 +114,7 @@ fun Application.configureProjectAdminRoutes() {
     val auditRepository = get<AuditRepositoryPort>()
     val dockerService = get<DockerGateway>()
     val dockerSettings = get<AppSettings>().docker
+    val scribed = get<ScribedIntegrationClient>()
     routing {
         authenticate("auth-jwt") {
             get("/api/admin/projects") {
@@ -320,7 +321,7 @@ fun Application.configureProjectAdminRoutes() {
                     actor,
                     "${type.name} amount=$amount oldBalance=$oldBalance newBalance=$newBalance reason=${body.reason.trim()}"
                 )
-                ScribedIntegrationClient.notifyLedger(project, "adjustment-${adjustment.id}", call.application.get<ProjectBalanceAdapter>(), call.application.get())
+                scribed.notifyLedger(project, "adjustment-${adjustment.id}", call.application.get<ProjectBalanceAdapter>(), call.application.get())
                 ProjectRepository.invalidateCache(slug)
                 call.respond(ProjectAdjustmentResponse(adjustment.id.toString(), project.id.toString(), type.name, amount.toDouble(), adjustment.reason, actor, adjustment.createdAt.toString(), oldBalance.toDouble(), newBalance.toDouble()))
             }
@@ -383,7 +384,7 @@ fun Application.configureProjectAdminRoutes() {
                 }
 
                 runCatching {
-                    val nginx = NginxService.configured()
+                    val nginx = get<NginxService>()
                     val removed = nginx.removeProject(slug)
                     if (!removed) {
                         logger.warn("Project archived but nginx cleanup failed for slug=$slug (removeProject returned false)")
@@ -447,7 +448,7 @@ fun Application.configureProjectAdminRoutes() {
                     blockReasonNote = body.blockReasonNote?.takeIf { it.isNotBlank() } ?: reason
                 )
                 ProjectRepository.invalidateCache(slug)
-                ScribedIntegrationClient.notifySuspension(project.copy(status = "manual_block", blockReason = "manual"), "manual_block: $reason", call.application.get())
+                scribed.notifySuspension(project.copy(status = "manual_block", blockReason = "manual"), "manual_block: $reason", call.application.get())
 
                 logger.info("Project blocked: $slug by $actor")
                 call.respond(StatusChangeResponse(status = "blocked", slug = slug))

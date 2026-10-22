@@ -64,6 +64,8 @@ class AppSettings private constructor(
 
     data class TelemetrySettings(val otlpEndpoint: String?)
 
+    data class OperationsSettings(val nginxConfigLogEnabled: Boolean)
+
     data class ApplicationSettings(
         val adminEmail: String,
         val adminPassword: String,
@@ -71,7 +73,6 @@ class AppSettings private constructor(
         val failMode: String,
         val corsAllowedHosts: List<CorsHost>,
         val defaultGracePeriodDays: Int,
-        val nginxConfigLogEnabled: Boolean,
         val deploymentStaleMinutes: Long,
         val deploymentHostPortRange: IntRange,
         val deploymentDrainDelaySeconds: Long
@@ -149,12 +150,12 @@ class AppSettings private constructor(
         )
     }
     val telemetry: TelemetrySettings by lazy { TelemetrySettings(get("OTEL_EXPORTER_OTLP_ENDPOINT")) }
+    val operations: OperationsSettings by lazy { OperationsSettings(boolean("NGINX_CONFIG_LOG_ENABLED", true)) }
     val application: ApplicationSettings by lazy {
         ApplicationSettings(
             optional("ADMIN_EMAIL", ""), optional("ADMIN_PASSWORD", ""),
             optional("DEPLOYMENT_SECRETS_KEY", ""), optional("FAIL_MODE", "open"), corsHosts(),
             optional("DEFAULT_GRACE_PERIOD_DAYS", "3").toInt(),
-            boolean("NGINX_CONFIG_LOG_ENABLED", true),
             optional("DEPLOYMENT_STALE_MINUTES", "30").toLong(),
             parsePortRange(optional("DEPLOYMENT_HOST_PORT_RANGE", "32000-40000")),
             optional("DEPLOYMENT_DRAIN_DELAY_SECONDS", "5").toLong().also {
