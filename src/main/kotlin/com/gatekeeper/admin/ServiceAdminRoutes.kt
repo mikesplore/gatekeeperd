@@ -306,17 +306,11 @@ fun Application.configureServiceAdminRoutes() {
                 if (ServiceRepository.findByProjectAndId(projectId, serviceId) == null) {
                     return@get call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
                 }
-                val lookup = ScribedIntegrationClient.serviceInvoiceStatus(serviceId.toString())
-                if (lookup.status == HttpStatusCode.NotFound) {
-                    return@get call.respondError(HttpStatusCode.NotFound, "invoice_unavailable", "No invoice has been created for this service")
-                }
-                val invoiceId = lookup.body?.get("invoice")?.jsonObject?.get("id")?.toString()?.toLongOrNull()
-                if (lookup.status == null || !lookup.status.isSuccess() || invoiceId == null) {
-                    return@get call.respondError(HttpStatusCode.BadGateway, "invoice_download_failed", "The service invoice could not be loaded")
-                }
-                val (status, bytes) = ScribedIntegrationClient.invoicePdf(invoiceId)
+                val (status, bytes) = ScribedIntegrationClient.serviceInvoicePdf(
+                    project, serviceId, call.application.get<PaymentDomainRepository>(), call.application.get<ProjectBalanceAdapter>()
+                )
                 if (bytes == null) {
-                    return@get call.respondError(HttpStatusCode.BadGateway, "invoice_download_failed", "Scribed could not retrieve the service invoice")
+                    return@get call.respondError(HttpStatusCode.BadGateway, "invoice_download_failed", "Scribed could not synchronize or retrieve the service invoice")
                 }
                 call.response.header(io.ktor.http.HttpHeaders.ContentDisposition, "attachment; filename=invoice-${project.slug}-service-$serviceId.pdf")
                 call.respondBytes(bytes, io.ktor.http.ContentType.Application.Pdf)
@@ -367,7 +361,7 @@ fun Application.configureServiceAdminRoutes() {
                 val adjustment = try { call.application.get<ProjectAdjustmentStore>().create(projectId, type, amount, body.reason, actor, serviceId) }
                     catch (e: IllegalArgumentException) { return@post call.respondError(HttpStatusCode.BadRequest, "invalid_adjustment", e.message ?: "Invalid adjustment") }
                 auditRepository.write(projectId, "service_adjustment", actor, "service=${service.name} ${type.name} amount=$amount reason=${body.reason.trim()}")
-                ScribedIntegrationClient.notifyServiceLedger(serviceId, "adjustment-${adjustment.id}", call.application.get<ProjectBalanceAdapter>())
+                ScribedIntegrationClient.notifyServiceLedger(serviceId, "adjustment-${adjustment.id}", call.application.get<ProjectBalanceAdapter>(), call.application.get())
                 call.respond(HttpStatusCode.Created, ServiceAdjustmentView(adjustment.id.toString(), projectId.toString(), serviceId.toString(), type.name, amount.toDouble(), adjustment.reason, actor, adjustment.createdAt.toString()))
             }
 
