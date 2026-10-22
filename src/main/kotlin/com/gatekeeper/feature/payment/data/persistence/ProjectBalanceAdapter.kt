@@ -13,7 +13,11 @@ import kotlinx.serialization.json.jsonPrimitive
 import java.math.BigDecimal
 
 /** Persistence adapter for assembling the domain balance from project billing and payment data. */
-class ProjectBalanceAdapter(private val payments: PaymentRepository, private val adjustments: ProjectAdjustmentRepository) {
+class ProjectBalanceAdapter(
+    private val payments: PaymentRepository,
+    private val adjustments: ProjectAdjustmentRepository,
+    private val scribed: ScribedIntegrationClient
+) {
     fun originalCharge(project: ProjectRepository.ProjectRecord): BigDecimal = serviceInvoiceTotals(project).total
     fun additionalCharges(project: ProjectRepository.ProjectRecord): BigDecimal = BigDecimal.ZERO
     fun discounts(project: ProjectRepository.ProjectRecord): BigDecimal = BigDecimal.ZERO
@@ -37,7 +41,7 @@ class ProjectBalanceAdapter(private val payments: PaymentRepository, private val
 
     private fun serviceInvoiceTotals(project: ProjectRepository.ProjectRecord): InvoiceTotals = runBlocking {
         ServiceRepository.listByProjectId(project.id).mapNotNull { service ->
-            val lookup = ScribedIntegrationClient.serviceInvoiceStatus(service.id.toString())
+            val lookup = scribed.serviceInvoiceStatus(service.id.toString())
             if (lookup.status?.value !in 200..299) return@mapNotNull null
             val invoice = lookup.body?.get("invoice")?.jsonObject ?: return@mapNotNull null
             val total = invoice["amount"]?.jsonPrimitive?.contentOrNull?.toBigDecimalOrNull() ?: BigDecimal.ZERO

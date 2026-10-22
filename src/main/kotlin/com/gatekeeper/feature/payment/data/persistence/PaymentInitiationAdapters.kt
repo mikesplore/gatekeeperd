@@ -30,7 +30,8 @@ class PaymentServiceAdapter : PaymentServicePort {
 class PaymentBalanceAdapter(
     private val payments: PaymentRepository,
     private val reconciliation: ReconcilePayments,
-    private val projectBalances: ProjectBalanceAdapter
+    private val projectBalances: ProjectBalanceAdapter,
+    private val scribed: ScribedIntegrationClient
 ) : PaymentBalancePort {
     override suspend fun requiresServiceScope(projectId: UUID): Boolean {
         return true
@@ -75,7 +76,7 @@ class PaymentBalanceAdapter(
             .fold(BigDecimal.ZERO) { sum, payment -> sum + payment.amount }
 
     private suspend fun serviceInvoice(projectId: UUID, serviceId: UUID): ServiceInvoiceBalance {
-        val lookup = ScribedIntegrationClient.serviceInvoiceStatus(serviceId.toString())
+        val lookup = scribed.serviceInvoiceStatus(serviceId.toString())
         if (lookup.status == HttpStatusCode.NotFound) error("No invoice is linked to this service")
         if (lookup.status?.value !in 200..299) error("Service invoice is temporarily unavailable")
         val invoice = lookup.body?.get("invoice")?.jsonObject ?: error("Service invoice is unavailable")

@@ -19,13 +19,14 @@ import kotlinx.serialization.json.contentOrNull
 class PaymentEffectsAdapter(
     private val projectBalances: ProjectBalanceAdapter,
     private val auditRepository: AuditRepository,
-    private val outbox: IntegrationOutboxRepository
+    private val outbox: IntegrationOutboxRepository,
+    private val scribed: ScribedIntegrationClient
 ) : PaymentEffects {
     override fun acceptSuccessfulPayment(payment: Payment?, projectId: java.util.UUID, amount: BigDecimal, currency: String?): Boolean {
         val project = ProjectRepository.findById(projectId) ?: return false
         if (!currency.isNullOrBlank() && !project.currency.equals(currency, ignoreCase = true)) return false
         val serviceId = payment?.serviceId ?: return false
-        val invoice = runBlocking { ScribedIntegrationClient.serviceInvoiceStatus(serviceId.toString()) }
+        val invoice = runBlocking { scribed.serviceInvoiceStatus(serviceId.toString()) }
         if (invoice.status?.value !in 200..299) return false
         val invoiceData = invoice.body?.get("invoice")?.jsonObject ?: return false
         val serviceCurrency = invoiceData["currency"]?.jsonPrimitive?.contentOrNull
@@ -38,18 +39,18 @@ class PaymentEffectsAdapter(
     override fun paymentSucceeded(payment: Payment, amount: BigDecimal, currency: String?, paidAt: LocalDateTime?, actor: String) {
         val project = ProjectRepository.findById(payment.projectId) ?: return
         if (payment.serviceId != null) {
-            val invoice = runBlocking { ScribedIntegrationClient.serviceInvoiceStatus(payment.serviceId.toString()) }
+            val invoice = runBlocking { scribed.serviceInvoiceStatus(payment.serviceId.toString()) }
             val balance = invoice.body?.get("invoice")?.jsonObject?.get("balance")?.jsonPrimitive?.contentOrNull?.toBigDecimalOrNull()
             if (balance != null && amount >= balance) ServiceRepository.clearAutoBlockForPayment(payment.serviceId)
             auditRepository.write(project.id, "payment_received", actor, "Service payment ref=${payment.reference} service=${payment.serviceId} amount=$amount")
             val timestamp = paidAt ?: LocalDateTime.now()
-            ScribedIntegrationClient.notifyPayment(project, payment.provider, payment.reference, amount.toPlainString(), currency ?: project.currency, timestamp.toString(), outbox, payment.serviceId)
+            scribed.notifyPayment(project, payment.provider, payment.reference, amount.toPlainString(), currency ?: project.currency, timestamp.toString(), outbox, payment.serviceId)
             return
         }
         auditRepository.write(project.id, "payment_received", actor, "Payment ref=${payment.reference} provider=${payment.provider} amount=$amount verified via payment_use_case")
         ProjectRepository.invalidateCache(project.slug)
         val timestamp = paidAt ?: LocalDateTime.now()
-        ScribedIntegrationClient.notifyPayment(project, payment.provider, payment.reference, amount.toPlainString(), currency ?: project.currency, timestamp.toString(), outbox, payment.serviceId)
+        scribed.notifyPayment(project, payment.provider, payment.reference, amount.toPlainString(), currency ?: project.currency, timestamp.toString(), outbox, payment.serviceId)
     }
 
     override fun paymentFailed(payment: Payment) {
@@ -63,7 +64,7 @@ class PaymentEffectsAdapter(
             ProjectRepository.setStatusAndDueDate(project.id, "blocked", LocalDate.now(), blockReason = "payment_reversed")
             auditRepository.write(project.id, "blocked", "system", "Payment reversed (ref=${payment.reference})")
             ProjectRepository.invalidateCache(project.slug)
-            ScribedIntegrationClient.notifySuspension(project.copy(status = "blocked", blockReason = "payment_reversed"), "payment_reversed", outbox)
+            scribed.notifySuspension(project.copy(status = "blocked", blockReason = "payment_reversed"), "payment_reversed", outbox)
         }
     }
 }
