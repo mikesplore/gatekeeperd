@@ -41,11 +41,11 @@ private fun ApplicationCall.requestedDomain(): String? =
     request.queryParameters["domain"]?.takeIf { it.isNotBlank() }
         ?: request.headers["X-Forwarded-Host"]?.substringBefore(',')?.takeIf { it.isNotBlank() }
 
-private suspend fun ApplicationCall.respondBlocked(result: GateResult.Blocked) {
+private suspend fun ApplicationCall.respondBlocked(result: GateResult.Blocked, scribed: ScribedIntegrationClient) {
     val integrationSettings = application.get<AppSettings>().integrations
     val paywall = result.paywall
     if (prefersHtml() && paywall != null) {
-        val (serviceBillingMode, serviceInvoices) = loadServiceInvoices(paywall)
+        val (serviceBillingMode, serviceInvoices) = loadServiceInvoices(paywall, scribed)
         response.header(HttpHeaders.ContentType, ContentType.Text.Html.withCharset(Charsets.UTF_8).toString())
         respond(HttpStatusCode.PaymentRequired, PaywallTemplates.htmlBlockWall(paywall, payEnabled = true, paymentMethods = application.get<GetPaymentMethodAvailability>()(paywall.currency), serviceInvoices = serviceInvoices, serviceBillingMode = serviceBillingMode, integrationSettings = integrationSettings))
         return
@@ -54,7 +54,7 @@ private suspend fun ApplicationCall.respondBlocked(result: GateResult.Blocked) {
     when (result.type) {
         "frontend" -> {
             if (paywall != null) {
-                val (serviceBillingMode, serviceInvoices) = loadServiceInvoices(paywall)
+                val (serviceBillingMode, serviceInvoices) = loadServiceInvoices(paywall, scribed)
                 response.header(HttpHeaders.ContentType, ContentType.Text.Html.withCharset(Charsets.UTF_8).toString())
                 respond(HttpStatusCode.PaymentRequired, PaywallTemplates.htmlBlockWall(paywall, payEnabled = true, paymentMethods = application.get<GetPaymentMethodAvailability>()(paywall.currency), serviceInvoices = serviceInvoices, serviceBillingMode = serviceBillingMode, integrationSettings = integrationSettings))
             } else {
@@ -65,12 +65,12 @@ private suspend fun ApplicationCall.respondBlocked(result: GateResult.Blocked) {
     }
 }
 
-private suspend fun loadServiceInvoices(paywall: PaywallInfo): Pair<Boolean, List<PaywallTemplates.ServiceInvoiceDue>> {
+private suspend fun loadServiceInvoices(paywall: PaywallInfo, scribed: ScribedIntegrationClient): Pair<Boolean, List<PaywallTemplates.ServiceInvoiceDue>> {
     val services = ServiceRepository.listByProjectId(paywall.projectId)
     if (services.size <= 1) return false to emptyList()
     var serviceBillingMode = false
     val invoices = services.mapNotNull { service ->
-        val lookup = ScribedIntegrationClient.serviceInvoiceStatus(service.id.toString())
+        val lookup = scribed.serviceInvoiceStatus(service.id.toString())
         if (lookup.status == HttpStatusCode.NotFound) return@mapNotNull null
         serviceBillingMode = true
         if (lookup.status?.value !in 200..299) return@mapNotNull null
@@ -86,12 +86,13 @@ private suspend fun loadServiceInvoices(paywall: PaywallInfo): Pair<Boolean, Lis
 
 fun Application.configureGateRoutes() {
     val integrationSettings = get<AppSettings>().integrations
+    val scribed = get<ScribedIntegrationClient>()
     routing {
         get("/api/gate/check") {
             val slug = call.requireProjectSlug() ?: return@get
             when (val result = call.application.get<GateApplicationService>().check(slug, call.requestedDomain())) {
                 is GateResult.Active -> call.respond(HttpStatusCode.OK, "")
-                is GateResult.Blocked -> call.respondBlocked(result)
+                is GateResult.Blocked -> call.respondBlocked(result, scribed)
                 is GateResult.Unknown -> call.respondError(
                     HttpStatusCode.PaymentRequired,
                     "unknown_project",
@@ -115,7 +116,7 @@ fun Application.configureGateRoutes() {
                 call.respondError(HttpStatusCode.BadRequest, "project_active", "This project is not suspended")
                 return@get
             }
-            val (serviceBillingMode, serviceInvoices) = loadServiceInvoices(gateResult.paywall)
+            val (serviceBillingMode, serviceInvoices) = loadServiceInvoices(gateResult.paywall, scribed)
             call.response.header(HttpHeaders.ContentType, ContentType.Text.Html.withCharset(Charsets.UTF_8).toString())
             call.respond(
                 HttpStatusCode.PaymentRequired,

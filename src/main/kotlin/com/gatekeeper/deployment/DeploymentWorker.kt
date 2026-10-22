@@ -37,7 +37,8 @@ class DeploymentWorker(
     private val deploymentLock: DeploymentLock,
     private val docker: DockerGateway,
     private val schedulerSettings: AppSettings.SchedulerSettings,
-    private val nginxSettings: AppSettings.NginxSettings
+    private val nginxSettings: AppSettings.NginxSettings,
+    private val nginxService: NginxService
 ) {
     private val logger = LoggerFactory.getLogger("com.gatekeeper.deployment.DeploymentWorker")
     private val started = AtomicBoolean(false)
@@ -98,7 +99,7 @@ class DeploymentWorker(
                 }
                 val candidateRunning = candidate?.name?.let { docker.containerHealth(it) == "running" } == true
                 val restoringFailedCutover = recovery.state == "repair_required"
-                val result = NginxService.configured().recoverInterruptedUpstream(
+                val result = nginxService.recoverInterruptedUpstream(
                     site, files, candidateRunning && !restoringFailedCutover
                 )
                 when (result) {
@@ -515,7 +516,7 @@ class DeploymentWorker(
         val changesProductionRoute = job.environment == "production"
         val site = if (changesProductionRoute) SiteRepository.findByServiceId(job.serviceId) else null
         val siteOwnerSlug = site?.projectSlug
-        val siteService = if (site != null && siteOwnerSlug != null) NginxService.configured() else null
+        val siteService = if (site != null && siteOwnerSlug != null) nginxService else null
         val existingSiteConfig = if (siteService != null && siteOwnerSlug != null) siteService.inspectSite(siteOwnerSlug) else null
         // Legacy explicit sites may already receive managed deployments. Convert them on cutover
         // so deployment changes only the stable service include after this first activation.

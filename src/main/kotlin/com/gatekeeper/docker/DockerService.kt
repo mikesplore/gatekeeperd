@@ -59,7 +59,7 @@ internal fun <Handle, Result> createContainerWithCleanup(
 
 class DockerService(
     dockerSocketPath: String,
-    private val dockerSettings: AppSettings.DockerSettings = AppSettings.fromEnv().docker
+    private val dockerSettings: AppSettings.DockerSettings
 ) : DockerGateway {
     private val client: DockerClient
 
