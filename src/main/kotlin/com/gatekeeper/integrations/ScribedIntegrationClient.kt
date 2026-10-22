@@ -60,7 +60,7 @@ import io.ktor.client.statement.bodyAsText
     val amount_paid: String = "0"
 )
 
-class ScribedIntegrationClient(private val settings: AppSettings.IntegrationSettings) {
+class ScribedIntegrationClient(private val settings: AppSettings.IntegrationSettings) : java.io.Closeable {
     private val logger = LoggerFactory.getLogger("com.gatekeeper.integrations.ScribedIntegrationClient")
     private val http = HttpClient { install(ContentNegotiation) { json(Json { ignoreUnknownKeys = true }) } }
     private val json = Json { encodeDefaults = true }
@@ -75,6 +75,8 @@ class ScribedIntegrationClient(private val settings: AppSettings.IntegrationSett
         val error: String? = null
     )
     data class DeliveryResult(val delivered: Boolean, val error: String? = null)
+
+    override fun close() = http.close()
 
     suspend fun createInvoice(project: ProjectRepository.ProjectRecord, description: String, amount: String, balances: ProjectBalanceAdapter): InvoiceCreateResult {
         val base = settings.scribedCallbackUrl.trim().trimEnd('/')

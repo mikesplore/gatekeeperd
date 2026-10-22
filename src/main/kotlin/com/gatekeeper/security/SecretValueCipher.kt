@@ -11,11 +11,16 @@ import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
 object SecretValueCipher {
+    private lateinit var deploymentSecretsKey: String
+
+    fun configure(settings: AppSettings.ApplicationSettings) {
+        deploymentSecretsKey = settings.deploymentSecretsKey
+    }
     private const val IV_SIZE = 12
     private const val TAG_BITS = 128
     private val random = SecureRandom()
 
-    fun isConfigured() = AppSettings.fromEnv().application.deploymentSecretsKey.isNotBlank()
+    fun isConfigured() = ::deploymentSecretsKey.isInitialized && deploymentSecretsKey.isNotBlank()
 
     fun encrypt(plaintext: String): String {
         val iv = ByteArray(IV_SIZE).also(random::nextBytes)
@@ -45,7 +50,7 @@ object SecretValueCipher {
         secrets.filter(String::isNotEmpty).fold(text) { result, secret -> result.replace(secret, "[REDACTED]") }
 
     private fun key(): SecretKeySpec {
-        val bytes = runCatching { Base64.getDecoder().decode(AppSettings.fromEnv().application.deploymentSecretsKey) }
+        val bytes = runCatching { Base64.getDecoder().decode(deploymentSecretsKey) }
             .getOrElse { throw IllegalStateException("DEPLOYMENT_SECRETS_KEY must be base64 encoded") }
         require(bytes.size == 32) { "DEPLOYMENT_SECRETS_KEY must decode to exactly 32 bytes" }
         return SecretKeySpec(bytes, "AES")
