@@ -13,7 +13,7 @@ object IntegrationOutboxJob {
         runWorkerLoop("integration-outbox", 60_000, "worker:integration-outbox", logger) {
             run {
                 outbox.claim().forEach { event ->
-                    val result = ScribedIntegrationClient.deliverWithResult(event, payments, balances)
+                    val result = ScribedIntegrationClient.deliverWithResult(event, payments, balances, outbox)
                     if (result.delivered) outbox.markDelivered(event.id)
                     else outbox.markFailed(event.id, result.error ?: "Integration delivery failed", event.attempts)
                 }

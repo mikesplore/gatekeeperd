@@ -33,7 +33,7 @@ fun Application.configureIntegrationAdminRoutes() {
             if (id == null) { call.respondError(HttpStatusCode.BadRequest, "invalid_id", "Invalid outbox event id"); return@post }
             val event = outbox.replayAndClaim(id)
             if (event == null) { call.respondError(HttpStatusCode.NotFound, "outbox_event_not_found", "Undelivered outbox event not found"); return@post }
-            val result = ScribedIntegrationClient.deliverWithResult(event, call.application.get<PaymentRepository>(), call.application.get<ProjectBalanceAdapter>())
+            val result = ScribedIntegrationClient.deliverWithResult(event, call.application.get<PaymentRepository>(), call.application.get<ProjectBalanceAdapter>(), outbox)
             if (result.delivered) outbox.markDelivered(id)
             else outbox.markFailed(id, result.error ?: "Integration delivery failed", event.attempts)
             call.respond(OutboxReplayResponse(result.delivered, id.toString(), if (result.delivered) "delivered" else "queued_for_retry", result.error))
