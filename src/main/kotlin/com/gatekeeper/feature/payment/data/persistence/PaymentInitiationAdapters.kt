@@ -1,7 +1,7 @@
 package com.gatekeeper.feature.payment.data.persistence
 
 import com.gatekeeper.feature.project.domain.repository.ProjectRepository
-import com.gatekeeper.db.repositories.ServiceRepository
+import com.gatekeeper.feature.service.domain.repository.ServiceRepository
 import com.gatekeeper.feature.payment.domain.repository.PaymentRepository
 import com.gatekeeper.feature.payment.domain.usecase.PaymentBalancePort
 import com.gatekeeper.feature.payment.domain.usecase.PaymentProject
@@ -23,29 +23,30 @@ class PaymentProjectAdapter(private val projects: ProjectRepository) : PaymentPr
 }
 
 class PaymentServiceAdapter : PaymentServicePort {
-    override fun belongsToProject(projectId: UUID, serviceId: UUID): Boolean =
-        ServiceRepository.findByProjectAndId(projectId, serviceId) != null
+    override fun belongsToProject(serviceRepository: ServiceRepository, projectId: UUID, serviceId: UUID): Boolean =
+        serviceRepository.findByProjectAndId(projectId, serviceId) != null
 }
 
 class PaymentBalanceAdapter(
     private val payments: PaymentRepository,
     private val reconciliation: ReconcilePayments,
     private val projectBalances: ProjectBalanceAdapter,
-    private val scribed: ScribedIntegrationClient
+    private val scribed: ScribedIntegrationClient,
+    private val projectRepository: ProjectRepository
 ) : PaymentBalancePort {
     override suspend fun requiresServiceScope(projectId: UUID): Boolean {
         return true
     }
 
-    override suspend fun availableAmount(projectId: UUID, requestedAmount: BigDecimal?): BigDecimal =
-        availableAmount(projectId, requestedAmount, null)
+    override suspend fun availableAmount(serviceRepository: ServiceRepository, projectId: UUID, requestedAmount: BigDecimal?): BigDecimal =
+        availableAmount( serviceRepository, projectId, requestedAmount,null)
 
-    override suspend fun availableAmount(projectId: UUID, requestedAmount: BigDecimal?, serviceId: UUID?): BigDecimal {
-        return availableServiceAmount(projectId, serviceId ?: error("A service is required for payment"), requestedAmount)
+    override suspend fun availableAmount(serviceRepository: ServiceRepository, projectId: UUID, requestedAmount: BigDecimal?, serviceId: UUID?): BigDecimal {
+        return availableServiceAmount(serviceRepository, projectId, serviceId ?: error("A service is required for payment"), requestedAmount)
     }
 
-    private suspend fun availableServiceAmount(projectId: UUID, serviceId: UUID, requestedAmount: BigDecimal?): BigDecimal {
-        require(ServiceRepository.findByProjectAndId(projectId, serviceId) != null) { "Service not found for this project" }
+    private suspend fun availableServiceAmount(serviceRepository: ServiceRepository, projectId: UUID, serviceId: UUID, requestedAmount: BigDecimal?): BigDecimal {
+        require(serviceRepository.findByProjectAndId(projectId, serviceId) != null) { "Service not found for this project" }
         var invoice = serviceInvoice(projectId, serviceId)
         var balance = invoice.balance - paymentsNotYetInScribed(projectId, serviceId, invoice)
         var pending = payments.pendingAmountForServiceId(serviceId)
@@ -81,7 +82,7 @@ class PaymentBalanceAdapter(
         if (lookup.status?.value !in 200..299) error("Service invoice is temporarily unavailable")
         val invoice = lookup.body?.get("invoice")?.jsonObject ?: error("Service invoice is unavailable")
         val invoiceCurrency = invoice["currency"]?.jsonPrimitive?.contentOrNull
-        val projectCurrency = projects.findById(projectId)?.currency ?: error("Project not found")
+        val projectCurrency = projectRepository.findById(projectId)?.currency ?: error("Project not found")
         require(invoiceCurrency.isNullOrBlank() || invoiceCurrency.equals(projectCurrency, ignoreCase = true)) {
             "Service invoice currency must match the project currency"
         }

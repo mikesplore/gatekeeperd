@@ -5,6 +5,7 @@ import java.math.BigDecimal
 import java.time.LocalDate
 import com.gatekeeper.feature.payment.domain.model.ProjectFinancials
 import com.gatekeeper.db.tables.AccessBlockReason
+import com.gatekeeper.feature.project.domain.model.ProjectRecord
 import java.util.UUID
 
 data class PaywallInfo(
@@ -24,7 +25,7 @@ data class PaywallInfo(
 ) {
     companion object {
         fun from(
-            project: ProjectRepository.ProjectRecord,
+            project: ProjectRecord,
             financials: ProjectFinancials,
             domain: String = project.domain,
             serviceId: UUID? = null,
