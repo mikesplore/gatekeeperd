@@ -1,11 +1,11 @@
 package com.gatekeeper.gate
 
 import com.gatekeeper.config.AppSettings
-import com.gatekeeper.db.repositories.ProjectQueryRepository
-import com.gatekeeper.db.repositories.GateTarget
 import com.gatekeeper.db.tables.AccessBlockReason
 import com.gatekeeper.feature.payment.domain.usecase.GetLatestPaymentLink
 import com.gatekeeper.feature.payment.data.persistence.ProjectBalanceAdapter
+import com.gatekeeper.feature.project.domain.repository.GateTarget
+import com.gatekeeper.feature.project.domain.repository.ProjectQueryRepository
 import com.gatekeeper.plugins.RedisService
 import com.gatekeeper.plugins.Metrics
 import org.slf4j.LoggerFactory

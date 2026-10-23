@@ -3,9 +3,8 @@ package com.gatekeeper.gate
 import com.gatekeeper.api.InputValidators
 import com.gatekeeper.api.respondError
 import com.gatekeeper.config.AppSettings
-import com.gatekeeper.gate.GateApplicationService
 import com.gatekeeper.feature.payment.domain.usecase.GetPaymentMethodAvailability
-import com.gatekeeper.db.repositories.ServiceRepository
+import com.gatekeeper.feature.service.domain.repository.ServiceRepository
 import com.gatekeeper.integrations.ScribedIntegrationClient
 import io.ktor.http.*
 import io.ktor.server.application.*
@@ -41,11 +40,11 @@ private fun ApplicationCall.requestedDomain(): String? =
     request.queryParameters["domain"]?.takeIf { it.isNotBlank() }
         ?: request.headers["X-Forwarded-Host"]?.substringBefore(',')?.takeIf { it.isNotBlank() }
 
-private suspend fun ApplicationCall.respondBlocked(result: GateResult.Blocked, scribed: ScribedIntegrationClient) {
+private suspend fun ApplicationCall.respondBlocked(serviceRepository: ServiceRepository,result: GateResult.Blocked, scribed: ScribedIntegrationClient) {
     val integrationSettings = application.get<AppSettings>().integrations
     val paywall = result.paywall
     if (prefersHtml() && paywall != null) {
-        val (serviceBillingMode, serviceInvoices) = loadServiceInvoices(paywall, scribed)
+        val (serviceBillingMode, serviceInvoices) = loadServiceInvoices(serviceRepository = serviceRepository,paywall, scribed)
         response.header(HttpHeaders.ContentType, ContentType.Text.Html.withCharset(Charsets.UTF_8).toString())
         respond(HttpStatusCode.PaymentRequired, PaywallTemplates.htmlBlockWall(paywall, payEnabled = true, paymentMethods = application.get<GetPaymentMethodAvailability>()(paywall.currency), serviceInvoices = serviceInvoices, serviceBillingMode = serviceBillingMode, integrationSettings = integrationSettings))
         return
@@ -54,7 +53,7 @@ private suspend fun ApplicationCall.respondBlocked(result: GateResult.Blocked, s
     when (result.type) {
         "frontend" -> {
             if (paywall != null) {
-                val (serviceBillingMode, serviceInvoices) = loadServiceInvoices(paywall, scribed)
+                val (serviceBillingMode, serviceInvoices) = loadServiceInvoices(serviceRepository = serviceRepository, paywall, scribed)
                 response.header(HttpHeaders.ContentType, ContentType.Text.Html.withCharset(Charsets.UTF_8).toString())
                 respond(HttpStatusCode.PaymentRequired, PaywallTemplates.htmlBlockWall(paywall, payEnabled = true, paymentMethods = application.get<GetPaymentMethodAvailability>()(paywall.currency), serviceInvoices = serviceInvoices, serviceBillingMode = serviceBillingMode, integrationSettings = integrationSettings))
             } else {
@@ -65,8 +64,8 @@ private suspend fun ApplicationCall.respondBlocked(result: GateResult.Blocked, s
     }
 }
 
-private suspend fun loadServiceInvoices(paywall: PaywallInfo, scribed: ScribedIntegrationClient): Pair<Boolean, List<PaywallTemplates.ServiceInvoiceDue>> {
-    val services = ServiceRepository.listByProjectId(paywall.projectId)
+private suspend fun loadServiceInvoices(serviceRepository: ServiceRepository, paywall: PaywallInfo, scribed: ScribedIntegrationClient): Pair<Boolean, List<PaywallTemplates.ServiceInvoiceDue>> {
+    val services = serviceRepository.listByProjectId(paywall.projectId)
     if (services.size <= 1) return false to emptyList()
     var serviceBillingMode = false
     val invoices = services.mapNotNull { service ->
@@ -84,7 +83,7 @@ private suspend fun loadServiceInvoices(paywall: PaywallInfo, scribed: ScribedIn
     return serviceBillingMode to invoices
 }
 
-fun Application.configureGateRoutes() {
+fun Application.configureGateRoutes(serviceRepository: ServiceRepository) {
     val integrationSettings = get<AppSettings>().integrations
     val scribed = get<ScribedIntegrationClient>()
     routing {
@@ -92,7 +91,7 @@ fun Application.configureGateRoutes() {
             val slug = call.requireProjectSlug() ?: return@get
             when (val result = call.application.get<GateApplicationService>().check(slug, call.requestedDomain())) {
                 is GateResult.Active -> call.respond(HttpStatusCode.OK, "")
-                is GateResult.Blocked -> call.respondBlocked(result, scribed)
+                is GateResult.Blocked -> call.respondBlocked(serviceRepository, result, scribed)
                 is GateResult.Unknown -> call.respondError(
                     HttpStatusCode.PaymentRequired,
                     "unknown_project",
@@ -116,7 +115,7 @@ fun Application.configureGateRoutes() {
                 call.respondError(HttpStatusCode.BadRequest, "project_active", "This project is not suspended")
                 return@get
             }
-            val (serviceBillingMode, serviceInvoices) = loadServiceInvoices(gateResult.paywall, scribed)
+            val (serviceBillingMode, serviceInvoices) = loadServiceInvoices(serviceRepository = serviceRepository,gateResult.paywall, scribed)
             call.response.header(HttpHeaders.ContentType, ContentType.Text.Html.withCharset(Charsets.UTF_8).toString())
             call.respond(
                 HttpStatusCode.PaymentRequired,

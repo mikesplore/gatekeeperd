@@ -1,6 +1,6 @@
 package com.gatekeeper.gate
 
-import com.gatekeeper.db.repositories.ProjectQueryRepository
+import com.gatekeeper.feature.project.domain.repository.ProjectQueryRepository
 
 class GateApplicationService(
     private val projects: ProjectQueryRepository,
