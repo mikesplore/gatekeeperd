@@ -1,22 +1,23 @@
 package com.gatekeeper.admin
 
 import com.gatekeeper.api.respondError
-import com.gatekeeper.db.repositories.DeploymentJobRepository
-import com.gatekeeper.db.repositories.ProjectRepository
-import com.gatekeeper.db.repositories.ServiceRepository
-import com.gatekeeper.db.repositories.ServiceDomainRepository
 import com.gatekeeper.deployment.DeploymentApplicationService
 import com.gatekeeper.nginx.requireValidHostname
 import com.gatekeeper.feature.project.domain.repository.ProjectAdjustmentRepository as ProjectAdjustmentStore
+import com.gatekeeper.feature.project.domain.repository.ProjectRepository
 import com.gatekeeper.feature.audit.domain.repository.AuditRepository as AuditRepositoryPort
 import com.gatekeeper.feature.payment.data.persistence.ProjectBalanceAdapter
 import com.gatekeeper.feature.payment.domain.repository.PaymentRepository as PaymentDomainRepository
 import com.gatekeeper.feature.payment.domain.usecase.GetPayment
 import com.gatekeeper.feature.deployment.domain.repository.EnvironmentSetRepository as EnvironmentSetStore
 import com.gatekeeper.feature.deployment.domain.repository.EnvironmentVersionMetadata
+import com.gatekeeper.feature.deployment.domain.repository.DeploymentJobRepository
+import com.gatekeeper.feature.deployment.domain.repository.ServiceDomainRepository
 import com.gatekeeper.feature.deployment.domain.repository.ActiveDeploymentInspection
 import com.gatekeeper.db.tables.AdjustmentType
 import com.gatekeeper.db.tables.AccessBlockReason
+import com.gatekeeper.feature.service.domain.repository.ServiceRepository
+import com.gatekeeper.feature.service.domain.repository.SiteRepository
 import com.gatekeeper.integrations.ScribedIntegrationClient
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.isSuccess
@@ -131,22 +132,27 @@ data class ActiveDeploymentInspectionView(
 )
 
 fun Application.configureServiceAdminRoutes() {
+    val projects = get<ProjectRepository>()
     val auditRepository = get<AuditRepositoryPort>()
     val environmentSets = get<EnvironmentSetStore>()
     val scribed = get<ScribedIntegrationClient>()
+    val deploymentJobs = get<DeploymentJobRepository>()
+    val serviceDomains = get<ServiceDomainRepository>()
+    val serviceRepository = get<ServiceRepository>()
+    val siteRepository = get<SiteRepository>()
     routing {
         authenticate("auth-jwt") {
             get("/api/admin/projects/{projectId}/services") {
-                val projectId = call.serviceProjectId() ?: return@get
-                if (ProjectRepository.findActiveById(projectId) == null) {
+                val projectId = call.serviceProjectId(projects) ?: return@get
+                if (projects.findActiveById(projectId) == null) {
                     return@get call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
                 }
-                call.respond(ServiceRepository.listByProjectId(projectId).map { it.toView() })
+                call.respond(serviceRepository.listByProjectId(projectId).map { it.toView() })
             }
 
             post("/api/admin/projects/{projectId}/services") {
-                val projectId = call.serviceProjectId() ?: return@post
-                if (ProjectRepository.findActiveById(projectId) == null) {
+                val projectId = call.serviceProjectId(projects) ?: return@post
+                if (projects.findActiveById(projectId) == null) {
                     return@post call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
                 }
                 val body = runCatching { call.receive<CreateServiceRequest>() }.getOrNull()
@@ -159,35 +165,35 @@ fun Application.configureServiceAdminRoutes() {
                 if (!validServiceName(name) || name.equals("default", ignoreCase = true)) {
                     return@post call.respondError(HttpStatusCode.BadRequest, "invalid_service_name", "Service name is invalid or reserved")
                 }
-                val service = runCatching { ServiceRepository.create(projectId, name, serviceType) }.getOrElse {
+                val service = runCatching { serviceRepository.create(projectId, name, serviceType) }.getOrElse {
                     return@post call.respondError(HttpStatusCode.Conflict, "service_create_conflict", "A service with that name already exists")
                 }
                 call.respond(HttpStatusCode.Created, service.toView())
             }
 
             get("/api/admin/projects/{projectId}/services/{serviceId}") {
-                val (projectId, serviceId) = call.serviceCoordinates() ?: return@get
-                val service = ServiceRepository.findByProjectAndId(projectId, serviceId)
+                val (projectId, serviceId) = call.serviceCoordinates(projects) ?: return@get
+                val service = serviceRepository.findByProjectAndId(projectId, serviceId)
                     ?: return@get call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
                 call.respond(service.toView())
             }
 
             get("/api/admin/projects/{projectId}/services/{serviceId}/domains") {
-                val (projectId, serviceId) = call.serviceCoordinates() ?: return@get
-                val service = ServiceRepository.findByProjectAndId(projectId, serviceId)
+                val (projectId, serviceId) = call.serviceCoordinates(projects) ?: return@get
+                val service = serviceRepository.findByProjectAndId(projectId, serviceId)
                     ?: return@get call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
                 val runtimePorts = DeploymentApplicationService.activeRuntime(service.id, "production")?.ports?.keys.orEmpty()
                 call.respond(ServiceDomainBindingsResponse(
                     serviceId = service.id.toString(),
                     publishedPorts = runtimePorts.sorted(),
-                    bindings = ServiceDomainRepository.reconcilePorts(service.id, runtimePorts).map { it.toView() },
-                    unboundPorts = ServiceDomainRepository.unboundPorts(service.id, runtimePorts)
+                    bindings = serviceDomains.reconcilePorts(service.id, runtimePorts).map { it.toView() },
+                    unboundPorts = serviceDomains.unboundPorts(service.id, runtimePorts)
                 ))
             }
 
             post("/api/admin/projects/{projectId}/services/{serviceId}/domains") {
-                val (projectId, serviceId) = call.serviceCoordinates() ?: return@post
-                val service = ServiceRepository.findByProjectAndId(projectId, serviceId)
+                val (projectId, serviceId) = call.serviceCoordinates(projects) ?: return@post
+                val service = serviceRepository.findByProjectAndId(projectId, serviceId)
                     ?: return@post call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
                 val body = runCatching { call.receive<ServiceDomainBindingRequest>() }.getOrNull()
                     ?: return@post call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid domain binding request")
@@ -204,16 +210,16 @@ fun Application.configureServiceAdminRoutes() {
                 if (body.containerPort != null && body.containerPort !in ports) {
                     return@post call.respondError(HttpStatusCode.BadRequest, "container_port_not_published", "Selected container port is not published")
                 }
-                if (ServiceDomainRepository.findByDomain(domain) != null) {
+                if (serviceDomains.findByDomain(domain) != null) {
                     return@post call.respondError(HttpStatusCode.Conflict, "domain_in_use", "Domain is already bound")
                 }
-                val binding = ServiceDomainRepository.add(service.id, domain, body.containerPort ?: ports.singleOrNull())
+                val binding = serviceDomains.add(service.id, domain, body.containerPort ?: ports.singleOrNull())
                 call.respond(HttpStatusCode.Created, binding.toView())
             }
 
             put("/api/admin/projects/{projectId}/services/{serviceId}/domains/{bindingId}") {
-                val (projectId, serviceId) = call.serviceCoordinates() ?: return@put
-                val service = ServiceRepository.findByProjectAndId(projectId, serviceId)
+                val (projectId, serviceId) = call.serviceCoordinates(projects) ?: return@put
+                val service = serviceRepository.findByProjectAndId(projectId, serviceId)
                     ?: return@put call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
                 val bindingId = runCatching { UUID.fromString(call.parameters["bindingId"]) }.getOrNull()
                     ?: return@put call.respondError(HttpStatusCode.BadRequest, "invalid_binding_id", "Binding ID is invalid")
@@ -222,7 +228,7 @@ fun Application.configureServiceAdminRoutes() {
                 val domain = runCatching { requireValidHostname(body.domain) }.getOrElse {
                     return@put call.respondError(HttpStatusCode.BadRequest, "invalid_domain", it.message ?: "Domain is invalid")
                 }
-                val existing = ServiceDomainRepository.findByDomain(domain)
+                val existing = serviceDomains.findByDomain(domain)
                 if (existing != null && existing.id != bindingId) {
                     return@put call.respondError(HttpStatusCode.Conflict, "domain_in_use", "Domain is already bound")
                 }
@@ -230,28 +236,28 @@ fun Application.configureServiceAdminRoutes() {
                 if (body.containerPort != null && body.containerPort !in ports) {
                     return@put call.respondError(HttpStatusCode.BadRequest, "container_port_not_published", "Selected container port is not published")
                 }
-                val binding = ServiceDomainRepository.update(bindingId, service.id, domain, body.containerPort ?: ports.singleOrNull())
+                val binding = serviceDomains.update(bindingId, service.id, domain, body.containerPort ?: ports.singleOrNull())
                     ?: return@put call.respondError(HttpStatusCode.NotFound, "domain_not_bound", "Domain binding was not found")
                 call.respond(binding.toView())
             }
 
             delete("/api/admin/projects/{projectId}/services/{serviceId}/domains/{bindingId}") {
-                val (projectId, serviceId) = call.serviceCoordinates() ?: return@delete
-                val service = ServiceRepository.findByProjectAndId(projectId, serviceId)
+                val (projectId, serviceId) = call.serviceCoordinates(projects) ?: return@delete
+                val service = serviceRepository.findByProjectAndId(projectId, serviceId)
                     ?: return@delete call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
                 val bindingId = runCatching { UUID.fromString(call.parameters["bindingId"]) }.getOrNull()
                     ?: return@delete call.respondError(HttpStatusCode.BadRequest, "invalid_binding_id", "Binding ID is invalid")
-                if (!ServiceDomainRepository.removeById(service.id, bindingId)) {
+                if (!serviceDomains.removeById(service.id, bindingId)) {
                     return@delete call.respondError(HttpStatusCode.NotFound, "domain_not_bound", "Domain binding was not found")
                 }
                 call.respond(mapOf("status" to "domain_removed", "bindingId" to bindingId.toString()))
             }
 
             post("/api/admin/projects/{projectId}/services/{serviceId}/invoice") {
-                val (projectId, serviceId) = call.serviceCoordinates() ?: return@post
-                val project = ProjectRepository.findActiveById(projectId)
+                val (projectId, serviceId) = call.serviceCoordinates(projects) ?: return@post
+                val project = projects.findActiveById(projectId)
                     ?: return@post call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
-                val service = ServiceRepository.findByProjectAndId(projectId, serviceId)
+                val service = serviceRepository.findByProjectAndId(projectId, serviceId)
                     ?: return@post call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
                 val body = runCatching { call.receive<CreateServiceInvoiceRequest>() }.getOrNull()
                     ?: return@post call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid service invoice request")
@@ -283,11 +289,11 @@ fun Application.configureServiceAdminRoutes() {
             }
 
             get("/api/admin/projects/{projectId}/services/{serviceId}/invoice") {
-                val (projectId, serviceId) = call.serviceCoordinates() ?: return@get
-                if (ProjectRepository.findActiveById(projectId) == null) {
+                val (projectId, serviceId) = call.serviceCoordinates(projects) ?: return@get
+                if (projects.findActiveById(projectId) == null) {
                     return@get call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
                 }
-                if (ServiceRepository.findByProjectAndId(projectId, serviceId) == null) {
+                if (serviceRepository.findByProjectAndId(projectId, serviceId) == null) {
                     return@get call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
                 }
                 val lookup = scribed.serviceInvoiceStatus(serviceId.toString())
@@ -301,10 +307,10 @@ fun Application.configureServiceAdminRoutes() {
             }
 
             get("/api/admin/projects/{projectId}/services/{serviceId}/invoice/download") {
-                val (projectId, serviceId) = call.serviceCoordinates() ?: return@get
-                val project = ProjectRepository.findActiveById(projectId)
+                val (projectId, serviceId) = call.serviceCoordinates(projects) ?: return@get
+                val project = projects.findActiveById(projectId)
                     ?: return@get call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
-                if (ServiceRepository.findByProjectAndId(projectId, serviceId) == null) {
+                if (serviceRepository.findByProjectAndId(projectId, serviceId) == null) {
                     return@get call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
                 }
                 val (status, bytes) = scribed.serviceInvoicePdf(
@@ -318,10 +324,10 @@ fun Application.configureServiceAdminRoutes() {
             }
 
             get("/api/admin/projects/{projectId}/services/{serviceId}/payments/{paymentId}/receipt") {
-                val (projectId, serviceId) = call.serviceCoordinates() ?: return@get
-                val project = ProjectRepository.findActiveById(projectId)
+                val (projectId, serviceId) = call.serviceCoordinates(projects) ?: return@get
+                val project = projects.findActiveById(projectId)
                     ?: return@get call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
-                if (ServiceRepository.findByProjectAndId(projectId, serviceId) == null) {
+                if (serviceRepository.findByProjectAndId(projectId, serviceId) == null) {
                     return@get call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
                 }
                 val paymentId = runCatching { UUID.fromString(call.parameters["paymentId"]) }.getOrNull()
@@ -342,8 +348,8 @@ fun Application.configureServiceAdminRoutes() {
             }
 
             post("/api/admin/projects/{projectId}/services/{serviceId}/adjustments") {
-                val (projectId, serviceId) = call.serviceCoordinates() ?: return@post
-                val service = ServiceRepository.findByProjectAndId(projectId, serviceId)
+                val (projectId, serviceId) = call.serviceCoordinates(projects) ?: return@post
+                val service = serviceRepository.findByProjectAndId(projectId, serviceId)
                     ?: return@post call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
                 val body = runCatching { call.receive<CreateServiceAdjustmentRequest>() }.getOrNull()
                     ?: return@post call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid service adjustment request")
@@ -367,8 +373,8 @@ fun Application.configureServiceAdminRoutes() {
             }
 
             patch("/api/admin/projects/{projectId}/services/{serviceId}") {
-                val (projectId, serviceId) = call.serviceCoordinates() ?: return@patch
-                val current = ServiceRepository.findByProjectAndId(projectId, serviceId)
+                val (projectId, serviceId) = call.serviceCoordinates(projects) ?: return@patch
+                val current = serviceRepository.findByProjectAndId(projectId, serviceId)
                     ?: return@patch call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
                 val body = runCatching { call.receive<UpdateServiceRequest>() }.getOrNull()
                     ?: return@patch call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid service update")
@@ -397,7 +403,7 @@ fun Application.configureServiceAdminRoutes() {
                     return@patch call.respondError(HttpStatusCode.BadRequest, "invalid_service_type", "Unsupported service type")
                 }
                 val updated = runCatching {
-                    ServiceRepository.update(projectId, serviceId, name, body.accessStatus, body.blockReason, blockReasonCode, body.blockReasonNote, body.isDefault == true, serviceType)
+                    serviceRepository.update(projectId, serviceId, name, body.accessStatus, body.blockReason, blockReasonCode, body.blockReasonNote, body.isDefault == true, serviceType)
                 }.getOrElse {
                     return@patch call.respondError(HttpStatusCode.Conflict, "service_update_conflict", "The service update conflicts with an existing service")
                 } ?: return@patch call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
@@ -405,21 +411,21 @@ fun Application.configureServiceAdminRoutes() {
             }
 
             delete("/api/admin/projects/{projectId}/services/{serviceId}") {
-                val (projectId, serviceId) = call.serviceCoordinates() ?: return@delete
-                val current = ServiceRepository.findByProjectAndId(projectId, serviceId)
+                val (projectId, serviceId) = call.serviceCoordinates(projects) ?: return@delete
+                val current = serviceRepository.findByProjectAndId(projectId, serviceId)
                     ?: return@delete call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
                 if (current.isDefault) {
                     return@delete call.respondError(HttpStatusCode.Conflict, "default_service_required", "The default service cannot be deleted")
                 }
-                if (!ServiceRepository.delete(projectId, serviceId)) {
+                if (!serviceRepository.delete(projectId, serviceId)) {
                     return@delete call.respondError(HttpStatusCode.Conflict, "service_in_use", "Services with deployment, environment, or site history cannot be deleted")
                 }
                 call.respond(HttpStatusCode.NoContent)
             }
 
             get("/api/admin/projects/{projectId}/environment/shared") {
-                val projectId = call.serviceProjectId() ?: return@get
-                if (ProjectRepository.findActiveById(projectId) == null) {
+                val projectId = call.serviceProjectId(projects) ?: return@get
+                if (projects.findActiveById(projectId) == null) {
                     return@get call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
                 }
                 val rawEnvironment = call.request.queryParameters["environment"]
@@ -432,8 +438,8 @@ fun Application.configureServiceAdminRoutes() {
             }
 
             get("/api/admin/projects/{projectId}/services/{serviceId}/environment") {
-                val (projectId, serviceId) = call.serviceCoordinates() ?: return@get
-                if (ServiceRepository.findByProjectAndId(projectId, serviceId) == null) {
+                val (projectId, serviceId) = call.serviceCoordinates(projects) ?: return@get
+                if (serviceRepository.findByProjectAndId(projectId, serviceId) == null) {
                     return@get call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
                 }
                 val rawEnvironment = call.request.queryParameters["environment"]
@@ -446,8 +452,8 @@ fun Application.configureServiceAdminRoutes() {
             }
 
             put("/api/admin/projects/{projectId}/services/{serviceId}/environment") {
-                val (projectId, serviceId) = call.serviceCoordinates() ?: return@put
-                if (ServiceRepository.findByProjectAndId(projectId, serviceId) == null) {
+                val (projectId, serviceId) = call.serviceCoordinates(projects) ?: return@put
+                if (serviceRepository.findByProjectAndId(projectId, serviceId) == null) {
                     return@put call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
                 }
                 val body = runCatching { call.receive<EnvironmentWriteRequest>() }.getOrNull()
@@ -463,7 +469,7 @@ fun Application.configureServiceAdminRoutes() {
                     if (body.sharedEnvironmentSetId != null && sharedId == null) {
                         return@put call.respondError(HttpStatusCode.BadRequest, "invalid_shared_environment_reference", "Shared environment ID is invalid")
                     }
-                    DeploymentJobRepository.updateServiceEnvironmentAndDeploy(
+                    deploymentJobs.updateServiceEnvironmentAndDeploy(
                         projectId, serviceId, environment, body.values, actor,
                         replaceExisting = body.replaceExisting,
                         sharedEnvironmentSetId = sharedId,
@@ -478,8 +484,8 @@ fun Application.configureServiceAdminRoutes() {
             }
 
             get("/api/admin/projects/{projectId}/services/{serviceId}/active-deployment") {
-                val (projectId, serviceId) = call.serviceCoordinates() ?: return@get
-                if (ServiceRepository.findByProjectAndId(projectId, serviceId) == null) {
+                val (projectId, serviceId) = call.serviceCoordinates(projects) ?: return@get
+                if (serviceRepository.findByProjectAndId(projectId, serviceId) == null) {
                     return@get call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
                 }
                 val rawEnvironment = call.request.queryParameters["environment"]
@@ -491,8 +497,8 @@ fun Application.configureServiceAdminRoutes() {
             }
 
             get("/api/admin/projects/{projectId}/services/{serviceId}/runtime") {
-                val (projectId, serviceId) = call.serviceCoordinates() ?: return@get
-                if (ServiceRepository.findByProjectAndId(projectId, serviceId) == null) {
+                val (projectId, serviceId) = call.serviceCoordinates(projects) ?: return@get
+                if (serviceRepository.findByProjectAndId(projectId, serviceId) == null) {
                     return@get call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
                 }
                 val rawEnvironment = call.request.queryParameters["environment"]
@@ -506,7 +512,7 @@ fun Application.configureServiceAdminRoutes() {
     }
 }
 
-private suspend fun ApplicationCall.serviceProjectId(): UUID? {
+private suspend fun ApplicationCall.serviceProjectId(projects: ProjectRepository): UUID? {
     val raw = parameters["projectId"]
     if (raw == null) {
         respondError(HttpStatusCode.BadRequest, "invalid_project_id", "Project ID is required")
@@ -514,8 +520,8 @@ private suspend fun ApplicationCall.serviceProjectId(): UUID? {
     }
     val project = runCatching { UUID.fromString(raw) }
         .getOrNull()
-        ?.let(ProjectRepository::findActiveById)
-        ?: ProjectRepository.findBySlug(raw)
+        ?.let(projects::findActiveById)
+        ?: projects.findBySlug(raw)
     if (project == null) {
         respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
         return null
@@ -523,8 +529,8 @@ private suspend fun ApplicationCall.serviceProjectId(): UUID? {
     return project.id
 }
 
-private suspend fun ApplicationCall.serviceCoordinates(): Pair<UUID, UUID>? {
-    val projectId = serviceProjectId() ?: return null
+private suspend fun ApplicationCall.serviceCoordinates(projects: ProjectRepository): Pair<UUID, UUID>? {
+    val projectId = serviceProjectId(projects) ?: return null
     val serviceId = parameters["serviceId"]?.let { runCatching { UUID.fromString(it) }.getOrNull() }
         ?: run {
             respondError(HttpStatusCode.BadRequest, "invalid_service_id", "Service ID is invalid")

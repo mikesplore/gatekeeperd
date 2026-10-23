@@ -1,7 +1,7 @@
 package com.gatekeeper.integrations
 
 import com.gatekeeper.config.AppSettings
-import com.gatekeeper.db.repositories.ProjectRepository
+import com.gatekeeper.feature.project.domain.repository.ProjectRepository
 import com.gatekeeper.feature.payment.domain.model.Payment
 import com.gatekeeper.feature.payment.domain.repository.PaymentRepository as PaymentDomainRepository
 import com.gatekeeper.feature.payment.data.persistence.ProjectBalanceAdapter
@@ -60,7 +60,10 @@ import io.ktor.client.statement.bodyAsText
     val amount_paid: String = "0"
 )
 
-class ScribedIntegrationClient(private val settings: AppSettings.IntegrationSettings) : java.io.Closeable {
+class ScribedIntegrationClient(
+    private val settings: AppSettings.IntegrationSettings,
+    private val projects: ProjectRepository
+) : java.io.Closeable {
     private val logger = LoggerFactory.getLogger("com.gatekeeper.integrations.ScribedIntegrationClient")
     private val http = HttpClient { install(ContentNegotiation) { json(Json { ignoreUnknownKeys = true }) } }
     private val json = Json { encodeDefaults = true }
@@ -600,7 +603,7 @@ class ScribedIntegrationClient(private val settings: AppSettings.IntegrationSett
             }.getOrNull() ?: return DeliveryResult(false, "Invalid project integration payload")
             val projectUuid = runCatching { java.util.UUID.fromString(projectId) }.getOrNull()
                 ?: return DeliveryResult(false, "Invalid project id in integration payload")
-            val project = ProjectRepository.findById(projectUuid)
+            val project = projects.findById(projectUuid)
                 ?: return DeliveryResult(false, "Gatekeeper project not found")
             val serviceId = if (event.eventType == "payment") runCatching {
                 json.decodeFromString<ScribedPaymentPayload>(event.payload).service_id
