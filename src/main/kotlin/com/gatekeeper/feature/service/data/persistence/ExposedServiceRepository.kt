@@ -1,0 +1,232 @@
+package com.gatekeeper.feature.service.data.persistence
+
+import com.gatekeeper.db.tables.Services
+import com.gatekeeper.db.tables.AccessBlockReason
+import com.gatekeeper.db.tables.DeploymentConfigurations
+import com.gatekeeper.db.tables.DeploymentExecutions
+import com.gatekeeper.db.tables.DeploymentJobs
+import com.gatekeeper.db.tables.Deployments
+import com.gatekeeper.db.tables.ProjectSecretSetVersions
+import com.gatekeeper.db.tables.ProjectAdjustments
+import com.gatekeeper.db.tables.Sites
+import com.gatekeeper.plugins.RedisService
+import com.gatekeeper.feature.service.domain.repository.ServiceRepository
+import com.gatekeeper.feature.service.domain.repository.SiteRepository
+import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
+import org.jetbrains.exposed.sql.and
+import org.jetbrains.exposed.sql.insert
+import org.jetbrains.exposed.sql.insertIgnore
+import org.jetbrains.exposed.sql.selectAll
+import org.jetbrains.exposed.sql.transactions.transaction
+import org.jetbrains.exposed.sql.update
+import org.jetbrains.exposed.sql.deleteWhere
+import java.util.UUID
+
+/** Persistence for service-level customer access policy. Runtime health is deliberately separate. */
+class ExposedServiceRepository(private val siteRepository: SiteRepository) : ServiceRepository {
+    override fun listByProjectId(projectId: UUID): List<ServiceRepository.ServiceRecord> = transaction {
+        Services.selectAll().where { Services.projectId eq projectId }
+            .orderBy(Services.name).map(::toRecord)
+    }
+
+    override fun listAll(): List<ServiceRepository.ServiceRecord> = transaction {
+        Services.selectAll().orderBy(Services.projectId to org.jetbrains.exposed.sql.SortOrder.ASC, Services.name to org.jetbrains.exposed.sql.SortOrder.ASC).map(::toRecord)
+    }
+
+    override fun findByProjectAndId(projectId: UUID, id: UUID): ServiceRepository.ServiceRecord? = transaction {
+        Services.selectAll().where { (Services.projectId eq projectId) and (Services.id eq id) }
+            .singleOrNull()?.let(::toRecord)
+    }
+
+    override fun updateDomain(projectId: UUID, id: UUID, domain: String): ServiceRepository.ServiceRecord? = transaction {
+        val updated = Services.update({ (Services.projectId eq projectId) and (Services.id eq id) }) {
+            it[Services.domain] = domain
+        }
+        if (updated == 0) return@transaction null
+        Services.selectAll().where { (Services.projectId eq projectId) and (Services.id eq id) }
+            .singleOrNull()?.let(::toRecord)
+    }
+
+    override fun findDefaultDomain(projectId: UUID): String? = transaction {
+        Services.selectAll().where {
+            (Services.projectId eq projectId) and (Services.isDefault eq true)
+        }.singleOrNull()?.get(Services.domain)
+    }
+
+    /** Returns the project's default service, repairing legacy projects missing the row. */
+    override fun getOrCreateDefault(projectId: UUID): ServiceRepository.ServiceRecord = transaction {
+        Services.insertIgnore {
+            it[Services.projectId] = projectId
+            it[Services.name] = "default"
+            it[Services.serviceType] = "frontend"
+            it[Services.isDefault] = true
+            it[Services.accessStatus] = "active"
+            it[Services.blockReason] = null
+        }
+        Services.selectAll().where {
+            (Services.projectId eq projectId) and (Services.isDefault eq true)
+        }.single().let(::toRecord)
+    }
+
+    override fun create(projectId: UUID, name: String, serviceType: String): ServiceRepository.ServiceRecord = transaction {
+        val id = UUID.randomUUID()
+        Services.insert {
+            it[Services.id] = id
+            it[Services.projectId] = projectId
+            it[Services.name] = name
+            it[Services.serviceType] = serviceType
+            it[Services.isDefault] = false
+            it[Services.accessStatus] = "active"
+            it[Services.blockReason] = null
+        }
+        Services.selectAll().where { Services.id eq id }.single().let(::toRecord)
+    }
+
+    override fun update(
+        projectId: UUID,
+        id: UUID,
+        name: String?,
+        accessStatus: String?,
+        blockReason: String?,
+        blockReasonCode: AccessBlockReason?,
+        blockReasonNote: String?,
+        makeDefault: Boolean,
+        serviceType: String?
+    ): ServiceRepository.ServiceRecord? {
+        accessStatus?.let { require(it in setOf("active", "blocked", "manual_block")) { "Unsupported service access status" } }
+        val previousGateSlugs = if (makeDefault) siteRepository.findGateSlugsByProjectId(projectId) else emptyList()
+        val updated = transaction {
+            val existing = Services.selectAll().where {
+                (Services.projectId eq projectId) and (Services.id eq id)
+            }.singleOrNull() ?: return@transaction null
+            if (makeDefault && !existing[Services.isDefault]) {
+                Services.update({ Services.projectId eq projectId }) {
+                    it[Services.isDefault] = false
+                }
+            }
+            Services.update({ (Services.projectId eq projectId) and (Services.id eq id) }) {
+                name?.let { value -> it[Services.name] = value }
+                serviceType?.let { value -> it[Services.serviceType] = value }
+                if (makeDefault) it[Services.isDefault] = true
+                accessStatus?.let { value -> it[Services.accessStatus] = value }
+                if (accessStatus == "active") {
+                    it[Services.blockReason] = null
+                    it[Services.blockReasonCode] = null
+                    it[Services.blockReasonNote] = null
+                } else if (accessStatus != null && accessStatus != "active") {
+                    val reasonCode = blockReasonCode ?: AccessBlockReason.fromLegacy(blockReason, accessStatus)
+                        ?: AccessBlockReason.MANUAL_HOLD
+                    val note = blockReasonNote ?: AccessBlockReason.legacyNote(blockReason)
+                    it[Services.blockReason] = blockReason ?: reasonCode.value
+                    it[Services.blockReasonCode] = reasonCode
+                    it[Services.blockReasonNote] = note
+                } else {
+                    blockReasonCode?.let { value -> it[Services.blockReasonCode] = value }
+                    blockReasonNote?.let { value -> it[Services.blockReasonNote] = value }
+                    blockReason?.let { value -> it[Services.blockReason] = value }
+                }
+            }
+            Services.selectAll().where { Services.id eq existing[Services.id] }.single().let(::toRecord)
+        }
+        if (updated != null && (accessStatus != null || name != null || makeDefault)) {
+            val previousGateSlugs = if (makeDefault) siteRepository.findGateSlugsByProjectId(projectId) else emptyList()
+            val gateSlugs = if (makeDefault) previousGateSlugs + siteRepository.findGateSlugsByProjectId(projectId)
+            else siteRepository.findGateSlugsByServiceId(id)
+            gateSlugs.distinct().forEach(::invalidateGateCache)
+        }
+        return updated
+    }
+
+    /** Only empty non-default services can be removed; referenced runtime history is preserved. */
+    override fun delete(projectId: UUID, id: UUID): Boolean = transaction {
+        val service = Services.selectAll().where {
+            (Services.projectId eq projectId) and (Services.id eq id)
+        }.singleOrNull() ?: return@transaction false
+        if (service[Services.isDefault]) return@transaction false
+        val inUse = DeploymentConfigurations.selectAll().where { DeploymentConfigurations.serviceId eq id }.count() > 0L ||
+            DeploymentExecutions.selectAll().where { DeploymentExecutions.serviceId eq id }.count() > 0L ||
+            DeploymentJobs.selectAll().where { DeploymentJobs.serviceId eq id }.count() > 0L ||
+            Deployments.selectAll().where { Deployments.serviceId eq id }.count() > 0L ||
+            ProjectSecretSetVersions.selectAll().where { ProjectSecretSetVersions.serviceId eq id }.count() > 0L ||
+            ProjectAdjustments.selectAll().where { ProjectAdjustments.serviceId eq id }.count() > 0L ||
+            Sites.selectAll().where { Sites.serviceId eq id }.count() > 0L
+        if (inUse) return@transaction false
+        Services.deleteWhere { (Services.projectId eq projectId) and (Services.id eq id) } > 0
+    }
+
+    override fun findAccessById(id: UUID): ServiceRepository.AccessRecord? = transaction {
+        Services.selectAll().where { Services.id eq id }.singleOrNull()?.let {
+            ServiceRepository.AccessRecord(
+                it[Services.id],
+                it[Services.name],
+                it[Services.accessStatus],
+                it[Services.blockReason],
+                it[Services.blockReasonCode],
+                it[Services.blockReasonNote]
+            )
+        }
+    }
+
+    private fun toRecord(row: org.jetbrains.exposed.sql.ResultRow) = ServiceRepository.ServiceRecord(
+        row[Services.id], row[Services.projectId], row[Services.name], row[Services.serviceType], row[Services.domain], row[Services.isDefault],
+        row[Services.accessStatus], row[Services.blockReason], row[Services.blockReasonCode], row[Services.blockReasonNote]
+    )
+
+    override fun updateAccessStatus(id: UUID, status: String, blockReason: String?): Boolean {
+        require(status in setOf("active", "blocked", "manual_block")) { "Unsupported service access status" }
+        val updated = transaction {
+            Services.update({ Services.id eq id }) {
+                it[Services.accessStatus] = status
+                it[Services.blockReason] = if (status == "active") null else blockReason
+                it[Services.blockReasonCode] = if (status == "active") null else AccessBlockReason.fromLegacy(blockReason, status) ?: AccessBlockReason.MANUAL_HOLD
+                it[Services.blockReasonNote] = if (status == "active") null else AccessBlockReason.legacyNote(blockReason)
+            }
+        }
+        if (updated > 0) {
+            siteRepository.findGateSlugsByServiceId(id).forEach(::invalidateGateCache)
+        }
+        return updated > 0
+    }
+
+    /** Auto-block only an active service so manual or existing payment blocks are never overwritten. */
+    override fun autoBlockForPayment(projectId: UUID, id: UUID): Boolean {
+        val updated = transaction {
+            Services.update({
+                (Services.projectId eq projectId) and (Services.id eq id) and (Services.accessStatus eq "active")
+            }) {
+                it[Services.accessStatus] = "blocked"
+                it[Services.blockReason] = "overdue"
+                it[Services.blockReasonCode] = AccessBlockReason.PAYMENT
+                it[Services.blockReasonNote] = null
+            }
+        }
+        if (updated > 0) siteRepository.findGateSlugsByServiceId(id).forEach(::invalidateGateCache)
+        return updated > 0
+    }
+
+    /** Clear only a payment-coded service block after its linked invoice is paid. */
+    override fun clearAutoBlockForPayment(id: UUID): Boolean {
+        val updated = transaction {
+            Services.update({
+                (Services.id eq id) and (Services.accessStatus eq "blocked") and (Services.blockReasonCode eq AccessBlockReason.PAYMENT)
+            }) {
+                it[Services.accessStatus] = "active"
+                it[Services.blockReason] = null
+                it[Services.blockReasonCode] = null
+                it[Services.blockReasonNote] = null
+            }
+        }
+        if (updated > 0) siteRepository.findGateSlugsByServiceId(id).forEach(::invalidateGateCache)
+        return updated > 0
+    }
+
+    private fun invalidateGateCache(slug: String) {
+        try {
+            RedisService.delete("project:status:$slug")
+        } catch (_: Exception) {
+            // Cache invalidation is best effort; the short TTL bounds stale access decisions.
+        }
+    }
+}
+
+
