@@ -1,6 +1,6 @@
 package com.gatekeeper.feature.payment.data.persistence
 
-import com.gatekeeper.db.repositories.ProjectRepository
+import com.gatekeeper.feature.project.domain.repository.ProjectRepository
 import com.gatekeeper.db.repositories.ServiceRepository
 import com.gatekeeper.feature.project.domain.repository.ProjectAdjustmentRepository
 import com.gatekeeper.feature.payment.domain.model.ProjectFinancials
@@ -16,7 +16,8 @@ import java.math.BigDecimal
 class ProjectBalanceAdapter(
     private val payments: PaymentRepository,
     private val adjustments: ProjectAdjustmentRepository,
-    private val scribed: ScribedIntegrationClient
+    private val scribed: ScribedIntegrationClient,
+    private val projects: ProjectRepository
 ) {
     fun originalCharge(project: ProjectRepository.ProjectRecord): BigDecimal = serviceInvoiceTotals(project).total
     fun additionalCharges(project: ProjectRepository.ProjectRecord): BigDecimal = BigDecimal.ZERO

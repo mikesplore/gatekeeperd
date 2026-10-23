@@ -12,7 +12,7 @@ import com.gatekeeper.api.respondError
 import com.gatekeeper.api.respondErrorWithData
 import com.gatekeeper.feature.audit.domain.repository.AuditRepository as AuditRepositoryPort
 import com.gatekeeper.feature.payment.domain.usecase.ListProjectPayments
-import com.gatekeeper.db.repositories.ProjectRepository
+import com.gatekeeper.feature.project.domain.repository.ProjectRepository
 import com.gatekeeper.feature.customer.domain.repository.CustomerRepository as CustomerStore
 import com.gatekeeper.feature.project.domain.repository.ProjectAdjustmentRepository as ProjectAdjustmentStore
 import com.gatekeeper.db.tables.AdjustmentType
@@ -111,6 +111,7 @@ data class TransferProjectRequest(
 )
 
 fun Application.configureProjectAdminRoutes() {
+    val projects = get<ProjectRepository>()
     val auditRepository = get<AuditRepositoryPort>()
     val dockerService = get<DockerGateway>()
     val dockerSettings = get<AppSettings>().docker
@@ -122,7 +123,7 @@ fun Application.configureProjectAdminRoutes() {
                 val status = call.request.queryParameters["status"]
                 val offset = call.request.queryParameters["offset"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0
                 val limit = call.request.queryParameters["limit"]?.toIntOrNull()?.coerceIn(1, 500) ?: 500
-                val filteredProjects = ProjectRepository.findAll().asSequence()
+                val filteredProjects = projects.findAll().asSequence()
                     .filter { search.isNullOrBlank() || listOf(it.name, it.slug, it.domain, it.customerName ?: "").any { value -> value.lowercase().contains(search) } }
                     .filter { status.isNullOrBlank() || it.status == status }
                     .toList()
@@ -139,7 +140,7 @@ fun Application.configureProjectAdminRoutes() {
             }
 
             get("/api/admin/projects/overdue") {
-                val overdue = ProjectRepository.findOverdue(java.time.LocalDate.now()).map { item ->
+                val overdue = projects.findOverdue(java.time.LocalDate.now()).map { item ->
                     OverdueProjectResponse(
                         slug = item.slug, name = item.name, customerName = item.customerName,
                         customerEmail = item.customerEmail, dueDate = item.dueDate.toString(),
@@ -156,7 +157,7 @@ fun Application.configureProjectAdminRoutes() {
                     call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing slug path parameter")
                     return@get
                 }
-                val project = ProjectRepository.findBySlug(slug)
+                val project = projects.findBySlug(slug)
                 if (project == null) {
                     call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
                     return@get
@@ -227,7 +228,7 @@ fun Application.configureProjectAdminRoutes() {
                 }
 
                 if (body.lifecycleStatus != null) {
-                    val current = ProjectRepository.findBySlug(slug)
+                    val current = projects.findBySlug(slug)
                     if (current == null) {
                         call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
                         return@patch
@@ -242,7 +243,7 @@ fun Application.configureProjectAdminRoutes() {
                     }
                 }
 
-                val project = ProjectRepository.update(
+                val project = projects.update(
                     slug = slug,
                     name = body.name?.trim(),
                     domain = body.domain?.trim(),
@@ -267,10 +268,10 @@ fun Application.configureProjectAdminRoutes() {
                 }
 
                 val assignedProject = if ("customerId" in presentFields) {
-                    ProjectRepository.assignCustomer(project.id, customerId)
+                    projects.assignCustomer(project.id, customerId)
                 } else project
 
-                ProjectRepository.invalidateCache(slug)
+                projects.invalidateCache(slug)
                 logger.info("Project updated: $slug")
                 val responseProject = assignedProject ?: project
                 call.respond(responseProject.toResponse(call.application.get<ProjectBalanceAdapter>().financials(responseProject)))
@@ -300,7 +301,7 @@ fun Application.configureProjectAdminRoutes() {
                     call.respondError(HttpStatusCode.BadRequest, "invalid_adjustment_reason", "reason is required")
                     return@post
                 }
-                val project = ProjectRepository.findBySlug(slug)
+                val project = projects.findBySlug(slug)
                 if (project == null) {
                     call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
                     return@post
@@ -322,7 +323,7 @@ fun Application.configureProjectAdminRoutes() {
                     "${type.name} amount=$amount oldBalance=$oldBalance newBalance=$newBalance reason=${body.reason.trim()}"
                 )
                 scribed.notifyLedger(project, "adjustment-${adjustment.id}", call.application.get<ProjectBalanceAdapter>(), call.application.get())
-                ProjectRepository.invalidateCache(slug)
+                projects.invalidateCache(slug)
                 call.respond(ProjectAdjustmentResponse(adjustment.id.toString(), project.id.toString(), type.name, amount.toDouble(), adjustment.reason, actor, adjustment.createdAt.toString(), oldBalance.toDouble(), newBalance.toDouble()))
             }
 
@@ -342,7 +343,7 @@ fun Application.configureProjectAdminRoutes() {
                     call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid deployment or service mode")
                     return@post
                 }
-                val current = ProjectRepository.findBySlug(slug)
+                val current = projects.findBySlug(slug)
                 if (current == null) {
                     call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
                     return@post
@@ -353,7 +354,7 @@ fun Application.configureProjectAdminRoutes() {
                 }
                 val principal = call.principal<io.ktor.server.auth.jwt.JWTPrincipal>()
                 val actor = principal?.payload?.subject ?: "unknown"
-                val updated = ProjectRepository.transfer(
+                val updated = projects.transfer(
                     slug = slug,
                     deploymentMode = body.deploymentMode,
                     serviceMode = body.serviceMode,
@@ -373,7 +374,7 @@ fun Application.configureProjectAdminRoutes() {
                 val principal = call.principal<JWTPrincipal>()
                 val actor = principal?.payload?.subject ?: "unknown"
 
-                val archived = ProjectRepository.archive(
+                val archived = projects.archive(
                     slug = slug,
                     actor = actor,
                     reason = "Archived via admin API"
@@ -432,7 +433,7 @@ fun Application.configureProjectAdminRoutes() {
                         }
                 } ?: AccessBlockReason.MANUAL_HOLD
 
-                val project = ProjectRepository.findBySlug(slug)
+                val project = projects.findBySlug(slug)
                 if (project == null) {
                     call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
                     return@post
@@ -441,13 +442,13 @@ fun Application.configureProjectAdminRoutes() {
                 val principal = call.principal<JWTPrincipal>()
                 val actor = principal?.payload?.subject ?: "unknown"
 
-                ProjectRepository.updateStatus(
+                projects.updateStatus(
                     project.id, "manual_block", actor, reason,
                     blockReason = blockReasonCode.value,
                     blockReasonCode = blockReasonCode,
                     blockReasonNote = body.blockReasonNote?.takeIf { it.isNotBlank() } ?: reason
                 )
-                ProjectRepository.invalidateCache(slug)
+                projects.invalidateCache(slug)
                 scribed.notifySuspension(project.copy(status = "manual_block", blockReason = "manual"), "manual_block: $reason", call.application.get())
 
                 logger.info("Project blocked: $slug by $actor")
@@ -473,7 +474,7 @@ fun Application.configureProjectAdminRoutes() {
                     return@post
                 }
 
-                val project = ProjectRepository.findBySlug(slug)
+                val project = projects.findBySlug(slug)
                 if (project == null) {
                     call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
                     return@post
@@ -482,8 +483,8 @@ fun Application.configureProjectAdminRoutes() {
                 val principal = call.principal<JWTPrincipal>()
                 val actor = principal?.payload?.subject ?: "unknown"
 
-                ProjectRepository.updateStatus(project.id, "active", actor, reason)
-                ProjectRepository.invalidateCache(slug)
+                projects.updateStatus(project.id, "active", actor, reason)
+                projects.invalidateCache(slug)
 
                 logger.info("Project unblocked: $slug by $actor")
                 call.respond(StatusChangeResponse(status = "active", slug = slug))
@@ -508,7 +509,7 @@ fun Application.configureProjectAdminRoutes() {
                     call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing slug path parameter")
                     return@get
                 }
-                val project = ProjectRepository.findBySlug(slug)
+                val project = projects.findBySlug(slug)
                 if (project == null) {
                     call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
                     return@get
