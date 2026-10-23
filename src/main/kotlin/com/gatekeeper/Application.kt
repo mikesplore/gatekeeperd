@@ -28,8 +28,9 @@ import com.gatekeeper.feature.payment.domain.usecase.ReconcilePayments
 import com.gatekeeper.feature.payment.domain.repository.PaymentRepository as PaymentDomainRepository
 import com.gatekeeper.feature.payment.data.persistence.ProjectBalanceAdapter
 import org.koin.ktor.ext.get
-import com.gatekeeper.docker.DockerService
+import com.gatekeeper.docker.DockerGatewayFactory
 import com.gatekeeper.docker.DockerGateway
+import com.gatekeeper.infrastructure.ProcessRunnerImpl
 import com.gatekeeper.scheduler.AutoBlockerJob
 import com.gatekeeper.scheduler.IntegrationOutboxJob
 import com.gatekeeper.scheduler.ReconciliationJob
@@ -77,7 +78,7 @@ private fun operationalCommand(command: String, args: Array<String>) {
             DatabaseFactory.init(
                 db.url, db.user, db.password, db.migrationBaselineVersion
             ); try {
-                val docker = DockerService(settings.docker.socket, settings.docker)
+                val docker = DockerGatewayFactory.create(settings.docker, ProcessRunnerImpl())
                 try {
                     NginxBackfillRunner.run(
                         args.firstOrNull { !it.startsWith("--") } ?: settings.nginx.sitesAvailablePath,
@@ -168,7 +169,7 @@ fun Application.module() {
 
     monitor.subscribe(ApplicationStopping) {
         runCatching { get<GitHubAppClient>().close() }
-        runCatching { get<DockerService>().close() }
+        runCatching { get<DockerGateway>().close() }
         runCatching { get<PaystackClient>().close() }
         runCatching { get<MpesaGateway>().close() }
         runCatching { org.koin.core.context.stopKoin() }
