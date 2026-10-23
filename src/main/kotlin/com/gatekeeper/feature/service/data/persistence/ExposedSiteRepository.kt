@@ -7,6 +7,8 @@ import com.gatekeeper.db.tables.Services
 import com.gatekeeper.db.tables.Sites
 import com.gatekeeper.db.tables.TlsMode
 import com.gatekeeper.db.tables.UpstreamMode
+import com.gatekeeper.feature.service.domain.repository.SiteDashboardUpdate
+import com.gatekeeper.feature.service.domain.repository.SiteRecord
 import com.gatekeeper.feature.service.domain.repository.SiteRepository
 import com.gatekeeper.nginx.DEFAULT_GATEKEEPER_BYPASS_PATHS
 import com.gatekeeper.nginx.NginxCustomLocation
@@ -23,9 +25,6 @@ import org.jetbrains.exposed.sql.transactions.transaction
 import org.jetbrains.exposed.sql.update
 import java.time.LocalDateTime
 import java.util.UUID
-import com.gatekeeper.feature.service.domain.repository.SiteRepository.SiteRecord as SiteRecord
-import com.gatekeeper.feature.service.domain.repository.SiteRepository.SiteDashboardUpdate as SiteDashboardUpdate
-
 
 class ExposedSiteRepository: SiteRepository {
     private fun defaultServiceId(projectId: UUID): UUID = Services.selectAll().where {
@@ -48,11 +47,15 @@ class ExposedSiteRepository: SiteRepository {
         this[Sites.upstreamMode], this[Sites.upstreamExplicitPort], this[Sites.upstreamContainerPort],
         this[Sites.tlsMode], this[Sites.certMode], this[Sites.certExplicitPath], this[Sites.gateEnabled],
         this[Sites.configVersion], this[Sites.createdAt], this[Sites.updatedAt],
-        runCatching { Json.decodeFromString<List<String>>(this[Sites.bypassPaths]) }.getOrDefault(DEFAULT_GATEKEEPER_BYPASS_PATHS),
+        runCatching { Json.decodeFromString<List<String>>(this[Sites.bypassPaths]) }.getOrDefault(
+            DEFAULT_GATEKEEPER_BYPASS_PATHS
+        ),
         this[Sites.reconciliationStatus],
         this[Sites.lastNginxError], this[Sites.lastDockerError], this[Sites.lastReconciledAt], projectSlug,
         this[Sites.serviceId], this[Sites.upstreamKind],
-        runCatching { Json.decodeFromString<List<NginxCustomLocation>>(this[Sites.customNginxLocations]) }.getOrDefault(emptyList())
+        runCatching { Json.decodeFromString<List<NginxCustomLocation>>(this[Sites.customNginxLocations]) }.getOrDefault(
+            emptyList()
+        )
     )
     
     //Main functions
@@ -73,7 +76,7 @@ class ExposedSiteRepository: SiteRepository {
         Sites.selectAll().where { (Sites.projectId eq projectId) and (Sites.domain eq domain) }.count() > 0
     }
 
-    override fun findByProjectId(projectId: UUID): SiteRepository.SiteRecord? = transaction {
+    override fun findByProjectId(projectId: UUID): SiteRecord? = transaction {
         val serviceId = defaultServiceId(projectId)
         val primaryDomain = Services.selectAll().where { Services.id eq serviceId }.singleOrNull()?.get(Services.domain)
         val row = Sites.selectAll().where { (Sites.projectId eq projectId) and (Sites.serviceId eq serviceId) }
