@@ -4,10 +4,10 @@ import com.gatekeeper.api.dto.PaginatedResponse
 import com.gatekeeper.api.dto.toResponse
 import com.gatekeeper.api.respondError
 import com.gatekeeper.config.AppSettings
-import com.gatekeeper.db.repositories.ProjectRepository
 import com.gatekeeper.db.repositories.SiteRepository
 import com.gatekeeper.deployment.DeploymentApplicationService
 import com.gatekeeper.docker.DockerGateway
+import com.gatekeeper.core.ports.PortProbe
 import com.gatekeeper.feature.payment.data.persistence.ProjectBalanceAdapter
 import com.gatekeeper.feature.payment.domain.usecase.GetPaymentDashboardData
 import com.gatekeeper.feature.payment.domain.usecase.ListPaymentsByProject
@@ -23,8 +23,6 @@ import io.ktor.server.routing.*
 import kotlinx.serialization.Serializable
 import org.koin.ktor.ext.get
 import java.io.File
-import java.net.InetSocketAddress
-import java.net.Socket
 import java.sql.SQLException
 import java.time.LocalDateTime
 import java.time.OffsetDateTime
@@ -35,6 +33,7 @@ import com.gatekeeper.feature.certificate.domain.repository.CertificateRepositor
 import com.gatekeeper.feature.customer.domain.repository.CustomerRepository as CustomerStore
 import com.gatekeeper.feature.integrations.domain.repository.IntegrationOutboxRepository as IntegrationOutboxRepositoryPort
 import com.gatekeeper.feature.notification.domain.repository.NotificationRepository as NotificationRepositoryPort
+import com.gatekeeper.feature.project.domain.repository.ProjectRepository
 
 @Serializable
 data class ProjectHealthResponse(
@@ -160,7 +159,7 @@ data class DashboardCustomerCreateRequest(
 @Serializable
 data class DashboardConfirmationRequest(val confirm: Boolean = false)
 
-private fun dashboardUpstreamState(site: SiteRepository.SiteRecord, dockerService: DockerGateway?): String {
+private fun dashboardUpstreamState(site: SiteRepository.SiteRecord, dockerService: DockerGateway?, portProbe: PortProbe): String {
     val port = when (site.upstreamMode) {
         com.gatekeeper.db.tables.UpstreamMode.EXPLICIT_PORT -> site.upstreamExplicitPort ?: return "unknown"
         com.gatekeeper.db.tables.UpstreamMode.DOCKER_DISCOVERY -> {
@@ -176,12 +175,7 @@ private fun dashboardUpstreamState(site: SiteRepository.SiteRecord, dockerServic
             target.port
         }
     }
-    val reachable = runCatching {
-        Socket().use { socket ->
-            socket.connect(InetSocketAddress(site.upstreamHost, port), 500)
-            true
-        }
-    }.getOrDefault(false)
+    val reachable = portProbe.isReachable(site.upstreamHost, port, 500)
     return if (reachable) "running" else "down"
 }
 
@@ -194,19 +188,20 @@ private data class CustomerOwnedProject(
     val site: SiteRepository.SiteRecord?
 )
 
-private fun customerOwnedProjects(customerId: UUID): List<CustomerOwnedProject> {
-    val projects = ProjectRepository.findByCustomerId(customerId)
+private fun customerOwnedProjects(projectRepository: ProjectRepository, customerId: UUID): List<CustomerOwnedProject> {
+    val projects = projectRepository.findByCustomerId(customerId)
     val sites = SiteRepository.findByProjectIds(projects.map { it.id })
     return projects.map { project -> CustomerOwnedProject(project, sites[project.id]) }
 }
 
 private fun dashboardSite(
     site: SiteRepository.SiteRecord,
+    projectRepository: ProjectRepository,
     customerStore: CustomerStore,
     nginxSettings: AppSettings.NginxSettings,
     dockerService: DockerGateway? = null
 ): DashboardSiteResponse {
-    val project = ProjectRepository.findById(site.projectId)
+    val project = projectRepository.findById(site.projectId)
     val customer = project?.customerId?.let(customerStore::findById)
     val slug = site.projectSlug ?: site.projectId.toString()
     val availableFile = File(nginxSettings.sitesAvailablePath, slug)
@@ -285,12 +280,14 @@ data class NotificationResponse(
 )
 
 fun Application.configureOperationsAdminRoutes() {
+    val projects = get<ProjectRepository>()
     val nginxSettings = get<AppSettings>().nginx
     val notificationRepository = get<NotificationRepositoryPort>()
     val certificateRepository = get<CertificateRepositoryPort>()
     val auditRepository = get<AuditRepositoryPort>()
     val integrationOutboxRepository = get<IntegrationOutboxRepositoryPort>()
     val docker = get<DockerGateway>()
+    val portProbe = get<PortProbe>()
     routing {
         authenticate("auth-jwt") {
             get("/api/admin/metrics") {
@@ -308,6 +305,7 @@ fun Application.configureOperationsAdminRoutes() {
                     page.map {
                         dashboardSite(
                             it,
+                            projects,
                             call.application.get<CustomerStore>(),
                             nginxSettings,
                             gateway
@@ -342,6 +340,7 @@ fun Application.configureOperationsAdminRoutes() {
                 val response = withDashboardDocker(docker, listOf(site)) { gateway ->
                     dashboardSite(
                         site,
+                        projects,
                         call.application.get<CustomerStore>(),
                         nginxSettings,
                         gateway
@@ -481,6 +480,7 @@ fun Application.configureOperationsAdminRoutes() {
                 call.respond(withDashboardDocker(docker, listOf(responseSite)) { gateway ->
                     dashboardSite(
                         responseSite,
+                        projects,
                         call.application.get<CustomerStore>(),
                         nginxSettings,
                         gateway
@@ -817,7 +817,7 @@ fun Application.configureOperationsAdminRoutes() {
                 if (customerId != null && call.application.get<CustomerStore>().findById(customerId) == null) {
                     call.respondError(HttpStatusCode.NotFound, "customer_not_found", "Customer not found"); return@patch
                 }
-                val project = ProjectRepository.assignCustomer(id, customerId) ?: run {
+                val project = projects.assignCustomer(id, customerId) ?: run {
                     call.respondError(
                         HttpStatusCode.NotFound,
                         "project_not_found",
@@ -833,7 +833,7 @@ fun Application.configureOperationsAdminRoutes() {
                 val customerRepository = call.application.get<CustomerStore>()
                 val (customers, total) = customerRepository.findPage(query, limit, offset)
                 val responses = customers.map { customer ->
-                    val owned = customerOwnedProjects(customer.id)
+                    val owned = customerOwnedProjects(projects, customer.id)
                     val balances = call.application.get<ProjectBalanceAdapter>()
                     val financials = owned.map { dashboardProjectFinancials(it.project, balances) }
                     val billed = financials.sumOf { it.billed }
@@ -878,7 +878,7 @@ fun Application.configureOperationsAdminRoutes() {
                         "Customer not found"
                     ); return@get
                 }
-                val owned = customerOwnedProjects(id)
+                val owned = customerOwnedProjects(projects, id)
                 val balances = call.application.get<ProjectBalanceAdapter>()
                 val financials = owned.map { dashboardProjectFinancials(it.project, balances) }
                 val projects = owned.map { ownedProject ->
@@ -920,7 +920,7 @@ fun Application.configureOperationsAdminRoutes() {
                     call.respondError(HttpStatusCode.NotFound, "customer_not_found", "Customer not found"); return@get
                 }
                 val listPayments = call.application.get<ListPaymentsByProject>()
-                val transactions = customerOwnedProjects(id).flatMap { owned ->
+                val transactions = customerOwnedProjects(projects, id).flatMap { owned ->
                     listPayments(owned.project.id).map { payment ->
                         DashboardCustomerTransactionResponse(
                             payment.id.toString(),
@@ -940,7 +940,7 @@ fun Application.configureOperationsAdminRoutes() {
                 call.respond(transactions)
             }
             get("/api/admin/dashboard/summary") {
-                val projects = ProjectRepository.findAll()
+                val allProjects = projects.findAll()
                 val paymentDashboard = call.application.get<GetPaymentDashboardData>()()
                 val outbox = integrationOutboxRepository.summary()
                 val nginxArtifacts = get<NginxService>().listConfigArtifacts()
@@ -963,7 +963,7 @@ fun Application.configureOperationsAdminRoutes() {
                 call.respond(
                     DashboardSummaryResponse(
                         OffsetDateTime.now().toString(),
-                        projects.groupingBy { it.status.lowercase() }.eachCount().mapValues { it.value.toLong() },
+                        allProjects.groupingBy { it.status.lowercase() }.eachCount().mapValues { it.value.toLong() },
                         paymentDashboard.paymentCountsByStatus,
                         mapOf(
                             "thisMonth" to paymentDashboard.thisMonthRevenue,
@@ -1091,7 +1091,7 @@ fun Application.configureOperationsAdminRoutes() {
                     call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing slug path parameter")
                     return@get
                 }
-                val project = ProjectRepository.findBySlug(slug) ?: run {
+                val project = projects.findBySlug(slug) ?: run {
                     call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
                     return@get
                 }
@@ -1148,10 +1148,10 @@ fun Application.configureOperationsAdminRoutes() {
                 } ?: com.gatekeeper.db.tables.AccessBlockReason.MANUAL_HOLD
                 val actor = call.principal<JWTPrincipal>()?.payload?.subject ?: "unknown"
                 call.respond(body.slugs.distinct().map { slug ->
-                    val project = ProjectRepository.findBySlug(slug)
+                    val project = projects.findBySlug(slug)
                     if (project == null) BulkProjectResult(slug, "failed", "Project not found")
                     else {
-                        ProjectRepository.updateStatus(
+                        projects.updateStatus(
                             project.id, "manual_block", actor, body.reason, blockReasonCode.value,
                             blockReasonCode, body.blockReasonNote?.takeIf { it.isNotBlank() } ?: body.reason
                         )
@@ -1167,10 +1167,10 @@ fun Application.configureOperationsAdminRoutes() {
                 }
                 val actor = call.principal<JWTPrincipal>()?.payload?.subject ?: "unknown"
                 call.respond(body.slugs.distinct().map { slug ->
-                    val project = ProjectRepository.findBySlug(slug)
+                    val project = projects.findBySlug(slug)
                     if (project == null) BulkProjectResult(slug, "failed", "Project not found")
                     else {
-                        ProjectRepository.updateStatus(project.id, "active", actor, body.reason)
+                        projects.updateStatus(project.id, "active", actor, body.reason)
                         BulkProjectResult(slug, "active")
                     }
                 })

@@ -1,6 +1,6 @@
 package com.gatekeeper.feature.payment.data.persistence
 
-import com.gatekeeper.db.repositories.ProjectRepository
+import com.gatekeeper.feature.project.domain.repository.ProjectRepository
 import com.gatekeeper.db.repositories.ServiceRepository
 import com.gatekeeper.feature.payment.domain.repository.PaymentRepository
 import com.gatekeeper.feature.payment.domain.usecase.PaymentBalancePort
@@ -16,8 +16,8 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
-class PaymentProjectAdapter : PaymentProjectPort {
-    override fun find(slug: String): PaymentProject? = ProjectRepository.findBySlug(slug)?.let {
+class PaymentProjectAdapter(private val projects: ProjectRepository) : PaymentProjectPort {
+    override fun find(slug: String): PaymentProject? = projects.findBySlug(slug)?.let {
         PaymentProject(it.id, it.slug, it.currency, it.customerEmail, it.domain, it.status)
     }
 }
@@ -81,7 +81,7 @@ class PaymentBalanceAdapter(
         if (lookup.status?.value !in 200..299) error("Service invoice is temporarily unavailable")
         val invoice = lookup.body?.get("invoice")?.jsonObject ?: error("Service invoice is unavailable")
         val invoiceCurrency = invoice["currency"]?.jsonPrimitive?.contentOrNull
-        val projectCurrency = ProjectRepository.findById(projectId)?.currency ?: error("Project not found")
+        val projectCurrency = projects.findById(projectId)?.currency ?: error("Project not found")
         require(invoiceCurrency.isNullOrBlank() || invoiceCurrency.equals(projectCurrency, ignoreCase = true)) {
             "Service invoice currency must match the project currency"
         }
