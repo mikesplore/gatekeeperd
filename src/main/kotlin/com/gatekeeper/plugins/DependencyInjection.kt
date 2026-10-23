@@ -12,13 +12,14 @@ import com.gatekeeper.nginx.NginxCommandRunner
 import com.gatekeeper.nginx.ExposedCertificateStore
 import com.gatekeeper.config.AppSettings
 import com.gatekeeper.docker.DockerGateway
-import com.gatekeeper.docker.DockerService
+import com.gatekeeper.docker.DockerGatewayFactory
 import com.gatekeeper.docker.DockerCleanupService
 import com.gatekeeper.core.ports.FileStore
 import com.gatekeeper.core.ports.PortProbe
 import com.gatekeeper.core.ports.HttpPortProbe
 import com.gatekeeper.core.ports.ProcessRunner
 import com.gatekeeper.core.ports.TransactionRunner
+import com.gatekeeper.core.ports.CutoverProbe
 import com.gatekeeper.core.ports.DeploymentLock
 import com.gatekeeper.infrastructure.ExposedTransactionRunner
 import com.gatekeeper.infrastructure.LocalFileStore
@@ -26,6 +27,7 @@ import com.gatekeeper.infrastructure.ProcessRunnerImpl
 import com.gatekeeper.infrastructure.DistributedDeploymentLock
 import com.gatekeeper.infrastructure.TcpPortProbe
 import com.gatekeeper.infrastructure.TcpHttpPortProbe
+import com.gatekeeper.infrastructure.TcpCutoverProbe
 import com.gatekeeper.feature.payment.data.persistence.ExposedPaymentRepository
 import com.gatekeeper.feature.payment.data.persistence.ExposedPaymentEventRepository
 import com.gatekeeper.feature.payment.data.persistence.PaymentEffectsAdapter
@@ -89,12 +91,18 @@ import com.gatekeeper.feature.integrations.data.persistence.ExposedProviderCrede
 import com.gatekeeper.feature.integrations.data.persistence.ExposedRegistryCredentialRepository
 import com.gatekeeper.feature.deployment.domain.repository.DeploymentPortAllocationRepository as DeploymentPortAllocationPort
 import com.gatekeeper.feature.deployment.data.persistence.ExposedDeploymentPortAllocationRepository
+import com.gatekeeper.feature.deployment.domain.repository.DeploymentJobRepository
+import com.gatekeeper.feature.deployment.data.persistence.ExposedDeploymentJobRepository
+import com.gatekeeper.feature.deployment.domain.repository.ServiceDomainRepository
+import com.gatekeeper.feature.deployment.data.persistence.ExposedServiceDomainRepository
 import com.gatekeeper.feature.deployment.domain.repository.EnvironmentSetRepository as EnvironmentSetStore
 import com.gatekeeper.feature.deployment.data.persistence.ExposedEnvironmentSetRepository
 import com.gatekeeper.deployment.DeploymentQueue
 import com.gatekeeper.feature.deployment.data.persistence.ExposedDeploymentQueue
 import com.gatekeeper.feature.project.domain.repository.ProjectAdjustmentRepository as ProjectAdjustmentStore
 import com.gatekeeper.feature.project.data.persistence.ExposedProjectAdjustmentRepository
+import com.gatekeeper.feature.project.domain.repository.ProjectRepository as ProjectStore
+import com.gatekeeper.feature.project.data.persistence.ExposedProjectRepository
 import com.gatekeeper.feature.deployment.domain.port.DeploymentCommandRunner
 import com.gatekeeper.feature.deployment.data.process.HostDeploymentCommandRunner
 import com.gatekeeper.feature.deployment.domain.port.GitHubTokenProvider
@@ -102,6 +110,10 @@ import com.gatekeeper.deployment.SourceFetcher
 import com.gatekeeper.deployment.ImageBuilder
 import com.gatekeeper.deployment.DeploymentWorker
 import com.gatekeeper.deployment.DeploymentTriggerService
+import com.gatekeeper.feature.service.data.persistence.ExposedServiceRepository
+import com.gatekeeper.feature.service.data.persistence.ExposedSiteRepository
+import com.gatekeeper.feature.service.domain.repository.ServiceRepository
+import com.gatekeeper.feature.service.domain.repository.SiteRepository
 import com.gatekeeper.integrations.GitHubAppClient
 import com.gatekeeper.integrations.ResendClient
 import com.gatekeeper.integrations.ScribedIntegrationClient
@@ -113,13 +125,13 @@ import io.ktor.server.application.install
 
 private val applicationModule = module {
     single { AppSettings.fromEnv() }
-    single { DockerService(get<AppSettings>().docker.socket, get<AppSettings>().docker) }
-    single<DockerGateway> { get<DockerService>() }
-    single { DockerCleanupService(get<DockerService>(), get<AuditRepository>()) }
     single<ProcessRunner> { ProcessRunnerImpl() }
+    single<DockerGateway> { DockerGatewayFactory.create(get<AppSettings>().docker, get<ProcessRunner>()) }
+    single { DockerCleanupService(get<DockerGateway>(), get<AuditRepository>()) }
     single { DeploymentTriggerService(get<ProcessRunner>()) }
     single<PortProbe> { TcpPortProbe() }
     single<HttpPortProbe> { TcpHttpPortProbe() }
+    single<CutoverProbe> { TcpCutoverProbe() }
     single<FileStore> { LocalFileStore() }
     single<TransactionRunner> { ExposedTransactionRunner() }
     single { NginxCommandRunner(get<ProcessRunner>()) }
@@ -136,33 +148,36 @@ private val applicationModule = module {
     single<RegistryCredentialStore> { ExposedRegistryCredentialRepository(get<ProviderCredentialStore>()) }
     single { GitHubAppClient(get(), get(), get<AppSettings>().github) }
     single { ResendClient(get<AppSettings>().integrations) }
-    single { ScribedIntegrationClient(get<AppSettings>().integrations) }
+    single { ScribedIntegrationClient(get<AppSettings>().integrations, get<ProjectStore>()) }
     single<DeploymentPortAllocationPort> { ExposedDeploymentPortAllocationRepository() }
     single<EnvironmentSetStore> { ExposedEnvironmentSetRepository() }
-    single<DeploymentQueue> { ExposedDeploymentQueue() }
+    single<DeploymentJobRepository> { ExposedDeploymentJobRepository() }
+    single<DeploymentQueue> { ExposedDeploymentQueue(get()) }
+    single<ServiceDomainRepository> { ExposedServiceDomainRepository() }
     single<ProjectAdjustmentStore> { ExposedProjectAdjustmentRepository() }
-    single<DeploymentCommandRunner> { HostDeploymentCommandRunner() }
+    single<ProjectStore> { ExposedProjectRepository() }
+    single<DeploymentCommandRunner> { HostDeploymentCommandRunner(get<ProcessRunner>()) }
     single<GitHubTokenProvider> { GitHubTokenProvider { get<GitHubAppClient>().installationToken() } }
     single { SourceFetcher(get<DeploymentCommandRunner>(), get<GitHubTokenProvider>()) }
     single { ImageBuilder(get<DeploymentCommandRunner>()) }
     single<DeploymentLock> { DistributedDeploymentLock() }
-    single { DeploymentWorker(get(), get(), get(), get(), get(), get(), get(), get<AppSettings>().scheduler, get<AppSettings>().nginx, get()) }
-    single<ProjectQueryRepository> { ExposedProjectQueryRepository() }
+    single { DeploymentWorker(get(), get(), get(), get(), get(), get(), get(), get<AppSettings>().scheduler, get<AppSettings>().nginx, get(), get(), get(), get(), get()) }
+    single<ProjectQueryRepository> { ExposedProjectQueryRepository(get<ProjectStore>()) }
     single<SupportRequestRepository> { ExposedSupportRequestRepository() }
     single { CustomerApplicationService(get<ProjectQueryRepository>(), get(), get(), get<SupportRequestRepository>()) }
     single { GateService(get<ProjectQueryRepository>(), get<GetLatestPaymentLink>(), get(), get<AppSettings>().application) }
     single { GateApplicationService(get<ProjectQueryRepository>(), get<GateService>()) }
-    single { NginxService.configured(get<AppSettings>().nginx, get<NginxCommandRunner>()) }
+    single { NginxService.configured(get<AppSettings>().nginx, get<NginxCommandRunner>(), get<PortProbe>(), get<CutoverProbe>()) }
     single { ExposedCertificateStore(get<CertificateRepository>()) }
     single { NginxAdminService(get(), get<ExposedCertificateStore>(), get<AppSettings>().nginx.sslCertPath) }
     single<PaymentDomainRepository> { ExposedPaymentRepository() }
-    single { ProjectBalanceAdapter(get<PaymentDomainRepository>(), get<ProjectAdjustmentStore>(), get()) }
+    single { ProjectBalanceAdapter(get<PaymentDomainRepository>(), get<ProjectAdjustmentStore>(), get(), get<ProjectStore>()) }
     single<PaymentEventDomainRepository> { ExposedPaymentEventRepository() }
-    single { PaymentProjectAdapter() }
+    single { PaymentProjectAdapter(get<ProjectStore>()) }
     single { PaymentServiceAdapter() }
     single<ServiceMembershipRepository> { ExposedServiceMembershipRepository() }
     single { PaymentBalanceAdapter(get<PaymentDomainRepository>(), get(), get(), get()) }
-    single<PaymentEffects> { PaymentEffectsAdapter(get(), get(), get(), get()) }
+    single<PaymentEffects> { PaymentEffectsAdapter(get(), get(), get(), get(), get<ProjectStore>()) }
     single { ApplyWebhookEvent(get(), get()) }
     single { PaystackClient(get<AppSettings>().payment) }
     single<PaymentGateway>(named("paystackGateway")) { PaystackGateway(get<AppSettings>().payment, get<AppSettings>().integrations, get()) }
@@ -179,7 +194,7 @@ private val applicationModule = module {
     single { GetPaymentDashboardData(get<PaymentDomainRepository>()) }
     single { ReconcilePayment(get<PaymentDomainRepository>(), get()) }
     single { RecordCashPayment(get<PaymentProjectAdapter>(), get<PaymentDomainRepository>(), get()) }
-    single<PaymentCurrencyPort> { PaymentCurrencyPort { ProjectRepository.findAll().firstOrNull()?.currency } }
+    single<PaymentCurrencyPort> { PaymentCurrencyPort { get<ProjectStore>().findAll().firstOrNull()?.currency } }
     single { GetPaymentRevenue(get<PaymentDomainRepository>(), get()) }
     single { InitiatePayment(get(), get<PaymentProjectAdapter>(), get<PaymentBalanceAdapter>(), mapOf("paystack" to get(named("paystackGateway")), "mpesa" to get(named("mpesaGateway"))), get<PaymentServiceAdapter>()) }
     single { ProcessPaymentEvent(get(), get(), get<PaymentProjectAdapter>(), get()) }
@@ -192,6 +207,8 @@ private val applicationModule = module {
     single { VerifyPayment(mapOf("paystack" to get(named("paystackGateway")), "mpesa" to get(named("mpesaGateway"))), get()) }
     single { CompletePaystackCallback(get<PaymentProjectAdapter>(), get()) }
     single { ReconcilePayments(get(), mapOf("paystack" to get(named("paystackGateway")), "mpesa" to get(named("mpesaGateway"))), get()) }
+    single<ServiceRepository> { ExposedServiceRepository(get()) }
+    single<SiteRepository> { ExposedSiteRepository() }
 }
 
 fun Application.configureDependencyInjection() {

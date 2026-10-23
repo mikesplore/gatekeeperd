@@ -1,7 +1,8 @@
 package com.gatekeeper.admin
 
 import com.gatekeeper.deployment.DeploymentReconciliationService
-import com.gatekeeper.docker.DockerService
+import com.gatekeeper.docker.DockerGateway
+import com.gatekeeper.nginx.NginxService
 import io.ktor.server.application.*
 import io.ktor.server.auth.*
 import io.ktor.server.response.*
@@ -12,7 +13,7 @@ fun Application.configureDeploymentAdminRoutes() {
     routing {
         authenticate("auth-jwt") {
             get("/api/admin/deployments/reconciliation") {
-                call.respond(DeploymentReconciliationService.production(get<DockerService>()).report())
+                call.respond(DeploymentReconciliationService.production(get<DockerGateway>(), get<NginxService>()).report())
             }
         }
     }
