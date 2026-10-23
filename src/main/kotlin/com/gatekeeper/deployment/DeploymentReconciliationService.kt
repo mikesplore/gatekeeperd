@@ -6,7 +6,7 @@ import com.gatekeeper.db.tables.DeploymentStatus
 import com.gatekeeper.db.tables.Deployments
 import com.gatekeeper.db.tables.Projects
 import com.gatekeeper.db.tables.UpstreamMode
-import com.gatekeeper.docker.DockerService
+import com.gatekeeper.docker.DockerGateway
 import com.gatekeeper.nginx.NginxService
 import com.gatekeeper.nginx.DeploymentUpstreamResolver
 import kotlinx.serialization.Serializable
@@ -45,7 +45,7 @@ data class DeploymentReconciliationReport(
 
 /** Read-only comparison of persisted active deployments with Docker and managed nginx state. */
 class DeploymentReconciliationService(
-    private val docker: DockerService?,
+    private val docker: DockerGateway?,
     private val nginx: NginxService
 ) {
     fun report(): DeploymentReconciliationReport {
@@ -256,7 +256,7 @@ class DeploymentReconciliationService(
             "repair_required"
         )
 
-        fun production(docker: DockerService, nginx: NginxService): DeploymentReconciliationService {
+        fun production(docker: DockerGateway, nginx: NginxService): DeploymentReconciliationService {
             return DeploymentReconciliationService(docker, nginx)
         }
     }
