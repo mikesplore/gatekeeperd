@@ -7,7 +7,7 @@ data class DockerCleanupResult(val dryRun: Boolean, val inspected: Int, val remo
 
 /** Reference-aware cleanup. It never invokes docker system prune. */
 class DockerCleanupService(
-    private val docker: DockerService,
+    private val docker: DockerGateway,
     private val auditRepository: AuditRepository
 ) {
     fun pruneProjectImages(projectImagePrefix: String?, preservedImages: Set<String>, dryRun: Boolean, actor: String): DockerCleanupResult {

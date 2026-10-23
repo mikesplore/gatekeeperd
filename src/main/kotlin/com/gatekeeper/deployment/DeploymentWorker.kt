@@ -1,6 +1,6 @@
 package com.gatekeeper.deployment
 
-import com.gatekeeper.db.repositories.DeploymentJobRecord
+import com.gatekeeper.feature.deployment.domain.repository.DeploymentJobRecord
 import com.gatekeeper.core.ports.DeploymentLock
 import com.gatekeeper.feature.deployment.domain.repository.DeploymentPortAllocationRepository
 import com.gatekeeper.feature.audit.domain.repository.AuditRepository
@@ -8,14 +8,15 @@ import com.gatekeeper.config.AppSettings
 import com.gatekeeper.plugins.DistributedLock
 import com.gatekeeper.docker.CreateContainerRequest
 import com.gatekeeper.docker.DockerGateway
-import com.gatekeeper.infrastructure.TcpPortProbe
-import com.gatekeeper.infrastructure.TcpHttpPortProbe
+import com.gatekeeper.core.ports.PortProbe
+import com.gatekeeper.core.ports.HttpPortProbe
+import com.gatekeeper.core.ports.CutoverProbe
 import com.gatekeeper.nginx.NginxService
 import com.gatekeeper.nginx.DeploymentUpstreamIncludes
 import com.gatekeeper.deployment.DurableCutoverFiles
 import com.gatekeeper.nginx.canDeploymentCutoverUpdateRoute
 import com.gatekeeper.db.repositories.SiteRepository
-import com.gatekeeper.db.repositories.ServiceDomainRepository
+import com.gatekeeper.feature.deployment.domain.repository.ServiceDomainRepository
 import com.gatekeeper.security.SecretValueCipher
 import kotlinx.coroutines.*
 import org.slf4j.LoggerFactory
@@ -38,11 +39,15 @@ class DeploymentWorker(
     private val docker: DockerGateway,
     private val schedulerSettings: AppSettings.SchedulerSettings,
     private val nginxSettings: AppSettings.NginxSettings,
-    private val nginxService: NginxService
+    private val nginxService: NginxService,
+    private val readinessPorts: PortProbe,
+    private val readinessHttp: HttpPortProbe,
+    private val cutoverProbe: CutoverProbe,
+    private val serviceDomains: ServiceDomainRepository
 ) {
     private val logger = LoggerFactory.getLogger("com.gatekeeper.deployment.DeploymentWorker")
     private val started = AtomicBoolean(false)
-    private val readinessChecker = ReadinessChecker(TcpPortProbe(), TcpHttpPortProbe())
+    private val readinessChecker = ReadinessChecker(readinessPorts, readinessHttp)
 
     fun start(scope: CoroutineScope) {
         if (!started.compareAndSet(false, true)) return
@@ -530,7 +535,7 @@ class DeploymentWorker(
             val hostPort = runtime.ports[containerPort]
                 ?: error("Candidate does not publish managed service primary container port $containerPort")
             val path = job.readinessTarget?.takeIf { it.startsWith("/") } ?: "/"
-            check(com.gatekeeper.nginx.probeCandidateLoopback(hostPort, managedSite.domain, path)) {
+            check(cutoverProbe.candidate(hostPort, managedSite.domain, path)) {
                 "Candidate failed its direct loopback HTTP probe before nginx cutover"
             }
             containerPort to hostPort
@@ -543,7 +548,7 @@ class DeploymentWorker(
             val serviceId = job.serviceId
             val includes = DeploymentUpstreamIncludes(File(nginxSettings.upstreamIncludeDirectory))
             val oldInclude = includes.file(serviceId).takeIf { it.isFile }?.readText()
-            val candidateInclude = includes.render(serviceId, route.second)
+        val candidateInclude = includes.render(serviceId, route.second)
             DurableCutoverFiles(
                 previousSiteConfig = existingSiteConfig?.content,
                 siteSlug = siteOwnerSlug,
@@ -675,7 +680,7 @@ class DeploymentWorker(
             }
         )
         if (changesProductionRoute) {
-            runCatching { ServiceDomainRepository.reconcilePorts(job.serviceId, runtime.ports.keys) }
+            runCatching { serviceDomains.reconcilePorts(job.serviceId, runtime.ports.keys) }
                 .onFailure { logger.warn("Unable to reconcile domain bindings for service {} after deployment {}", job.serviceId, job.id, it) }
         }
         update(
