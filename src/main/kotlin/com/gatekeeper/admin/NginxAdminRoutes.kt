@@ -29,14 +29,16 @@ import com.gatekeeper.nginx.requireValidEmail
 import com.gatekeeper.nginx.requireValidHostname
 import com.gatekeeper.feature.project.domain.repository.ProjectRepository
 import com.gatekeeper.feature.audit.domain.repository.AuditRepository as AuditRepositoryPort
-import com.gatekeeper.db.repositories.SiteRepository
-import com.gatekeeper.db.repositories.ServiceRepository
 import com.gatekeeper.feature.deployment.domain.repository.DeploymentJobRepository
 import com.gatekeeper.feature.deployment.domain.repository.ServiceDomainRepository
 import com.gatekeeper.db.tables.CertMode
 import com.gatekeeper.db.tables.ServiceDomainStatus
 import com.gatekeeper.db.tables.TlsMode
 import com.gatekeeper.db.tables.UpstreamMode
+import com.gatekeeper.feature.service.domain.repository.ServiceRepository
+import com.gatekeeper.feature.service.domain.repository.SiteDashboardUpdate
+import com.gatekeeper.feature.service.domain.repository.SiteRecord
+import com.gatekeeper.feature.service.domain.repository.SiteRepository
 import com.gatekeeper.plugins.DistributedLock
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.Application
@@ -140,7 +142,7 @@ private sealed interface NginxPlanResult {
 
 private fun renderModelFromSite(
     slug: String,
-    site: SiteRepository.SiteRecord,
+    site: SiteRecord,
     nginxService: NginxService
 ): NginxSiteRenderModel {
     val (upstreamHost, port) = if (site.upstreamKind == "DEPLOYMENT_MANAGED" || site.upstreamContainerPort != null) {
@@ -405,12 +407,14 @@ fun Application.configureNginxAdminRoutes() {
     val deploymentJobs = get<DeploymentJobRepository>()
     val serviceDomains = get<ServiceDomainRepository>()
     val dockerService: DockerGateway = get()
+    val siteRepository = get<SiteRepository>()
+    val serviceRepository = get<ServiceRepository>()
 
     routing {
         authenticate("auth-jwt") {
 
             get("/api/admin/nginx/upstream-migration") {
-                val report = SiteRepository.findAll().map { site ->
+                val report = siteRepository.findAll().map { site ->
                     val serviceId = site.serviceId
                     val configured = serviceId != null && deploymentJobs.configurationIdForService(site.projectId, serviceId) != null
                     val target = activeDeploymentTarget(site)
@@ -430,7 +434,7 @@ fun Application.configureNginxAdminRoutes() {
             post("/api/admin/nginx/upstream-migration/sites/{siteId}") {
                 val siteId = call.parameters["siteId"]?.let { runCatching { java.util.UUID.fromString(it) }.getOrNull() }
                     ?: return@post call.respondError(HttpStatusCode.BadRequest, "invalid_site_id", "A valid site ID is required")
-                val site = SiteRepository.findById(siteId)
+                val site = siteRepository.findById(siteId)
                     ?: return@post call.respondError(HttpStatusCode.NotFound, "site_not_found", "Site not found")
                 val serviceId = site.serviceId
                     ?: return@post call.respondError(HttpStatusCode.Conflict, "service_missing", "Site must be attached to a service before migration")
@@ -459,7 +463,7 @@ fun Application.configureNginxAdminRoutes() {
             post("/api/admin/nginx/upstream-migration/sites/{siteId}/rollback") {
                 val siteId = call.parameters["siteId"]?.let { runCatching { java.util.UUID.fromString(it) }.getOrNull() }
                     ?: return@post call.respondError(HttpStatusCode.BadRequest, "invalid_site_id", "A valid site ID is required")
-                val site = SiteRepository.findById(siteId)
+                val site = siteRepository.findById(siteId)
                     ?: return@post call.respondError(HttpStatusCode.NotFound, "site_not_found", "Site not found")
                 if (site.upstreamKind != "DEPLOYMENT_MANAGED") {
                     return@post call.respondError(HttpStatusCode.Conflict, "site_not_deployment_managed", "Site is not converted to deployment-managed upstream mode")
@@ -474,7 +478,7 @@ fun Application.configureNginxAdminRoutes() {
                 if (!result.success) {
                     return@post call.respondError(HttpStatusCode.BadGateway, "upstream_migration_rollback_failed", result.message)
                 }
-                SiteRepository.restoreUpstreamKind(site.id, if (site.upstreamMode == UpstreamMode.EXPLICIT_PORT) "EXPLICIT_PORT" else null)
+                siteRepository.restoreUpstreamKind(site.id, if (site.upstreamMode == UpstreamMode.EXPLICIT_PORT) "EXPLICIT_PORT" else null)
                 val includeRemoved = site.serviceId?.let { nginxService.restoreDeploymentUpstream(it, null) } ?: true
                 call.respond(mapOf(
                     "success" to true,
@@ -487,7 +491,7 @@ fun Application.configureNginxAdminRoutes() {
                 val serviceId = call.parameters["serviceId"]?.let { runCatching { java.util.UUID.fromString(it) }.getOrNull() }
                     ?: return@post call.respondError(HttpStatusCode.BadRequest, "invalid_service_id", "A valid service ID is required")
                 val environment = call.request.queryParameters["environment"]?.trim()?.takeIf { it.isNotEmpty() } ?: "production"
-                val site = SiteRepository.findByServiceId(serviceId)
+                val site = siteRepository.findByServiceId(serviceId)
                     ?: return@post call.respondError(HttpStatusCode.NotFound, "site_not_found", "Service has no nginx site")
                 if (site.upstreamKind != "DEPLOYMENT_MANAGED") {
                     return@post call.respondError(HttpStatusCode.Conflict, "site_not_deployment_managed", "Only deployment-managed sites can be repaired through this operation")
@@ -535,13 +539,13 @@ fun Application.configureNginxAdminRoutes() {
                     call.respondError(HttpStatusCode.BadRequest, "invalid_service", "Selected service ID is invalid")
                     return@get
                 }
-                val service = requestedServiceId?.let { ServiceRepository.findByProjectAndId(project.id, it) }
+                val service = requestedServiceId?.let { serviceRepository.findByProjectAndId(project.id, it) }
                 if (requestedServiceId != null && service == null) {
                     call.respondError(HttpStatusCode.BadRequest, "invalid_service", "Selected service does not belong to this project")
                     return@get
                 }
-                val serviceId = service?.id ?: SiteRepository.findDefaultServiceId(project.id)
-                val selectedService = ServiceRepository.findByProjectAndId(project.id, serviceId)
+                val serviceId = service?.id ?: siteRepository.findDefaultServiceId(project.id)
+                val selectedService = serviceRepository.findByProjectAndId(project.id, serviceId)
                     ?: run {
                         call.respondError(HttpStatusCode.BadRequest, "invalid_service", "No valid service is available for this project")
                         return@get
@@ -549,7 +553,7 @@ fun Application.configureNginxAdminRoutes() {
                 val bindings = serviceDomains.listByService(serviceId).map {
                     NginxWizardDomainBindingResponse(it.id.toString(), it.serviceId.toString(), it.containerPort, it.domain, it.status)
                 }
-                val site = SiteRepository.findByProjectIdAndServiceId(project.id, serviceId)
+                val site = siteRepository.findByProjectIdAndServiceId(project.id, serviceId)
                 val activeRuntime = runCatching { DeploymentApplicationService.activeDeploymentRuntime(serviceId, "production") }.getOrNull()
                 val resolvedTarget = DeploymentUpstreamResolver.resolve(serviceId, "production")
                 val configuredPort = resolvedTarget?.port
@@ -607,8 +611,8 @@ fun Application.configureNginxAdminRoutes() {
                     call.respondError(HttpStatusCode.BadRequest, "invalid_service", "Selected service ID is invalid")
                     return@post
                 }
-                val selectedServiceId = serviceId ?: SiteRepository.findDefaultServiceId(project.id)
-                val service = ServiceRepository.findByProjectAndId(project.id, selectedServiceId)
+                val selectedServiceId = serviceId ?: siteRepository.findDefaultServiceId(project.id)
+                val service = serviceRepository.findByProjectAndId(project.id, selectedServiceId)
                 if (service == null) {
                     call.respondError(HttpStatusCode.BadRequest, "invalid_service", "Selected service does not belong to this project")
                     return@post
@@ -633,7 +637,7 @@ fun Application.configureNginxAdminRoutes() {
                     call.respondError(HttpStatusCode.Conflict, "binding_port_mismatch", "The selected domain is bound to a different container port")
                     return@post
                 }
-                val site = SiteRepository.findByDomain(serviceDomain)
+                val site = siteRepository.findByDomain(serviceDomain)
                 if (site != null && site.serviceId != selectedServiceId) {
                     call.respondError(HttpStatusCode.Conflict, "domain_in_use", "Domain is already configured for another service")
                     return@post
@@ -707,9 +711,9 @@ fun Application.configureNginxAdminRoutes() {
 
                 val enabled = nginxService.listConfigArtifacts().any { it.filename == slug && it.available && it.enabled }
 
-                val service = ServiceRepository.listByProjectId(project.id).firstOrNull { it.isDefault }
-                val site = service?.let { SiteRepository.findByProjectIdAndServiceId(project.id, it.id) }
-                val domain = ServiceRepository.findDefaultDomain(project.id)
+                val service = serviceRepository.listByProjectId(project.id).firstOrNull { it.isDefault }
+                val site = service?.let { siteRepository.findByProjectIdAndServiceId(project.id, it.id) }
+                val domain = serviceRepository.findDefaultDomain(project.id)
                 val resolvedCert = domain?.let(nginxService::resolveCertificateForDomain)
                 val expiry = resolvedCert?.certificateDomain?.let(nginxService::certificateExpiry)
 
@@ -755,7 +759,7 @@ fun Application.configureNginxAdminRoutes() {
                 val body = runCatching { call.receive<NginxCustomLocationRequest>() }.getOrElse {
                     return@post call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid custom location body")
                 }
-                val site = SiteRepository.findByProjectSlug(slug)
+                val site = siteRepository.findByProjectSlug(slug)
                     ?: return@post call.respondError(HttpStatusCode.NotFound, "site_not_found", "Managed site not found")
                 val location = NginxCustomLocation(java.util.UUID.randomUUID().toString(), body.path.trim(), body.directives.trim())
                 val result = runCatching { nginxAdminService.updateCustomLocations(slug, site, site.customNginxLocations + location) { updated -> renderModelFromSite(slug, updated, nginxService) } }
@@ -768,7 +772,7 @@ fun Application.configureNginxAdminRoutes() {
                 val slug = call.parameters["slug"]
                 val id = call.parameters["id"]
                 if (slug.isNullOrBlank() || id.isNullOrBlank()) return@delete call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Site slug and custom block ID are required")
-                val site = SiteRepository.findByProjectSlug(slug)
+                val site = siteRepository.findByProjectSlug(slug)
                     ?: return@delete call.respondError(HttpStatusCode.NotFound, "site_not_found", "Managed site not found")
                 val location = site.customNginxLocations.firstOrNull { it.id == id }
                     ?: return@delete call.respondError(HttpStatusCode.NotFound, "custom_location_not_found", "Custom location not found")
@@ -849,8 +853,8 @@ fun Application.configureNginxAdminRoutes() {
                     call.respondError(HttpStatusCode.BadRequest, "invalid_service", "Selected service ID is invalid")
                     return@post
                 }
-                val serviceId = parsedServiceId ?: SiteRepository.findDefaultServiceId(project.id)
-                val service = ServiceRepository.findByProjectAndId(project.id, serviceId)
+                val serviceId = parsedServiceId ?: siteRepository.findDefaultServiceId(project.id)
+                val service = serviceRepository.findByProjectAndId(project.id, serviceId)
                 if (service == null) {
                     call.respondError(HttpStatusCode.BadRequest, "invalid_service", "Selected service does not belong to this project")
                     return@post
@@ -888,7 +892,7 @@ fun Application.configureNginxAdminRoutes() {
                     call.respondError(HttpStatusCode.BadRequest, "container_port_not_published", "Selected container port is not published by the active deployment")
                     return@post
                 }
-                val site = SiteRepository.findByDomain(requestedDomain)
+                val site = siteRepository.findByDomain(requestedDomain)
                 if (site != null && site.serviceId != serviceId) {
                     call.respondError(HttpStatusCode.Conflict, "domain_in_use", "Domain is already configured for another service")
                     return@post
@@ -1007,10 +1011,10 @@ fun Application.configureNginxAdminRoutes() {
                 }
 
                 if (siteToPersist != null) {
-                    val model = requireNotNull(siteToPersist)
+                    val model = siteToPersist
                     val persisted = runCatching {
-                        if (site == null) SiteRepository.create(project.id, model.copy(slug = enabledSlug), requestedContainerPort)
-                        else SiteRepository.updateDashboard(site.id, SiteRepository.SiteDashboardUpdate(
+                        if (site == null) siteRepository.create(project.id, model.copy(slug = enabledSlug), requestedContainerPort)
+                        else siteRepository.updateDashboard(site.id, SiteDashboardUpdate(
                             domain = model.domain,
                             upstreamHost = model.upstreamHost,
                             upstreamMode = model.upstreamMode,
@@ -1024,7 +1028,8 @@ fun Application.configureNginxAdminRoutes() {
                             certMode = model.certMode,
                             certExplicitPath = model.certificatePath,
                             gateEnabled = true
-                        ))
+                        )
+                        )
                     }
                         .onFailure { error ->
                             logger.error("Nginx site enabled but database registration failed for project $slug", error)
@@ -1209,7 +1214,7 @@ fun Application.configureNginxAdminRoutes() {
     }
 }
 
-private fun activeDeploymentTarget(site: SiteRepository.SiteRecord): DeploymentUpstreamResolver.Target? {
+private fun activeDeploymentTarget(site: SiteRecord): DeploymentUpstreamResolver.Target? {
     val serviceId = site.serviceId ?: return null
     val active = DeploymentApplicationService.activeRuntime(serviceId, "production") ?: return null
     val containerPort = site.upstreamContainerPort ?: active.containerPort ?: active.ports.keys.singleOrNull() ?: return null

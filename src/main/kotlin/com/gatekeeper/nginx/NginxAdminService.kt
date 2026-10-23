@@ -1,9 +1,10 @@
 package com.gatekeeper.nginx
 
-import com.gatekeeper.config.AppSettings
-import com.gatekeeper.db.repositories.SiteRepository
 import com.gatekeeper.plugins.DistributedLock
 import com.gatekeeper.feature.certificate.domain.repository.CertificateRepository
+import com.gatekeeper.feature.service.domain.repository.SiteDashboardUpdate
+import com.gatekeeper.feature.service.domain.repository.SiteRecord
+import com.gatekeeper.feature.service.domain.repository.SiteRepository
 import java.time.Instant
 import java.time.LocalDateTime
 import java.time.OffsetDateTime
@@ -12,13 +13,14 @@ import java.time.OffsetDateTime
 class NginxAdminService(
     private val nginx: NginxService,
     private val certificates: CertificateStore,
-    private val sslCertPath: String
+    private val sslCertPath: String,
+    private val siteRepository: SiteRepository
 ) {
     fun updateCustomLocations(
         slug: String,
-        site: SiteRepository.SiteRecord,
+        site: SiteRecord,
         locations: List<NginxCustomLocation>,
-        renderModel: (SiteRepository.SiteRecord) -> NginxSiteRenderModel
+        renderModel: (SiteRecord) -> NginxSiteRenderModel
     ): NginxCustomLocationResponse = DistributedLock.withLock("nginx-host-mutation") {
         nginx.validateCustomLocations(locations)
         val inspection = nginx.inspectSite(slug)
@@ -26,18 +28,18 @@ class NginxAdminService(
             "Custom locations can only be managed for an enabled Gatekeeperd-managed Nginx site"
         }
         val previous = site.customNginxLocations
-        val updated = SiteRepository.updateDashboard(
+        val updated = siteRepository.updateDashboard(
             site.id,
-            SiteRepository.SiteDashboardUpdate(customNginxLocations = locations)
+            SiteDashboardUpdate(customNginxLocations = locations)
         ) ?: error("Site no longer exists")
         val activation = runCatching {
             nginx.enableProjectDetailed(slug, nginx.generateNginxConfig(renderModel(updated)))
         }.getOrElse { error ->
-            SiteRepository.updateDashboard(site.id, SiteRepository.SiteDashboardUpdate(customNginxLocations = previous))
+            siteRepository.updateDashboard(site.id, SiteDashboardUpdate(customNginxLocations = previous))
             throw error
         }
         if (!activation.success) {
-            SiteRepository.updateDashboard(site.id, SiteRepository.SiteDashboardUpdate(customNginxLocations = previous))
+            siteRepository.updateDashboard(site.id, SiteDashboardUpdate(customNginxLocations = previous))
             error(activation.message ?: "Nginx rejected the custom location update")
         }
         NginxCustomLocationResponse(true, "Custom Nginx locations saved and reloaded", locations)
@@ -155,10 +157,10 @@ interface CertificateStore {
     fun recordRenewal(domain: String, expiresAt: LocalDateTime?, status: String, error: String?)
 }
 
-class ExposedCertificateStore(private val repository: CertificateRepository) : CertificateStore {
+class ExposedCertificateStore(private val repository: CertificateRepository, private val siteRepository: SiteRepository) : CertificateStore {
     override fun syncInventory(domain: String, expiresAt: LocalDateTime?, status: String) { repository.syncInventory(domain, expiresAt, status) }
     override fun upsert(domain: String, issuedAt: LocalDateTime?, expiresAt: LocalDateTime?, status: String) = CertificateStore.Record(repository.upsert(domain, issuedAt, expiresAt, status).id)
-    override fun linkSites(domain: String, certificateId: java.util.UUID) { SiteRepository.linkCertificateForDomain(domain, certificateId) }
+    override fun linkSites(domain: String, certificateId: java.util.UUID) { siteRepository.linkCertificateForDomain(domain, certificateId) }
     override fun requireRemovable(domain: String) = repository.requireRemovable(domain)
     override fun delete(domain: String) { repository.deleteByDomain(domain) }
     override fun recordRenewal(domain: String, expiresAt: LocalDateTime?, status: String, error: String?) { repository.recordRenewalResult(domain, expiresAt, status, error) }

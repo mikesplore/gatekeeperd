@@ -4,6 +4,7 @@ import com.gatekeeper.feature.payment.domain.gateway.InitiatePaymentCommand
 import com.gatekeeper.feature.payment.domain.gateway.PaymentGateway
 import com.gatekeeper.feature.payment.domain.repository.PaymentRepository
 import com.gatekeeper.feature.payment.domain.model.MpesaPhoneNumber
+import com.gatekeeper.feature.service.domain.repository.ServiceRepository
 import java.math.BigDecimal
 import java.util.UUID
 
@@ -12,13 +13,14 @@ class InitiatePayment(
     private val projects: PaymentProjectPort,
     private val balance: PaymentBalancePort,
     private val gateways: Map<String, PaymentGateway>,
-    private val services: PaymentServicePort = PaymentServicePort { _, _ -> false }
+    private val serviceRepository: ServiceRepository,
+    private val services: PaymentServicePort = PaymentServicePort {_, _, _ -> false }
 ) {
     suspend operator fun invoke(command: Command): Result<PaymentInitiation> = runCatching {
         if (command.projectSlug.isBlank()) invalid("missing_payment_details", "project is required")
         val serviceId = command.serviceId ?: invalid("service_required", "Choose a service to pay for")
         val project = projects.find(command.projectSlug) ?: fail("project_not_found", "Project not found", FailureKind.NOT_FOUND)
-        if (!services.belongsToProject(project.id, serviceId)) {
+        if (!services.belongsToProject(serviceRepository, project.id, serviceId)) {
             fail("service_not_found", "Service not found for this project", FailureKind.NOT_FOUND)
         }
         if (command.requireSuspendedProject && project.status?.lowercase() !in setOf("blocked", "manual_block")) {
@@ -28,7 +30,7 @@ class InitiatePayment(
         val gateway = gateways[command.provider.lowercase()]
             ?: fail("payment_unavailable", "Payment provider is unavailable", FailureKind.PROVIDER_UNAVAILABLE)
         val amount = try {
-            balance.availableAmount(project.id, command.requestedAmount, serviceId)
+            balance.availableAmount(serviceRepository = serviceRepository,project.id, command.requestedAmount, serviceId)
         } catch (error: IllegalArgumentException) {
             invalid("invalid_payment_amount", error.message ?: "Invalid payment amount")
         } catch (error: IllegalStateException) {
@@ -92,9 +94,9 @@ data class PaymentProject(
 )
 
 interface PaymentProjectPort { fun find(slug: String): PaymentProject? }
-fun interface PaymentServicePort { fun belongsToProject(projectId: UUID, serviceId: UUID): Boolean }
+fun interface PaymentServicePort { fun belongsToProject( serviceRepository: ServiceRepository, projectId: UUID, serviceId: UUID): Boolean }
 interface PaymentBalancePort {
-    suspend fun availableAmount(projectId: UUID, requestedAmount: BigDecimal?): BigDecimal
-    suspend fun availableAmount(projectId: UUID, requestedAmount: BigDecimal?, serviceId: UUID?): BigDecimal = availableAmount(projectId, requestedAmount)
+    suspend fun availableAmount(serviceRepository: ServiceRepository, projectId: UUID, requestedAmount: BigDecimal?): BigDecimal
+    suspend fun availableAmount(serviceRepository: ServiceRepository, projectId: UUID, requestedAmount: BigDecimal?, serviceId: UUID?): BigDecimal = availableAmount( serviceRepository = serviceRepository, projectId, requestedAmount)
     suspend fun requiresServiceScope(projectId: UUID): Boolean = false
 }
