@@ -21,6 +21,8 @@ import com.github.dockerjava.core.DockerClientConfig
 import com.github.dockerjava.httpclient5.ApacheDockerHttpClient
 import org.slf4j.LoggerFactory
 import com.gatekeeper.config.AppSettings
+import com.gatekeeper.core.ports.ProcessRunner
+import com.gatekeeper.infrastructure.ProcessRunnerImpl
 import java.io.File
 import java.util.stream.Collectors
 import com.github.dockerjava.api.async.ResultCallback
@@ -59,7 +61,8 @@ internal fun <Handle, Result> createContainerWithCleanup(
 
 class DockerService(
     dockerSocketPath: String,
-    private val dockerSettings: AppSettings.DockerSettings
+    private val dockerSettings: AppSettings.DockerSettings,
+    private val processRunner: ProcessRunner = ProcessRunnerImpl()
 ) : DockerGateway {
     private val client: DockerClient
 
@@ -76,6 +79,10 @@ class DockerService(
             .withDockerHttpClient(httpClient)
             .build()
         logger.info("Docker client initialized (socket: $dockerSocketPath)")
+    }
+
+    fun verifyAvailability() {
+        client.pingCmd().exec()
     }
 
     override fun listContainers(all: Boolean): List<ContainerInfo> {
@@ -97,7 +104,7 @@ class DockerService(
     }
 
     /** Returns only the standard database/Redis preset credentials, never arbitrary container env. */
-    fun getContainerPresetCredentials(containerNameOrId: String): ContainerPresetCredentialsResponse? = try {
+    override fun getContainerPresetCredentials(containerNameOrId: String): ContainerPresetCredentialsResponse? = try {
         val listed = client.listContainersCmd().withShowAll(true).exec().firstOrNull { container ->
             container.id.startsWith(containerNameOrId) || container.names.orEmpty().any { it.removePrefix("/") == containerNameOrId }
         } ?: return null
@@ -196,22 +203,6 @@ class DockerService(
     }
 
     /** Runtime details for explicit project adoption. Environment values stay inside the service. */
-    data class AdoptionDetails(
-        val id: String,
-        val name: String,
-        val image: String,
-        val imageDigest: String?,
-        val imageId: String,
-        val state: String,
-        val ports: Map<Int, Int>,
-        val portHostIps: Map<Int, String>,
-        val networks: List<String>,
-        val restartPolicy: String,
-        val volumes: List<VolumeMount>,
-        val environment: Map<String, String>,
-        val runtimeOptions: ContainerRuntimeOptions
-    )
-
     override fun adoptionDetails(containerIdOrName: String): AdoptionDetails? = try {
         val listed = client.listContainersCmd().withShowAll(true).exec().firstOrNull { container ->
             container.id.startsWith(containerIdOrName) || container.names.orEmpty().any { it.removePrefix("/") == containerIdOrName }
@@ -271,7 +262,7 @@ class DockerService(
             .firstOrNull { container -> container.ports.orEmpty().any { it.publicPort == hostPort } }
             ?.let { getContainer(it.id) }
 
-    fun containerLogs(containerNameOrId: String, tail: Int = 100): String {
+    override fun containerLogs(containerNameOrId: String, tail: Int): String {
         val output = StringBuilder()
         client.logContainerCmd(containerNameOrId)
             .withStdOut(true)
@@ -285,7 +276,7 @@ class DockerService(
         return output.toString()
     }
 
-    fun startContainer(containerNameOrId: String) {
+    override fun startContainer(containerNameOrId: String) {
         client.startContainerCmd(containerNameOrId).exec()
         logger.info("Started container: $containerNameOrId")
     }
@@ -295,7 +286,7 @@ class DockerService(
         logger.info("Stopped container: $containerNameOrId")
     }
 
-    fun restartContainer(containerNameOrId: String) {
+    override fun restartContainer(containerNameOrId: String) {
         client.restartContainerCmd(containerNameOrId).exec()
         logger.info("Restarted container: $containerNameOrId")
     }
@@ -314,19 +305,11 @@ class DockerService(
         val cmd = listOf("docker", "pull", ref)
         logger.info("Pulling image via docker CLI: $ref")
 
-        val process = ProcessBuilder(cmd)
-            .redirectErrorStream(true)
-            .apply {
-                if (!dockerHost.isNullOrBlank()) {
-                    environment()["DOCKER_HOST"] = dockerHost
-                }
-            }
-            .start()
-
-        val output = process.inputStream.bufferedReader().use { it.readText() }
-        val exit = process.waitFor()
-        if (exit != 0) {
-            throw RuntimeException("docker pull failed (exit=$exit): ${output.trim().ifBlank { "no output" }}")
+        val environment = dockerHost?.takeIf(String::isNotBlank)?.let { mapOf("DOCKER_HOST" to it) }.orEmpty()
+        val result = processRunner.runStreaming(cmd, environment = environment, timeoutMillis = Long.MAX_VALUE)
+        if (result.exitCode != 0) {
+            val output = (result.stdout + result.stderr).trim().ifBlank { "no output" }
+            throw RuntimeException("docker pull failed (exit=${result.exitCode}): $output")
         }
         logger.info("Image pulled via docker CLI: $ref")
     }
@@ -476,13 +459,11 @@ class DockerService(
         .sorted()
         .toList()
 
-    data class ImageInfo(val id: String, val tags: List<String>, val sizeBytes: Long)
-
-    fun listImages(): List<ImageInfo> = client.listImagesCmd().withShowAll(true).exec().map { image ->
-        ImageInfo(image.id ?: "", image.repoTags?.toList().orEmpty(), image.size ?: 0L)
+    override fun listImages(): List<DockerImageInfo> = client.listImagesCmd().withShowAll(true).exec().map { image ->
+        DockerImageInfo(image.id ?: "", image.repoTags?.toList().orEmpty(), image.size ?: 0L)
     }
 
-    fun referencedImageNames(): Set<String> = listContainers(true).map { it.image }.toSet()
+    override fun referencedImageNames(): Set<String> = listContainers(true).map { it.image }.toSet()
 
     override fun hostPortsInUse(): Set<Int> {
         return client.listContainersCmd()
@@ -545,17 +526,17 @@ class DockerService(
         }
     }
 
-    fun createNetwork(name: String, driver: String = "bridge") {
+    override fun createNetwork(name: String, driver: String) {
         require(name.matches(Regex("^[A-Za-z0-9_.-]{1,63}$"))) { "Invalid network name" }
         client.createNetworkCmd().withName(name).withDriver(driver).exec()
     }
 
-    fun deleteNetwork(name: String) {
+    override fun deleteNetwork(name: String) {
         require(name != "bridge" && name != "host" && name != "none") { "Docker built-in networks cannot be deleted" }
         client.removeNetworkCmd(name).exec()
     }
 
-    fun listVolumes(): List<VolumeInfo> {
+    override fun listVolumes(): List<VolumeInfo> {
         val attachedByVolume = client.listContainersCmd().withShowAll(true).exec().flatMap { container ->
             val name = container.names?.firstOrNull()?.trimStart('/') ?: container.id.orEmpty()
             runCatching {
@@ -579,12 +560,12 @@ class DockerService(
         }
     }
 
-    fun createVolume(name: String, driver: String = "local") {
+    override fun createVolume(name: String, driver: String) {
         require(name.matches(Regex("^[A-Za-z0-9_.-]{1,255}$"))) { "Invalid volume name" }
         client.createVolumeCmd().withName(name).withDriver(driver).exec()
     }
 
-    fun deleteVolume(name: String) { client.removeVolumeCmd(name).exec() }
+    override fun deleteVolume(name: String) { client.removeVolumeCmd(name).exec() }
 
     override fun containerHealth(containerNameOrId: String): String {
         return try {
@@ -728,7 +709,7 @@ class DockerService(
         logger.info("Image deleted: $fullName")
     }
 
-    fun deleteImageReference(reference: String) {
+    override fun deleteImageReference(reference: String) {
         client.removeImageCmd(reference).withForce(false).exec()
     }
 
@@ -772,4 +753,26 @@ class DockerService(
             networks = container.networkSettings?.networks?.keys?.sorted().orEmpty()
         )
     }
+}
+
+object DockerGatewayFactory {
+    fun create(settings: AppSettings.DockerSettings, processRunner: ProcessRunner): DockerGateway {
+        val docker = DockerService(settings.socket, settings, processRunner)
+        return try {
+            docker.verifyAvailability()
+            docker.createNetworkIfMissing(settings.internalNetwork)
+            docker
+        } catch (failure: Exception) {
+            docker.close()
+            logger.warn("Docker is unavailable; continuing in degraded mode", failure)
+            UnavailableDockerGateway
+        }
+    }
+}
+
+private object UnavailableDockerGateway : DockerGateway {
+    override val available: Boolean = false
+    override fun containerHealth(containerNameOrId: String): String = throw IllegalStateException("Docker is unavailable")
+    override fun dockerHealthStatus(containerNameOrId: String): String? = throw IllegalStateException("Docker is unavailable")
+    override fun close() = Unit
 }
