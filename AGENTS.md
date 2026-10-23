@@ -71,7 +71,7 @@ rtk ./gradlew run
 rtk git status --short
 ```
 
-The CI workflow runs `./gradlew --no-daemon test buildFatJar` on Java 21 and publishes `build/libs/gatekeeperd-all.jar` plus its SHA-256 file. Run the relevant tests after Kotlin/API changes, and run the full test/build command before handing off broad changes. Run tests in the host environment using the normal project Gradle setup; do not create or use a custom downloaded Gradle installation or alternate `GRADLE_USER_HOME` for verification. Any Gradle command or frontend npm build must run on the host with permission, not in the sandbox. Request host permission before running it.
+The CI workflow runs `./gradlew --no-daemon test buildFatJar` on Java 21 and publishes `build/libs/gatekeeperd-all.jar` plus its SHA-256 file. Run the relevant tests after Kotlin/API changes, and run the full test/build command before handing off broad changes. Tests may be skipped temporarily when the user explicitly requests it; in that case, run the strongest practical non-test validation (such as compilation, lint, or `git diff --check`) and state clearly that tests were not run. Run tests in the host environment using the normal project Gradle setup; do not create or use a custom downloaded Gradle installation or alternate `GRADLE_USER_HOME` for verification. Any Gradle command or frontend npm build must run on the host with permission, not in the sandbox. Request host permission before running it.
 
 The paired frontend project is located at `/home/mike/Development/gatekeeperd-frontend`. Run its production build from that directory with the NVM-provided Node.js toolchain:
 
@@ -88,7 +88,7 @@ Commit completed changes as part of the work unless the user explicitly asks not
 
 - commit changes after every fix made
 
-- run the relevant tests
+- run the relevant tests, unless the user explicitly requests a temporary test skip; if skipped, perform non-test validation and report the omission
 - run `rtk git diff --check`
 - inspect `rtk git status --short`
 - stage only files belonging to the requested change
