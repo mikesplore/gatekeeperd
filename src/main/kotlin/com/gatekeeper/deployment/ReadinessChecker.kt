@@ -2,8 +2,8 @@ package com.gatekeeper.deployment
 
 import com.gatekeeper.core.ports.HttpPortProbe
 import com.gatekeeper.core.ports.PortProbe
-import com.gatekeeper.db.repositories.DeploymentJobRecord
 import com.gatekeeper.docker.DockerGateway
+import com.gatekeeper.feature.deployment.domain.repository.DeploymentJobRecord
 
 data class ReadinessResult(val containerPort: Int?)
 
