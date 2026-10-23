@@ -2,7 +2,7 @@ package com.gatekeeper.plugins
 
 import com.gatekeeper.api.respondError
 import com.gatekeeper.config.AppSettings
-import com.gatekeeper.docker.DockerService
+import com.gatekeeper.docker.DockerGateway
 import com.gatekeeper.docker.PullImageRequest
 import com.gatekeeper.docker.ContainersListResponse
 import com.gatekeeper.docker.ContainerLogsResponse
@@ -18,11 +18,7 @@ import io.ktor.server.auth.*
 import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
-import org.slf4j.LoggerFactory
 import org.koin.ktor.ext.get
-import java.lang.Runtime
-
-private val logger = LoggerFactory.getLogger("com.gatekeeper.plugins.Routing")
 
 private suspend fun ApplicationCall.requireContainerName(): String? {
     val name = parameters["name"]
@@ -38,18 +34,7 @@ private suspend fun ApplicationCall.requireContainerName(): String? {
 }
 
 fun Application.configureRouting() {
-    val internalNetwork = get<AppSettings>().docker.internalNetwork
-
-    // Initialize Docker lazily — may not be available in all environments
-    val dockerService: DockerService? = try {
-        get<DockerService>().also { svc ->
-            svc.createNetworkIfMissing(internalNetwork)
-            logger.info("Docker initialized successfully")
-        }
-    } catch (e: Exception) {
-        logger.warn("Docker not available (non-fatal): ${e.message}")
-        null
-    }
+    val dockerService = get<DockerGateway>()
 
     routing {
         // Health check — no auth required
@@ -96,7 +81,7 @@ fun Application.configureRouting() {
         // Admin routes (JWT-protected)
         authenticate("auth-jwt") {
             get("/api/admin/containers") {
-                if (dockerService == null) {
+                if (!dockerService.available) {
                     call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available")
                     return@get
                 }
@@ -119,7 +104,7 @@ fun Application.configureRouting() {
             }
 
             get("/api/admin/containers/{name}") {
-                if (dockerService == null) {
+                if (!dockerService.available) {
                     call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available")
                     return@get
                 }
@@ -133,7 +118,7 @@ fun Application.configureRouting() {
             }
 
             get("/api/admin/containers/{name}/credentials") {
-                if (dockerService == null) {
+                if (!dockerService.available) {
                     call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available")
                     return@get
                 }
@@ -144,7 +129,7 @@ fun Application.configureRouting() {
             }
 
             get("/api/admin/containers/{name}/logs") {
-                if (dockerService == null) {
+                if (!dockerService.available) {
                     call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available")
                     return@get
                 }
@@ -156,7 +141,7 @@ fun Application.configureRouting() {
             }
 
             post("/api/admin/containers/{name}/start") {
-                if (dockerService == null) {
+                if (!dockerService.available) {
                     call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available")
                     return@post
                 }
@@ -174,7 +159,7 @@ fun Application.configureRouting() {
             }
 
             post("/api/admin/containers/{name}/stop") {
-                if (dockerService == null) {
+                if (!dockerService.available) {
                     call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available")
                     return@post
                 }
@@ -192,7 +177,7 @@ fun Application.configureRouting() {
             }
 
             post("/api/admin/containers/{name}/restart") {
-                if (dockerService == null) {
+                if (!dockerService.available) {
                     call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available")
                     return@post
                 }
@@ -210,7 +195,7 @@ fun Application.configureRouting() {
             }
 
             get("/api/admin/containers/{name}/health") {
-                if (dockerService == null) {
+                if (!dockerService.available) {
                     call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available")
                     return@get
                 }
@@ -220,7 +205,7 @@ fun Application.configureRouting() {
             }
 
             get("/api/admin/networks") {
-                if (dockerService == null) {
+                if (!dockerService.available) {
                     call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available")
                     return@get
                 }
@@ -233,16 +218,16 @@ fun Application.configureRouting() {
             }
 
             post("/api/admin/networks") {
-                val svc = dockerService ?: run { call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available"); return@post }
+                val svc = dockerService.takeIf { it.available } ?: run { call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available"); return@post }
                 val body = runCatching { call.receive<CreateNetworkRequest>() }.getOrElse { call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid network request"); return@post }
                 runCatching { svc.createNetwork(body.name, body.driver); call.respond(HttpStatusCode.Created, mapOf("name" to body.name, "driver" to body.driver)) }.onFailure { call.respondError(HttpStatusCode.Conflict, "network_create_failed", it.message ?: "Unable to create network") }
             }
             delete("/api/admin/networks/{name}") {
-                val svc = dockerService ?: run { call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available"); return@delete }
+                val svc = dockerService.takeIf { it.available } ?: run { call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available"); return@delete }
                 val name = call.parameters["name"] ?: run { call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Network name is required"); return@delete }
                 runCatching { svc.deleteNetwork(name); call.respond(mapOf("status" to "deleted", "name" to name)) }.onFailure { call.respondError(HttpStatusCode.Conflict, "network_delete_failed", it.message ?: "Unable to delete network") }
             }
-            get("/api/admin/volumes") { dockerService?.let { svc ->
+            get("/api/admin/volumes") { dockerService.takeIf { it.available }?.let { svc ->
                 val search = call.request.queryParameters["q"]?.trim()?.lowercase()
                 val offset = call.request.queryParameters["offset"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0
                 val limit = call.request.queryParameters["limit"]?.toIntOrNull()?.coerceIn(1, 500) ?: 100
@@ -253,19 +238,19 @@ fun Application.configureRouting() {
                 }.onFailure { call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", it.message ?: "Unable to list Docker volumes") }
             } ?: call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available") }
             post("/api/admin/volumes") {
-                val svc = dockerService ?: run { call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available"); return@post }
+                val svc = dockerService.takeIf { it.available } ?: run { call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available"); return@post }
                 val body = runCatching { call.receive<CreateNetworkRequest>() }.getOrElse { call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid volume request"); return@post }
                 val driver = body.driver.trim().takeIf { it.isNotBlank() && !it.equals("bridge", ignoreCase = true) } ?: "local"
                 runCatching { svc.createVolume(body.name, driver); call.respond(HttpStatusCode.Created, mapOf("name" to body.name, "driver" to driver)) }.onFailure { call.respondError(HttpStatusCode.Conflict, "volume_create_failed", it.message ?: "Unable to create volume") }
             }
             delete("/api/admin/volumes/{name}") {
-                val svc = dockerService ?: run { call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available"); return@delete }
+                val svc = dockerService.takeIf { it.available } ?: run { call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available"); return@delete }
                 val name = call.parameters["name"] ?: run { call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Volume name is required"); return@delete }
                 runCatching { svc.deleteVolume(name); call.respond(mapOf("status" to "deleted", "name" to name)) }.onFailure { call.respondError(HttpStatusCode.Conflict, "volume_delete_failed", it.message ?: "Unable to delete volume") }
             }
 
             post("/api/admin/images/pull") {
-                if (dockerService == null) {
+                if (!dockerService.available) {
                     call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker is not available")
                     return@post
                 }

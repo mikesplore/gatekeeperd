@@ -19,8 +19,7 @@ class ResendClient(private val settings: AppSettings.IntegrationSettings) {
     suspend fun sendPasswordReset(email: String, link: String): Boolean {
         val key = settings.resendApiKey.trim()
         val from = settings.resendFromEmail.trim()
-        if (key.isBlank() || from.isBlank()) return false
-        return runCatching {
+        return !(key.isBlank() || from.isBlank()) && runCatching {
             http.post("https://api.resend.com/emails") {
                 contentType(ContentType.Application.Json)
                 header(HttpHeaders.Authorization, "Bearer $key")
