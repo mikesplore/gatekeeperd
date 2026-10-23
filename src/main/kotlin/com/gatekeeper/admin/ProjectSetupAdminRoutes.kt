@@ -4,16 +4,20 @@ import com.gatekeeper.api.InputValidators
 import com.gatekeeper.api.respondError
 import com.gatekeeper.db.repositories.*
 import com.gatekeeper.deployment.*
-import com.gatekeeper.docker.DockerService
+import com.gatekeeper.docker.DockerGateway
+import com.gatekeeper.core.ports.PortProbe
 import com.gatekeeper.nginx.DeploymentUpstreamResolver
 import com.gatekeeper.nginx.NginxService
 import com.gatekeeper.nginx.requireValidHostname
 import com.gatekeeper.security.SecretValueCipher
 import com.gatekeeper.feature.payment.data.persistence.ProjectBalanceAdapter
+import com.gatekeeper.feature.project.domain.repository.ProjectRepository
 import com.gatekeeper.feature.audit.domain.repository.AuditRepository as AuditRepositoryPort
 import com.gatekeeper.feature.integrations.domain.repository.ProviderCredentialStore
 import com.gatekeeper.feature.integrations.domain.repository.RegistryCredentialStore
 import com.gatekeeper.feature.customer.domain.repository.CustomerRepository as CustomerStore
+import com.gatekeeper.feature.deployment.domain.repository.DeploymentJobRepository
+import com.gatekeeper.feature.deployment.domain.repository.ServiceDomainRepository
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.Application
 import io.ktor.server.auth.authenticate
@@ -23,13 +27,11 @@ import io.ktor.server.response.respond
 import io.ktor.server.routing.*
 import kotlinx.serialization.Serializable
 import org.koin.ktor.ext.get
-import java.net.InetSocketAddress
-import java.net.Socket
 import java.math.BigDecimal
 import java.text.Normalizer
 import java.util.UUID
 
-private fun generatedProjectSlug(name: String): String {
+private fun generatedProjectSlug(projects: ProjectRepository, name: String): String {
     val base = Normalizer.normalize(name.trim().lowercase(), Normalizer.Form.NFD)
         .replace(Regex("\\p{M}+"), "")
         .replace(Regex("[^a-z0-9]+"), "-")
@@ -38,12 +40,12 @@ private fun generatedProjectSlug(name: String): String {
         .take(54)
         .trimEnd('-')
 
-    if (ProjectRepository.findBySlug(base, includeArchived = true) == null) return base
+    if (projects.findBySlug(base, includeArchived = true) == null) return base
 
     while (true) {
         val salt = UUID.randomUUID().toString().replace("-", "").take(8)
         val candidate = "${base.take(64 - salt.length - 1).trimEnd('-')}-$salt"
-        if (ProjectRepository.findBySlug(candidate, includeArchived = true) == null) return candidate
+        if (projects.findBySlug(candidate, includeArchived = true) == null) return candidate
     }
 }
 
@@ -362,10 +364,14 @@ data class AdoptContainerResponse(
 )
 
 fun Application.configureProjectSetupAdminRoutes() {
+    val projects = get<ProjectRepository>()
     val auditRepository = get<AuditRepositoryPort>()
     val providerCredentials = get<ProviderCredentialStore>()
     val registryCredentials = get<RegistryCredentialStore>()
-    val docker = get<DockerService>()
+    val docker = get<DockerGateway>()
+    val deploymentJobs = get<DeploymentJobRepository>()
+    val serviceDomains = get<ServiceDomainRepository>()
+    val portProbe = get<PortProbe>()
     routing {
         authenticate("auth-jwt") {
             get("/api/admin/project-setup/containers") {
@@ -429,7 +435,7 @@ fun Application.configureProjectSetupAdminRoutes() {
                 val domain = if (body.domain.isBlank()) "" else runCatching { requireValidHostname(body.domain) }.getOrElse {
                     return@post call.respondError(HttpStatusCode.BadRequest, "invalid_domain", it.message ?: "Domain is invalid")
                 }
-                val slug = generatedProjectSlug(body.name)
+                val slug = generatedProjectSlug(projects, body.name)
                 val customerId = body.customerId?.let {
                     runCatching { UUID.fromString(it) }.getOrNull()
                         ?: return@post call.respondError(HttpStatusCode.BadRequest, "invalid_customer", "customerId must be a valid UUID")
@@ -444,7 +450,7 @@ fun Application.configureProjectSetupAdminRoutes() {
                 if (body.gracePeriodDays < 0 || body.currency.length !in 3..6 || body.amountDue?.let { it < 0 } == true) {
                     return@post call.respondError(HttpStatusCode.BadRequest, "invalid_billing", "Billing values are invalid")
                 }
-                val project = ProjectRepository.create(
+                val project = projects.create(
                     slug = slug, name = body.name.trim(), domain = domain,
                     type = body.type.lowercase(), billingName = null, billingEmail = null, billingAddress = null,
                     amountDue = body.amountDue?.let(BigDecimal::valueOf), currency = body.currency.uppercase(),
@@ -456,7 +462,7 @@ fun Application.configureProjectSetupAdminRoutes() {
 
             get("/api/admin/project-setup/projects/{projectId}") {
                 val projectId = call.setupProjectId() ?: return@get
-                val project = ProjectRepository.findActiveById(projectId)
+                val project = projects.findActiveById(projectId)
                     ?: return@get call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
                 val serviceId = call.request.queryParameters["serviceId"]?.let { raw ->
                     runCatching { UUID.fromString(raw) }.getOrNull()
@@ -465,12 +471,12 @@ fun Application.configureProjectSetupAdminRoutes() {
                 if (ServiceRepository.findByProjectAndId(projectId, serviceId) == null) {
                     return@get call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
                 }
-                val config = DeploymentJobRepository.configurationSummaryForService(projectId, serviceId)
+                val config = deploymentJobs.configurationSummaryForService(projectId, serviceId)
                 val credential = config?.registryCredentialId?.let(providerCredentials::findMetadata)
                 val service = ServiceRepository.findByProjectAndId(projectId, serviceId)
                 val active = DeploymentApplicationService.activeDeploymentSummaryForService(serviceId, "production")
                 val latest = DeploymentApplicationService.latestDeploymentStateForService(serviceId, "production")
-                val bindings = ServiceDomainRepository.listByService(serviceId).map {
+                val bindings = serviceDomains.listByService(serviceId).map {
                     ProjectSetupDomainBinding(it.id.toString(), it.serviceId.toString(), it.containerPort, it.domain, it.status)
                 }
                 call.respond(ProjectSetupStatusResponse(
@@ -483,7 +489,7 @@ fun Application.configureProjectSetupAdminRoutes() {
 
             post("/api/admin/project-setup/projects/{projectId}/adopt-container") {
                 val projectId = call.setupProjectId() ?: return@post
-                val project = ProjectRepository.findActiveById(projectId)
+                val project = projects.findActiveById(projectId)
                     ?: return@post call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
                 val request = runCatching { call.receive<AdoptContainerRequest>() }.getOrNull()
                     ?: return@post call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Container ID and container port are required")
@@ -506,15 +512,12 @@ fun Application.configureProjectSetupAdminRoutes() {
                 }
                 val hostPort = details.ports[request.containerPort]
                     ?: return@post call.respondError(HttpStatusCode.BadRequest, "container_port_not_published", "Selected container port has no published TCP host port")
-                val reachable = runCatching {
-                    Socket().use { socket -> socket.connect(InetSocketAddress("127.0.0.1", hostPort), 1500) }
-                    true
-                }.getOrDefault(false)
+                val reachable = portProbe.isReachable("127.0.0.1", hostPort, 1500)
                 if (!reachable) {
                     return@post call.respondError(HttpStatusCode.Conflict, "container_port_unreachable", "The container's published port is not reachable from this server")
                 }
                 val actor = call.principal<io.ktor.server.auth.jwt.JWTPrincipal>()?.payload?.subject ?: "admin"
-                val adopted = runCatching { DeploymentJobRepository.createAdoptedRuntime(projectId, serviceId, details, request.containerPort, actor) }
+                val adopted = runCatching { deploymentJobs.createAdoptedRuntime(projectId, serviceId, details, request.containerPort, actor) }
                     .getOrElse { error ->
                         return@post call.respondError(HttpStatusCode.Conflict, "container_adoption_failed", error.message ?: "Container could not be adopted")
                     }
@@ -561,7 +564,7 @@ fun Application.configureProjectSetupAdminRoutes() {
 
             put("/api/admin/project-setup/projects/{projectId}/source-runtime") {
                 val projectId = call.setupProjectId() ?: return@put
-                val project = ProjectRepository.findActiveById(projectId)
+                val project = projects.findActiveById(projectId)
                     ?: return@put call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
                 val body = runCatching { call.receive<CreateDeploymentRequest>() }.getOrNull()
                     ?: return@put call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid source/runtime configuration")
@@ -583,7 +586,7 @@ fun Application.configureProjectSetupAdminRoutes() {
                     id
                 }
                 val configurationId = runCatching {
-                    DeploymentJobRepository.upsertProjectConfiguration(projectId, body.copy(repository = normalizedRepository, registryCredentialId = registryCredentialId?.toString(), projectId = projectId.toString(), triggerSource = "project_setup"))
+                    deploymentJobs.upsertProjectConfiguration(projectId, body.copy(repository = normalizedRepository, registryCredentialId = registryCredentialId?.toString(), projectId = projectId.toString(), triggerSource = "project_setup"))
                 }.getOrElse { error ->
                     return@put call.respondError(HttpStatusCode.BadRequest, "invalid_deployment_configuration", error.message ?: "Configuration could not be saved")
                 }
@@ -592,7 +595,7 @@ fun Application.configureProjectSetupAdminRoutes() {
 
             put("/api/admin/project-setup/projects/{projectId}/credentials") {
                 val projectId = call.setupProjectId() ?: return@put
-                if (ProjectRepository.findActiveById(projectId) == null) {
+                if (projects.findActiveById(projectId) == null) {
                     return@put call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
                 }
                 val body = runCatching { call.receive<ProjectSetupCredentialsRequest>() }.getOrNull()
@@ -603,9 +606,9 @@ fun Application.configureProjectSetupAdminRoutes() {
                 if (!environment.matches(Regex("^[a-z][a-z0-9_-]{0,31}$"))) {
                     return@put call.respondError(HttpStatusCode.BadRequest, "invalid_environment", "Environment name is invalid")
                 }
-                val targetServiceId = serviceId ?: DeploymentJobRepository.defaultServiceIdForProject(projectId)
-                val configId = DeploymentJobRepository.configurationIdForService(projectId, targetServiceId, environment)
-                val config = configId?.let(DeploymentJobRepository::configurationSummaryById)
+                val targetServiceId = serviceId ?: deploymentJobs.defaultServiceIdForProject(projectId)
+                val configId = deploymentJobs.configurationIdForService(projectId, targetServiceId, environment)
+                val config = configId?.let(deploymentJobs::configurationSummaryById)
                     ?: return@put call.respondError(HttpStatusCode.Conflict, "source_runtime_required", "Save source/runtime configuration before credentials")
                 if (body.secretEnv != null) return@put call.respondError(HttpStatusCode.BadRequest, "environment_use_environment_endpoint", "Application environment values must use the service environment endpoint")
                 val registry = (body.registry ?: config.registry).trim().lowercase()
@@ -622,7 +625,7 @@ fun Application.configureProjectSetupAdminRoutes() {
                 }
                 val providerCredential = if (username.isNotBlank()) registryCredentials.save(registry, username, password) else null
                 if (registry != config.registry) {
-                    DeploymentJobRepository.updateConfiguration(config.id, UpdateDeploymentConfigurationRequest(registry = registry))
+                    deploymentJobs.updateConfiguration(config.id, UpdateDeploymentConfigurationRequest(registry = registry))
                 }
                 val currentCredential = body.registryCredentialId?.takeIf(String::isNotBlank)?.let { raw ->
                     val credentialId = runCatching { UUID.fromString(raw) }.getOrNull()
@@ -632,7 +635,7 @@ fun Application.configureProjectSetupAdminRoutes() {
                     if (credential.provider != "docker" || credential.credentialType != "registry" || credential.scope != registry || !credential.current) {
                         return@put call.respondError(HttpStatusCode.BadRequest, "invalid_registry_credential", "Select a current credential for this registry")
                     }
-                    DeploymentJobRepository.updateConfiguration(config.id, UpdateDeploymentConfigurationRequest(registryCredentialId = credentialId.toString()))
+                    deploymentJobs.updateConfiguration(config.id, UpdateDeploymentConfigurationRequest(registryCredentialId = credentialId.toString()))
                     credential
                 }
                 call.respond(ProjectSetupCredentialsResponse(
@@ -643,7 +646,7 @@ fun Application.configureProjectSetupAdminRoutes() {
 
             put("/api/admin/projects/{projectId}/environment/shared") {
                 val projectId = call.setupProjectId() ?: return@put
-                if (ProjectRepository.findActiveById(projectId) == null) {
+                if (projects.findActiveById(projectId) == null) {
                     return@put call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
                 }
                 val body = runCatching { call.receive<ProjectSharedEnvironmentRequest>() }.getOrNull()
@@ -661,7 +664,7 @@ fun Application.configureProjectSetupAdminRoutes() {
                 }
                 val actor = call.principal<io.ktor.server.auth.jwt.JWTPrincipal>()?.payload?.subject ?: "admin"
                 val result = runCatching {
-                    DeploymentJobRepository.updateSharedEnvironmentAndDeploy(projectId, environment, body.values, actor)
+                    deploymentJobs.updateSharedEnvironmentAndDeploy(projectId, environment, body.values, actor)
                 }.getOrElse { error ->
                     return@put call.respondError(HttpStatusCode.Conflict, "shared_environment_update_failed", error.message ?: "Shared environment could not be saved")
                 }
@@ -672,7 +675,7 @@ fun Application.configureProjectSetupAdminRoutes() {
 
             put("/api/admin/project-setup/projects/{projectId}/domain-gateway") {
                 val projectId = call.setupProjectId() ?: return@put
-                val project = ProjectRepository.findActiveById(projectId)
+                val project = projects.findActiveById(projectId)
                     ?: return@put call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
                 val body = runCatching { call.receive<ProjectSetupGatewayRequest>() }.getOrNull()
                     ?: return@put call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid domain/gateway configuration")
@@ -680,7 +683,7 @@ fun Application.configureProjectSetupAdminRoutes() {
                     return@put call.respondError(HttpStatusCode.BadRequest, "invalid_domain", it.message ?: "Domain is invalid")
                 }
                 val serviceId = body.serviceId?.let { raw -> runCatching { UUID.fromString(raw) }.getOrNull() }
-                    ?: if (body.serviceId == null) DeploymentJobRepository.defaultServiceIdForProject(projectId)
+                    ?: if (body.serviceId == null) deploymentJobs.defaultServiceIdForProject(projectId)
                     else return@put call.respondError(HttpStatusCode.BadRequest, "invalid_service_id", "Service ID is invalid")
                 val service = ServiceRepository.findByProjectAndId(projectId, serviceId)
                     ?: return@put call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
@@ -696,19 +699,19 @@ fun Application.configureProjectSetupAdminRoutes() {
                 if (body.containerPort != null && body.containerPort !in publishedPorts) {
                     return@put call.respondError(HttpStatusCode.BadRequest, "container_port_not_published", "Selected container port is not published by the active deployment")
                 }
-                val existing = ServiceDomainRepository.findByDomain(domain)
+                val existing = serviceDomains.findByDomain(domain)
                 if (existing != null && existing.serviceId != serviceId) {
                     return@put call.respondError(HttpStatusCode.Conflict, "domain_in_use", "Domain is already bound to another service")
                 }
                 val binding = existing ?: runCatching {
-                    ServiceDomainRepository.add(serviceId, domain, selectedPort)
+                    serviceDomains.add(serviceId, domain, selectedPort)
                 }.getOrElse {
                     return@put call.respondError(HttpStatusCode.Conflict, "domain_binding_failed", "Domain binding could not be saved")
                 }
                 if (existing != null && selectedPort != null && existing.containerPort != selectedPort) {
-                    ServiceDomainRepository.attachPort(existing.id, selectedPort)
+                    serviceDomains.attachPort(existing.id, selectedPort)
                 }
-                val bindings = ServiceDomainRepository.reconcilePorts(serviceId, publishedPorts).map {
+                val bindings = serviceDomains.reconcilePorts(serviceId, publishedPorts).map {
                     ProjectSetupDomainBinding(it.id.toString(), it.serviceId.toString(), it.containerPort, it.domain, it.status)
                 }
                 val savedBinding = bindings.first { it.id == binding.id.toString() }
@@ -717,7 +720,7 @@ fun Application.configureProjectSetupAdminRoutes() {
 
             delete("/api/admin/project-setup/projects/{projectId}/domain-gateway") {
                 val projectId = call.setupProjectId() ?: return@delete
-                val project = ProjectRepository.findActiveById(projectId)
+                val project = projects.findActiveById(projectId)
                     ?: return@delete call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
                 val body = runCatching { call.receive<ProjectSetupGatewayRequest>() }.getOrNull()
                     ?: return@delete call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid domain/gateway configuration")
@@ -725,17 +728,17 @@ fun Application.configureProjectSetupAdminRoutes() {
                     return@delete call.respondError(HttpStatusCode.BadRequest, "invalid_domain", it.message ?: "Domain is invalid")
                 }
                 val serviceId = body.serviceId?.let { raw -> runCatching { UUID.fromString(raw) }.getOrNull() }
-                    ?: if (body.serviceId == null) DeploymentJobRepository.defaultServiceIdForProject(projectId)
+                    ?: if (body.serviceId == null) deploymentJobs.defaultServiceIdForProject(projectId)
                     else return@delete call.respondError(HttpStatusCode.BadRequest, "invalid_service_id", "Service ID is invalid")
                 val service = ServiceRepository.findByProjectAndId(projectId, serviceId)
                     ?: return@delete call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
-                val removed = ServiceDomainRepository.remove(serviceId, domain)
+                val removed = serviceDomains.remove(serviceId, domain)
                 if (!removed) {
                     return@delete call.respondError(HttpStatusCode.NotFound, "domain_not_bound", "Domain is not bound to this service")
                 }
                 val actor = call.principal<io.ktor.server.auth.jwt.JWTPrincipal>()?.payload?.subject ?: "admin"
                 auditRepository.write(projectId, "domain_binding_removed", actor, "service=${serviceId} domain=$domain")
-                val bindings = ServiceDomainRepository.listByService(serviceId).map {
+                val bindings = serviceDomains.listByService(serviceId).map {
                     ProjectSetupDomainBinding(it.id.toString(), it.serviceId.toString(), it.containerPort, it.domain, it.status)
                 }
                 call.respond(ProjectSetupGatewayResponse(domain, "domain_removed", serviceId.toString(), null, bindings))
@@ -743,26 +746,26 @@ fun Application.configureProjectSetupAdminRoutes() {
 
             post("/api/admin/project-setup/projects/{projectId}/deploy") {
                 val projectId = call.setupProjectId() ?: return@post
-                if (ProjectRepository.findActiveById(projectId) == null) {
+                if (projects.findActiveById(projectId) == null) {
                     return@post call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
                 }
                 val serviceId = call.request.queryParameters["serviceId"]?.let { raw ->
                     runCatching { UUID.fromString(raw) }.getOrNull()
                         ?: return@post call.respondError(HttpStatusCode.BadRequest, "invalid_service_id", "Service ID is invalid")
-                } ?: DeploymentJobRepository.defaultServiceIdForProject(projectId)
+                } ?: deploymentJobs.defaultServiceIdForProject(projectId)
                 if (ServiceRepository.findByProjectAndId(projectId, serviceId) == null) {
                     return@post call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
                 }
-                val configurationId = DeploymentJobRepository.configurationIdForService(projectId, serviceId)
+                val configurationId = deploymentJobs.configurationIdForService(projectId, serviceId)
                     ?: return@post call.respondError(HttpStatusCode.Conflict, "source_runtime_required", "Save source/runtime configuration before deploying")
-                val deploymentId = DeploymentJobRepository.redeployConfiguration(configurationId)
+                val deploymentId = deploymentJobs.redeployConfiguration(configurationId)
                     ?: return@post call.respondError(HttpStatusCode.Conflict, "deployment_not_queued", "Deployment could not be queued")
                 call.respond(HttpStatusCode.Accepted, ProjectSetupDeployResponse(deploymentId.toString()))
             }
 
             post("/api/admin/projects/{projectId}/secret-sets/rotate-and-deploy") {
                 val projectId = call.setupProjectId() ?: return@post
-                if (ProjectRepository.findActiveById(projectId) == null) {
+                if (projects.findActiveById(projectId) == null) {
                     return@post call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
                 }
                 val request = runCatching { call.receive<ProjectSecretRotationRequest>() }.getOrNull()
@@ -775,7 +778,7 @@ fun Application.configureProjectSetupAdminRoutes() {
                 }
                 val actor = call.principal<io.ktor.server.auth.jwt.JWTPrincipal>()?.payload?.subject ?: "admin"
                 val deploymentId = runCatching {
-                    DeploymentJobRepository.rotateProjectSecretsAndDeploy(projectId, request.secretEnv, actor)
+                    deploymentJobs.rotateProjectSecretsAndDeploy(projectId, request.secretEnv, actor)
                 }.getOrElse { error ->
                     return@post call.respondError(HttpStatusCode.Conflict, "secret_rotation_failed", error.message ?: "Secrets could not be rotated")
                 } ?: return@post call.respondError(HttpStatusCode.Conflict, "deployment_configuration_missing", "Project has no deployment configuration")
@@ -784,11 +787,11 @@ fun Application.configureProjectSetupAdminRoutes() {
 
             get("/api/admin/projects/{slug}/overview") {
                 val slug = call.parameters["slug"] ?: return@get call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing project slug")
-                val project = ProjectRepository.findBySlug(slug)
+                val project = projects.findBySlug(slug)
                     ?: return@get call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
                 ServiceRepository.getOrCreateDefault(project.id)
-                val config = DeploymentJobRepository.configurationSummary(project.id)
-                val serviceId = DeploymentJobRepository.defaultServiceIdForProject(project.id)
+                val config = deploymentJobs.configurationSummary(project.id)
+                val serviceId = deploymentJobs.defaultServiceIdForProject(project.id)
                 val site = SiteRepository.findByProjectIdAndServiceId(project.id, serviceId)
                 val service = ServiceRepository.findByProjectAndId(project.id, serviceId)
                 val active = DeploymentApplicationService.activeDeploymentSummaryForService(serviceId, "production")
@@ -833,10 +836,10 @@ fun Application.configureProjectSetupAdminRoutes() {
                         site != null && site.domain == service?.domain, site?.tlsMode?.value,
                         site?.gateEnabled?.takeIf { site.domain == service?.domain },
                         site?.reconciliationStatus?.value?.takeIf { site.domain == service?.domain }, upstream?.host, upstream?.port,
-                        ServiceDomainRepository.listByService(serviceId).map {
+                        serviceDomains.listByService(serviceId).map {
                             ProjectSetupDomainBinding(it.id.toString(), it.serviceId.toString(), it.containerPort, it.domain, it.status)
                         },
-                        ServiceDomainRepository.unboundPorts(serviceId, publishedPorts.keys)
+                        serviceDomains.unboundPorts(serviceId, publishedPorts.keys)
                     ),
                     ProjectOverviewCustomerBilling(
                         project.customerId?.toString(), project.customerName, project.customerEmail,
@@ -848,7 +851,7 @@ fun Application.configureProjectSetupAdminRoutes() {
 
             get("/api/admin/projects/{slug}/deployments/history") {
                 val slug = call.parameters["slug"] ?: return@get call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing project slug")
-                val project = ProjectRepository.findBySlug(slug)
+                val project = projects.findBySlug(slug)
                     ?: return@get call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
                 val environment = call.request.queryParameters["environment"]?.trim()?.takeIf(String::isNotEmpty) ?: "production"
                 val serviceId = call.request.queryParameters["serviceId"]?.let { raw ->
@@ -875,21 +878,21 @@ fun Application.configureProjectSetupAdminRoutes() {
 
             post("/api/admin/projects/{slug}/deployments/{id}/redeploy") {
                 val slug = call.parameters["slug"] ?: return@post call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing project slug")
-                val project = ProjectRepository.findBySlug(slug)
+                val project = projects.findBySlug(slug)
                     ?: return@post call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
                 val id = call.parameters["id"]?.let { runCatching { UUID.fromString(it) }.getOrNull() }
                     ?: return@post call.respondError(HttpStatusCode.BadRequest, "invalid_deployment_id", "Invalid deployment ID")
                 val item = DeploymentApplicationService.deploymentHistory(project.id, "production").firstOrNull { it.id == id }
                     ?: return@post call.respondError(HttpStatusCode.NotFound, "deployment_not_found", "Deployment not found for project")
                 if (!item.canRedeploy) return@post call.respondError(HttpStatusCode.Conflict, "redeploy_unavailable", "Only an active deployment or the latest failed attempt for a service can be redeployed")
-                val deploymentId = DeploymentJobRepository.redeployConfiguration(item.configurationId)
+                val deploymentId = deploymentJobs.redeployConfiguration(item.configurationId)
                     ?: return@post call.respondError(HttpStatusCode.Conflict, "redeploy_unavailable", "Deployment configuration could not be queued")
                 call.respond(HttpStatusCode.Accepted, ProjectSetupDeployResponse(deploymentId.toString()))
             }
 
             post("/api/admin/projects/{slug}/deployments/{id}/cancel") {
                 val slug = call.parameters["slug"] ?: return@post call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing project slug")
-                val project = ProjectRepository.findBySlug(slug)
+                val project = projects.findBySlug(slug)
                     ?: return@post call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
                 val id = call.parameters["id"]?.let { runCatching { UUID.fromString(it) }.getOrNull() }
                     ?: return@post call.respondError(HttpStatusCode.BadRequest, "invalid_deployment_id", "Invalid deployment ID")
@@ -905,7 +908,7 @@ fun Application.configureProjectSetupAdminRoutes() {
 
             delete("/api/admin/projects/{slug}/deployments/{id}") {
                 val slug = call.parameters["slug"] ?: return@delete call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing project slug")
-                val project = ProjectRepository.findBySlug(slug)
+                val project = projects.findBySlug(slug)
                     ?: return@delete call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
                 val id = call.parameters["id"]?.let { runCatching { UUID.fromString(it) }.getOrNull() }
                     ?: return@delete call.respondError(HttpStatusCode.BadRequest, "invalid_deployment_id", "Invalid deployment ID")
@@ -933,7 +936,7 @@ fun Application.configureProjectSetupAdminRoutes() {
 
             post("/api/admin/projects/{slug}/deployments/{id}/rollback") {
                 val slug = call.parameters["slug"] ?: return@post call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing project slug")
-                val project = ProjectRepository.findBySlug(slug)
+                val project = projects.findBySlug(slug)
                     ?: return@post call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
                 val id = call.parameters["id"]?.let { runCatching { UUID.fromString(it) }.getOrNull() }
                     ?: return@post call.respondError(HttpStatusCode.BadRequest, "invalid_deployment_id", "Invalid deployment ID")
