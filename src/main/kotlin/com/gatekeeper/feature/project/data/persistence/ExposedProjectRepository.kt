@@ -8,21 +8,21 @@ import com.gatekeeper.db.tables.AccessBlockReason
 import com.gatekeeper.db.tables.Projects
 import com.gatekeeper.db.tables.Services
 import com.gatekeeper.db.tables.Customers
+import com.gatekeeper.feature.project.domain.model.OverdueProject
+import com.gatekeeper.feature.project.domain.model.ProjectRecord
 import com.gatekeeper.plugins.RedisService
 import com.gatekeeper.feature.project.domain.repository.ProjectRepository
-import com.gatekeeper.db.repositories.SiteRepository
+import com.gatekeeper.feature.service.domain.repository.SiteRepository
 import org.jetbrains.exposed.sql.*
-import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
 import org.jetbrains.exposed.sql.transactions.transaction
 import java.math.BigDecimal
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.util.*
 
-typealias ProjectRecord = ProjectRepository.ProjectRecord
-typealias OverdueProject = ProjectRepository.OverdueProject
-
-class ExposedProjectRepository : ProjectRepository {
+class ExposedProjectRepository(
+    private val siteRepository: SiteRepository
+) : ProjectRepository {
     private companion object {
         const val REDIS_KEY_PREFIX = "project:status:"
     }
@@ -182,9 +182,9 @@ class ExposedProjectRepository : ProjectRepository {
         newStatus: String,
         actor: String,
         reason: String?,
-        blockReason: String? = null,
-        blockReasonCode: AccessBlockReason? = null,
-        blockReasonNote: String? = null
+        blockReason: String?,
+        blockReasonCode: AccessBlockReason?,
+        blockReasonNote: String?
     ) {
         val slug = transaction {
             val project = Projects.selectAll().where { Projects.id eq id }.singleOrNull()
@@ -283,7 +283,7 @@ class ExposedProjectRepository : ProjectRepository {
         try {
             RedisService.delete("$REDIS_KEY_PREFIX$slug")
             val id = projectId ?: findBySlug(slug)?.id
-            id?.let { SiteRepository.findGateSlugsByProjectId(it).forEach { siteSlug ->
+            id?.let { siteRepository.findGateSlugsByProjectId(it).forEach { siteSlug ->
                 RedisService.delete("$REDIS_KEY_PREFIX$siteSlug")
             } }
         } catch (_: Exception) {
