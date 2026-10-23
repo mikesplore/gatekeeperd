@@ -2,7 +2,7 @@ package com.gatekeeper.integrations
 
 import com.gatekeeper.config.AppSettings
 import com.gatekeeper.api.respondError
-import com.gatekeeper.db.repositories.DeploymentJobRepository
+import com.gatekeeper.feature.deployment.domain.repository.DeploymentJobRepository
 import com.gatekeeper.feature.audit.domain.repository.AuditRepository as AuditRepositoryPort
 import com.gatekeeper.feature.integrations.domain.repository.GitHubCredentialStore
 import com.gatekeeper.feature.integrations.domain.repository.GitHubWebhookStore
@@ -29,6 +29,7 @@ fun Application.configureGitHubWebhookRoutes() {
     val auditRepository = get<AuditRepositoryPort>()
     val credentialStore = get<GitHubCredentialStore>()
     val webhookStore = get<GitHubWebhookStore>()
+    val deploymentJobs = get<DeploymentJobRepository>()
     val fallbackWebhookSecret = get<AppSettings>().github.webhookSecret
     routing {
         post("/api/integrations/github/webhook") {
@@ -56,7 +57,7 @@ fun Application.configureGitHubWebhookRoutes() {
                 call.respond(HttpStatusCode.Accepted, GitHubWebhookResponse("duplicate", event, 0))
                 return@post
             }
-            val queued = if (event == "push") queuePushDeployments(body) else 0
+            val queued = if (event == "push") queuePushDeployments(body, deploymentJobs) else 0
             webhookStore.setQueuedCount(delivery, queued)
             auditRepository.write(null, "github_webhook_received", "github:$delivery", "event=$event repository=${repository ?: "unknown"} queued=$queued")
             call.respond(HttpStatusCode.Accepted, GitHubWebhookResponse("received", event, queued))
@@ -64,7 +65,7 @@ fun Application.configureGitHubWebhookRoutes() {
     }
 }
 
-private fun queuePushDeployments(body: String): Int {
+private fun queuePushDeployments(body: String, deploymentJobs: DeploymentJobRepository): Int {
     val root = Json.parseToJsonElement(body).jsonObject
     val repository = root["repository"]?.jsonObject?.get("full_name")?.jsonPrimitive?.content ?: return 0
     val ref = root["ref"]?.jsonPrimitive?.content?.let { rawRef ->
@@ -74,8 +75,8 @@ private fun queuePushDeployments(body: String): Int {
             else -> rawRef
         }
     } ?: return 0
-    return DeploymentJobRepository.findAutoDeployTargets(repository, ref).count { target ->
-        val saved = DeploymentJobRepository.latestForService(target.projectId, target.serviceId, target.environment)
+    return deploymentJobs.findAutoDeployTargets(repository, ref).count { target ->
+        val saved = deploymentJobs.latestForService(target.projectId, target.serviceId, target.environment)
         val request = if (saved != null) {
             CreateDeploymentRequest(
                 repository = target.repository, gitRef = target.gitRef, registry = target.registry,
@@ -97,7 +98,7 @@ private fun queuePushDeployments(body: String): Int {
                 environment = target.environment, autoDeploy = true
             )
         }
-        DeploymentJobRepository.create(request)
+        deploymentJobs.create(request)
         true
     }
 }
