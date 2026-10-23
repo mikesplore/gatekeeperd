@@ -2,6 +2,7 @@ package com.gatekeeper.db.repositories
 
 import com.gatekeeper.db.tables.SupportRequests
 import com.gatekeeper.db.tables.AccessBlockReason
+import com.gatekeeper.feature.project.domain.repository.ProjectRepository
 import org.jetbrains.exposed.sql.insert
 import org.jetbrains.exposed.sql.transactions.transaction
 import java.util.UUID
@@ -29,13 +30,13 @@ interface SupportRequestRepository {
     fun create(projectId: UUID, name: String?, email: String, message: String): UUID
 }
 
-class ExposedProjectQueryRepository : ProjectQueryRepository {
-    override fun findBySlug(slug: String) = ProjectRepository.findBySlug(slug)
+class ExposedProjectQueryRepository(private val projects: ProjectRepository) : ProjectQueryRepository {
+    override fun findBySlug(slug: String) = projects.findBySlug(slug)
 
     override fun findGateTargetBySlug(slug: String): GateTarget? {
         val site = SiteRepository.findByProjectSlug(slug)
-        val project = site?.let { ProjectRepository.findById(it.projectId) }
-            ?: ProjectRepository.findBySlug(slug)
+        val project = site?.let { projects.findById(it.projectId) }
+            ?: projects.findBySlug(slug)
             ?: return null
         return gateTarget(project, site)
     }
@@ -44,7 +45,7 @@ class ExposedProjectQueryRepository : ProjectQueryRepository {
         val normalizedDomain = domain.trim().lowercase().substringBefore(':').trimEnd('.')
         if (normalizedDomain.isBlank()) return null
         val site = SiteRepository.findByDomain(normalizedDomain) ?: return null
-        val project = ProjectRepository.findById(site.projectId) ?: return null
+        val project = projects.findById(site.projectId) ?: return null
         return gateTarget(project, site)
     }
 

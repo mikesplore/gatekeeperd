@@ -3,7 +3,7 @@ package com.gatekeeper.customer
 import com.gatekeeper.config.AppSettings
 import com.gatekeeper.api.InputValidators
 import com.gatekeeper.api.respondError
-import com.gatekeeper.db.repositories.ProjectRepository
+import com.gatekeeper.feature.project.domain.repository.ProjectRepository
 import com.gatekeeper.db.tables.SupportRequests
 import io.ktor.http.*
 import io.ktor.server.application.*
@@ -79,10 +79,11 @@ private fun frontendUrl(path: String, settings: AppSettings.IntegrationSettings)
 
 fun Application.configureCustomerRoutes() {
     val settings = get<AppSettings>().integrations
+    val projects = get<ProjectRepository>()
     routing {
         get("/api/customer/projects/{slug}/status") {
             val slug = call.parameters["slug"] ?: return@get call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing project slug")
-            val project = ProjectRepository.findBySlug(slug) ?: return@get call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
+            val project = projects.findBySlug(slug) ?: return@get call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
             val payments = call.application.get<CustomerApplicationService>().payments(project.id).map { payment ->
                 CustomerPaymentResponse(
                     id = payment.id.toString(), reference = payment.providerReference,
@@ -105,7 +106,7 @@ fun Application.configureCustomerRoutes() {
             val slug = call.parameters["slug"] ?: return@get call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing project slug")
             val paymentId = call.parameters["paymentId"]?.let { runCatching { java.util.UUID.fromString(it) }.getOrNull() }
                 ?: return@get call.respondError(HttpStatusCode.BadRequest, "invalid_payment_id", "Invalid payment ID")
-            val project = ProjectRepository.findBySlug(slug) ?: return@get call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
+            val project = projects.findBySlug(slug) ?: return@get call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
             val payment = call.application.get<CustomerApplicationService>().payment(paymentId)?.takeIf { it.projectId == project.id }
                 ?: return@get call.respondError(HttpStatusCode.NotFound, "payment_not_found", "Payment not found")
             if (payment.status != "success") return@get call.respondError(HttpStatusCode.Conflict, "payment_not_complete", "A receipt is available after successful payment")
@@ -122,14 +123,14 @@ fun Application.configureCustomerRoutes() {
 
         get("/api/customer/projects/{slug}/portal") {
             val slug = call.parameters["slug"] ?: return@get call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing project slug")
-            if (ProjectRepository.findBySlug(slug) == null) return@get call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
+            if (projects.findBySlug(slug) == null) return@get call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
             val url = frontendUrl("portal/$slug", settings) ?: return@get call.respondError(HttpStatusCode.ServiceUnavailable, "frontend_not_configured", "Customer frontend URL is not configured")
             call.respondRedirect(url, permanent = false)
         }
 
         get("/api/customer/projects/{slug}/payment-success") {
             val slug = call.parameters["slug"] ?: return@get call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing project slug")
-            if (ProjectRepository.findBySlug(slug) == null) return@get call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
+            if (projects.findBySlug(slug) == null) return@get call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
             val url = frontendUrl("payment/success?project=$slug&reference=${call.request.queryParameters["reference"].orEmpty()}", settings)
                 ?: return@get call.respondError(HttpStatusCode.ServiceUnavailable, "frontend_not_configured", "Customer frontend URL is not configured")
             call.respondRedirect(url, permanent = false)
@@ -137,7 +138,7 @@ fun Application.configureCustomerRoutes() {
 
         get("/api/customer/projects/{slug}/reminder") {
             val slug = call.parameters["slug"] ?: return@get call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing project slug")
-            val project = ProjectRepository.findBySlug(slug) ?: return@get call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
+            val project = projects.findBySlug(slug) ?: return@get call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
             val recipient = project.customerEmail?.takeIf { it.isNotBlank() }
                 ?: return@get call.respondError(HttpStatusCode.Conflict, "missing_customer_email", "This project has no customer email configured")
             call.respond(CustomerReminderResponse(
@@ -151,7 +152,7 @@ fun Application.configureCustomerRoutes() {
 
         post("/api/customer/projects/{slug}/support") {
             val slug = call.parameters["slug"] ?: return@post call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing project slug")
-            val project = ProjectRepository.findBySlug(slug) ?: return@post call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
+            val project = projects.findBySlug(slug) ?: return@post call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
             val body = runCatching { call.receive<SupportRequestBody>() }.getOrNull()
                 ?: return@post call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Support request body is invalid")
             if (!InputValidators.isValidEmail(body.email) || body.message.isBlank() || body.message.length > 5000) {
