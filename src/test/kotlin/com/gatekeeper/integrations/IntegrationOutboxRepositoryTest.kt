@@ -13,7 +13,7 @@ class IntegrationOutboxRepositoryTest {
         val url = System.getenv("DB_URL") ?: return
         val user = System.getenv("DB_USER") ?: return
         val password = System.getenv("DB_PASSWORD") ?: return
-        DatabaseFactory.init(url, user, password)
+        DatabaseFactory.init(url, user, password, "0")
         try {
             val outbox = ExposedIntegrationOutboxRepository()
             val key = "test-outbox-${UUID.randomUUID()}"
