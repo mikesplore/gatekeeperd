@@ -1,6 +1,8 @@
 package com.gatekeeper.admin
 
 import com.gatekeeper.api.respondError
+import com.gatekeeper.core.ports.ProcessRunner
+import com.gatekeeper.core.ports.ProcessTimeoutException
 import io.ktor.http.*
 import io.ktor.server.application.*
 import io.ktor.server.auth.*
@@ -15,8 +17,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.slf4j.LoggerFactory
 import java.time.Instant
-import java.util.concurrent.CompletableFuture
-import java.util.concurrent.TimeUnit
+import org.koin.ktor.ext.get
 
 private val logAdminLogger = LoggerFactory.getLogger("com.gatekeeper.admin.LogAdminRoutes")
 
@@ -69,23 +70,17 @@ internal object JournalLogReader {
     private val authorizationPattern = Regex("(?i)(\\bauthorization\\s*[:=]\\s*(?:bearer|basic)\\s+)[^\\s,;]+")
     private val urlPasswordPattern = Regex("(?i)(://[^:/\\s]+:)[^@/\\s]+@")
 
-    fun readLatest(): JournalReadResult {
-        val process = ProcessBuilder(
-            "/usr/bin/journalctl",
-            "--unit=$JOURNAL_UNIT",
-            "--output=json",
-            "--no-pager",
-            "--lines=${MAX_ENTRIES + 1}"
-        ).redirectErrorStream(true).start()
-
-        val outputFuture = CompletableFuture.supplyAsync { process.inputStream.bufferedReader().use { it.readText() } }
-        if (!process.waitFor(10, TimeUnit.SECONDS)) {
-            process.destroyForcibly()
-            outputFuture.cancel(true)
-            throw IllegalStateException("journalctl timed out")
+    fun readLatest(processRunner: ProcessRunner): JournalReadResult {
+        val result = try {
+            processRunner.runStreaming(
+                listOf("/usr/bin/journalctl", "--unit=$JOURNAL_UNIT", "--output=json", "--no-pager", "--lines=${MAX_ENTRIES + 1}"),
+                timeoutMillis = 10_000
+            )
+        } catch (timeout: ProcessTimeoutException) {
+            throw IllegalStateException("journalctl timed out", timeout)
         }
-        val output = outputFuture.get(2, TimeUnit.SECONDS)
-        if (process.exitValue() != 0 ||
+        val output = result.stdout + result.stderr
+        if (result.exitCode != 0 ||
             output.contains("No journal files were opened", ignoreCase = true) ||
             output.contains("currently not seeing messages from other users and the system", ignoreCase = true)
         ) {
@@ -185,6 +180,7 @@ internal object JournalLogReader {
 }
 
 fun Application.configureLogAdminRoutes() {
+    val processRunner = get<ProcessRunner>()
     routing {
         authenticate("auth-jwt") {
             get("/api/admin/logs") {
@@ -215,7 +211,7 @@ fun Application.configureLogAdminRoutes() {
                 val offset = rawOffset ?: 0
                 val search = query["search"]?.trim()?.take(200)?.takeIf(String::isNotEmpty)
                 val read = try {
-                    withContext(Dispatchers.IO) { JournalLogReader.readLatest() }
+                    withContext(Dispatchers.IO) { JournalLogReader.readLatest(processRunner) }
                 } catch (error: Exception) {
                     logAdminLogger.error("Unable to read Gatekeeperd system journal", error)
                     call.respondError(
