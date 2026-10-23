@@ -3,7 +3,6 @@ package com.gatekeeper.plugins
 import com.gatekeeper.customer.CustomerApplicationService
 import com.gatekeeper.feature.customer.domain.repository.CustomerRepository as CustomerStore
 import com.gatekeeper.feature.customer.data.persistence.ExposedCustomerRepository
-import com.gatekeeper.db.repositories.*
 import com.gatekeeper.gate.GateApplicationService
 import com.gatekeeper.gate.GateService
 import com.gatekeeper.nginx.NginxAdminService
@@ -110,6 +109,10 @@ import com.gatekeeper.deployment.SourceFetcher
 import com.gatekeeper.deployment.ImageBuilder
 import com.gatekeeper.deployment.DeploymentWorker
 import com.gatekeeper.deployment.DeploymentTriggerService
+import com.gatekeeper.feature.customer.data.persistence.ExposedSupportRequestRepository
+import com.gatekeeper.feature.customer.domain.repository.SupportRequestRepository
+import com.gatekeeper.feature.project.data.persistence.ExposedProjectQueryRepository
+import com.gatekeeper.feature.project.domain.repository.ProjectQueryRepository
 import com.gatekeeper.feature.service.data.persistence.ExposedServiceRepository
 import com.gatekeeper.feature.service.data.persistence.ExposedSiteRepository
 import com.gatekeeper.feature.service.domain.repository.ServiceRepository
@@ -155,29 +158,29 @@ private val applicationModule = module {
     single<DeploymentQueue> { ExposedDeploymentQueue(get()) }
     single<ServiceDomainRepository> { ExposedServiceDomainRepository() }
     single<ProjectAdjustmentStore> { ExposedProjectAdjustmentRepository() }
-    single<ProjectStore> { ExposedProjectRepository() }
+    single<ProjectStore> { ExposedProjectRepository(get()) }
     single<DeploymentCommandRunner> { HostDeploymentCommandRunner(get<ProcessRunner>()) }
     single<GitHubTokenProvider> { GitHubTokenProvider { get<GitHubAppClient>().installationToken() } }
     single { SourceFetcher(get<DeploymentCommandRunner>(), get<GitHubTokenProvider>()) }
     single { ImageBuilder(get<DeploymentCommandRunner>()) }
     single<DeploymentLock> { DistributedDeploymentLock() }
-    single { DeploymentWorker(get(), get(), get(), get(), get(), get(), get(), get<AppSettings>().scheduler, get<AppSettings>().nginx, get(), get(), get(), get(), get()) }
-    single<ProjectQueryRepository> { ExposedProjectQueryRepository(get<ProjectStore>()) }
+    single { DeploymentWorker(get(), get(), get(),get(), get(), get(), get(),get(), get(), get(), get(), get(), get(), get(), get(), get()) }
+    single<ProjectQueryRepository> { ExposedProjectQueryRepository(get<ProjectStore>(), get(), get()) }
     single<SupportRequestRepository> { ExposedSupportRequestRepository() }
     single { CustomerApplicationService(get<ProjectQueryRepository>(), get(), get(), get<SupportRequestRepository>()) }
     single { GateService(get<ProjectQueryRepository>(), get<GetLatestPaymentLink>(), get(), get<AppSettings>().application) }
     single { GateApplicationService(get<ProjectQueryRepository>(), get<GateService>()) }
     single { NginxService.configured(get<AppSettings>().nginx, get<NginxCommandRunner>(), get<PortProbe>(), get<CutoverProbe>()) }
-    single { ExposedCertificateStore(get<CertificateRepository>()) }
-    single { NginxAdminService(get(), get<ExposedCertificateStore>(), get<AppSettings>().nginx.sslCertPath) }
+    single { ExposedCertificateStore(get<CertificateRepository>(), get()) }
+    single { NginxAdminService(get(), get<ExposedCertificateStore>(), get<AppSettings>().nginx.sslCertPath, get()) }
     single<PaymentDomainRepository> { ExposedPaymentRepository() }
-    single { ProjectBalanceAdapter(get<PaymentDomainRepository>(), get<ProjectAdjustmentStore>(), get(), get<ProjectStore>()) }
+    single { ProjectBalanceAdapter(get<PaymentDomainRepository>(), get<ProjectAdjustmentStore>(), get(),  get()) }
     single<PaymentEventDomainRepository> { ExposedPaymentEventRepository() }
     single { PaymentProjectAdapter(get<ProjectStore>()) }
     single { PaymentServiceAdapter() }
-    single<ServiceMembershipRepository> { ExposedServiceMembershipRepository() }
-    single { PaymentBalanceAdapter(get<PaymentDomainRepository>(), get(), get(), get()) }
-    single<PaymentEffects> { PaymentEffectsAdapter(get(), get(), get(), get(), get<ProjectStore>()) }
+    single<ServiceMembershipRepository> { ExposedServiceMembershipRepository(get()) }
+    single { PaymentBalanceAdapter(get<PaymentDomainRepository>(), get(), get(), get(), get()) }
+    single<PaymentEffects> { PaymentEffectsAdapter(get(), get(), get(), get(), get<ProjectStore>(), get()) }
     single { ApplyWebhookEvent(get(), get()) }
     single { PaystackClient(get<AppSettings>().payment) }
     single<PaymentGateway>(named("paystackGateway")) { PaystackGateway(get<AppSettings>().payment, get<AppSettings>().integrations, get()) }
@@ -196,7 +199,7 @@ private val applicationModule = module {
     single { RecordCashPayment(get<PaymentProjectAdapter>(), get<PaymentDomainRepository>(), get()) }
     single<PaymentCurrencyPort> { PaymentCurrencyPort { get<ProjectStore>().findAll().firstOrNull()?.currency } }
     single { GetPaymentRevenue(get<PaymentDomainRepository>(), get()) }
-    single { InitiatePayment(get(), get<PaymentProjectAdapter>(), get<PaymentBalanceAdapter>(), mapOf("paystack" to get(named("paystackGateway")), "mpesa" to get(named("mpesaGateway"))), get<PaymentServiceAdapter>()) }
+    single { InitiatePayment(get(), get<PaymentProjectAdapter>(), get<PaymentBalanceAdapter>(), mapOf("paystack" to get(named("paystackGateway")), "mpesa" to get(named("mpesaGateway"))), get(),get()) }
     single { ProcessPaymentEvent(get(), get(), get<PaymentProjectAdapter>(), get()) }
     single { HandlePaystackWebhook(get()) }
     single { ReplayPaystackEvent(get(), get()) }
