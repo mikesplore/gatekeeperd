@@ -1,12 +1,12 @@
 package com.gatekeeper.deployment
 
-import com.gatekeeper.db.repositories.ProjectRepository
-import com.gatekeeper.db.repositories.SiteRepository
 import com.gatekeeper.db.tables.DeploymentStatus
 import com.gatekeeper.db.tables.Deployments
 import com.gatekeeper.db.tables.Projects
 import com.gatekeeper.db.tables.UpstreamMode
 import com.gatekeeper.docker.DockerGateway
+import com.gatekeeper.feature.project.domain.repository.ProjectRepository
+import com.gatekeeper.feature.service.domain.repository.SiteRepository
 import com.gatekeeper.nginx.NginxService
 import com.gatekeeper.nginx.DeploymentUpstreamResolver
 import kotlinx.serialization.Serializable
@@ -46,7 +46,9 @@ data class DeploymentReconciliationReport(
 /** Read-only comparison of persisted active deployments with Docker and managed nginx state. */
 class DeploymentReconciliationService(
     private val docker: DockerGateway?,
-    private val nginx: NginxService
+    private val nginx: NginxService,
+    private val projectRepository: ProjectRepository,
+    private val siteRepository: SiteRepository
 ) {
     fun report(): DeploymentReconciliationReport {
         val errors = mutableListOf<String>()
@@ -162,7 +164,7 @@ class DeploymentReconciliationService(
             }
         }
 
-        val project = runCatching { ProjectRepository.findById(deployment.projectId) }.getOrElse {
+        val project = runCatching { projectRepository.findById(deployment.projectId) }.getOrElse {
             errors += "project lookup failed for deployment ${deployment.id}: ${it.message ?: it.javaClass.simpleName}"
             null
         }
@@ -256,8 +258,8 @@ class DeploymentReconciliationService(
             "repair_required"
         )
 
-        fun production(docker: DockerGateway, nginx: NginxService): DeploymentReconciliationService {
-            return DeploymentReconciliationService(docker, nginx)
+        fun production(projectRepository: ProjectRepository, siteRepository: SiteRepository, docker: DockerGateway, nginx: NginxService): DeploymentReconciliationService {
+            return DeploymentReconciliationService(docker, nginx, projectRepository, siteRepository)
         }
     }
 }

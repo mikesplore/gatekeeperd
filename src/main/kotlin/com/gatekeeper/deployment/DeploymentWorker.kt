@@ -13,16 +13,16 @@ import com.gatekeeper.core.ports.HttpPortProbe
 import com.gatekeeper.core.ports.CutoverProbe
 import com.gatekeeper.nginx.NginxService
 import com.gatekeeper.nginx.DeploymentUpstreamIncludes
-import com.gatekeeper.deployment.DurableCutoverFiles
 import com.gatekeeper.nginx.canDeploymentCutoverUpdateRoute
-import com.gatekeeper.db.repositories.SiteRepository
 import com.gatekeeper.feature.deployment.domain.repository.ServiceDomainRepository
+import com.gatekeeper.feature.project.domain.repository.ProjectRepository
+import com.gatekeeper.feature.service.domain.repository.SiteRecord
+import com.gatekeeper.feature.service.domain.repository.SiteRepository
 import com.gatekeeper.security.SecretValueCipher
 import kotlinx.coroutines.*
 import org.slf4j.LoggerFactory
 import java.io.File
 import java.nio.file.Files
-import java.nio.file.Path
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.UUID
 import java.time.LocalDateTime
@@ -43,6 +43,8 @@ class DeploymentWorker(
     private val readinessPorts: PortProbe,
     private val readinessHttp: HttpPortProbe,
     private val cutoverProbe: CutoverProbe,
+    private val projectRepository: ProjectRepository,
+    private val siteRepository: SiteRepository,
     private val serviceDomains: ServiceDomainRepository
 ) {
     private val logger = LoggerFactory.getLogger("com.gatekeeper.deployment.DeploymentWorker")
@@ -70,8 +72,7 @@ class DeploymentWorker(
     }
 
     private fun cleanupInterruptedCandidate(deploymentId: UUID, candidateName: String?, reason: String): Boolean {
-        if (candidateName.isNullOrBlank()) return true
-        return runCatching {
+        return candidateName.isNullOrBlank() || runCatching {
             docker.removeContainerIfPresent(candidateName)
         }.onSuccess { removed ->
             if (removed) {
@@ -94,7 +95,7 @@ class DeploymentWorker(
             val serviceId = recovery.serviceId ?: continue
             val lockKey = "deployment-service:$serviceId:${recovery.environment}"
             DistributedLock.tryWithLock(lockKey) {
-                val site = SiteRepository.findByServiceId(serviceId)
+                val site = siteRepository.findByServiceId(serviceId)
                 val files = recovery.files
                 val candidate = DeploymentApplicationService.candidateRuntime(deploymentId)
                 if (site == null || files == null) {
@@ -194,7 +195,7 @@ class DeploymentWorker(
 
     private suspend fun processClaimedJob(claimedJob: DeploymentJobRecord) {
         var job = claimedJob
-        val site = if (job.environment == "production") SiteRepository.findByServiceId(job.serviceId) else null
+        val site = if (job.environment == "production") siteRepository.findByServiceId(job.serviceId) else null
         if (job.containerPort == null) {
             job = job.copy(containerPort = DeploymentSiteCutoverPolicy.primaryContainerPort(
                 null, site?.upstreamKind, site?.upstreamExplicitPort
@@ -316,7 +317,7 @@ class DeploymentWorker(
                 if (job.network != "bridge" && job.createNetworkIfMissing) docker.createNetworkIfMissing(job.network)
                 candidateName = deterministicCandidateName
                 val imagePorts = docker.imageExposedTcpPorts(image)
-                val managedSite = if (job.environment == "production") SiteRepository.findByServiceId(job.serviceId) else null
+                val managedSite = if (job.environment == "production") siteRepository.findByServiceId(job.serviceId) else null
                 if (DeploymentSiteCutoverPolicy.hasDeploymentRoute(managedSite?.upstreamKind) && job.containerPort == null && imagePorts.size != 1) {
                     error("Managed service must configure a primary container port when its image exposes zero or multiple TCP ports")
                 }
@@ -337,7 +338,7 @@ class DeploymentWorker(
                 var created: Pair<String, com.gatekeeper.docker.ContainerInfo>? = null
                 for (attempt in 0 until 4) {
                     reservedPorts = if (dynamicContainerPorts.isEmpty()) emptyMap() else {
-                        val site = if (job.environment == "production") SiteRepository.findByServiceId(job.serviceId) else null
+                        val site = if (job.environment == "production") siteRepository.findByServiceId(job.serviceId) else null
                         portAllocationRepository.allocateSlot(
                             serviceId = job.serviceId,
                             environment = job.environment,
@@ -519,7 +520,7 @@ class DeploymentWorker(
         var previousDeployment = DeploymentApplicationService.activeRuntime(job.serviceId, job.environment)
         val previousContainer = previousDeployment?.name
         val changesProductionRoute = job.environment == "production"
-        val site = if (changesProductionRoute) SiteRepository.findByServiceId(job.serviceId) else null
+        val site = if (changesProductionRoute) siteRepository.findByServiceId(job.serviceId) else null
         val siteOwnerSlug = site?.projectSlug
         val siteService = if (site != null && siteOwnerSlug != null) nginxService else null
         val existingSiteConfig = if (siteService != null && siteOwnerSlug != null) siteService.inspectSite(siteOwnerSlug) else null
@@ -602,16 +603,17 @@ class DeploymentWorker(
             val recovery = DeploymentApplicationService.cutoverRecovery(job.id) ?: error("Cutover state disappeared")
             val previousConfig = recovery.previousNginxConfig ?: existingSiteConfig.content
             val (containerPort, hostPort) = managedRoute ?: error("Managed site candidate route was not prepared")
-            val previousHostPort = managedPreviousHostPort
             rollbackRoute = {
                 if (convertsLegacySite) {
                     val restoredSite = previousConfig?.let { activeSiteService.restoreSiteConfiguration(ownerSlug, it) } == true
-                    val restoredInclude = activeSiteService.restoreDeploymentUpstream(job.serviceId, previousHostPort)
-                    val restoredKind = SiteRepository.restoreUpstreamKind(managedSite.id, managedSite.upstreamKind) != null
+                    val restoredInclude = activeSiteService.restoreDeploymentUpstream(job.serviceId,
+                        managedPreviousHostPort
+                    )
+                    val restoredKind = siteRepository.restoreUpstreamKind(managedSite.id, managedSite.upstreamKind) != null
                     restoredSite && restoredInclude && restoredKind
                 } else {
-                    val restored = activeSiteService.restoreDeploymentUpstream(job.serviceId, previousHostPort)
-                    if (restored) SiteRepository.restoreDeploymentUpstreamForSite(managedSite) != null else false
+                    val restored = activeSiteService.restoreDeploymentUpstream(job.serviceId, managedPreviousHostPort)
+                    restored && siteRepository.restoreDeploymentUpstreamForSite(managedSite) != null
                 }
             }
             onRouteRollback(rollbackRoute)
@@ -634,7 +636,7 @@ class DeploymentWorker(
             val postDrain = activeSiteService.verifyAfterDrain(
                 job.serviceId, managedSite.domain,
                 managedSite.tlsMode != com.gatekeeper.db.tables.TlsMode.HTTP_ONLY,
-                previousHostPort
+                managedPreviousHostPort
             )
             if (!postDrain.candidateHealthy) {
                 if (!postDrain.previousRouteRestored) DeploymentApplicationService.updateCutoverState(job.id, "repair_required", "Post-drain probe failed and previous upstream restoration failed")
@@ -706,7 +708,7 @@ class DeploymentWorker(
         docker: DockerGateway,
         nginx: NginxService?,
         ownerSlug: String?,
-        site: SiteRepository.SiteRecord?
+        site: SiteRecord?
     ) {
         val secretValues = previous?.let { deploymentQueue.resolveEnvironmentForExecution(it.executionId).values }.orEmpty()
         val image = previous?.let { runtime ->
@@ -746,7 +748,7 @@ class DeploymentWorker(
         PreviousRuntimeRecovery.restore(
             plan = plan,
             previousNginxConfig = previousNginxConfig,
-            docker = RuntimeRestoreDockerBoundary { restorePlan ->
+            docker = { restorePlan ->
                 val hostToContainer = restorePlan.publishedPorts.entries.associate { (containerPort, hostPort) -> hostPort to containerPort }
                 docker.ensureRestoredContainer(CreateContainerRequest(
                     name = restorePlan.containerName,
@@ -763,18 +765,19 @@ class DeploymentWorker(
                     runtimeOptions = restorePlan.runtimeOptions
                 ))
             },
-            route = RuntimeRestoreRouteBoundary { config ->
+            route = { config ->
                 if (site?.upstreamKind == "DEPLOYMENT_MANAGED" && nginx != null) {
                     previous?.let { old ->
                         val oldHostPort = old.containerPort?.let(old.ports::get) ?: old.hostPort
                         site.serviceId?.let { nginx.restoreDeploymentUpstream(it, oldHostPort) } ?: false
                     } ?: false
                 } else {
-                    val routeRestored = if (nginx != null && ownerSlug != null) nginx.restoreSiteConfiguration(ownerSlug, config) else true
-                    if (routeRestored && site != null) SiteRepository.restoreDeploymentUpstreamForSite(site) != null else routeRestored
+                    val routeRestored =
+                        !(nginx != null && ownerSlug != null) || nginx.restoreSiteConfiguration(ownerSlug, config)
+                    if (routeRestored && site != null) siteRepository.restoreDeploymentUpstreamForSite(site) != null else routeRestored
                 }
             },
-            state = RuntimeRestoreStateBoundary { state, error ->
+            state = { state, error ->
                 check(DeploymentApplicationService.updateCutoverState(deploymentId, state, error)) { "Unable to persist cutover restoration state" }
             },
             secrets = secretValues.values
