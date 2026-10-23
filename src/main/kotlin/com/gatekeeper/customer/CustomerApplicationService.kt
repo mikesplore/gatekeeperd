@@ -1,9 +1,9 @@
 package com.gatekeeper.customer
 
-import com.gatekeeper.db.repositories.ProjectQueryRepository
-import com.gatekeeper.db.repositories.SupportRequestRepository
+import com.gatekeeper.feature.customer.domain.repository.SupportRequestRepository
 import com.gatekeeper.feature.payment.domain.usecase.GetPayment
 import com.gatekeeper.feature.payment.domain.usecase.ListPaymentsByProject
+import com.gatekeeper.feature.project.domain.repository.ProjectQueryRepository
 import java.util.UUID
 
 class CustomerApplicationService(

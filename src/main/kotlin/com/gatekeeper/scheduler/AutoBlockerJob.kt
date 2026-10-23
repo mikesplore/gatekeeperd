@@ -1,7 +1,5 @@
 package com.gatekeeper.scheduler
 
-import com.gatekeeper.db.repositories.ProjectRepository
-import com.gatekeeper.db.repositories.ServiceRepository
 import com.gatekeeper.config.AppSettings
 import org.slf4j.LoggerFactory
 import java.time.LocalDate
@@ -14,6 +12,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import com.gatekeeper.integrations.ScribedIntegrationClient
 import com.gatekeeper.feature.integrations.domain.repository.IntegrationOutboxRepository
+import com.gatekeeper.feature.project.domain.repository.ProjectRepository
 
 object AutoBlockerJob {
 
