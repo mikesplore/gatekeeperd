@@ -3,8 +3,12 @@ package com.gatekeeper.nginx
 import com.gatekeeper.config.AppSettings
 import org.slf4j.LoggerFactory
 import java.io.File
-import java.net.InetSocketAddress
-import java.net.Socket
+import com.gatekeeper.core.ports.PortProbe
+import com.gatekeeper.core.ports.ProcessRunner
+import com.gatekeeper.core.ports.CutoverProbe
+import com.gatekeeper.infrastructure.ProcessRunnerImpl
+import com.gatekeeper.infrastructure.TcpPortProbe
+import com.gatekeeper.infrastructure.TcpCutoverProbe
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.time.Instant
@@ -29,28 +33,39 @@ data class ResolvedCertificate(
 )
 
 class NginxService(
-    private val sitesAvailablePath: String,
-    private val sitesEnabledPath: String,
+    private val sitesAvailablePath: String = "/etc/nginx/sites-available",
+    private val sitesEnabledPath: String = "/etc/nginx/sites-enabled",
     private val gatekeeperPort: Int = 8080,
-    private val sslCertPath: String,
+    private val sslCertPath: String = "/etc/letsencrypt/live",
     private val nginxTestRunner: () -> NginxTestResult = { NginxCommandRunner().test() },
     private val nginxReloadRunner: () -> Boolean = { NginxCommandRunner().reload() },
     private val selfDomainExclusion: NginxSelfDomainExclusion = NginxSelfDomainExclusion(emptyList()),
-    private val upstreamIncludeDirectory: String,
-    private val localProbeRunner: (String, Boolean) -> Boolean = ::probeViaLocalNginx,
-    private val nginxConfigDumpRunner: () -> String? = { NginxCommandRunner().dumpConfig() }
+    private val upstreamIncludeDirectory: String = "/etc/nginx/conf.d/gatekeeperd-upstreams",
+    private val cutoverProbe: CutoverProbe = TcpCutoverProbe(),
+    private val localProbeRunner: (String, Boolean) -> Boolean = { domain, tls -> cutoverProbe.throughLocalNginx(domain, tls) },
+    private val nginxConfigDumpRunner: () -> String? = { NginxCommandRunner().dumpConfig() },
+    private val portProbe: PortProbe = TcpPortProbe(),
+    private val processRunner: ProcessRunner = ProcessRunnerImpl()
 ) {
     enum class InterruptedCutoverResult { TARGET_RELOADED, PREVIOUS_RESTORED, CONFLICT }
     companion object {
-        fun configured(settings: AppSettings.NginxSettings, commands: NginxCommandRunner): NginxService = NginxService(
+        fun configured(
+            settings: AppSettings.NginxSettings,
+            commands: NginxCommandRunner,
+            portProbe: PortProbe = TcpPortProbe(),
+            cutoverProbe: CutoverProbe = TcpCutoverProbe()
+        ): NginxService = NginxService(
             sitesAvailablePath = settings.sitesAvailablePath,
             sitesEnabledPath = settings.sitesEnabledPath,
             sslCertPath = settings.sslCertPath,
             upstreamIncludeDirectory = settings.upstreamIncludeDirectory,
             selfDomainExclusion = NginxSelfDomainExclusion(settings.selfDomains),
+            cutoverProbe = cutoverProbe,
             nginxTestRunner = commands::test,
             nginxReloadRunner = commands::reload,
-            nginxConfigDumpRunner = commands::dumpConfig
+            nginxConfigDumpRunner = commands::dumpConfig,
+            portProbe = portProbe,
+            processRunner = commands.processRunner
         )
     }
 
@@ -587,10 +602,7 @@ class NginxService(
     fun isPortActive(port: Int): Boolean {
         return try {
             listOf("127.0.0.1", "::1").any { host ->
-                Socket().use { socket ->
-                    socket.connect(InetSocketAddress(host, port), 250)
-                    true
-                }
+                portProbe.isReachable(host, port, 250)
             }
         } catch (_: Exception) {
             false
@@ -1063,8 +1075,7 @@ class NginxService(
 
     fun isCertbotAvailable(): Boolean {
         return try {
-            val process = Runtime.getRuntime().exec(arrayOf("which", "certbot"))
-            process.waitFor() == 0
+            processRunner.run(listOf("which", "certbot")).exitCode == 0
         } catch (e: Exception) {
             false
         }
@@ -1077,17 +1088,13 @@ class NginxService(
             return "The restricted Gatekeeperd Certbot helper is missing. Redeploy with the current deploy.sh to install it."
         }
         return try {
-            val process = ProcessBuilder("sudo", "-n", "-l", helper.absolutePath)
-                .redirectErrorStream(true)
-                .start()
-            if (!process.waitFor(5, java.util.concurrent.TimeUnit.SECONDS)) {
-                process.destroyForcibly()
+            val result = processRunner.runStreaming(
+                listOf("sudo", "-n", "-l", helper.absolutePath),
+                timeoutMillis = 5_000
+            )
+            if (result.exitCode != 0) {
                 "Timed out checking Gatekeeperd's Certbot permissions."
-            } else if (process.exitValue() != 0) {
-                process.inputStream.close()
-                "The Gatekeeperd service account cannot run the Certbot helper. Redeploy to configure its restricted sudoers rule."
             } else {
-                process.inputStream.close()
                 null
             }
         } catch (e: Exception) {
@@ -1097,19 +1104,16 @@ class NginxService(
     }
 
     private fun runCertbotHelper(vararg arguments: String): Int? {
-        val process = ProcessBuilder(
-            listOf("sudo", "-n", "/usr/local/sbin/gatekeeperd-certbot") + arguments
-        )
-            .redirectOutput(ProcessBuilder.Redirect.INHERIT)
-            .redirectError(ProcessBuilder.Redirect.INHERIT)
-            .start()
-        if (!process.waitFor(8, java.util.concurrent.TimeUnit.MINUTES)) {
-            process.destroyForcibly()
-            process.waitFor(5, java.util.concurrent.TimeUnit.SECONDS)
+        return try {
+            processRunner.runStreaming(
+                listOf("sudo", "-n", "/usr/local/sbin/gatekeeperd-certbot") + arguments,
+                timeoutMillis = java.util.concurrent.TimeUnit.MINUTES.toMillis(8),
+                onOutput = { line -> logger.info(line) }
+            ).exitCode
+        } catch (e: com.gatekeeper.core.ports.ProcessTimeoutException) {
             logger.error("Certbot helper timed out after 8 minutes: ${arguments.firstOrNull() ?: "unknown operation"}")
-            return null
+            null
         }
-        return process.exitValue()
     }
 
     fun installCertificate(domain: String, email: String): Boolean {

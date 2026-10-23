@@ -1,6 +1,6 @@
 package com.gatekeeper.nginx
 
-import com.gatekeeper.config.AppConfig
+import com.gatekeeper.config.AppSettings
 import com.gatekeeper.db.repositories.SiteRepository
 import com.gatekeeper.db.tables.CertMode
 import com.gatekeeper.db.tables.ReconciliationStatus
@@ -22,7 +22,8 @@ class NginxDockerReconciliationIntegrationTest {
     @Test
     fun `stopped enabled container is reported as docker down`() {
         val containerName = System.getenv("GATEKEEPERD_DOCKER_INTEGRATION_CONTAINER") ?: return
-        val docker = DockerService(AppConfig.dockerSocket)
+        val dockerSettings = AppSettings.fromEnv().docker
+        val docker = DockerService(dockerSettings.socket, dockerSettings)
         docker.use { docker ->
             if (docker.containerHealth(containerName) != "running") return
             val root = Files.createTempDirectory("gk-docker-reconcile").toFile()

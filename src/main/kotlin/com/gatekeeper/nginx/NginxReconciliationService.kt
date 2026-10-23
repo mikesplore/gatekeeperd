@@ -4,7 +4,7 @@ import com.gatekeeper.config.AppSettings
 import com.gatekeeper.db.repositories.SiteRepository
 import com.gatekeeper.db.tables.ReconciliationStatus
 import com.gatekeeper.db.tables.UpstreamMode
-import com.gatekeeper.docker.DockerService
+import com.gatekeeper.docker.DockerGateway
 import java.io.File
 import java.nio.file.Files
 import java.security.MessageDigest
@@ -38,7 +38,7 @@ class NginxReconciliationService(
     companion object {
         /** Docker-backed check used by production reconciliation wiring and integration tests. */
         fun dockerCheck(
-            docker: DockerService,
+            docker: DockerGateway,
             resolveContainer: (serviceId: UUID, environment: String) -> String? = { serviceId, environment ->
                 DeploymentUpstreamResolver.resolve(serviceId, environment)?.containerName
             }
