@@ -1,6 +1,6 @@
 package com.gatekeeper.gate
 
-import com.gatekeeper.db.repositories.ProjectRepository
+import com.gatekeeper.feature.project.domain.repository.ProjectRepository
 import java.math.BigDecimal
 import java.time.LocalDate
 import com.gatekeeper.feature.payment.domain.model.ProjectFinancials
