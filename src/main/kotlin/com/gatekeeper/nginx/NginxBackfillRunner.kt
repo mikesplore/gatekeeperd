@@ -1,11 +1,8 @@
 package com.gatekeeper.nginx
 
 import com.gatekeeper.config.AppSettings
-import com.gatekeeper.db.repositories.ProjectRepository
-import com.gatekeeper.db.repositories.SiteRepository
 import com.gatekeeper.feature.certificate.data.persistence.ExposedCertificateRepository
 import com.gatekeeper.docker.DockerGateway
-import com.gatekeeper.deployment.DeploymentApplicationService
 import java.io.File
 
 /** Manual production entry point. Call only after database and Docker are available. */

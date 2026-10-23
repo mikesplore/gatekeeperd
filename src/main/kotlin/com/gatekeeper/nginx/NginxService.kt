@@ -17,10 +17,11 @@ import java.io.ByteArrayInputStream
 import java.time.ZoneOffset
 import java.security.MessageDigest
 import com.gatekeeper.plugins.DistributedLock
-import com.gatekeeper.db.repositories.SiteRepository
 import com.gatekeeper.db.tables.CertMode
 import com.gatekeeper.db.tables.TlsMode
 import com.gatekeeper.db.tables.UpstreamMode
+import com.gatekeeper.feature.service.domain.repository.SiteRecord
+import com.gatekeeper.feature.service.domain.repository.SiteRepository
 
 private val logger = LoggerFactory.getLogger("com.gatekeeper.nginx.NginxService")
 
@@ -45,7 +46,8 @@ class NginxService(
     private val localProbeRunner: (String, Boolean) -> Boolean = { domain, tls -> cutoverProbe.throughLocalNginx(domain, tls) },
     private val nginxConfigDumpRunner: () -> String? = { NginxCommandRunner().dumpConfig() },
     private val portProbe: PortProbe = TcpPortProbe(),
-    private val processRunner: ProcessRunner = ProcessRunnerImpl()
+    private val processRunner: ProcessRunner = ProcessRunnerImpl(),
+    private val siteRepository: SiteRepository
 ) {
     enum class InterruptedCutoverResult { TARGET_RELOADED, PREVIOUS_RESTORED, CONFLICT }
     companion object {
@@ -65,7 +67,7 @@ class NginxService(
             nginxReloadRunner = commands::reload,
             nginxConfigDumpRunner = commands::dumpConfig,
             portProbe = portProbe,
-            processRunner = commands.processRunner
+            processRunner = commands.processRunner,
         )
     }
 
@@ -106,7 +108,7 @@ class NginxService(
             isSymlink = Files.isSymbolicLink(enabledFile.toPath()),
             content = content,
             blocks = content?.let(::extractBlocks).orEmpty(),
-            customLocations = runCatching { SiteRepository.findByProjectSlug(slug)?.customNginxLocations.orEmpty() }.getOrDefault(emptyList()),
+            customLocations = runCatching { siteRepository.findByProjectSlug(slug)?.customNginxLocations.orEmpty() }.getOrDefault(emptyList()),
             modifiedAt = availableFile.takeIf { it.exists() }?.let { Instant.ofEpochMilli(it.lastModified()).toString() },
             sizeBytes = availableFile.takeIf { it.exists() }?.length()
             ,managed = content?.contains("# gatekeeperd:block:") == true,
@@ -117,7 +119,7 @@ class NginxService(
         )
     }
 
-    fun listConfigArtifacts(sites: List<SiteRepository.SiteRecord> = SiteRepository.findAll()): List<NginxConfigArtifact> {
+    fun listConfigArtifacts(sites: List<SiteRecord> = siteRepository.findAll()): List<NginxConfigArtifact> {
         val availableDir = File(sitesAvailablePath)
         val enabledDir = File(sitesEnabledPath)
         val filenames = (availableDir.listFiles().orEmpty().toList() + enabledDir.listFiles().orEmpty().toList())
@@ -424,7 +426,7 @@ class NginxService(
         else -> pattern == hostname
     }
 
-    fun removeSiteArtifacts(site: SiteRepository.SiteRecord): Boolean {
+    fun removeSiteArtifacts(site: SiteRecord): Boolean {
         val matches = listConfigArtifacts(listOf(site)).filter { artifact ->
             artifact.siteId == site.id.toString() ||
                 artifact.projectId == site.projectId.toString() && (
@@ -569,7 +571,7 @@ class NginxService(
     }
 
     private fun validateProtectedGateBlocks(slug: String, config: String) {
-        val gateEnabled = runCatching { SiteRepository.findByProjectSlug(slug)?.gateEnabled }.getOrNull() ?: true
+        val gateEnabled = runCatching { siteRepository.findByProjectSlug(slug)?.gateEnabled }.getOrNull() ?: true
         if (!gateEnabled) return
         require("# gatekeeperd:block:auth_request" in config && "# gatekeeperd:block:paywall" in config) {
             "This backup is missing Gatekeeper's protected auth or paywall block"
@@ -743,7 +745,7 @@ class NginxService(
 
     /** Route a managed project site to a ready candidate and reload nginx before reporting success. */
     fun switchDeploymentUpstream(serviceId: java.util.UUID, slug: String, host: String, port: Int): Boolean {
-        val site = SiteRepository.findByServiceId(serviceId) ?: return true
+        val site = siteRepository.findByServiceId(serviceId) ?: return true
         val previousContent = inspectSite(slug).content
         val previousPort = site.upstreamExplicitPort
         val containerPort = site.upstreamContainerPort ?: port
@@ -753,7 +755,7 @@ class NginxService(
     fun switchDeploymentUpstream(serviceId: java.util.UUID, slug: String, host: String, containerPort: Int, hostPort: Int): Boolean {
         require(host == "127.0.0.1") { "Deployment upstream must use loopback" }
         require(containerPort in 1..65535 && hostPort in 1..65535) { "Deployment upstream ports must be between 1 and 65535" }
-        val site = SiteRepository.findByServiceId(serviceId) ?: return true
+        val site = siteRepository.findByServiceId(serviceId) ?: return true
         if (site.upstreamKind == "DEPLOYMENT_MANAGED") {
             return DistributedLock.withLock("nginx-host-mutation") {
                 val includes = DeploymentUpstreamIncludes(File(upstreamIncludeDirectory))
@@ -807,14 +809,14 @@ class NginxService(
         )
         val config = generateNginxConfig(model)
         if (!enableProject(slug, config)) return false
-        if (SiteRepository.updateDeploymentUpstreamForSite(site.id, host, hostPort, containerPort) != null) return true
+        if (siteRepository.updateDeploymentUpstreamForSite(site.id, host, hostPort, containerPort) != null) return true
         previousContent?.let { restoreSiteConfiguration(slug, it) }
-        previousPort?.let { SiteRepository.updateDeploymentUpstreamForSite(site.id, site.upstreamHost, it) }
+        previousPort?.let { siteRepository.updateDeploymentUpstreamForSite(site.id, site.upstreamHost, it) }
         return false
     }
 
     /** One-site admin migration from an inline upstream to the stable service include. */
-    fun convertSiteToDeploymentManaged(site: SiteRepository.SiteRecord, hostPort: Int): Boolean {
+    fun convertSiteToDeploymentManaged(site: SiteRecord, hostPort: Int): Boolean {
         val serviceId = site.serviceId ?: return false
         val slug = site.projectSlug ?: return false
         require(hostPort in 1..65535)
@@ -847,7 +849,7 @@ class NginxService(
                 check(nginxTestRunner().valid) { "nginx -t failed with the service upstream include" }
                 check(enableProject(slug, generateNginxConfig(model))) { "Unable to activate stable upstream site config" }
                 check(localProbeRunner(site.domain, site.tlsMode != TlsMode.HTTP_ONLY)) { "Stable upstream probe failed after nginx reload" }
-                check(SiteRepository.setUpstreamKind(site.id, "DEPLOYMENT_MANAGED") != null) { "Unable to persist deployment-managed site kind" }
+                check(siteRepository.setUpstreamKind(site.id, "DEPLOYMENT_MANAGED") != null) { "Unable to persist deployment-managed site kind" }
                 true
             } catch (error: Exception) {
                 runCatching { restoreSiteConfiguration(slug, previousSite) }
@@ -917,7 +919,7 @@ class NginxService(
         }
 
     fun recoverInterruptedUpstream(
-        site: SiteRepository.SiteRecord,
+        site: SiteRecord,
         files: com.gatekeeper.deployment.DurableCutoverFiles,
         candidateRunning: Boolean
     ): InterruptedCutoverResult = DistributedLock.withLock("nginx-host-mutation") {
@@ -948,7 +950,7 @@ class NginxService(
                     restoreSiteConfiguration(slug, files.previousSiteConfig)
                 } else true
                 if (!configRestored) return@withLock InterruptedCutoverResult.CONFLICT
-                if (SiteRepository.restoreUpstreamKind(site.id, files.previousUpstreamKind) == null) {
+                if (siteRepository.restoreUpstreamKind(site.id, files.previousUpstreamKind) == null) {
                     return@withLock InterruptedCutoverResult.CONFLICT
                 }
             }
@@ -960,7 +962,7 @@ class NginxService(
                 val slug = files.siteSlug ?: site.projectSlug
                 check(files.previousSiteConfig != null && slug != null)
                 check(restoreSiteConfiguration(slug, files.previousSiteConfig))
-                check(SiteRepository.restoreUpstreamKind(site.id, files.previousUpstreamKind) != null)
+                check(siteRepository.restoreUpstreamKind(site.id, files.previousUpstreamKind) != null)
             }
             if (files.previousIncludeContent == null) Files.deleteIfExists(file.toPath())
             else includes.write(serviceId, files.previousIncludeContent)

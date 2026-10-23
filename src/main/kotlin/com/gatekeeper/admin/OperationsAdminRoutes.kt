@@ -4,10 +4,12 @@ import com.gatekeeper.api.dto.PaginatedResponse
 import com.gatekeeper.api.dto.toResponse
 import com.gatekeeper.api.respondError
 import com.gatekeeper.config.AppSettings
-import com.gatekeeper.db.repositories.SiteRepository
 import com.gatekeeper.deployment.DeploymentApplicationService
 import com.gatekeeper.docker.DockerGateway
 import com.gatekeeper.core.ports.PortProbe
+import com.gatekeeper.db.tables.CertMode
+import com.gatekeeper.db.tables.TlsMode
+import com.gatekeeper.db.tables.UpstreamMode
 import com.gatekeeper.feature.payment.data.persistence.ProjectBalanceAdapter
 import com.gatekeeper.feature.payment.domain.usecase.GetPaymentDashboardData
 import com.gatekeeper.feature.payment.domain.usecase.ListPaymentsByProject
@@ -34,6 +36,9 @@ import com.gatekeeper.feature.customer.domain.repository.CustomerRepository as C
 import com.gatekeeper.feature.integrations.domain.repository.IntegrationOutboxRepository as IntegrationOutboxRepositoryPort
 import com.gatekeeper.feature.notification.domain.repository.NotificationRepository as NotificationRepositoryPort
 import com.gatekeeper.feature.project.domain.repository.ProjectRepository
+import com.gatekeeper.feature.service.domain.repository.SiteDashboardUpdate
+import com.gatekeeper.feature.service.domain.repository.SiteRecord
+import com.gatekeeper.feature.service.domain.repository.SiteRepository
 
 @Serializable
 data class ProjectHealthResponse(
@@ -159,7 +164,7 @@ data class DashboardCustomerCreateRequest(
 @Serializable
 data class DashboardConfirmationRequest(val confirm: Boolean = false)
 
-private fun dashboardUpstreamState(site: SiteRepository.SiteRecord, dockerService: DockerGateway?, portProbe: PortProbe): String {
+private fun dashboardUpstreamState(siteRepository: SiteRepository, site: SiteRecord, dockerService: DockerGateway?, portProbe: PortProbe): String {
     val port = when (site.upstreamMode) {
         com.gatekeeper.db.tables.UpstreamMode.EXPLICIT_PORT -> site.upstreamExplicitPort ?: return "unknown"
         com.gatekeeper.db.tables.UpstreamMode.DOCKER_DISCOVERY -> {
@@ -185,17 +190,17 @@ private fun Throwable.isUniqueConstraintViolation(): Boolean = generateSequence(
 
 private data class CustomerOwnedProject(
     val project: ProjectRepository.ProjectRecord,
-    val site: SiteRepository.SiteRecord?
+    val site: SiteRecord?
 )
 
-private fun customerOwnedProjects(projectRepository: ProjectRepository, customerId: UUID): List<CustomerOwnedProject> {
+private fun customerOwnedProjects(projectRepository: ProjectRepository,siteRepository: SiteRepository, customerId: UUID): List<CustomerOwnedProject> {
     val projects = projectRepository.findByCustomerId(customerId)
-    val sites = SiteRepository.findByProjectIds(projects.map { it.id })
+    val sites = siteRepository.findByProjectIds(projects.map { it.id })
     return projects.map { project -> CustomerOwnedProject(project, sites[project.id]) }
 }
 
 private fun dashboardSite(
-    site: SiteRepository.SiteRecord,
+    site: SiteRecord,
     projectRepository: ProjectRepository,
     customerStore: CustomerStore,
     nginxSettings: AppSettings.NginxSettings,
@@ -240,7 +245,7 @@ private fun dashboardSite(
 
 private inline fun <T> withDashboardDocker(
     docker: DockerGateway?,
-    sites: List<SiteRepository.SiteRecord>,
+    sites: List<SiteRecord>,
     block: (DockerGateway?) -> T
 ): T {
     val needsDocker = sites.any { it.upstreamMode == com.gatekeeper.db.tables.UpstreamMode.DOCKER_DISCOVERY }
@@ -288,6 +293,7 @@ fun Application.configureOperationsAdminRoutes() {
     val integrationOutboxRepository = get<IntegrationOutboxRepositoryPort>()
     val docker = get<DockerGateway>()
     val portProbe = get<PortProbe>()
+    val siteRepository = get<SiteRepository>()
     routing {
         authenticate("auth-jwt") {
             get("/api/admin/metrics") {
@@ -299,7 +305,7 @@ fun Application.configureOperationsAdminRoutes() {
                 val offset = call.request.queryParameters["offset"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0
                 val limit = call.request.queryParameters["limit"]?.toIntOrNull()?.coerceIn(1, 500) ?: 100
                 val filtered =
-                    SiteRepository.findAll().filter { status == null || it.reconciliationStatus.value == status }
+                    siteRepository.findAll().filter { status == null || it.reconciliationStatus.value == status }
                 val page = filtered.drop(offset).take(limit)
                 val rows = withDashboardDocker(docker, page) { gateway ->
                     page.map {
@@ -330,7 +336,7 @@ fun Application.configureOperationsAdminRoutes() {
                         "Missing slug"
                     ); return@get
                 }
-                val site = SiteRepository.findByProjectSlug(slug) ?: SiteRepository.findByDomain(slug)
+                val site = siteRepository.findByProjectSlug(slug) ?: siteRepository.findByDomain(slug)
                 ?: run { call.respondError(HttpStatusCode.NotFound, "site_not_found", "Site not found"); return@get }
                 val nginx = get<NginxService>()
                 val siteSlug = site.projectSlug ?: slug
@@ -364,7 +370,7 @@ fun Application.configureOperationsAdminRoutes() {
                         "Missing slug"
                     ); return@patch
                 }
-                val site = SiteRepository.findByProjectSlug(slug) ?: SiteRepository.findByDomain(slug)
+                val site = siteRepository.findByProjectSlug(slug) ?: siteRepository.findByDomain(slug)
                 ?: run { call.respondError(HttpStatusCode.NotFound, "site_not_found", "Site not found"); return@patch }
                 val body = runCatching { call.receive<DashboardSiteUpdateRequest>() }.getOrElse {
                     call.respondError(
@@ -374,12 +380,12 @@ fun Application.configureOperationsAdminRoutes() {
                     ); return@patch
                 }
                 val update = runCatching {
-                    SiteRepository.SiteDashboardUpdate(
+                    SiteDashboardUpdate(
                         domain = body.domain?.let { requireValidHostname(it) }, upstreamHost = body.upstreamHost,
-                        upstreamMode = body.upstreamMode?.let { com.gatekeeper.db.tables.UpstreamMode.valueOf(it.uppercase()) },
+                        upstreamMode = body.upstreamMode?.let { UpstreamMode.valueOf(it.uppercase()) },
                         upstreamExplicitPort = body.upstreamExplicitPort?.also { require(it in 1..65535) },
-                        tlsMode = body.tlsMode?.let { com.gatekeeper.db.tables.TlsMode.valueOf(it.uppercase()) },
-                        certMode = body.certMode?.let { com.gatekeeper.db.tables.CertMode.valueOf(it.uppercase()) },
+                        tlsMode = body.tlsMode?.let { TlsMode.valueOf(it.uppercase()) },
+                        certMode = body.certMode?.let { CertMode.valueOf(it.uppercase()) },
                         certExplicitPath = body.certExplicitPath?.let {
                             requireCertificatePath(
                                 it,
@@ -395,7 +401,7 @@ fun Application.configureOperationsAdminRoutes() {
                         it.message ?: "Invalid site update"
                     ); return@patch
                 }
-                val updated = SiteRepository.updateDashboard(site.id, update) ?: run {
+                val updated = siteRepository.updateDashboard(site.id, update) ?: run {
                     call.respondError(
                         HttpStatusCode.NotFound,
                         "site_not_found",
@@ -476,7 +482,7 @@ fun Application.configureOperationsAdminRoutes() {
                     return@patch
                 }
                 val responseSite =
-                    SiteRepository.findByProjectSlug(siteSlug) ?: SiteRepository.findByDomain(siteSlug) ?: updated
+                    siteRepository.findByProjectSlug(siteSlug) ?: siteRepository.findByDomain(siteSlug) ?: updated
                 call.respond(withDashboardDocker(docker, listOf(responseSite)) { gateway ->
                     dashboardSite(
                         responseSite,
@@ -496,7 +502,7 @@ fun Application.configureOperationsAdminRoutes() {
                     ); return@delete
                 }
                 val nginx = get<NginxService>()
-                val site = SiteRepository.findByProjectSlug(slug) ?: SiteRepository.findByDomain(slug)
+                val site = siteRepository.findByProjectSlug(slug) ?: siteRepository.findByDomain(slug)
                 val removed = site?.let(nginx::removeSiteArtifacts) ?: nginx.removeProject(slug)
                 if (!removed) {
                     call.respondError(
@@ -512,7 +518,7 @@ fun Application.configureOperationsAdminRoutes() {
                         "Nginx artifacts were removed but the active configuration could not be reloaded"
                     ); return@delete
                 }
-                site?.let { SiteRepository.deleteById(it.id) }
+                site?.let { siteRepository.deleteById(it.id) }
                 call.respond(DashboardSiteDeleteResponse(deleted = true, slug = slug))
             }
             get("/api/admin/nginx/configs") {
@@ -833,7 +839,7 @@ fun Application.configureOperationsAdminRoutes() {
                 val customerRepository = call.application.get<CustomerStore>()
                 val (customers, total) = customerRepository.findPage(query, limit, offset)
                 val responses = customers.map { customer ->
-                    val owned = customerOwnedProjects(projects, customer.id)
+                    val owned = customerOwnedProjects(projects, siteRepository,customer.id)
                     val balances = call.application.get<ProjectBalanceAdapter>()
                     val financials = owned.map { dashboardProjectFinancials(it.project, balances) }
                     val billed = financials.sumOf { it.billed }
@@ -878,7 +884,7 @@ fun Application.configureOperationsAdminRoutes() {
                         "Customer not found"
                     ); return@get
                 }
-                val owned = customerOwnedProjects(projects, id)
+                val owned = customerOwnedProjects(projects, siteRepository,id)
                 val balances = call.application.get<ProjectBalanceAdapter>()
                 val financials = owned.map { dashboardProjectFinancials(it.project, balances) }
                 val projects = owned.map { ownedProject ->
@@ -920,7 +926,7 @@ fun Application.configureOperationsAdminRoutes() {
                     call.respondError(HttpStatusCode.NotFound, "customer_not_found", "Customer not found"); return@get
                 }
                 val listPayments = call.application.get<ListPaymentsByProject>()
-                val transactions = customerOwnedProjects(projects, id).flatMap { owned ->
+                val transactions = customerOwnedProjects(projects, siteRepository,id).flatMap { owned ->
                     listPayments(owned.project.id).map { payment ->
                         DashboardCustomerTransactionResponse(
                             payment.id.toString(),
@@ -948,7 +954,7 @@ fun Application.configureOperationsAdminRoutes() {
                 val enabled = nginxArtifacts.count { it.enabled }.toLong()
                 val selfDomains = nginxSettings.selfDomains.toSet()
                 val siteCounts =
-                    SiteRepository.findAll().filterNot { it.domain.lowercase().trimEnd('.') in selfDomains }
+                    siteRepository.findAll().filterNot { it.domain.lowercase().trimEnd('.') in selfDomains }
                         .groupingBy { it.reconciliationStatus.value }.eachCount().mapValues { it.value.toLong() }
                 val now = LocalDateTime.now()
                 val certificateAlerts = certificateRepository.findAll().flatMap { certificate ->
