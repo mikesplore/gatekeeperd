@@ -5,7 +5,7 @@ import com.gatekeeper.infrastructure.ProcessRunnerImpl
 import java.time.OffsetDateTime
 
 /** Executes the host nginx commands while keeping command handling out of the service orchestration. */
-class NginxCommandRunner(private val processRunner: ProcessRunner = ProcessRunnerImpl()) {
+class NginxCommandRunner(internal val processRunner: ProcessRunner = ProcessRunnerImpl()) {
     fun test(): NginxTestResult = try {
         val result = processRunner.run(listOf("sudo", "-n", "/usr/sbin/nginx", "-t"))
         val output = listOf(result.stdout, result.stderr).filter(String::isNotBlank).joinToString("\n")

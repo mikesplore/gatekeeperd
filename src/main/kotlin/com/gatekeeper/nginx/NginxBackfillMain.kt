@@ -1,7 +1,8 @@
 package com.gatekeeper.nginx
 
 import com.gatekeeper.config.AppSettings
-import com.gatekeeper.docker.DockerService
+import com.gatekeeper.docker.DockerGatewayFactory
+import com.gatekeeper.infrastructure.ProcessRunnerImpl
 import com.gatekeeper.plugins.DatabaseFactory
 import com.gatekeeper.security.SecretValueCipher
 
@@ -13,7 +14,7 @@ fun main(args: Array<String>) {
     try {
         val dryRun = args.contains("--dry-run")
         val path = args.firstOrNull { it != "--dry-run" } ?: settings.nginx.sitesAvailablePath
-        val docker = DockerService(settings.docker.socket, settings.docker)
+        val docker = DockerGatewayFactory.create(settings.docker, ProcessRunnerImpl())
         try {
             NginxBackfillRunner.run(path, dryRun, docker, settings)
         } finally {
