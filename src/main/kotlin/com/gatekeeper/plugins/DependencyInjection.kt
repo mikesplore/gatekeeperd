@@ -120,6 +120,9 @@ import com.gatekeeper.feature.service.domain.repository.SiteRepository
 import com.gatekeeper.integrations.GitHubAppClient
 import com.gatekeeper.integrations.ResendClient
 import com.gatekeeper.integrations.ScribedIntegrationClient
+import com.gatekeeper.feature.nginx.infrastructure.DeploymentUpstreamResolver
+import com.gatekeeper.feature.nginx.infrastructure.NginxReconciliationService
+import com.gatekeeper.scheduler.AutoBlockerJob
 import org.koin.dsl.module
 import org.koin.core.qualifier.named
 import org.koin.ktor.plugin.Koin
@@ -212,6 +215,9 @@ private val applicationModule = module {
     single { ReconcilePayments(get(), mapOf("paystack" to get(named("paystackGateway")), "mpesa" to get(named("mpesaGateway"))), get()) }
     single<ServiceRepository> { ExposedServiceRepository(get()) }
     single<SiteRepository> { ExposedSiteRepository() }
+    single { AutoBlockerJob(get(), get(), get(), get()) }
+    single { DeploymentUpstreamResolver(get(), get()) }
+    single { NginxReconciliationService(get(), get(), get(), get(), get()) }
 }
 
 fun Application.configureDependencyInjection() {

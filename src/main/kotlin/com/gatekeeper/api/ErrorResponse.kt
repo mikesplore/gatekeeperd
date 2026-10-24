@@ -1,6 +1,5 @@
 package com.gatekeeper.api
 
-import com.gatekeeper.config.AppSettings
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.response.respond

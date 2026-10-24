@@ -6,7 +6,6 @@ import java.time.Instant
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
-import kotlin.test.assertTrue
 
 class DeploymentVersionServiceTest {
     private val directory: Path = Files.createTempDirectory("deployment-version-test")
@@ -23,7 +22,7 @@ class DeploymentVersionServiceTest {
         val result = DeploymentVersionService(directory, { now }).current()
 
         assertEquals("up_to_date", result.status)
-        assertTrue(result.upToDate == true)
+        assertEquals(true, result.upToDate)
     }
 
     @Test

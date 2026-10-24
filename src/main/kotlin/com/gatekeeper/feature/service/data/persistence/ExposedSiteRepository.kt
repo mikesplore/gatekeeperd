@@ -10,7 +10,9 @@ import com.gatekeeper.db.tables.UpstreamMode
 import com.gatekeeper.feature.service.domain.repository.SiteDashboardUpdate
 import com.gatekeeper.feature.service.domain.repository.SiteRecord
 import com.gatekeeper.feature.service.domain.repository.SiteRepository
-import com.gatekeeper.nginx.DEFAULT_GATEKEEPER_BYPASS_PATHS
+import com.gatekeeper.feature.nginx.model.DEFAULT_GATEKEEPER_BYPASS_PATHS
+import com.gatekeeper.feature.nginx.model.NginxSiteRenderModel
+import com.gatekeeper.feature.nginx.model.TlsRenderMode
 import com.gatekeeper.nginx.NginxCustomLocation
 import kotlinx.serialization.json.Json
 import org.jetbrains.exposed.sql.ResultRow
@@ -212,7 +214,7 @@ class ExposedSiteRepository: SiteRepository {
         }
     }
 
-    override fun create(projectId: UUID, model: com.gatekeeper.nginx.NginxSiteRenderModel, containerPort: Int?): SiteRecord = transaction {
+    override fun create(projectId: UUID, model: NginxSiteRenderModel, containerPort: Int?): SiteRecord = transaction {
         val id = UUID.randomUUID()
         val serviceId = model.serviceId ?: defaultServiceId(projectId)
         check(Services.selectAll().where { (Services.id eq serviceId) and (Services.projectId eq projectId) }.count() == 1L) {
@@ -233,9 +235,9 @@ class ExposedSiteRepository: SiteRepository {
             it[Sites.upstreamExplicitPort] = if (model.upstreamMode == UpstreamMode.EXPLICIT_PORT) model.appPort else null
             it[Sites.upstreamContainerPort] = containerPort
             it[Sites.tlsMode] = when (model.tlsMode) {
-                com.gatekeeper.nginx.TlsRenderMode.HTTP_ONLY -> TlsMode.HTTP_ONLY
-                com.gatekeeper.nginx.TlsRenderMode.HTTPS -> TlsMode.HTTPS
-                com.gatekeeper.nginx.TlsRenderMode.HTTPS_HTTP2 -> TlsMode.HTTPS_HTTP2
+                TlsRenderMode.HTTP_ONLY -> TlsMode.HTTP_ONLY
+                TlsRenderMode.HTTPS -> TlsMode.HTTPS
+                TlsRenderMode.HTTPS_HTTP2 -> TlsMode.HTTPS_HTTP2
             }
             it[Sites.certMode] = model.certMode
             it[Sites.certExplicitPath] = model.certificatePath.takeIf { model.certMode == CertMode.EXPLICIT_PATH }

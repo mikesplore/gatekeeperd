@@ -21,7 +21,7 @@ import com.gatekeeper.feature.payment.presentation.configurePaystackWebhookRoute
 import com.gatekeeper.feature.payment.presentation.configurePaymentAdminRoutes
 import com.gatekeeper.admin.configureLogAdminRoutes
 import com.gatekeeper.feature.payment.presentation.configurePaymentRoutes
-import com.gatekeeper.nginx.NginxBackfillRunner
+import com.gatekeeper.feature.nginx.domain.service.NginxBackfillRunner
 import com.gatekeeper.nginx.NginxService
 import com.gatekeeper.plugins.*
 import com.gatekeeper.feature.payment.domain.usecase.ReconcilePayments

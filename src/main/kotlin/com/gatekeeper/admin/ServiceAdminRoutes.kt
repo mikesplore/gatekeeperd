@@ -2,7 +2,7 @@ package com.gatekeeper.admin
 
 import com.gatekeeper.api.respondError
 import com.gatekeeper.deployment.DeploymentApplicationService
-import com.gatekeeper.nginx.requireValidHostname
+import com.gatekeeper.feature.nginx.domain.service.requireValidHostname
 import com.gatekeeper.feature.project.domain.repository.ProjectAdjustmentRepository as ProjectAdjustmentStore
 import com.gatekeeper.feature.project.domain.repository.ProjectRepository
 import com.gatekeeper.feature.audit.domain.repository.AuditRepository as AuditRepositoryPort
@@ -33,7 +33,6 @@ import io.ktor.server.auth.jwt.JWTPrincipal
 import io.ktor.server.routing.*
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.jsonObject
 import java.util.UUID
 import java.math.BigDecimal
 import org.koin.ktor.ext.get

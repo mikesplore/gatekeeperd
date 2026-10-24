@@ -1,7 +1,7 @@
 package com.gatekeeper.infrastructure
 
 import com.gatekeeper.core.ports.CutoverProbe
-import com.gatekeeper.nginx.requireValidHostname
+import com.gatekeeper.feature.nginx.domain.service.requireValidHostname
 import java.net.InetSocketAddress
 import java.net.Socket
 import javax.net.ssl.SNIHostName

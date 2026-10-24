@@ -5,6 +5,7 @@ import com.gatekeeper.feature.payment.domain.model.Payment
 import com.gatekeeper.feature.project.domain.repository.ProjectRepository
 import com.gatekeeper.feature.project.domain.repository.ProjectAdjustmentRepository
 import com.gatekeeper.feature.payment.domain.model.ProjectFinancials
+import com.gatekeeper.feature.project.domain.model.ProjectRecord
 import kotlinx.serialization.Serializable
 import java.time.LocalDateTime
 import java.time.ZoneId
@@ -190,7 +191,7 @@ data class StatusChangeResponse(
     val slug: String
 )
 
-fun ProjectRepository.ProjectRecord.toResponse(financials: ProjectFinancials): ProjectResponse = ProjectResponse(
+fun ProjectRecord.toResponse(financials: ProjectFinancials): ProjectResponse = ProjectResponse(
     id = id.toString(),
     slug = slug,
     name = name,

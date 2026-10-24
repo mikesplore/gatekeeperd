@@ -1,5 +1,7 @@
 package com.gatekeeper.nginx
 
+import com.gatekeeper.feature.nginx.domain.service.UpstreamValidation
+import com.gatekeeper.feature.nginx.infrastructure.NginxConfigRenderer
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue

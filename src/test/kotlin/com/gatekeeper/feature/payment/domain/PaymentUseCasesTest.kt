@@ -24,6 +24,7 @@ import com.gatekeeper.feature.payment.domain.usecase.HandleMpesaCallback
 import com.gatekeeper.feature.payment.domain.usecase.MpesaCallbackData
 import com.gatekeeper.feature.payment.domain.usecase.GetPaymentMethodAvailability
 import com.gatekeeper.feature.payment.domain.usecase.PaymentProviderReadiness
+import com.gatekeeper.feature.service.domain.repository.ServiceRecord
 import java.math.BigDecimal
 import java.time.LocalDateTime
 import java.time.LocalDate
@@ -199,6 +200,14 @@ class PaymentUseCasesTest {
         override fun revenueByMonth(months: Int): List<PaymentRevenueMonth> = emptyList()
         override fun paymentCounts() = PaymentCounts(0, 0, 0, 0)
         override fun latestPendingAuthorizationUrl(projectId: UUID): String? = null
+        var autoBlockedCalled = false
+
+        override fun listAll(): List<ServiceRecord> = emptyList() // or return test records if needed
+
+        override fun autoBlockForPayment(projectId: UUID, serviceId: UUID): Boolean {
+            autoBlockedCalled = true
+            return true
+        }
     }
 
     private class FakePaymentEffects : PaymentEffects {

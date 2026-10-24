@@ -24,7 +24,7 @@ class IntegrationOutboxRepositoryTest {
             outbox.markFailed(first.id, "test failure", 11)
             assertTrue(outbox.pending(100).any { it.id == first.id })
             val replayed = outbox.replayAndClaim(first.id)
-            assertTrue(replayed?.id == first.id)
+            assertEquals(replayed?.id, first.id)
             outbox.markDelivered(first.id)
         } finally {
             DatabaseFactory.close()

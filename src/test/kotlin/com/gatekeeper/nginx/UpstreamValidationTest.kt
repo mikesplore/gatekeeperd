@@ -1,5 +1,7 @@
 package com.gatekeeper.nginx
 
+import com.gatekeeper.feature.nginx.infrastructure.BackfillDockerTarget
+import com.gatekeeper.feature.nginx.infrastructure.solePublishedDockerTarget
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull

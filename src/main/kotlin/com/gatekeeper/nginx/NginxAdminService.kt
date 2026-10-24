@@ -2,6 +2,20 @@ package com.gatekeeper.nginx
 
 import com.gatekeeper.plugins.DistributedLock
 import com.gatekeeper.feature.certificate.domain.repository.CertificateRepository
+import com.gatekeeper.feature.nginx.application.inspectSite
+import com.gatekeeper.feature.nginx.domain.port.CertificateProvisioner
+import com.gatekeeper.feature.nginx.domain.port.NginxSiteStorage
+import com.gatekeeper.feature.nginx.domain.service.requireValidEmail
+import com.gatekeeper.feature.nginx.domain.service.requireValidHostname
+import com.gatekeeper.feature.nginx.model.NginxSiteRenderModel
+import com.gatekeeper.feature.nginx.model.validateCustomLocations
+import com.gatekeeper.feature.nginx.presentation.CertificateListResponse
+import com.gatekeeper.feature.nginx.presentation.CertificateRenewalResponse
+import com.gatekeeper.feature.nginx.presentation.CertificateResponse
+import com.gatekeeper.feature.nginx.presentation.InstalledCertificateInfo
+import com.gatekeeper.feature.nginx.presentation.NginxCustomLocation
+import com.gatekeeper.feature.nginx.presentation.NginxCustomLocationResponse
+import com.gatekeeper.feature.nginx.presentation.NginxEnableRequest
 import com.gatekeeper.feature.service.domain.repository.SiteDashboardUpdate
 import com.gatekeeper.feature.service.domain.repository.SiteRecord
 import com.gatekeeper.feature.service.domain.repository.SiteRepository
@@ -11,19 +25,21 @@ import java.time.OffsetDateTime
 
 /** Application-level operations for nginx administration routes. */
 class NginxAdminService(
-    private val nginx: NginxService,
     private val certificates: CertificateStore,
     private val sslCertPath: String,
-    private val siteRepository: SiteRepository
+    private val siteRepository: SiteRepository,
+    private val certificateProvisioner: CertificateProvisioner,
+    private val nginxSiteStorage: NginxSiteStorage,
 ) {
     fun updateCustomLocations(
         slug: String,
         site: SiteRecord,
         locations: List<NginxCustomLocation>,
+        certificate: CertificateProvisioner,
         renderModel: (SiteRecord) -> NginxSiteRenderModel
     ): NginxCustomLocationResponse = DistributedLock.withLock("nginx-host-mutation") {
-        nginx.validateCustomLocations(locations)
-        val inspection = nginx.inspectSite(slug)
+        validateCustomLocations(locations)
+        val inspection = inspectSite(slug, siteRepository = siteRepository)
         require(inspection.available && inspection.enabled && inspection.managed) {
             "Custom locations can only be managed for an enabled Gatekeeperd-managed Nginx site"
         }
@@ -33,7 +49,7 @@ class NginxAdminService(
             SiteDashboardUpdate(customNginxLocations = locations)
         ) ?: error("Site no longer exists")
         val activation = runCatching {
-            nginx.enableProjectDetailed(slug, nginx.generateNginxConfig(renderModel(updated)))
+            nginxSiteStorage.enableProjectDetailed(slug, nginx.generateNginxConfig(renderModel(updated)))
         }.getOrElse { error ->
             siteRepository.updateDashboard(site.id, SiteDashboardUpdate(customNginxLocations = previous))
             throw error
@@ -51,8 +67,8 @@ class NginxAdminService(
             body.sslCertificateKeyPath != null || body.requireSsl != null
 
     fun listCertificates(): CertificateListResponse = CertificateListResponse(
-        nginx.listInstalledCertificates().map { cert ->
-            val expiry = nginx.certificateExpiry(cert.certificateDomain)
+        certificateProvisioner.listInstalledCertificates().map { cert ->
+            val expiry = certificateProvisioner.certificateExpiry(cert.certificateDomain)
             val status = when {
                 expiry == null -> "unknown"
                 OffsetDateTime.parse(expiry.first).toInstant().isBefore(Instant.now()) -> "expired"
@@ -72,12 +88,14 @@ class NginxAdminService(
 
     fun installCertificate(domainInput: String, emailInput: String): CertificateOperationResult<CertificateResponse> {
         val domain = validateDomain(domainInput) ?: return CertificateOperationResult.InvalidDomain
-        val email = try { requireValidEmail(emailInput.trim()) } catch (e: IllegalArgumentException) {
+        val email = try {
+            requireValidEmail(emailInput.trim())
+        } catch (e: IllegalArgumentException) {
             return CertificateOperationResult.InvalidEmail(e.message ?: "Invalid email")
         }
-        if (!nginx.isCertbotAvailable()) return CertificateOperationResult.CertbotUnavailable
-        if (!nginx.installCertificate(domain, email)) return CertificateOperationResult.Failed
-        val expiry = nginx.certificateExpiry(domain)
+        if (!certificateProvisioner.isCertbotAvailable()) return CertificateOperationResult.CertbotUnavailable
+        if (!certificateProvisioner.installCertificate(domain, email)) return CertificateOperationResult.Failed
+        val expiry = certificateProvisioner.certificateExpiry(domain)
         val record = certificates.upsert(
             domain,
             LocalDateTime.now(),
@@ -86,7 +104,7 @@ class NginxAdminService(
         )
         certificates.linkSites(domain, record.id)
         return CertificateOperationResult.Success(
-            CertificateResponse(domain, nginx.isCertificateInstalled(domain), "$sslCertPath/$domain/fullchain.pem", "$sslCertPath/$domain/privkey.pem")
+            CertificateResponse(domain, certificateProvisioner.isCertificateInstalled(domain), "$sslCertPath/$domain/fullchain.pem", "$sslCertPath/$domain/privkey.pem")
         )
     }
 
@@ -95,14 +113,14 @@ class NginxAdminService(
         try { certificates.requireRemovable(domain) } catch (e: IllegalArgumentException) {
             return CertificateOperationResult.InUse(e.message ?: "Certificate is still referenced by active sites")
         }
-        if (!nginx.removeCertificate(domain)) return CertificateOperationResult.Failed
+        if (!certificateProvisioner.removeCertificate(domain)) return CertificateOperationResult.Failed
         certificates.delete(domain)
         return CertificateOperationResult.Success(CertificateResponse(domain, false))
     }
 
     fun certificateStatus(domainInput: String): CertificateOperationResult<CertificateResponse> {
         val domain = validateDomain(domainInput) ?: return CertificateOperationResult.InvalidDomain
-        val installed = nginx.isCertificateInstalled(domain)
+        val installed = certificateProvisioner.isCertificateInstalled(domain)
         return CertificateOperationResult.Success(
             CertificateResponse(
                 domain,
@@ -115,15 +133,15 @@ class NginxAdminService(
 
     fun renewCertificate(domainInput: String): CertificateOperationResult<CertificateRenewalResponse> {
         val domain = validateDomain(domainInput) ?: return CertificateOperationResult.InvalidDomain
-        if (!nginx.isCertificateInstalled(domain)) return CertificateOperationResult.NotFound
-        if (!nginx.isCertbotAvailable()) return CertificateOperationResult.CertbotUnavailable
-        val before = nginx.certificateExpiry(domain)
-        if (!nginx.renewCertificate(domain)) {
+        if (!certificateProvisioner.isCertificateInstalled(domain)) return CertificateOperationResult.NotFound
+        if (!certificateProvisioner.isCertbotAvailable()) return CertificateOperationResult.CertbotUnavailable
+        val before = certificateProvisioner.certificateExpiry(domain)
+        if (!certificateProvisioner.renewCertificate(domain)) {
             val status = when { before == null -> "unknown"; before.second < 0 -> "expired"; else -> "active" }
             certificates.recordRenewal(domain, before?.first?.let(OffsetDateTime::parse)?.toLocalDateTime(), status, "Certbot renewal failed")
             return CertificateOperationResult.RenewalFailed
         }
-        val after = nginx.certificateExpiry(domain)
+        val after = certificateProvisioner.certificateExpiry(domain)
         val parsed = after?.first?.let(OffsetDateTime::parse)
         val status = when { parsed == null -> "unknown"; parsed.toInstant().isBefore(Instant.now()) -> "expired"; else -> "active" }
         certificates.recordRenewal(domain, parsed?.toLocalDateTime(), status, null)
@@ -133,7 +151,9 @@ class NginxAdminService(
         )
     }
 
-    private fun validateDomain(value: String): String? = try { requireValidHostname(value.trim()) } catch (_: IllegalArgumentException) { null }
+    private fun validateDomain(value: String): String? = try {
+        requireValidHostname(value.trim())
+    } catch (_: IllegalArgumentException) { null }
 }
 
 sealed interface CertificateOperationResult<out T> {

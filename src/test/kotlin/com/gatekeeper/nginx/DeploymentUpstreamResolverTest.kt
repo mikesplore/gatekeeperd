@@ -1,6 +1,7 @@
 package com.gatekeeper.nginx
 
 import com.gatekeeper.db.tables.UpstreamMode
+import com.gatekeeper.feature.nginx.infrastructure.DeploymentUpstreamResolver
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals

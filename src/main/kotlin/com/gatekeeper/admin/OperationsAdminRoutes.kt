@@ -10,6 +10,12 @@ import com.gatekeeper.core.ports.PortProbe
 import com.gatekeeper.db.tables.CertMode
 import com.gatekeeper.db.tables.TlsMode
 import com.gatekeeper.db.tables.UpstreamMode
+import com.gatekeeper.feature.nginx.domain.service.requireCertificatePath
+import com.gatekeeper.feature.nginx.domain.service.requireValidHostname
+import com.gatekeeper.feature.nginx.infrastructure.DeploymentUpstreamResolver
+import com.gatekeeper.feature.nginx.infrastructure.NginxSelfDomainExclusion
+import com.gatekeeper.feature.nginx.model.NginxSiteRenderModel
+import com.gatekeeper.feature.nginx.model.TlsRenderMode
 import com.gatekeeper.feature.payment.data.persistence.ProjectBalanceAdapter
 import com.gatekeeper.feature.payment.domain.usecase.GetPaymentDashboardData
 import com.gatekeeper.feature.payment.domain.usecase.ListPaymentsByProject
@@ -438,11 +444,11 @@ fun Application.configureOperationsAdminRoutes() {
                         appPort = port,
                         serviceId = updated.serviceId,
                         siteId = updated.id,
-                        upstreamScheme = if (updated.tlsMode == com.gatekeeper.db.tables.TlsMode.HTTP_ONLY) "http" else "https",
+                        upstreamScheme = if (updated.tlsMode == TlsMode.HTTP_ONLY) "http" else "https",
                         tlsMode = when (updated.tlsMode) {
-                            com.gatekeeper.db.tables.TlsMode.HTTP_ONLY -> TlsRenderMode.HTTP_ONLY
-                            com.gatekeeper.db.tables.TlsMode.HTTPS -> TlsRenderMode.HTTPS
-                            com.gatekeeper.db.tables.TlsMode.HTTPS_HTTP2 -> TlsRenderMode.HTTPS_HTTP2
+                            TlsMode.HTTP_ONLY -> TlsRenderMode.HTTP_ONLY
+                            TlsMode.HTTPS -> TlsRenderMode.HTTPS
+                            TlsMode.HTTPS_HTTP2 -> TlsRenderMode.HTTPS_HTTP2
                         },
                         certificatePath = cert?.certificatePath ?: updated.certExplicitPath,
                         certificateKeyPath = cert?.privateKeyPath,

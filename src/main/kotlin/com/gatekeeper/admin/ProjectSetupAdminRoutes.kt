@@ -2,13 +2,12 @@ package com.gatekeeper.admin
 
 import com.gatekeeper.api.InputValidators
 import com.gatekeeper.api.respondError
-import com.gatekeeper.db.repositories.*
 import com.gatekeeper.deployment.*
 import com.gatekeeper.docker.DockerGateway
 import com.gatekeeper.core.ports.PortProbe
-import com.gatekeeper.nginx.DeploymentUpstreamResolver
+import com.gatekeeper.feature.nginx.infrastructure.DeploymentUpstreamResolver
 import com.gatekeeper.nginx.NginxService
-import com.gatekeeper.nginx.requireValidHostname
+import com.gatekeeper.feature.nginx.domain.service.requireValidHostname
 import com.gatekeeper.security.SecretValueCipher
 import com.gatekeeper.feature.payment.data.persistence.ProjectBalanceAdapter
 import com.gatekeeper.feature.project.domain.repository.ProjectRepository
@@ -18,6 +17,9 @@ import com.gatekeeper.feature.integrations.domain.repository.RegistryCredentialS
 import com.gatekeeper.feature.customer.domain.repository.CustomerRepository as CustomerStore
 import com.gatekeeper.feature.deployment.domain.repository.DeploymentJobRepository
 import com.gatekeeper.feature.deployment.domain.repository.ServiceDomainRepository
+import com.gatekeeper.feature.project.domain.model.ProjectRecord
+import com.gatekeeper.feature.service.domain.repository.ServiceRepository
+import com.gatekeeper.feature.service.domain.repository.SiteRepository
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.Application
 import io.ktor.server.auth.authenticate
@@ -372,6 +374,9 @@ fun Application.configureProjectSetupAdminRoutes() {
     val deploymentJobs = get<DeploymentJobRepository>()
     val serviceDomains = get<ServiceDomainRepository>()
     val portProbe = get<PortProbe>()
+    val serviceRepository = get<ServiceRepository>()
+    val siteRepository = get<SiteRepository>()
+    val projectRepository = get<ProjectRepository>()
     routing {
         authenticate("auth-jwt") {
             get("/api/admin/project-setup/containers") {
@@ -467,13 +472,13 @@ fun Application.configureProjectSetupAdminRoutes() {
                 val serviceId = call.request.queryParameters["serviceId"]?.let { raw ->
                     runCatching { UUID.fromString(raw) }.getOrNull()
                         ?: return@get call.respondError(HttpStatusCode.BadRequest, "invalid_service_id", "Service ID is invalid")
-                } ?: ServiceRepository.getOrCreateDefault(projectId).id
-                if (ServiceRepository.findByProjectAndId(projectId, serviceId) == null) {
+                } ?: serviceRepository.getOrCreateDefault(projectId).id
+                if (serviceRepository.findByProjectAndId(projectId, serviceId) == null) {
                     return@get call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
                 }
                 val config = deploymentJobs.configurationSummaryForService(projectId, serviceId)
                 val credential = config?.registryCredentialId?.let(providerCredentials::findMetadata)
-                val service = ServiceRepository.findByProjectAndId(projectId, serviceId)
+                val service = serviceRepository.findByProjectAndId(projectId, serviceId)
                 val active = DeploymentApplicationService.activeDeploymentSummaryForService(serviceId, "production")
                 val latest = DeploymentApplicationService.latestDeploymentStateForService(serviceId, "production")
                 val bindings = serviceDomains.listByService(serviceId).map {
@@ -499,10 +504,10 @@ fun Application.configureProjectSetupAdminRoutes() {
                 val serviceId = request.serviceId?.let { raw ->
                     runCatching { UUID.fromString(raw) }.getOrNull()
                         ?: return@post call.respondError(HttpStatusCode.BadRequest, "invalid_service", "Service ID is invalid")
-                } ?: runCatching { ServiceRepository.getOrCreateDefault(projectId).id }.getOrElse {
+                } ?: runCatching { serviceRepository.getOrCreateDefault(projectId).id }.getOrElse {
                     return@post call.respondError(HttpStatusCode.NotFound, "service_not_found", "Project has no service to attach this container to")
                 }
-                if (ServiceRepository.findByProjectAndId(projectId, serviceId) == null) {
+                if (serviceRepository.findByProjectAndId(projectId, serviceId) == null) {
                     return@post call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
                 }
                 val details = docker.adoptionDetails(request.containerId)
@@ -521,7 +526,7 @@ fun Application.configureProjectSetupAdminRoutes() {
                     .getOrElse { error ->
                         return@post call.respondError(HttpStatusCode.Conflict, "container_adoption_failed", error.message ?: "Container could not be adopted")
                     }
-                val site = SiteRepository.findByServiceId(adopted.serviceId)
+                val site = siteRepository.findByServiceId(adopted.serviceId)
                 val nginx = if (site != null) get<NginxService>() else null
                 val siteSlug = site?.projectSlug ?: project.slug
                 val previous = DeploymentApplicationService.activeRuntime(adopted.serviceId, "production")
@@ -541,7 +546,7 @@ fun Application.configureProjectSetupAdminRoutes() {
                 if (!activated) {
                     if (site != null) {
                         previousConfig?.let { priorConfig -> runCatching { nginx?.restoreSiteConfiguration(siteSlug, priorConfig) } }
-                        runCatching { SiteRepository.restoreDeploymentUpstreamForSite(site) }
+                        runCatching { siteRepository.restoreDeploymentUpstreamForSite(site) }
                         val previousPort = if (site.upstreamKind == "DEPLOYMENT_MANAGED") {
                             val primary = previous?.containerPort ?: previous?.ports?.keys?.singleOrNull()
                             primary?.let { previous?.ports?.get(it) } ?: previous?.hostPort
@@ -685,7 +690,7 @@ fun Application.configureProjectSetupAdminRoutes() {
                 val serviceId = body.serviceId?.let { raw -> runCatching { UUID.fromString(raw) }.getOrNull() }
                     ?: if (body.serviceId == null) deploymentJobs.defaultServiceIdForProject(projectId)
                     else return@put call.respondError(HttpStatusCode.BadRequest, "invalid_service_id", "Service ID is invalid")
-                val service = ServiceRepository.findByProjectAndId(projectId, serviceId)
+                val service = serviceRepository.findByProjectAndId(projectId, serviceId)
                     ?: return@put call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
                 if (body.containerPort != null && body.containerPort !in 1..65535) {
                     return@put call.respondError(HttpStatusCode.BadRequest, "invalid_container_port", "containerPort must be between 1 and 65535")
@@ -730,7 +735,7 @@ fun Application.configureProjectSetupAdminRoutes() {
                 val serviceId = body.serviceId?.let { raw -> runCatching { UUID.fromString(raw) }.getOrNull() }
                     ?: if (body.serviceId == null) deploymentJobs.defaultServiceIdForProject(projectId)
                     else return@delete call.respondError(HttpStatusCode.BadRequest, "invalid_service_id", "Service ID is invalid")
-                val service = ServiceRepository.findByProjectAndId(projectId, serviceId)
+                val service = serviceRepository.findByProjectAndId(projectId, serviceId)
                     ?: return@delete call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
                 val removed = serviceDomains.remove(serviceId, domain)
                 if (!removed) {
@@ -753,7 +758,7 @@ fun Application.configureProjectSetupAdminRoutes() {
                     runCatching { UUID.fromString(raw) }.getOrNull()
                         ?: return@post call.respondError(HttpStatusCode.BadRequest, "invalid_service_id", "Service ID is invalid")
                 } ?: deploymentJobs.defaultServiceIdForProject(projectId)
-                if (ServiceRepository.findByProjectAndId(projectId, serviceId) == null) {
+                if (serviceRepository.findByProjectAndId(projectId, serviceId) == null) {
                     return@post call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
                 }
                 val configurationId = deploymentJobs.configurationIdForService(projectId, serviceId)
@@ -789,11 +794,11 @@ fun Application.configureProjectSetupAdminRoutes() {
                 val slug = call.parameters["slug"] ?: return@get call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing project slug")
                 val project = projects.findBySlug(slug)
                     ?: return@get call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
-                ServiceRepository.getOrCreateDefault(project.id)
+                serviceRepository.getOrCreateDefault(project.id)
                 val config = deploymentJobs.configurationSummary(project.id)
                 val serviceId = deploymentJobs.defaultServiceIdForProject(project.id)
-                val site = SiteRepository.findByProjectIdAndServiceId(project.id, serviceId)
-                val service = ServiceRepository.findByProjectAndId(project.id, serviceId)
+                val site = siteRepository.findByProjectIdAndServiceId(project.id, serviceId)
+                val service = serviceRepository.findByProjectAndId(project.id, serviceId)
                 val active = DeploymentApplicationService.activeDeploymentSummaryForService(serviceId, "production")
                 val activeRuntime = DeploymentApplicationService.activeRuntime(serviceId, "production")
                 val publishedPorts = activeRuntime?.ports?.takeIf { it.isNotEmpty() } ?: active?.runtimePorts.orEmpty()
@@ -858,7 +863,7 @@ fun Application.configureProjectSetupAdminRoutes() {
                     runCatching { UUID.fromString(raw) }.getOrNull()
                         ?: return@get call.respondError(HttpStatusCode.BadRequest, "invalid_service_id", "Service ID is invalid")
                 }
-                if (serviceId != null && ServiceRepository.findByProjectAndId(project.id, serviceId) == null) {
+                if (serviceId != null && serviceRepository.findByProjectAndId(project.id, serviceId) == null) {
                     return@get call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
                 }
                 val items = DeploymentApplicationService.deploymentHistory(project.id, environment, serviceId).map { item ->
@@ -976,7 +981,7 @@ private fun DeploymentJobRepository.ConfigurationSummary.toSetupResponse() = Pro
 )
 
 private fun projectOverviewFinancials(
-    project: ProjectRepository.ProjectRecord,
+    project: ProjectRecord,
     balances: ProjectBalanceAdapter
 ): Triple<BigDecimal, BigDecimal, BigDecimal> {
     val financials = balances.financials(project)

@@ -5,11 +5,13 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import org.slf4j.LoggerFactory
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.min
+import kotlin.time.Duration.Companion.milliseconds
 
 fun interface WorkerDelay {
     suspend fun delay(millis: Long)
@@ -25,7 +27,6 @@ data class WorkerHealth(
 )
 
 class WorkerSupervisor(
-    private val delay: WorkerDelay = WorkerDelay { millis -> delay(millis) },
     private val now: () -> Instant = Instant::now,
     private val maxBackoffMillis: Long = 60_000L
 ) {
@@ -47,7 +48,7 @@ class WorkerSupervisor(
 
     suspend fun stop() {
         jobs.values.forEach { it.cancel() }
-        jobs.values.forEach { job -> job.join() }
+        jobs.values.joinAll()
         jobs.clear()
         health.replaceAll { _, status -> status.copy(running = false) }
     }
@@ -60,7 +61,7 @@ class WorkerSupervisor(
                     worker.tick()
                     failures = 0
                     update(worker.name) { it.copy(lastTickAt = now(), consecutiveFailures = 0, lastError = null) }
-                    delay(worker.intervalMillis)
+                    delay(worker.intervalMillis.milliseconds)
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (failure: Throwable) {
@@ -74,7 +75,7 @@ class WorkerSupervisor(
                         )
                     }
                     logger.error("Background worker {} failed; retrying in {} ms", worker.name, backoff, failure)
-                    delay(backoff)
+                    delay(backoff.milliseconds)
                 }
             }
         } finally {

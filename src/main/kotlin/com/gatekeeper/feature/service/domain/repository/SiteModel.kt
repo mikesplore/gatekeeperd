@@ -4,7 +4,7 @@ import com.gatekeeper.db.tables.CertMode
 import com.gatekeeper.db.tables.ReconciliationStatus
 import com.gatekeeper.db.tables.TlsMode
 import com.gatekeeper.db.tables.UpstreamMode
-import com.gatekeeper.nginx.DEFAULT_GATEKEEPER_BYPASS_PATHS
+import com.gatekeeper.feature.nginx.model.DEFAULT_GATEKEEPER_BYPASS_PATHS
 import com.gatekeeper.nginx.NginxCustomLocation
 import java.time.LocalDateTime
 import java.util.UUID

@@ -15,6 +15,16 @@ import com.gatekeeper.db.tables.CertMode
 import com.gatekeeper.db.tables.ReconciliationStatus
 import com.gatekeeper.db.tables.TlsMode
 import com.gatekeeper.db.tables.UpstreamMode
+import com.gatekeeper.feature.nginx.domain.service.requireCertificatePath
+import com.gatekeeper.feature.nginx.domain.service.requireValidEmail
+import com.gatekeeper.feature.nginx.domain.service.requireValidHostname
+import com.gatekeeper.feature.nginx.infrastructure.BackfillDockerTarget
+import com.gatekeeper.feature.nginx.infrastructure.BackfillProject
+import com.gatekeeper.feature.nginx.infrastructure.NginxReconciliationService
+import com.gatekeeper.feature.nginx.infrastructure.NginxSelfDomainExclusion
+import com.gatekeeper.feature.nginx.infrastructure.NginxSiteBackfill
+import com.gatekeeper.feature.nginx.model.NginxSiteRenderModel
+import com.gatekeeper.feature.nginx.model.TlsRenderMode
 import java.time.LocalDateTime
 import java.util.UUID
 
@@ -179,12 +189,14 @@ class NginxServiceTest {
         assertFailsWith<IllegalArgumentException> { svc.validateCustomLocations(listOf(custom.copy(directives = "auth_request off;"))) }
         assertFailsWith<IllegalArgumentException> { svc.validateCustomLocations(listOf(custom.copy(directives = "proxy_pass http://evil.example;"))) }
 
-        val managedConfig = svc.generateNginxConfig(NginxSiteRenderModel(
-            slug = "acw", serviceId = UUID.fromString("123e4567-e89b-12d3-a456-426614174000"),
-            domain = "acw.example.com", appPort = 3000, upstreamScheme = "http",
-            tlsMode = TlsRenderMode.HTTP_ONLY, upstreamKind = "DEPLOYMENT_MANAGED",
-            customNginxLocations = listOf(custom)
-        ))
+        val managedConfig = svc.generateNginxConfig(
+            NginxSiteRenderModel(
+                slug = "acw", serviceId = UUID.fromString("123e4567-e89b-12d3-a456-426614174000"),
+                domain = "acw.example.com", appPort = 3000, upstreamScheme = "http",
+                tlsMode = TlsRenderMode.HTTP_ONLY, upstreamKind = "DEPLOYMENT_MANAGED",
+                customNginxLocations = listOf(custom)
+            )
+        )
         assertContains(managedConfig, "proxy_pass http://gk_123e4567e89b12d3a456426614174000;")
     }
 
@@ -444,8 +456,8 @@ class NginxServiceTest {
         File(fixture, "failed").writeText(config("failed.example.com", 3002))
         File(fixture, "orphan").writeText(config("orphan.example.com", 3003))
         val projects = mapOf(
-            "migrated" to BackfillProject(java.util.UUID.randomUUID(), "migrated", "migrated-container"),
-            "failed" to BackfillProject(java.util.UUID.randomUUID(), "failed", "failed-container")
+            "migrated" to BackfillProject(UUID.randomUUID(), "migrated", "migrated-container"),
+            "failed" to BackfillProject(UUID.randomUUID(), "failed", "failed-container")
         )
         val created = mutableListOf<String>()
         val createdModels = mutableMapOf<String, NginxSiteRenderModel>()
@@ -458,7 +470,9 @@ class NginxServiceTest {
                 else BackfillDockerTarget("failed-container", 9999)
             },
             autoCertificatePath = { null },
-            render = { model -> if (model.domain == "migrated.example.com") fixture.resolve("migrated").readText() else "different" },
+            render = { model ->
+                if (model.domain == "migrated.example.com") fixture.resolve("migrated").readText() else "different"
+            },
             createSite = { project, model -> created += project.slug; createdModels[project.slug] = model },
             deleteSite = { project -> deleted += project.slug }
         ).run()
@@ -486,7 +500,11 @@ class NginxServiceTest {
             }
         """.trimIndent() + "\n"
         File(root, "old-slug").writeText(original)
-        val canonical = BackfillProject(java.util.UUID.fromString("11111111-1111-1111-1111-111111111111"), "canonical-slug", "canonical-container")
+        val canonical = BackfillProject(
+            UUID.fromString("11111111-1111-1111-1111-111111111111"),
+            "canonical-slug",
+            "canonical-container"
+        )
         var createdModel: NginxSiteRenderModel? = null
         var slugLookupCalled = false
         val report = NginxSiteBackfill(
@@ -515,7 +533,7 @@ class NginxServiceTest {
         var createCalls = 0
         val report = NginxSiteBackfill(
             sitesAvailable = root,
-            findProject = { slugLookupCalled = true; BackfillProject(java.util.UUID.randomUUID(), it, null) },
+            findProject = { slugLookupCalled = true; BackfillProject(UUID.randomUUID(), it, null) },
             findProjectById = { null },
             expectedDockerTarget = { null }, autoCertificatePath = { null }, render = { "unused" },
             createSite = { _, _ -> createCalls++ }, deleteSite = {}, dryRun = true
@@ -537,7 +555,7 @@ class NginxServiceTest {
             }
         """.trimIndent() + "\n"
         File(root, "app").writeText(content)
-        val project = BackfillProject(java.util.UUID.randomUUID(), "app", "app-container")
+        val project = BackfillProject(UUID.randomUUID(), "app", "app-container")
         var model: NginxSiteRenderModel? = null
 
         val report = NginxSiteBackfill(
@@ -563,15 +581,20 @@ class NginxServiceTest {
                 location / { proxy_pass http://127.0.0.1:3001; }
             }
         """.trimIndent() + "\n")
-        val project = BackfillProject(java.util.UUID.randomUUID(), "app", "app-container")
+        val project = BackfillProject(UUID.randomUUID(), "app", "app-container")
         var createCalls = 0
         var deleteCalls = 0
         var checkedDomain: String? = null
 
         val report = NginxSiteBackfill(
-            sitesAvailable = root, findProject = { project }, expectedDockerTarget = { BackfillDockerTarget("app-container", 3001) },
-            autoCertificatePath = { null }, render = { "unused" }, createSite = { _, _ -> createCalls++ },
-            deleteSite = { deleteCalls++ }, siteExists = { projectId, domain -> checkedDomain = domain; projectId == project.id }
+            sitesAvailable = root,
+            findProject = { project },
+            expectedDockerTarget = { BackfillDockerTarget("app-container", 3001) },
+            autoCertificatePath = { null },
+            render = { "unused" },
+            createSite = { _, _ -> createCalls++ },
+            deleteSite = { deleteCalls++ },
+            siteExists = { projectId, domain -> checkedDomain = domain; projectId == project.id }
         ).run()
 
         assertEquals(listOf("app"), report.skippedExistingSite)
@@ -596,10 +619,12 @@ class NginxServiceTest {
     @Test
     fun `generated site config carries stable project ownership marker`() {
         val projectId = java.util.UUID.randomUUID()
-        val rendered = service.generateNginxConfig(NginxSiteRenderModel(
-            slug = "current-slug", projectId = projectId, domain = "app.example.com", appPort = 3001,
-            upstreamScheme = "http", tlsMode = TlsRenderMode.HTTP_ONLY
-        ))
+        val rendered = service.generateNginxConfig(
+            NginxSiteRenderModel(
+                slug = "current-slug", projectId = projectId, domain = "app.example.com", appPort = 3001,
+                upstreamScheme = "http", tlsMode = TlsRenderMode.HTTP_ONLY
+            )
+        )
 
         assertContains(rendered, "# gatekeeperd:project_id:$projectId")
     }
@@ -635,7 +660,12 @@ class NginxServiceTest {
         }
         val report = NginxReconciliationService(
             available, enabled, { sites },
-            renderExpected = { site -> if (site.projectSlug == "drifted") "expected" else File(available, site.projectSlug!!).readText() },
+            renderExpected = { site ->
+                if (site.projectSlug == "drifted") "expected" else File(
+                    available,
+                    site.projectSlug!!
+                ).readText()
+            },
             dockerCheck = { if (it.projectSlug == "docker") "container is not running" else null },
             nginxTest = { "/etc/nginx/sites-available/error: syntax error" },
             persist = { _, _ -> },

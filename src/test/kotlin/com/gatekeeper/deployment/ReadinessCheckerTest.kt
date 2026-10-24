@@ -2,8 +2,8 @@ package com.gatekeeper.deployment
 
 import com.gatekeeper.core.ports.HttpPortProbe
 import com.gatekeeper.core.ports.PortProbe
-import com.gatekeeper.db.repositories.DeploymentJobRecord
 import com.gatekeeper.docker.DockerGateway
+import com.gatekeeper.feature.deployment.domain.repository.DeploymentJobRecord
 import java.time.LocalDateTime
 import java.util.UUID
 import kotlin.test.Test
@@ -15,12 +15,12 @@ class ReadinessCheckerTest {
     fun `http probe resolves the configured container port and accepts 4xx response`() {
         val checked = mutableListOf<Triple<String, Int, String>>()
         val checker = ReadinessChecker(
-            PortProbe { _, _, _ -> error("TCP probe should not be used") },
-            HttpPortProbe { host, port, path, _ -> checked += Triple(host, port, path); true }
+            { _, _, _ -> error("TCP probe should not be used") },
+            { host, port, path, _ -> checked += Triple(host, port, path); true }
         )
         val job = job(readinessType = "http", readinessTarget = "/ready", containerPort = 8080)
 
-        val result = checker.check(HealthyDocker, "candidate", mapOf(8080 to 18080), job)
+        val result = checker.check(healthyDocker, "candidate", mapOf(8080 to 18080), job)
 
         assertEquals(ReadinessResult(8080), result)
         assertEquals(listOf(Triple("127.0.0.1", 18080, "/ready")), checked)
@@ -29,17 +29,17 @@ class ReadinessCheckerTest {
     @Test
     fun `docker health probe waits until container reports healthy`() {
         val checker = ReadinessChecker(
-            PortProbe { _, _, _ -> true },
-            HttpPortProbe { _, _, _, _ -> true }
+            { _, _, _ -> true },
+            { _, _, _, _ -> true }
         )
 
-        assertNull(checker.check(HealthyDocker.copy(health = "starting"), "candidate", emptyMap(), job(readinessType = "docker")))
-        assertEquals(ReadinessResult(null), checker.check(HealthyDocker, "candidate", emptyMap(), job(readinessType = "docker")))
+        assertNull(checker.check(healthyDocker.copy(health = "starting"), "candidate", emptyMap(), job(readinessType = "docker")))
+        assertEquals(ReadinessResult(null), checker.check(healthyDocker, "candidate", emptyMap(), job(readinessType = "docker")))
     }
 
     @Test
     fun `unknown readiness mode selects tcp only when a published port exists`() {
-        val checker = ReadinessChecker(PortProbe { _, _, _ -> true }, HttpPortProbe { _, _, _, _ -> true })
+        val checker = ReadinessChecker({ _, _, _ -> true }, { _, _, _, _ -> true })
 
         assertEquals("tcp (auto-detected)", checker.selectedProbe(job(), true))
         assertEquals("process", checker.selectedProbe(job(), false))
@@ -66,5 +66,5 @@ class ReadinessCheckerTest {
         override fun close() = Unit
     }
 
-    private val HealthyDocker = FakeDocker()
+    private val healthyDocker = FakeDocker()
 }
