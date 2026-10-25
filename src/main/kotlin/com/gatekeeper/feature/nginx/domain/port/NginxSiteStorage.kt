@@ -28,7 +28,6 @@ interface NginxSiteStorage {
     fun testNginxConfig(): Boolean
     fun reloadNginx(): Boolean
     fun removeSiteArtifacts(site: SiteRecord): Boolean
-    fun resolveInstalledCertificateByName(certificateDomain: String): ResolvedCertificate?
     fun nginxIncludesDirectoryInHttpContext(configDump: String, directory: String): Boolean
     fun testNginxConfigWithStagedSite(slug: String, stagedFile: File): NginxTestResult
     fun includePort(content: String): Int?

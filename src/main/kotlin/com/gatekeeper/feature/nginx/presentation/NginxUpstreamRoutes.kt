@@ -6,6 +6,9 @@ import com.gatekeeper.db.tables.UpstreamMode
 import com.gatekeeper.deployment.DeploymentApplicationService
 import com.gatekeeper.docker.DockerService
 import com.gatekeeper.feature.deployment.domain.repository.DeploymentJobRepository
+import com.gatekeeper.feature.nginx.application.ConvertSiteToDeploymentManagedUseCase
+import com.gatekeeper.feature.nginx.application.RepairDeploymentUpstreamUseCase
+import com.gatekeeper.feature.nginx.domain.port.NginxSiteStorage
 import com.gatekeeper.feature.service.domain.repository.SiteRecord
 import com.gatekeeper.feature.service.domain.repository.SiteRepository
 import com.gatekeeper.feature.nginx.infrastructure.DeploymentUpstreamResolver
@@ -19,7 +22,9 @@ fun Route.nginxUpstreamRoutes(
     siteRepository: SiteRepository,
     dockerService: DockerService,
     deploymentJobs: DeploymentJobRepository,
-    nginxService: NginxService
+    nginxSiteStorage: NginxSiteStorage,
+    repairDeploymentUpstreamUseCase: RepairDeploymentUpstreamUseCase,
+    convertSiteToDeploymentManagedUseCase: ConvertSiteToDeploymentManagedUseCase
 ) {
     authenticate("auth-jwt") {
         get("/api/admin/nginx/upstream-migration") {
@@ -90,13 +95,13 @@ fun Route.nginxUpstreamRoutes(
             if (summary?.containerPort == null && legacyPrimary != null) {
                 deploymentJobs.setPrimaryContainerPortForService(site.projectId, serviceId, legacyPrimary)
             }
-            val migrated = nginxService.convertSiteToDeploymentManaged(site, target.port)
+            val migrated = convertSiteToDeploymentManagedUseCase.execute(site, target.port)
             if (!migrated) return@post call.respondError(
                 HttpStatusCode.InternalServerError,
                 "upstream_migration_failed",
                 "Site conversion failed; the previous route was restored where possible"
             )
-            val backupName = site.projectSlug?.let { slug -> nginxService.listBackups(slug).firstOrNull()?.name }
+            val backupName = site.projectSlug?.let { slug -> nginxSiteStorage.listBackups(slug).firstOrNull()?.name }
             call.respond(
                 mapOf(
                     "success" to true,
@@ -177,7 +182,7 @@ fun Route.nginxUpstreamRoutes(
                     "The active container no longer exposes the persisted host port; redeploy or adopt the runtime before repairing nginx"
                 )
             }
-            if (!nginxService.repairDeploymentUpstream(
+            if (!repairDeploymentUpstreamUseCase.execute(
                     serviceId,
                     site.domain,
                     site.tlsMode != TlsMode.HTTP_ONLY,

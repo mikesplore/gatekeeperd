@@ -3,17 +3,22 @@ package com.gatekeeper.feature.nginx.presentation
 import com.gatekeeper.admin.respondNginxDomainConflicts
 import com.gatekeeper.api.respondError
 import com.gatekeeper.api.respondErrorWithData
+import com.gatekeeper.config.AppSettings
 import com.gatekeeper.db.tables.ServiceDomainStatus
 import com.gatekeeper.deployment.DeploymentApplicationService
 import com.gatekeeper.docker.DockerService
 import com.gatekeeper.feature.deployment.domain.repository.ServiceDomainRepository
+import com.gatekeeper.feature.nginx.application.ListConfigArtifactsUseCase
+import com.gatekeeper.feature.nginx.domain.service.NginxConfigRenderer
+import com.gatekeeper.feature.nginx.domain.service.NginxConflictAnalyzer
+import com.gatekeeper.feature.nginx.domain.service.NginxValidationService
+import com.gatekeeper.feature.nginx.infrastructure.CertbotCertificateProvisioner
 import com.gatekeeper.feature.nginx.model.NginxPlanResult
 import com.gatekeeper.feature.project.domain.repository.ProjectRepository
 import com.gatekeeper.feature.service.domain.repository.ServiceRepository
 import com.gatekeeper.feature.service.domain.repository.SiteRepository
 import com.gatekeeper.feature.nginx.infrastructure.DeploymentUpstreamResolver
 import com.gatekeeper.nginx.NginxService
-import com.gatekeeper.feature.nginx.domain.service.requireValidHostname
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.auth.authenticate
 import io.ktor.server.request.receive
@@ -25,11 +30,17 @@ import io.ktor.server.routing.post
 fun Route.nginxWizardAdminRoutes(
     siteRepository: SiteRepository,
     dockerService: DockerService,
-    nginxService: NginxService,
     serviceRepository: ServiceRepository,
     serviceDomains: ServiceDomainRepository,
     projectRepository: ProjectRepository,
-    deploymentUR: DeploymentUpstreamResolver
+    deploymentUR: DeploymentUpstreamResolver,
+    certificationService: CertbotCertificateProvisioner,
+    validator: NginxValidationService,
+    nginxSettings: AppSettings.NginxSettings,
+    renderer: NginxConfigRenderer,
+    analyzer: NginxConflictAnalyzer,
+    artifactsUseCase: ListConfigArtifactsUseCase,
+    planNginxEnableRequest: PlanNginxEnableRequest
 ){
     authenticate("auth-jwt") {
         get("/api/admin/nginx/wizard/context/{slug}") {
@@ -93,7 +104,7 @@ fun Route.nginxWizardAdminRoutes(
                 activeRuntime?.containerName?.let(dockerService::containerHealth)
             }.getOrNull()
 
-            val installedCerts = nginxService.listInstalledCertificates().map { it.certificateDomain }.sorted()
+            val installedCerts = certificationService.listInstalledCertificates().map { it.certificateDomain }.sorted()
             val domain = selectedService.domain
             val siteSlug = domain?.let {
                 site?.projectSlug ?: nginxSiteSlug(
@@ -104,24 +115,20 @@ fun Route.nginxWizardAdminRoutes(
                 )
             }
             val nginxEnabled = siteSlug?.let { name ->
-                nginxService.listConfigArtifacts().any { it.filename == name && it.available && it.enabled }
+                artifactsUseCase.execute().any { it.filename == name && it.available && it.enabled }
             } ?: false
-            val resolvedCert = domain?.let(nginxService::resolveCertificateForDomain)
+            val resolvedCert = domain?.let(certificationService::resolveCertificateForDomain)
 
             call.respond(
                 NginxWizardContextResponse(
                     slug = slug,
-                    serviceId = serviceId.toString(),
-                    domain = domain,
+                    domain = domain?:"",
                     nginxEnabled = nginxEnabled,
                     resolvedUpstreamHost = resolvedTarget?.host,
                     configuredPort = configuredPort,
-                    configuredContainerPort = site?.upstreamContainerPort ?: activeRuntime?.containerPort,
-                    publishedPorts = activeRuntime?.publishedPorts ?: emptyMap(),
                     runtimeHealth = dockerHealth,
                     installedCertificates = installedCerts,
                     resolvedCertificateDomain = resolvedCert?.certificateDomain,
-                    bindings = bindings
                 )
             )
         }
@@ -162,7 +169,7 @@ fun Route.nginxWizardAdminRoutes(
                 return@post
             }
             val requestedDomain = body.domain?.let { raw ->
-                runCatching { requireValidHostname(raw) }.getOrElse {
+                runCatching { validator.requireValidHostname(raw) }.getOrElse {
                     call.respondError(
                         HttpStatusCode.BadRequest,
                         "invalid_domain",
@@ -209,7 +216,7 @@ fun Route.nginxWizardAdminRoutes(
             val siteSlug =
                 site?.projectSlug ?: nginxSiteSlug(slug, service.isDefault, serviceDomain, service.domain)
 
-            when (val result = createNginxEnablePlan(
+            when (val result = planNginxEnableRequest.planNginxEnableRequest(
                 slug = siteSlug,
                 projectDomain = serviceDomain,
                 activeRuntimeTarget = binding.containerPort?.let {
@@ -221,8 +228,6 @@ fun Route.nginxWizardAdminRoutes(
                 }
                     ?: deploymentUR.resolve(selectedServiceId, "production"),
                 request = body,
-                nginxService = nginxService,
-                dockerService = dockerService,
                 sslCertPath = nginxSettings.sslCertPath
             )) {
                 is NginxPlanResult.Err -> {
@@ -236,7 +241,7 @@ fun Route.nginxWizardAdminRoutes(
 
                 is NginxPlanResult.Ok -> {
                     val plan = result.plan
-                    val config = nginxService.generateNginxConfig(
+                    val config = renderer.generateNginxConfig(
                         slug = siteSlug,
                         domain = plan.domain,
                         appPort = plan.appPort,
@@ -246,7 +251,7 @@ fun Route.nginxWizardAdminRoutes(
                         sslCertificateKeyPath = plan.resolvedCertificate?.privateKeyPath
                     )
                     val conflicts =
-                        runCatching { nginxService.findDomainConflicts(config, siteSlug) }.getOrElse { error ->
+                        runCatching { analyzer.findDomainConflicts(config, siteSlug) }.getOrElse { error ->
                             call.respondError(
                                 HttpStatusCode.InternalServerError,
                                 "nginx_config_scan_failed",
@@ -276,7 +281,7 @@ fun Route.nginxWizardAdminRoutes(
     }
 }
 
-private fun nginxSiteSlug(
+fun nginxSiteSlug(
     projectSlug: String,
     isDefaultService: Boolean,
     domain: String,
