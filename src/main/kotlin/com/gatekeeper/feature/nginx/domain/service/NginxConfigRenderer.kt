@@ -1,11 +1,14 @@
 package com.gatekeeper.feature.nginx.domain.service
 
+import com.gatekeeper.feature.nginx.infrastructure.NginxConfigRenderer
 import com.gatekeeper.feature.nginx.model.DEFAULT_GATEKEEPER_BYPASS_PATHS
 import com.gatekeeper.feature.nginx.model.NginxSiteRenderModel
 import com.gatekeeper.feature.nginx.model.TlsRenderMode
 import com.gatekeeper.feature.nginx.presentation.NginxCustomLocation
 
-class NginxConfigRenderer {
+class NginxConfigRendererService(
+    private val renderer: NginxConfigRenderer
+) {
     fun generateNginxConfig(
         site: NginxSiteRenderModel
     ): String = generateNginxConfig(
@@ -44,7 +47,7 @@ class NginxConfigRenderer {
         siteId: java.util.UUID? = null,
         upstreamKind: String? = null,
         customNginxLocations: List<NginxCustomLocation> = emptyList()
-    ): String = NginxConfigRenderer().render(
+    ): String = renderer.render(
         slug, domain, appPort, upstreamScheme, sslEnabled, sslCertificatePath, sslCertificateKeyPath,
         upstreamHost, http2, gateEnabled, bypassPaths, projectId, serviceId, siteId, upstreamKind, customNginxLocations
     )

@@ -22,7 +22,7 @@ class NginxBackfillRunner(
     private val siteRepository: SiteRepository,
     private val deploymentUpstreamResolver: DeploymentUpstreamResolver,
     private val certificate: CertificateProvisioner,
-    private val renderer: NginxConfigRenderer
+    private val renderer: NginxConfigRendererService
 ) {
     fun run(
         sitesAvailablePath: String,

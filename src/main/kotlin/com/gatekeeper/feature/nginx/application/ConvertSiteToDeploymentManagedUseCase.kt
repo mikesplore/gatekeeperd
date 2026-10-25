@@ -6,7 +6,7 @@ import com.gatekeeper.db.tables.TlsMode
 import com.gatekeeper.feature.nginx.domain.port.CertificateProvisioner
 import com.gatekeeper.feature.nginx.domain.port.NginxCommandRunner
 import com.gatekeeper.feature.nginx.domain.port.NginxSiteStorage
-import com.gatekeeper.feature.nginx.domain.service.NginxConfigRenderer
+import com.gatekeeper.feature.nginx.domain.service.NginxConfigRendererService
 import com.gatekeeper.feature.nginx.infrastructure.DeploymentUpstreamIncludes
 import com.gatekeeper.feature.nginx.model.ResolvedCertificate
 import com.gatekeeper.feature.service.domain.repository.SiteRecord
@@ -15,7 +15,6 @@ import com.gatekeeper.feature.nginx.model.TlsRenderMode
 import com.gatekeeper.feature.nginx.model.nginxServiceLogger
 import com.gatekeeper.feature.nginx.presentation.NginxTestResult
 import com.gatekeeper.feature.service.domain.repository.SiteRepository
-import com.gatekeeper.infrastructure.TcpCutoverProbe
 import com.gatekeeper.plugins.DistributedLock
 import java.io.File
 
@@ -23,7 +22,7 @@ class ConvertSiteToDeploymentManagedUseCase(
     private val upstreamIncludeDirectory: String = "/etc/nginx/conf.d/gatekeeperd-upstreams",
     private val nginxTestRunner: () -> NginxTestResult = { NginxCommandRunner().test() },
     private val siteConfig: ApplySiteConfigUseCase,
-    private val renderer: NginxConfigRenderer,
+    private val renderer: NginxConfigRendererService,
     private val cutoverProbe: CutoverProbe,
     private val nginxSiteStorage: NginxSiteStorage,
     private val inspectSite: InspectSiteConfigUseCase,

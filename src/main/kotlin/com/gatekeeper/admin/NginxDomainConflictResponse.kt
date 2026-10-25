@@ -8,6 +8,7 @@ import io.ktor.server.application.ApplicationCall
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 
 internal suspend fun ApplicationCall.respondNginxDomainConflicts(conflicts: List<NginxDomainConflict>) {

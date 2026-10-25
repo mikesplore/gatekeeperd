@@ -2,6 +2,7 @@ package com.gatekeeper.feature.nginx.infrastructure
 
 import com.gatekeeper.config.AppSettings
 import com.gatekeeper.feature.nginx.application.ApplySiteConfigUseCase
+import com.gatekeeper.feature.nginx.application.DisableManualConfigUseCase
 import com.gatekeeper.feature.nginx.application.ListConfigArtifactsUseCase
 import com.gatekeeper.feature.nginx.application.RemoveSiteConfigUseCase
 import com.gatekeeper.feature.nginx.domain.port.NginxCommandRunner
@@ -29,6 +30,7 @@ class NginxSiteFileStore(
     private val removeSiteConfigUseCase: RemoveSiteConfigUseCase,
     private val listConfigArtifacts: ListConfigArtifactsUseCase,
     private val applySiteConfigUseCase: ApplySiteConfigUseCase,
+    private val disableManConfig: DisableManualConfigUseCase
 
     ) : NginxSiteStorage {
     private val availableDir = File(settings.sitesAvailablePath)
@@ -112,8 +114,8 @@ class NginxSiteFileStore(
         File(availableDir, filename).takeIf { it.exists() }?.readText()
 
     override fun disableManualConfig(filename: String): NginxManualConfigDisableResult {
-        val disabled = disableSite(filename)
-        return NginxManualConfigDisableResult(success = disabled, filename = filename)
+        disableSite(filename)
+        return disableManConfig.execute(filename = filename)
     }
 
     override fun deleteDisabledManualConfig(filename: String): String {

@@ -9,7 +9,7 @@ import com.gatekeeper.deployment.DeploymentApplicationService
 import com.gatekeeper.docker.DockerService
 import com.gatekeeper.feature.deployment.domain.repository.ServiceDomainRepository
 import com.gatekeeper.feature.nginx.application.ListConfigArtifactsUseCase
-import com.gatekeeper.feature.nginx.domain.service.NginxConfigRenderer
+import com.gatekeeper.feature.nginx.domain.service.NginxConfigRendererService
 import com.gatekeeper.feature.nginx.domain.service.NginxConflictAnalyzer
 import com.gatekeeper.feature.nginx.domain.service.NginxValidationService
 import com.gatekeeper.feature.nginx.infrastructure.CertbotCertificateProvisioner
@@ -18,7 +18,6 @@ import com.gatekeeper.feature.project.domain.repository.ProjectRepository
 import com.gatekeeper.feature.service.domain.repository.ServiceRepository
 import com.gatekeeper.feature.service.domain.repository.SiteRepository
 import com.gatekeeper.feature.nginx.infrastructure.DeploymentUpstreamResolver
-import com.gatekeeper.nginx.NginxService
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.auth.authenticate
 import io.ktor.server.request.receive
@@ -37,7 +36,7 @@ fun Route.nginxWizardAdminRoutes(
     certificationService: CertbotCertificateProvisioner,
     validator: NginxValidationService,
     nginxSettings: AppSettings.NginxSettings,
-    renderer: NginxConfigRenderer,
+    renderer: NginxConfigRendererService,
     analyzer: NginxConflictAnalyzer,
     artifactsUseCase: ListConfigArtifactsUseCase,
     planNginxEnableRequest: PlanNginxEnableRequest

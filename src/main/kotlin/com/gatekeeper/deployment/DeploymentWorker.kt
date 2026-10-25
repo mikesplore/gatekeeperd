@@ -1,35 +1,36 @@
 package com.gatekeeper.deployment
 
-import com.gatekeeper.feature.deployment.domain.repository.DeploymentJobRecord
-import com.gatekeeper.core.ports.DeploymentLock
-import com.gatekeeper.feature.deployment.domain.repository.DeploymentPortAllocationRepository
-import com.gatekeeper.feature.audit.domain.repository.AuditRepository
 import com.gatekeeper.config.AppSettings
-import com.gatekeeper.plugins.DistributedLock
+import com.gatekeeper.core.ports.CutoverProbe
+import com.gatekeeper.core.ports.DeploymentLock
+import com.gatekeeper.core.ports.HttpPortProbe
+import com.gatekeeper.core.ports.PortProbe
 import com.gatekeeper.docker.CreateContainerRequest
 import com.gatekeeper.docker.DockerGateway
-import com.gatekeeper.core.ports.PortProbe
-import com.gatekeeper.core.ports.HttpPortProbe
-import com.gatekeeper.core.ports.CutoverProbe
+import com.gatekeeper.feature.audit.domain.repository.AuditRepository
+import com.gatekeeper.feature.deployment.domain.repository.DeploymentJobRecord
+import com.gatekeeper.feature.deployment.domain.repository.DeploymentPortAllocationRepository
 import com.gatekeeper.feature.deployment.domain.repository.ServiceDomainRepository
+import com.gatekeeper.feature.nginx.application.ConvertSiteToDeploymentManagedUseCase
 import com.gatekeeper.feature.nginx.application.InspectSiteConfigUseCase
 import com.gatekeeper.feature.nginx.application.RecoverInterruptedCutoverUseCase
 import com.gatekeeper.feature.nginx.application.SwitchDeploymentUpstreamUseCase
 import com.gatekeeper.feature.nginx.domain.port.NginxSiteStorage
 import com.gatekeeper.feature.nginx.infrastructure.DeploymentUpstreamIncludes
 import com.gatekeeper.feature.nginx.model.InterruptedCutoverResult
-import com.gatekeeper.feature.project.domain.repository.ProjectRepository
+import com.gatekeeper.feature.nginx.presentation.canDeploymentCutoverUpdateRoute
 import com.gatekeeper.feature.service.domain.repository.SiteRecord
 import com.gatekeeper.feature.service.domain.repository.SiteRepository
+import com.gatekeeper.plugins.DistributedLock
 import com.gatekeeper.security.SecretValueCipher
 import kotlinx.coroutines.*
 import org.slf4j.LoggerFactory
 import java.io.File
 import java.nio.file.Files
-import java.util.concurrent.atomic.AtomicBoolean
-import java.util.UUID
 import java.time.LocalDateTime
+import java.util.*
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.time.Duration.Companion.milliseconds
 
 class DeploymentWorker(
@@ -45,13 +46,13 @@ class DeploymentWorker(
     private val readinessPorts: PortProbe,
     private val readinessHttp: HttpPortProbe,
     private val cutoverProbe: CutoverProbe,
-    private val projectRepository: ProjectRepository,
     private val siteRepository: SiteRepository,
     private val serviceDomains: ServiceDomainRepository,
     private val recoverInterruptedCutoverUseCase: RecoverInterruptedCutoverUseCase,
     private val nginx: NginxSiteStorage,
     private val switchDeploymentUpstreamUseCase: SwitchDeploymentUpstreamUseCase,
-    private val inspectSiteConfigUseCase: InspectSiteConfigUseCase
+    private val inspectSiteConfigUseCase: InspectSiteConfigUseCase,
+    private val convertSiteToDeploymentManagedUseCase: ConvertSiteToDeploymentManagedUseCase
 ) {
     private val logger = LoggerFactory.getLogger("com.gatekeeper.deployment.DeploymentWorker")
     private val started = AtomicBoolean(false)
@@ -106,12 +107,16 @@ class DeploymentWorker(
                 val candidate = DeploymentApplicationService.candidateRuntime(deploymentId)
                 if (site == null || files == null) {
                     cleanupInterruptedCandidate(deploymentId, candidate?.name, "missing recovery data or site")
-                    DeploymentApplicationService.updateCutoverState(deploymentId, "repair_required", "Pending upstream recovery data or site is missing")
+                    DeploymentApplicationService.updateCutoverState(
+                        deploymentId,
+                        "repair_required",
+                        "Pending upstream recovery data or site is missing"
+                    )
                     return@tryWithLock
                 }
                 val candidateRunning = candidate?.name?.let { docker.containerHealth(it) == "running" } == true
                 val restoringFailedCutover = recovery.state == "repair_required"
-                val result = nginxService.recoverInterruptedUpstream(
+                val result = recoverInterruptedCutoverUseCase.execute(
                     site, files, candidateRunning && !restoringFailedCutover
                 )
                 when (result) {
@@ -125,7 +130,9 @@ class DeploymentWorker(
                             )
                             if (removed) {
                                 DeploymentApplicationService.updateCutoverState(
-                                    deploymentId, "restored", "Previous gateway route restored and failed candidate removed"
+                                    deploymentId,
+                                    "restored",
+                                    "Previous gateway route restored and failed candidate removed"
                                 )
                             }
                         } else if (result == InterruptedCutoverResult.PREVIOUS_RESTORED) {
@@ -153,8 +160,13 @@ class DeploymentWorker(
                             )
                         }
                     }
+
                     InterruptedCutoverResult.CONFLICT -> {
-                        DeploymentApplicationService.updateCutoverState(deploymentId, "repair_required", "Upstream include checksum matches neither saved cutover target nor previous content")
+                        DeploymentApplicationService.updateCutoverState(
+                            deploymentId,
+                            "repair_required",
+                            "Upstream include checksum matches neither saved cutover target nor previous content"
+                        )
                     }
                 }
             }
@@ -203,9 +215,11 @@ class DeploymentWorker(
         var job = claimedJob
         val site = if (job.environment == "production") siteRepository.findByServiceId(job.serviceId) else null
         if (job.containerPort == null) {
-            job = job.copy(containerPort = DeploymentSiteCutoverPolicy.primaryContainerPort(
-                null, site?.upstreamKind, site?.upstreamExplicitPort
-            ))
+            job = job.copy(
+                containerPort = DeploymentSiteCutoverPolicy.primaryContainerPort(
+                    null, site?.upstreamKind, site?.upstreamExplicitPort
+                )
+            )
         }
         DeploymentApplicationService.deploymentBlockReason(job.serviceId, job.environment)?.let { reason ->
             update(job, step = "failed", log = reason, status = "failed", error = reason)
@@ -220,8 +234,15 @@ class DeploymentWorker(
             } catch (error: Exception) {
                 val routeRestored = routeRollback?.let { runCatching(it).getOrDefault(false) } ?: true
                 if (!routeRestored) {
-                    DeploymentApplicationService.updateCutoverState(job.id, "repair_required", "Gateway restoration failed after cutover error")
-                    logger.error("Deployment {} failed after gateway cutover; candidate retained because gateway restoration failed", job.id)
+                    DeploymentApplicationService.updateCutoverState(
+                        job.id,
+                        "repair_required",
+                        "Gateway restoration failed after cutover error"
+                    )
+                    logger.error(
+                        "Deployment {} failed after gateway cutover; candidate retained because gateway restoration failed",
+                        job.id
+                    )
                     update(
                         job,
                         step = "failed",
@@ -235,9 +256,17 @@ class DeploymentWorker(
                         requireNotNull(job.claimToken),
                         error.message ?: "Cutover failed"
                     )
-                    if (!requeued) logger.warn("Deployment {} cutover retry was not queued because its claim changed", job.id)
+                    if (!requeued) logger.warn(
+                        "Deployment {} cutover retry was not queued because its claim changed",
+                        job.id
+                    )
                 }
-                auditRepository.write(null, "deployment_cutover_failed", "deployment-worker", "job=${job.id} error=${error.message}")
+                auditRepository.write(
+                    null,
+                    "deployment_cutover_failed",
+                    "deployment-worker",
+                    "job=${job.id} error=${error.message}"
+                )
             }
             return
         }
@@ -277,7 +306,7 @@ class DeploymentWorker(
                     gitRef = job.gitRef,
                     workspace = workspace,
                     resetWorkspace = {
-                    workspace.toFile().deleteRecursively()
+                        workspace.toFile().deleteRecursively()
                         Files.createDirectories(workspace)
                     },
                     checkCancelled = { ensureNotCancelled(job.id, requireNotNull(job.claimToken)) },
@@ -293,22 +322,36 @@ class DeploymentWorker(
                 imageBuilder.authenticate(job.registry, credential.username, credential.password) {
                     ensureNotCancelled(job.id, requireNotNull(job.claimToken))
                 }
-                deploymentQueue.update(job.id, requireNotNull(job.claimToken), "registry_authenticated", "Authenticated to registry ${job.registry}")
+                deploymentQueue.update(
+                    job.id,
+                    requireNotNull(job.claimToken),
+                    "registry_authenticated",
+                    "Authenticated to registry ${job.registry}"
+                )
             }
             if (rollbackArtifact == null && !job.repository.isNullOrBlank()) {
                 update(job, "building", "Building $image")
-                imageBuilder.build(image, workspace, { ensureNotCancelled(job.id, requireNotNull(job.claimToken)) }) { line ->
+                imageBuilder.build(
+                    image,
+                    workspace,
+                    { ensureNotCancelled(job.id, requireNotNull(job.claimToken)) }) { line ->
                     deploymentQueue.update(job.id, requireNotNull(job.claimToken), log = line)
                 }
                 imageBuiltLocally = true
                 update(job, "pushing", "Pushing $image")
-                imageBuilder.push(image, workspace, { ensureNotCancelled(job.id, requireNotNull(job.claimToken)) }) { line ->
+                imageBuilder.push(
+                    image,
+                    workspace,
+                    { ensureNotCancelled(job.id, requireNotNull(job.claimToken)) }) { line ->
                     deploymentQueue.update(job.id, requireNotNull(job.claimToken), log = line)
                 }
             }
             if (!imageBuiltLocally) {
                 update(job, "pulling", "Pulling $image on the deployment host")
-                imageBuilder.pull(image, workspace, { ensureNotCancelled(job.id, requireNotNull(job.claimToken)) }) { line ->
+                imageBuilder.pull(
+                    image,
+                    workspace,
+                    { ensureNotCancelled(job.id, requireNotNull(job.claimToken)) }) { line ->
                     deploymentQueue.update(job.id, requireNotNull(job.claimToken), log = line)
                 }
             } else {
@@ -317,117 +360,144 @@ class DeploymentWorker(
             update(job, "starting_container", "Starting application container")
             ensureNotCancelled(job.id, requireNotNull(job.claimToken))
             val digest = docker.imageDigest(image)
-                val immutableImageReference = docker.immutableImageReference(image)
-                    ?: error("Docker could not determine an immutable image identity for deployment recovery")
-                update(job, log = "Image digest: ${digest ?: "unavailable"}", imageDigest = digest)
-                if (job.network != "bridge" && job.createNetworkIfMissing) docker.createNetworkIfMissing(job.network)
-                candidateName = deterministicCandidateName
-                val imagePorts = docker.imageExposedTcpPorts(image)
-                val managedSite = if (job.environment == "production") siteRepository.findByServiceId(job.serviceId) else null
-                if (DeploymentSiteCutoverPolicy.hasDeploymentRoute(managedSite?.upstreamKind) && job.containerPort == null && imagePorts.size != 1) {
-                    error("Managed service must configure a primary container port when its image exposes zero or multiple TCP ports")
+            val immutableImageReference = docker.immutableImageReference(image)
+                ?: error("Docker could not determine an immutable image identity for deployment recovery")
+            update(job, log = "Image digest: ${digest ?: "unavailable"}", imageDigest = digest)
+            if (job.network != "bridge" && job.createNetworkIfMissing) docker.createNetworkIfMissing(job.network)
+            candidateName = deterministicCandidateName
+            val imagePorts = docker.imageExposedTcpPorts(image)
+            val managedSite =
+                if (job.environment == "production") siteRepository.findByServiceId(job.serviceId) else null
+            if (DeploymentSiteCutoverPolicy.hasDeploymentRoute(managedSite?.upstreamKind) && job.containerPort == null && imagePorts.size != 1) {
+                error("Managed service must configure a primary container port when its image exposes zero or multiple TCP ports")
+            }
+            val dynamicContainerPorts = (imagePorts + listOfNotNull(job.containerPort)).toSet()
+            update(
+                job,
+                log = if (imagePorts.isNotEmpty()) {
+                    "Docker image declares TCP port(s): ${imagePorts.joinToString()}; configured primary port ${job.containerPort ?: "not set"} is preserved"
+                } else if (job.containerPort != null) {
+                    "Docker image declares no TCP ports; using saved container port ${job.containerPort} as a fallback"
+                } else {
+                    "Docker image declares no TCP ports; readiness will use container process state"
                 }
-                val dynamicContainerPorts = (imagePorts + listOfNotNull(job.containerPort)).toSet()
-                update(
-                    job,
-                    log = if (imagePorts.isNotEmpty()) {
-                        "Docker image declares TCP port(s): ${imagePorts.joinToString()}; configured primary port ${job.containerPort ?: "not set"} is preserved"
-                    } else if (job.containerPort != null) {
-                        "Docker image declares no TCP ports; using saved container port ${job.containerPort} as a fallback"
-                    } else {
-                        "Docker image declares no TCP ports; readiness will use container process state"
-                    }
-                )
-                val activePorts = DeploymentApplicationService.activeRuntime(job.serviceId, job.environment)?.ports.orEmpty()
-                val rejectedPorts = mutableSetOf<Int>()
-                var reservedPorts = emptyMap<Int, Int>()
-                var created: Pair<String, com.gatekeeper.docker.ContainerInfo>? = null
-                for (attempt in 0 until 4) {
-                    reservedPorts = if (dynamicContainerPorts.isEmpty()) emptyMap() else {
-                        val site = if (job.environment == "production") siteRepository.findByServiceId(job.serviceId) else null
-                        portAllocationRepository.allocateSlot(
-                            serviceId = job.serviceId,
-                            environment = job.environment,
-                            activePorts = activePorts,
-                            containerPorts = dynamicContainerPorts,
-                            dockerPortsInUse = docker.hostPortsInUse() + HostPortListeners.read(),
-                            portRange = schedulerSettings.deploymentHostPortRange,
-                            rejectedPorts = rejectedPorts,
-                            preferredHostPorts = buildMap {
-                                val explicitPort = site?.upstreamExplicitPort
-                                val containerPort = job.containerPort
-                                if (explicitPort != null && containerPort != null) put(containerPort, explicitPort)
-                            }
-                        )
-                    }
-                    if (reservedPorts.isNotEmpty()) {
-                        update(
-                            job,
-                            log = "Reserved stable host ports for candidate: " +
+            )
+            val activePorts =
+                DeploymentApplicationService.activeRuntime(job.serviceId, job.environment)?.ports.orEmpty()
+            val rejectedPorts = mutableSetOf<Int>()
+            var reservedPorts = emptyMap<Int, Int>()
+            var created: Pair<String, com.gatekeeper.docker.ContainerInfo>? = null
+            for (attempt in 0 until 4) {
+                reservedPorts = if (dynamicContainerPorts.isEmpty()) emptyMap() else {
+                    val site =
+                        if (job.environment == "production") siteRepository.findByServiceId(job.serviceId) else null
+                    portAllocationRepository.allocateSlot(
+                        serviceId = job.serviceId,
+                        environment = job.environment,
+                        activePorts = activePorts,
+                        containerPorts = dynamicContainerPorts,
+                        dockerPortsInUse = docker.hostPortsInUse() + HostPortListeners.read(),
+                        portRange = schedulerSettings.deploymentHostPortRange,
+                        rejectedPorts = rejectedPorts,
+                        preferredHostPorts = buildMap {
+                            val explicitPort = site?.upstreamExplicitPort
+                            val containerPort = job.containerPort
+                            if (explicitPort != null && containerPort != null) put(containerPort, explicitPort)
+                        }
+                    )
+                }
+                if (reservedPorts.isNotEmpty()) {
+                    update(
+                        job,
+                        log = "Reserved stable host ports for candidate: " +
                                 reservedPorts.entries.sortedBy { it.key }.joinToString { "${it.value}->${it.key}" }
-                        )
-                    }
-                    try {
-                        val result = docker.createContainerTracked(CreateContainerRequest(
+                    )
+                }
+                try {
+                    val result = docker.createContainerTracked(
+                        CreateContainerRequest(
                             name = candidateName,
                             image = immutableImageReference,
-                            ports = reservedPorts.map { (containerPort, hostPort) -> hostPort to containerPort }.toMap(),
+                            ports = reservedPorts.map { (containerPort, hostPort) -> hostPort to containerPort }
+                                .toMap(),
                             portHostIp = "127.0.0.1",
                             network = job.network,
                             restartPolicy = job.restartPolicy,
                             env = deploymentQueue.resolveEnvironmentForExecution(job.id).values,
                             volumes = job.volumes,
                             pullImage = false
-                        ))
-                        created = result.id to result.info
-                        break
-                    } catch (error: Exception) {
-                        if (!isHostPortConflict(error) || attempt == 3 || reservedPorts.isEmpty()) throw error
-                        rejectedPorts += reservedPorts.values
-                        update(job, log = "Docker could not bind reserved port(s) ${reservedPorts.values.joinToString()}; reallocating from the configured pool")
-                    }
-                }
-                val (createdId, candidateInfo) = created
-                    ?: error("Docker did not create the candidate container")
-                candidateContainerId = createdId
-                val candidatePortMappings = dynamicContainerPorts.associateWith { containerPort ->
-                    candidateInfo.ports.publishedHostPort(containerPort)
-                        ?: error("Docker did not assign a host port for candidate container port $containerPort")
-                }
-                val selectedProbe = readinessChecker.selectedProbe(job, candidatePortMappings.isNotEmpty())
-                update(job, step = "health_checking", log = "Waiting for candidate readiness using $selectedProbe probe")
-                val readiness = awaitHealthy(docker, candidateName, candidatePortMappings, job)
-                if (readiness == null) {
-                    val failure = IllegalStateException(
-                        "Candidate container did not pass automatic readiness checks for port(s) ${dynamicContainerPorts.sorted().joinToString().ifBlank { "none declared" }}"
+                        )
                     )
-                    candidateContainerId?.let { removeCandidatePreservingFailure(docker, it, failure) }
-                    candidateContainerId = null
-                    candidateName = null
-                    throw failure
+                    created = result.id to result.info
+                    break
+                } catch (error: Exception) {
+                    if (!isHostPortConflict(error) || attempt == 3 || reservedPorts.isEmpty()) throw error
+                    rejectedPorts += reservedPorts.values
+                    update(
+                        job,
+                        log = "Docker could not bind reserved port(s) ${reservedPorts.values.joinToString()}; reallocating from the configured pool"
+                    )
                 }
-                ensureNotCancelled(job.id, requireNotNull(job.claimToken))
-                val resolvedContainerPort = readiness.containerPort ?: job.containerPort
-                val candidateHostPort = resolvedContainerPort?.let(candidatePortMappings::get)
-                check(DeploymentApplicationService.recordCandidateRuntime(
-                    job.id, candidateName, candidateHostPort, resolvedContainerPort, candidatePortMappings,
-                    immutableImageReference, listOf(job.network), candidatePortMappings.keys.associateWith { "127.0.0.1" }
-                )) {
-                    "Unable to persist candidate runtime for deployment ${job.id}"
-                }
-                update(
-                    job,
-                    step = "readiness_succeeded",
-                    log = "Candidate passed readiness checks ($selectedProbe); resolved application container port ${resolvedContainerPort ?: "none"}. Container is ready; gateway cutover is a separate step"
+            }
+            val (createdId, candidateInfo) = created
+                ?: error("Docker did not create the candidate container")
+            candidateContainerId = createdId
+            val candidatePortMappings = dynamicContainerPorts.associateWith { containerPort ->
+                candidateInfo.ports.publishedHostPort(containerPort)
+                    ?: error("Docker did not assign a host port for candidate container port $containerPort")
+            }
+            val selectedProbe = readinessChecker.selectedProbe(job, candidatePortMappings.isNotEmpty())
+            update(job, step = "health_checking", log = "Waiting for candidate readiness using $selectedProbe probe")
+            val readiness = awaitHealthy(docker, candidateName, candidatePortMappings, job)
+            if (readiness == null) {
+                val failure = IllegalStateException(
+                    "Candidate container did not pass automatic readiness checks for port(s) ${
+                        dynamicContainerPorts.sorted().joinToString().ifBlank { "none declared" }
+                    }"
                 )
-                auditRepository.write(null, "deployment_readiness_succeeded", "deployment-worker", "job=${job.id} repository=${job.repository ?: "prebuilt-image"} commit=${commit ?: "not-applicable"}")
-                var cutoverSucceeded = false
-                cutover(job.copy(containerPort = resolvedContainerPort), docker, auditRepository) { rollback -> routeRollback = rollback }
-                cutoverSucceeded = true
-                if (cutoverSucceeded) {
-                    candidateName = null
-                    candidateContainerId = null
-                }
+                candidateContainerId.let { removeCandidatePreservingFailure(docker, it, failure) }
+                candidateContainerId = null
+                candidateName = null
+                throw failure
+            }
+            ensureNotCancelled(job.id, requireNotNull(job.claimToken))
+            val resolvedContainerPort = readiness.containerPort ?: job.containerPort
+            val candidateHostPort = resolvedContainerPort?.let(candidatePortMappings::get)
+            check(
+                DeploymentApplicationService.recordCandidateRuntime(
+                job.id,
+                candidateName,
+                candidateHostPort,
+                resolvedContainerPort,
+                candidatePortMappings,
+                immutableImageReference,
+                listOf(job.network),
+                candidatePortMappings.keys.associateWith { "127.0.0.1" }
+            )) {
+                "Unable to persist candidate runtime for deployment ${job.id}"
+            }
+            update(
+                job,
+                step = "readiness_succeeded",
+                log = "Candidate passed readiness checks ($selectedProbe); resolved application container port ${resolvedContainerPort ?: "none"}. Container is ready; gateway cutover is a separate step"
+            )
+            auditRepository.write(
+                null,
+                "deployment_readiness_succeeded",
+                "deployment-worker",
+                "job=${job.id} repository=${job.repository ?: "prebuilt-image"} commit=${commit ?: "not-applicable"}"
+            )
+            var cutoverSucceeded = false
+            cutover(
+                job.copy(containerPort = resolvedContainerPort),
+                docker,
+                auditRepository
+            ) { rollback -> routeRollback = rollback }
+            cutoverSucceeded = true
+            if (cutoverSucceeded) {
+                candidateName = null
+                candidateContainerId = null
+            }
         } catch (error: CancellationException) {
             candidateContainerId?.let { id -> removeCandidatePreservingFailure(null, id, error) }
             if (deploymentQueue.isCancelled(job.id)) {
@@ -436,11 +506,19 @@ class DeploymentWorker(
                 throw error
             }
         } catch (error: Exception) {
-            val candidateIsReady = deploymentQueue.find(job.id)?.currentStep in setOf("readiness_succeeded", "cutover_in_progress")
+            val candidateIsReady =
+                deploymentQueue.find(job.id)?.currentStep in setOf("readiness_succeeded", "cutover_in_progress")
             val routeRestored = routeRollback?.let { rollback -> runCatching(rollback).getOrDefault(false) } ?: true
             if (candidateIsReady && !routeRestored) {
-                DeploymentApplicationService.updateCutoverState(job.id, "repair_required", "Gateway restoration failed after cutover error")
-                logger.error("Deployment {} route rollback failed; candidate remains the routed runtime and cutover requires operator review", job.id)
+                DeploymentApplicationService.updateCutoverState(
+                    job.id,
+                    "repair_required",
+                    "Gateway restoration failed after cutover error"
+                )
+                logger.error(
+                    "Deployment {} route rollback failed; candidate remains the routed runtime and cutover requires operator review",
+                    job.id
+                )
                 update(
                     job,
                     step = "failed",
@@ -448,7 +526,12 @@ class DeploymentWorker(
                     status = "failed",
                     error = "Cutover failed and gateway route restoration requires operator repair: ${error.message}"
                 )
-                auditRepository.write(null, "deployment_cutover_failed", "deployment-worker", "job=${job.id} error=${error.message}")
+                auditRepository.write(
+                    null,
+                    "deployment_cutover_failed",
+                    "deployment-worker",
+                    "job=${job.id} error=${error.message}"
+                )
                 return
             }
             if (candidateIsReady) {
@@ -457,9 +540,18 @@ class DeploymentWorker(
                     requireNotNull(job.claimToken),
                     error.message ?: "Cutover failed"
                 )
-                if (!requeued) logger.warn("Deployment {} cutover retry was not queued because its claim changed", job.id)
+                if (!requeued) logger.warn(
+                    "Deployment {} cutover retry was not queued because its claim changed",
+                    job.id
+                )
             }
-            if (routeRestored && !candidateIsReady) candidateContainerId?.let { id -> removeCandidatePreservingFailure(null, id, error) }
+            if (routeRestored && !candidateIsReady) candidateContainerId?.let { id ->
+                removeCandidatePreservingFailure(
+                    null,
+                    id,
+                    error
+                )
+            }
             else if (!routeRestored) logger.error(
                 "Deployment {} failed after gateway cutover; candidate runtime retained because gateway restoration failed",
                 job.id
@@ -468,8 +560,19 @@ class DeploymentWorker(
                 job.id
             )
             if (!deploymentQueue.isCancelled(job.id) && !candidateIsReady) {
-                auditRepository.write(null, "deployment_failed", "deployment-worker", "job=${job.id} error=${error.message}")
-                update(job, "failed", error.message ?: "Deployment failed", status = "failed", error = error.message ?: "Deployment failed")
+                auditRepository.write(
+                    null,
+                    "deployment_failed",
+                    "deployment-worker",
+                    "job=${job.id} error=${error.message}"
+                )
+                update(
+                    job,
+                    "failed",
+                    error.message ?: "Deployment failed",
+                    status = "failed",
+                    error = error.message ?: "Deployment failed"
+                )
             }
         } finally {
             workspace.toFile().deleteRecursively()
@@ -496,9 +599,9 @@ class DeploymentWorker(
         .mapNotNull { it.message?.lowercase() }
         .any { message ->
             "address already in use" in message ||
-                "port is already allocated" in message ||
-                "failed to bind" in message ||
-                "bind for 127.0.0.1" in message
+                    "port is already allocated" in message ||
+                    "failed to bind" in message ||
+                    "bind for 127.0.0.1" in message
         }
 
     private fun deploymentContainerName(serviceName: String, deploymentId: UUID): String {
@@ -512,7 +615,12 @@ class DeploymentWorker(
         return "$normalizedServiceName-${deploymentId.toString().take(8)}"
     }
 
-    private fun cutover(job: DeploymentJobRecord, docker: DockerGateway, auditRepository: AuditRepository, onRouteRollback: ((() -> Boolean)?) -> Unit) {
+    private fun cutover(
+        job: DeploymentJobRecord,
+        docker: DockerGateway,
+        auditRepository: AuditRepository,
+        onRouteRollback: ((() -> Boolean)?) -> Unit
+    ) {
         var durableState = DeploymentApplicationService.cutoverRecovery(job.id)
             ?: error("Cutover state is missing for deployment ${job.id}")
         if (durableState.state == "activated") {
@@ -528,16 +636,17 @@ class DeploymentWorker(
         val changesProductionRoute = job.environment == "production"
         val site = if (changesProductionRoute) siteRepository.findByServiceId(job.serviceId) else null
         val siteOwnerSlug = site?.projectSlug
-        val existingSiteConfig = if (siteService != null && siteOwnerSlug != null) inspectSiteConfigUseCase.inspectSite(siteOwnerSlug) else null
+        val existingSiteConfig =
+            if (siteOwnerSlug != null) inspectSiteConfigUseCase.inspectSite(siteOwnerSlug) else null
         // Legacy explicit sites may already receive managed deployments. Convert them on cutover
         // so deployment changes only the stable service include after this first activation.
         val convertsLegacySite = DeploymentSiteCutoverPolicy.convertsLegacySite(site?.upstreamKind)
         val hasEnabledManagedSite = DeploymentSiteCutoverPolicy.hasDeploymentRoute(site?.upstreamKind) &&
-            existingSiteConfig?.canDeploymentCutoverUpdateRoute() == true
+                existingSiteConfig?.canDeploymentCutoverUpdateRoute() == true
         val managedRoute = if (hasEnabledManagedSite) {
             val managedSite = requireNotNull(site)
             val containerPort = job.containerPort ?: runtime.ports.keys.singleOrNull()
-                ?: error("Managed service needs an explicit primary container port when the image exposes multiple TCP ports")
+            ?: error("Managed service needs an explicit primary container port when the image exposes multiple TCP ports")
             val hostPort = runtime.ports[containerPort]
                 ?: error("Candidate does not publish managed service primary container port $containerPort")
             val path = job.readinessTarget?.takeIf { it.startsWith("/") } ?: "/"
@@ -548,13 +657,13 @@ class DeploymentWorker(
         } else null
         val managedPreviousHostPort = managedRoute?.let { route ->
             previousDeployment?.ports?.get(route.first) ?: previousDeployment?.hostPort
-                ?: if (convertsLegacySite) site?.upstreamExplicitPort else null
+            ?: if (convertsLegacySite) site?.upstreamExplicitPort else null
         }
         val durableCutoverFiles = managedRoute?.let { route ->
             val serviceId = job.serviceId
             val includes = DeploymentUpstreamIncludes(File(nginxSettings.upstreamIncludeDirectory))
             val oldInclude = includes.file(serviceId).takeIf { it.isFile }?.readText()
-        val candidateInclude = includes.render(serviceId, route.second)
+            val candidateInclude = includes.render(serviceId, route.second)
             DurableCutoverFiles(
                 previousSiteConfig = existingSiteConfig?.content,
                 siteSlug = siteOwnerSlug,
@@ -571,7 +680,7 @@ class DeploymentWorker(
                     "Adopted previous runtime settings are incomplete without the original Docker container; refusing to retire it"
                 }
                 val immutableImage = observedRuntime?.imageDigest ?: observedRuntime?.imageId ?: previous.image
-                    ?: error("Previous runtime has no immutable image identity; refusing to retire it")
+                ?: error("Previous runtime has no immutable image identity; refusing to retire it")
                 check(immutableImage.contains("@sha256:") || immutableImage.startsWith("sha256:")) {
                     "Previous runtime image identity is not immutable; refusing to retire it"
                 }
@@ -585,9 +694,11 @@ class DeploymentWorker(
                 check(publishedPorts.isEmpty() || portHostIps.keys.containsAll(publishedPorts.keys)) {
                     "Previous runtime published port addresses are unavailable; refusing to retire it"
                 }
-                check(DeploymentApplicationService.recordRuntimeRestorationSnapshot(
-                    previous.id, immutableImage, publishedPorts, portHostIps, attachedNetworks, runtimeOptions
-                )) {
+                check(
+                    DeploymentApplicationService.recordRuntimeRestorationSnapshot(
+                        previous.id, immutableImage, publishedPorts, portHostIps, attachedNetworks, runtimeOptions
+                    )
+                ) {
                     "Unable to persist previous runtime restoration snapshot"
                 }
                 previousDeployment = previous.copy(
@@ -595,29 +706,41 @@ class DeploymentWorker(
                     portHostIps = portHostIps, runtimeOptions = runtimeOptions
                 )
             }
-            check(DeploymentApplicationService.prepareRuntimeCutover(job.id, previousDeployment?.id, existingSiteConfig?.content, durableCutoverFiles)) {
+            check(
+                DeploymentApplicationService.prepareRuntimeCutover(
+                    job.id,
+                    previousDeployment?.id,
+                    existingSiteConfig?.content,
+                    durableCutoverFiles
+                )
+            ) {
                 "Unable to persist cutover recovery information"
             }
-            durableState = DeploymentApplicationService.cutoverRecovery(job.id) ?: error("Cutover recovery information disappeared")
+            durableState = DeploymentApplicationService.cutoverRecovery(job.id)
+                ?: error("Cutover recovery information disappeared")
         }
         var rollbackRoute: (() -> Boolean)? = null
         if (hasEnabledManagedSite) {
             val managedSite = requireNotNull(site)
             val ownerSlug = requireNotNull(siteOwnerSlug)
-            val activeSiteService = requireNotNull(siteService)
             val recovery = DeploymentApplicationService.cutoverRecovery(job.id) ?: error("Cutover state disappeared")
             val previousConfig = recovery.previousNginxConfig ?: existingSiteConfig.content
             val (containerPort, hostPort) = managedRoute ?: error("Managed site candidate route was not prepared")
             rollbackRoute = {
                 if (convertsLegacySite) {
-                    val restoredSite = previousConfig?.let { activeSiteService.restoreSiteConfiguration(ownerSlug, it) } == true
-                    val restoredInclude = activeSiteService.restoreDeploymentUpstream(job.serviceId,
+                    val restoredSite = previousConfig?.let { nginx.restoreSiteConfiguration(ownerSlug, it) } == true
+                    val restoredInclude = switchDeploymentUpstreamUseCase.restoreDeploymentUpstream(
+                        job.serviceId,
                         managedPreviousHostPort
                     )
-                    val restoredKind = siteRepository.restoreUpstreamKind(managedSite.id, managedSite.upstreamKind) != null
+                    val restoredKind =
+                        siteRepository.restoreUpstreamKind(managedSite.id, managedSite.upstreamKind) != null
                     restoredSite && restoredInclude && restoredKind
                 } else {
-                    val restored = activeSiteService.restoreDeploymentUpstream(job.serviceId, managedPreviousHostPort)
+                    val restored = switchDeploymentUpstreamUseCase.restoreDeploymentUpstream(
+                        job.serviceId,
+                        managedPreviousHostPort
+                    )
                     restored && siteRepository.restoreDeploymentUpstreamForSite(managedSite) != null
                 }
             }
@@ -625,36 +748,65 @@ class DeploymentWorker(
 
             if (recovery.state in setOf("restoring", "runtime_restored", "restore_failed")) {
                 onRouteRollback(null)
-                restorePreviousRuntime(job.id, previousDeployment, previousConfig, docker, activeSiteService, ownerSlug, managedSite)
+                restorePreviousRuntime(job.id, previousDeployment, previousConfig, docker, ownerSlug, managedSite)
             }
             val routeActivated = if (convertsLegacySite) {
-                activeSiteService.convertSiteToDeploymentManaged(managedSite, hostPort)
+                convertSiteToDeploymentManagedUseCase.execute(managedSite, hostPort)
             } else {
-                activeSiteService.switchDeploymentUpstream(job.serviceId, ownerSlug, "127.0.0.1", containerPort, hostPort)
+                switchDeploymentUpstreamUseCase.switchDeploymentUpstream(
+                    job.serviceId,
+                    ownerSlug,
+                    "127.0.0.1",
+                    containerPort,
+                    hostPort
+                )
             }
             check(routeActivated) {
                 "Gateway/site upstream cutover failed; previous runtime remains active"
             }
-            check(DeploymentApplicationService.updateCutoverState(job.id, "route_switched")) { "Unable to persist route cutover state" }
-            check(DeploymentApplicationService.updateCutoverState(job.id, "draining")) { "Unable to persist deployment drain state" }
-            if (schedulerSettings.deploymentDrainDelaySeconds > 0) Thread.sleep(TimeUnit.SECONDS.toMillis(schedulerSettings.deploymentDrainDelaySeconds))
-            val postDrain = activeSiteService.verifyAfterDrain(
+            check(
+                DeploymentApplicationService.updateCutoverState(
+                    job.id,
+                    "route_switched"
+                )
+            ) { "Unable to persist route cutover state" }
+            check(
+                DeploymentApplicationService.updateCutoverState(
+                    job.id,
+                    "draining"
+                )
+            ) { "Unable to persist deployment drain state" }
+            if (schedulerSettings.deploymentDrainDelaySeconds > 0) Thread.sleep(
+                TimeUnit.SECONDS.toMillis(
+                    schedulerSettings.deploymentDrainDelaySeconds
+                )
+            )
+            val postDrain = switchDeploymentUpstreamUseCase.verifyAfterDrain(
                 job.serviceId, managedSite.domain,
                 managedSite.tlsMode != com.gatekeeper.db.tables.TlsMode.HTTP_ONLY,
                 managedPreviousHostPort
             )
             if (!postDrain.candidateHealthy) {
-                if (!postDrain.previousRouteRestored) DeploymentApplicationService.updateCutoverState(job.id, "repair_required", "Post-drain probe failed and previous upstream restoration failed")
+                if (!postDrain.previousRouteRestored) DeploymentApplicationService.updateCutoverState(
+                    job.id,
+                    "repair_required",
+                    "Post-drain probe failed and previous upstream restoration failed"
+                )
                 check(postDrain.previousRouteRestored) { "Post-drain probe failed and the previous route could not be restored; service requires repair" }
                 error("Candidate failed its post-drain nginx probe; previous route was restored")
             }
         } else if (durableState.state in setOf("restoring", "runtime_restored", "restore_failed")) {
             onRouteRollback(null)
-            restorePreviousRuntime(job.id, previousDeployment, durableState.previousNginxConfig, docker, null, null, null)
+            restorePreviousRuntime(job.id, previousDeployment, durableState.previousNginxConfig, docker, null, null)
         }
 
         if (changesProductionRoute && previousDeployment != null && previousContainer != null && previousContainer != candidateRuntimeName) {
-            check(DeploymentApplicationService.updateCutoverState(job.id, "retiring_previous")) { "Unable to persist previous-runtime retirement state" }
+            check(
+                DeploymentApplicationService.updateCutoverState(
+                    job.id,
+                    "retiring_previous"
+                )
+            ) { "Unable to persist previous-runtime retirement state" }
             try {
                 docker.getContainer(previousContainer)?.let {
                     if (docker.containerHealth(previousContainer) == "running") docker.stopContainer(previousContainer)
@@ -667,7 +819,7 @@ class DeploymentWorker(
                 onRouteRollback(null)
                 restorePreviousRuntime(
                     job.id, previousDeployment, durableState.previousNginxConfig,
-                    docker, siteService, siteOwnerSlug, site
+                    docker, siteOwnerSlug, site
                 )
                 throw retirementError
             }
@@ -681,14 +833,21 @@ class DeploymentWorker(
             restore = {
                 onRouteRollback(null)
                 restorePreviousRuntime(
-                job.id, previousDeployment, durableState.previousNginxConfig ?: existingSiteConfig?.content,
-                docker, siteService, siteOwnerSlug, site
+                    job.id, previousDeployment, durableState.previousNginxConfig ?: existingSiteConfig?.content,
+                    docker, siteOwnerSlug, site
                 )
             }
         )
         if (changesProductionRoute) {
             runCatching { serviceDomains.reconcilePorts(job.serviceId, runtime.ports.keys) }
-                .onFailure { logger.warn("Unable to reconcile domain bindings for service {} after deployment {}", job.serviceId, job.id, it) }
+                .onFailure {
+                    logger.warn(
+                        "Unable to reconcile domain bindings for service {} after deployment {}",
+                        job.serviceId,
+                        job.id,
+                        it
+                    )
+                }
         }
         update(
             job,
@@ -697,11 +856,21 @@ class DeploymentWorker(
             status = "succeeded"
         )
         DeploymentApplicationService.rollbackTargetId(job.id)?.let { targetId ->
-            auditRepository.write(null, "deployment_rollback_activated", "deployment-worker", "deployment=${job.id} rolled_back_to=$targetId")
+            auditRepository.write(
+                null,
+                "deployment_rollback_activated",
+                "deployment-worker",
+                "deployment=${job.id} rolled_back_to=$targetId"
+            )
         }
         if (previousContainer != null && previousContainer != candidateRuntimeName) {
             previousDeployment?.let { previous ->
-                auditRepository.write(null, "deployment_runtime_superseded", "deployment-worker", "deployment=${previous.id} container=$previousContainer")
+                auditRepository.write(
+                    null,
+                    "deployment_runtime_superseded",
+                    "deployment-worker",
+                    "deployment=${previous.id} container=$previousContainer"
+                )
             }
         }
     }
@@ -714,20 +883,32 @@ class DeploymentWorker(
         ownerSlug: String?,
         site: SiteRecord?
     ) {
-        val secretValues = previous?.let { deploymentQueue.resolveEnvironmentForExecution(it.executionId).values }.orEmpty()
+        val secretValues =
+            previous?.let { deploymentQueue.resolveEnvironmentForExecution(it.executionId).values }.orEmpty()
         val image = previous?.let { runtime ->
             runtime.image ?: runtime.name?.let(docker::containerImageId)?.also {
-                check(DeploymentApplicationService.recordRuntimeImageReference(runtime.id, it)) { "Unable to persist immutable previous image identity" }
+                check(
+                    DeploymentApplicationService.recordRuntimeImageReference(
+                        runtime.id,
+                        it
+                    )
+                ) { "Unable to persist immutable previous image identity" }
             }
         }
         val runtimeNetworks = previous?.let { runtime ->
             val actual = runtime.name?.let(docker::getContainer)?.networks.orEmpty()
             (actual.ifEmpty { runtime.networks }).also {
-                check(DeploymentApplicationService.recordRuntimeNetworkAttachments(runtime.id, it)) { "Unable to persist previous runtime networks" }
+                check(
+                    DeploymentApplicationService.recordRuntimeNetworkAttachments(
+                        runtime.id,
+                        it
+                    )
+                ) { "Unable to persist previous runtime networks" }
             }
         }.orEmpty()
         val plan = previous?.let { runtime ->
-            val immutableImage = image ?: error("Previous runtime has no immutable image identity; refusing tag-based restoration")
+            val immutableImage =
+                image ?: error("Previous runtime has no immutable image identity; refusing tag-based restoration")
             check(immutableImage.contains("@sha256:") || immutableImage.startsWith("sha256:")) {
                 "Previous runtime image identity is not immutable"
             }
@@ -753,27 +934,35 @@ class DeploymentWorker(
             plan = plan,
             previousNginxConfig = previousNginxConfig,
             docker = { restorePlan ->
-                val hostToContainer = restorePlan.publishedPorts.entries.associate { (containerPort, hostPort) -> hostPort to containerPort }
-                docker.ensureRestoredContainer(CreateContainerRequest(
-                    name = restorePlan.containerName,
-                    image = restorePlan.imageReference,
-                    ports = hostToContainer,
-                    env = restorePlan.environment,
-                    network = restorePlan.networkMode,
-                    additionalNetworks = restorePlan.networkAttachments,
-                    volumes = restorePlan.volumes,
-                    restartPolicy = restorePlan.restartPolicy,
-                    pullImage = false,
-                    portHostIp = restorePlan.portHostIp,
-                    portHostIps = restorePlan.portHostIps,
-                    runtimeOptions = restorePlan.runtimeOptions
-                ))
+                val hostToContainer =
+                    restorePlan.publishedPorts.entries.associate { (containerPort, hostPort) -> hostPort to containerPort }
+                docker.ensureRestoredContainer(
+                    CreateContainerRequest(
+                        name = restorePlan.containerName,
+                        image = restorePlan.imageReference,
+                        ports = hostToContainer,
+                        env = restorePlan.environment,
+                        network = restorePlan.networkMode,
+                        additionalNetworks = restorePlan.networkAttachments,
+                        volumes = restorePlan.volumes,
+                        restartPolicy = restorePlan.restartPolicy,
+                        pullImage = false,
+                        portHostIp = restorePlan.portHostIp,
+                        portHostIps = restorePlan.portHostIps,
+                        runtimeOptions = restorePlan.runtimeOptions
+                    )
+                )
             },
             route = { config ->
                 if (site?.upstreamKind == "DEPLOYMENT_MANAGED") {
                     previous?.let { old ->
                         val oldHostPort = old.containerPort?.let(old.ports::get) ?: old.hostPort
-                        site.serviceId?.let { switchDeploymentUpstreamUseCase.restoreDeploymentUpstream(it, oldHostPort) } ?: false
+                        site.serviceId?.let {
+                            switchDeploymentUpstreamUseCase.restoreDeploymentUpstream(
+                                it,
+                                oldHostPort
+                            )
+                        } ?: false
                     } ?: false
                 } else {
                     val routeRestored =
@@ -782,13 +971,19 @@ class DeploymentWorker(
                 }
             },
             state = { state, error ->
-                check(DeploymentApplicationService.updateCutoverState(deploymentId, state, error)) { "Unable to persist cutover restoration state" }
+                check(
+                    DeploymentApplicationService.updateCutoverState(
+                        deploymentId,
+                        state,
+                        error
+                    )
+                ) { "Unable to persist cutover restoration state" }
             },
             secrets = secretValues.values
         )
     }
 
-    fun rollback(id: java.util.UUID): UUID? {
+    fun rollback(id: UUID): UUID? {
         return runCatching { deploymentQueue.createRollback(id) }
             .onFailure { logger.warn("Unable to queue rollback deployment for {}", id, it) }
             .getOrNull()
@@ -834,7 +1029,12 @@ class DeploymentWorker(
         }
     }
 
-    private fun awaitHealthy(docker: DockerGateway, name: String, portMappings: Map<Int, Int>, job: DeploymentJobRecord): ReadinessResult? {
+    private fun awaitHealthy(
+        docker: DockerGateway,
+        name: String,
+        portMappings: Map<Int, Int>,
+        job: DeploymentJobRecord
+    ): ReadinessResult? {
         return DeploymentReadiness.await(
             timeoutNanos = job.readinessTimeoutSeconds * 1_000_000_000L,
             intervalMillis = job.readinessIntervalSeconds * 1000L,

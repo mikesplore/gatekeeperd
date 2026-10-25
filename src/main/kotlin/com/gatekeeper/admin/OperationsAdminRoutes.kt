@@ -17,7 +17,7 @@ import com.gatekeeper.feature.nginx.application.InspectSiteConfigUseCase
 import com.gatekeeper.feature.nginx.application.ListConfigArtifactsUseCase
 import com.gatekeeper.feature.nginx.application.RemoveSiteConfigUseCase
 import com.gatekeeper.feature.nginx.domain.port.NginxSiteStorage
-import com.gatekeeper.feature.nginx.domain.service.NginxConfigRenderer
+import com.gatekeeper.feature.nginx.domain.service.NginxConfigRendererService
 import com.gatekeeper.feature.nginx.domain.service.NginxConflictAnalyzer
 import com.gatekeeper.feature.nginx.domain.service.NginxValidationService
 import com.gatekeeper.feature.nginx.infrastructure.CertbotCertificateProvisioner
@@ -317,7 +317,7 @@ fun Application.configureOperationsAdminRoutes() {
     val inspectSiteConfig: InspectSiteConfigUseCase = get<InspectSiteConfigUseCase>()
     val nginx: NginxSiteStorage = get<NginxSiteStorage>()
     val nginxValidation: NginxValidationService = get<NginxValidationService>()
-    val render: NginxConfigRenderer = get<NginxConfigRenderer>()
+    val render: NginxConfigRendererService = get<NginxConfigRendererService>()
     val conflictAnalyzer: NginxConflictAnalyzer = get<NginxConflictAnalyzer>()
     val applySiteConfig: ApplySiteConfigUseCase = get<ApplySiteConfigUseCase>()
     val removesite: RemoveSiteConfigUseCase = get<RemoveSiteConfigUseCase>()

@@ -7,7 +7,7 @@ import com.gatekeeper.db.tables.UpstreamMode
 import com.gatekeeper.feature.nginx.domain.port.CertificateProvisioner
 import com.gatekeeper.feature.nginx.domain.port.NginxCommandRunner
 import com.gatekeeper.feature.nginx.domain.port.NginxSiteStorage
-import com.gatekeeper.feature.nginx.domain.service.NginxConfigRenderer
+import com.gatekeeper.feature.nginx.domain.service.NginxConfigRendererService
 import com.gatekeeper.feature.nginx.infrastructure.DeploymentUpstreamIncludes
 import com.gatekeeper.feature.service.domain.repository.SiteRepository
 import com.gatekeeper.feature.nginx.model.NginxSiteRenderModel
@@ -25,7 +25,7 @@ class SwitchDeploymentUpstreamUseCase(
     private val commandRunner: NginxCommandRunner,
     private val cutoverProbe: CutoverProbe,
     private val siteRepository: SiteRepository,
-    private val renderer: NginxConfigRenderer,
+    private val renderer: NginxConfigRendererService,
     private val certificateProvisioner: CertificateProvisioner,
     private val upstreamIncludeDirectory: String = "/etc/nginx/conf.d/gatekeeperd-upstreams",
     private val applySiteConfigUseCase: ApplySiteConfigUseCase,

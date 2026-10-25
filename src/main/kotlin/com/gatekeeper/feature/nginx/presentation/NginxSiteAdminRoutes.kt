@@ -18,7 +18,7 @@ import com.gatekeeper.feature.nginx.application.RemoveSiteConfigUseCase
 import com.gatekeeper.feature.nginx.application.RollbackSiteConfigUseCase
 import com.gatekeeper.feature.nginx.application.SwitchDeploymentUpstreamUseCase
 import com.gatekeeper.feature.nginx.domain.port.NginxSiteStorage
-import com.gatekeeper.feature.nginx.domain.service.NginxConfigRenderer
+import com.gatekeeper.feature.nginx.domain.service.NginxConfigRendererService
 import com.gatekeeper.feature.nginx.domain.service.NginxConflictAnalyzer
 import com.gatekeeper.feature.nginx.domain.service.NginxValidationService
 import com.gatekeeper.feature.nginx.infrastructure.CertbotCertificateProvisioner
@@ -50,7 +50,7 @@ fun Route.nginxSiteAdminRoutes(
     validator: NginxValidationService,
     serviceDomainRepository: ServiceDomainRepository,
     deploymentUpstreamResolver: DeploymentUpstreamResolver,
-    renderer: NginxConfigRenderer,
+    renderer: NginxConfigRendererService,
     certificateProvisioner: CertbotCertificateProvisioner,
     nginx: NginxSiteStorage,
     rollback: RollbackSiteConfigUseCase,
