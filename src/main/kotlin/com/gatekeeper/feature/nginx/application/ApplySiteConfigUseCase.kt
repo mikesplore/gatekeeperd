@@ -3,7 +3,7 @@ package com.gatekeeper.feature.nginx.application
 import com.gatekeeper.core.util.sha256
 import com.gatekeeper.feature.nginx.domain.port.NginxCommandRunner
 import com.gatekeeper.feature.nginx.domain.port.NginxSiteStorage
-import com.gatekeeper.feature.nginx.domain.service.findDomainConflicts
+import com.gatekeeper.feature.nginx.domain.service.NginxConflictAnalyzer
 import com.gatekeeper.feature.nginx.infrastructure.NginxSelfDomainExclusion
 import com.gatekeeper.feature.nginx.model.DomainRules
 import com.gatekeeper.feature.nginx.model.NginxSiteActivationResult
@@ -20,7 +20,8 @@ class ApplySiteConfigUseCase(
     private val sitesEnabledPath: String = "/etc/nginx/sites-enabled",
     private val nginxSiteStorage: NginxSiteStorage,
     private val selfDomainExclusion: NginxSelfDomainExclusion,
-    private val domainRules: DomainRules
+    private val domainRules: DomainRules,
+    private val nginxConflictAnalyzer: NginxConflictAnalyzer
 ) {
     fun execute(slug: String, configContent: String): NginxSiteActivationResult {
         val previousConfig = nginxSiteStorage.readAvailable(slug)
@@ -63,7 +64,7 @@ class ApplySiteConfigUseCase(
     fun enableProjectDetailed(slug: String, configContent: String): NginxSiteActivationResult {
         return DistributedLock.withLock("nginx-host-mutation") {
             try {
-                val conflicts = findDomainConflicts(configContent, slug, nginxSiteStorage = nginxSiteStorage, nginxSelfDomainExclusion = selfDomainExclusion, domainRules = domainRules)
+                val conflicts = nginxConflictAnalyzer.findDomainConflicts(configContent, slug, nginxSiteStorage = nginxSiteStorage, nginxSelfDomainExclusion = selfDomainExclusion, domainRules = domainRules)
                 if (conflicts.isNotEmpty()) {
                     val message =
                         "Nginx domain conflict: ${conflicts.joinToString { it.filename ?: "Gatekeeperd self domain" }}"

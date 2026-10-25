@@ -30,6 +30,10 @@ import com.gatekeeper.feature.payment.data.persistence.ProjectBalanceAdapter
 import org.koin.ktor.ext.get
 import com.gatekeeper.docker.DockerGatewayFactory
 import com.gatekeeper.docker.DockerGateway
+import com.gatekeeper.feature.nginx.application.InspectSiteConfigUseCase
+import com.gatekeeper.feature.project.domain.repository.ProjectRepository
+import com.gatekeeper.feature.service.domain.repository.ServiceRepository
+import com.gatekeeper.feature.service.domain.repository.SiteRepository
 import com.gatekeeper.infrastructure.ProcessRunnerImpl
 import com.gatekeeper.scheduler.AutoBlockerJob
 import com.gatekeeper.scheduler.IntegrationOutboxJob
@@ -101,7 +105,6 @@ private fun operationalCommand(command: String, args: Array<String>) {
             val report = ServiceIdentityBackfill.report(
                 db.url, db.user, db.password
             )
-            println("projects_without_default_service=${report.projectsWithoutDefaultService}")
             println("planned_default_services=${report.projectsWithoutDefaultService}")
         }
 
@@ -123,6 +126,13 @@ private fun Array<String>.portArg(): Int? =
     firstOrNull { it.startsWith("-port=") }?.substringAfter("=")?.toIntOrNull()
 
 fun Application.module() {
+    val dockerService: DockerGateway = get<DockerGateway>()
+    val inspectSiteConfigUseCase = get<InspectSiteConfigUseCase>()
+    val serviceRepository = get<ServiceRepository>()
+    val projectRepository = get<ProjectRepository>()
+    val siteRepository = get<SiteRepository>()
+    val autoBlockerJob = get<AutoBlockerJob>()
+
     configureSerialization()
     configureMonitoring()
     configureApiDocumentation()
@@ -131,7 +141,7 @@ fun Application.module() {
     SecretValueCipher.configure(settings.application)
     configureDatabase()
     if (settings.nginx.deploymentUpstreamsEnabled) {
-        get<NginxService>().bootstrapDeploymentUpstreams()
+        inspectSiteConfigUseCase.bootstrapDeploymentUpstreams()
     } else {
         org.slf4j.LoggerFactory.getLogger("com.gatekeeper.Application")
             .warn("Nginx deployment upstream bootstrap is disabled; deployment cutovers require nginx configuration")
@@ -139,7 +149,7 @@ fun Application.module() {
     configureRedis()
     configureSecurity()
     configureRouting()
-    configureGateRoutes()
+    configureGateRoutes(serviceRepository)
     configurePaymentRoutes()
     configureCustomerRoutes()
     configureAuthRoutes()
@@ -150,7 +160,7 @@ fun Application.module() {
     configureIntegrationAdminRoutes()
     configurePaymentAdminRoutes()
     configureNginxAdminRoutes()
-    configureDeploymentAdminRoutes()
+    configureDeploymentAdminRoutes(dockerService, projectRepository, siteRepository, inspectSiteConfigUseCase, get())
     configureSystemAdminRoutes()
     configureLogAdminRoutes()
     configureRegistryAdminRoutes()
@@ -162,7 +172,7 @@ fun Application.module() {
     seedInitialAdmin(settings.application)
 
     val appScope = CoroutineScope(SupervisorJob())
-    AutoBlockerJob.start(appScope, get(), settings.scheduler, get())
+    autoBlockerJob.start(appScope, settings.scheduler)
     ReconciliationJob.start(appScope, get<ReconcilePayments>(), settings.scheduler)
     IntegrationOutboxJob.start(appScope, get(), get<PaymentDomainRepository>(), get<ProjectBalanceAdapter>(), get<ScribedIntegrationClient>())
     get<DeploymentWorker>().start(appScope)

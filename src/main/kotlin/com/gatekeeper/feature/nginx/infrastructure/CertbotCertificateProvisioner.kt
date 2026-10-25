@@ -3,9 +3,8 @@ package com.gatekeeper.feature.nginx.infrastructure
 import com.gatekeeper.core.ports.ProcessRunner
 import com.gatekeeper.feature.nginx.domain.port.CertificateProvisioner
 import com.gatekeeper.feature.nginx.domain.port.NginxSiteStorage
+import com.gatekeeper.feature.nginx.domain.service.NginxValidationService
 import com.gatekeeper.feature.nginx.model.ResolvedCertificate
-import com.gatekeeper.feature.nginx.domain.service.requireValidEmail
-import com.gatekeeper.feature.nginx.domain.service.requireValidHostname
 import com.gatekeeper.plugins.DistributedLock
 import org.slf4j.LoggerFactory
 import java.io.ByteArrayInputStream
@@ -18,7 +17,8 @@ class CertbotCertificateProvisioner(
     private val processRunner: ProcessRunner,
     private val sslCertPath: String = "/etc/letsencrypt/live",
     private val nginxSiteStorage: NginxSiteStorage,
-    private val selfDomainExclusion: NginxSelfDomainExclusion
+    private val selfDomainExclusion: NginxSelfDomainExclusion,
+    private val validator: NginxValidationService
 ) : CertificateProvisioner {
     private val logger = LoggerFactory.getLogger("com.gatekeeper.admin.NginxAdminRoutes")
 
@@ -67,8 +67,8 @@ class CertbotCertificateProvisioner(
     }
 
     override fun installCertificate(domain: String, email: String): Boolean {
-        requireValidHostname(domain)
-        requireValidEmail(email)
+        validator.requireValidHostname(domain)
+        validator.requireValidEmail(email)
         certificateManagerIssue()?.let { issue ->
             logger.error("Certificate manager unavailable: $issue")
             return false
@@ -93,7 +93,7 @@ class CertbotCertificateProvisioner(
     }
 
     override fun renewCertificate(domain: String): Boolean {
-        requireValidHostname(domain)
+        validator.requireValidHostname(domain)
         return !(!isCertificateInstalled(domain) || certificateManagerIssue() != null) && DistributedLock.withLock("nginx-host-mutation") {
             try {
                 val exitCode = runCertbotHelper("renew", domain)
@@ -115,7 +115,7 @@ class CertbotCertificateProvisioner(
     }
 
     override fun removeCertificate(domain: String): Boolean {
-        requireValidHostname(domain)
+        validator.requireValidHostname(domain)
         if (selfDomainExclusion.excludesDomain(domain)) {
             logger.warn("Refusing to remove certificate $domain because it covers a Gatekeeperd self domain")
             return false
@@ -144,7 +144,7 @@ class CertbotCertificateProvisioner(
     }
 
     override fun isCertificateInstalled(domain: String): Boolean {
-        requireValidHostname(domain)
+        validator.requireValidHostname(domain)
         val certDir = File("$sslCertPath/$domain")
         return certDir.exists() &&
                 File(certDir, "fullchain.pem").exists() &&
@@ -152,9 +152,9 @@ class CertbotCertificateProvisioner(
     }
 
     override fun resolveCertificateForDomain(domain: String, requestedCertificateDomain: String?): ResolvedCertificate? {
-        requireValidHostname(domain)
+        validator.requireValidHostname(domain)
         val requested = requestedCertificateDomain?.trim()?.takeIf { it.isNotBlank() }
-        requested?.let { requireValidHostname(it, "certificateDomain") }
+        requested?.let { validator.requireValidHostname(it, "certificateDomain") }
         if (requested != null) {
             return resolveInstalledCertificateByName(requested)
         }
@@ -211,7 +211,7 @@ class CertbotCertificateProvisioner(
 
     override fun certificateExpiry(domain: String): Pair<String, Long>? {
         return try {
-            requireValidHostname(domain)
+            validator.requireValidHostname(domain)
             val certFile = File("$sslCertPath/$domain/fullchain.pem")
             if (!certFile.exists()) return null
             val pem = certFile.readBytes()
