@@ -13,7 +13,7 @@ import com.gatekeeper.feature.service.domain.repository.SiteRepository
 import com.gatekeeper.feature.nginx.model.DEFAULT_GATEKEEPER_BYPASS_PATHS
 import com.gatekeeper.feature.nginx.model.NginxSiteRenderModel
 import com.gatekeeper.feature.nginx.model.TlsRenderMode
-import com.gatekeeper.nginx.NginxCustomLocation
+import com.gatekeeper.feature.nginx.presentation.NginxCustomLocation
 import kotlinx.serialization.json.Json
 import org.jetbrains.exposed.sql.ResultRow
 import org.jetbrains.exposed.sql.SortOrder
