@@ -2,7 +2,6 @@ package com.gatekeeper.admin
 
 import com.gatekeeper.api.respondError
 import com.gatekeeper.deployment.DeploymentApplicationService
-import com.gatekeeper.feature.nginx.domain.service.requireValidHostname
 import com.gatekeeper.feature.project.domain.repository.ProjectAdjustmentRepository as ProjectAdjustmentStore
 import com.gatekeeper.feature.project.domain.repository.ProjectRepository
 import com.gatekeeper.feature.audit.domain.repository.AuditRepository as AuditRepositoryPort
@@ -16,6 +15,8 @@ import com.gatekeeper.feature.deployment.domain.repository.ServiceDomainReposito
 import com.gatekeeper.feature.deployment.domain.repository.ActiveDeploymentInspection
 import com.gatekeeper.db.tables.AdjustmentType
 import com.gatekeeper.db.tables.AccessBlockReason
+import com.gatekeeper.feature.nginx.domain.service.NginxValidationService
+import com.gatekeeper.feature.service.domain.repository.ServiceRecord
 import com.gatekeeper.feature.service.domain.repository.ServiceRepository
 import com.gatekeeper.feature.service.domain.repository.SiteRepository
 import com.gatekeeper.integrations.ScribedIntegrationClient
@@ -139,6 +140,7 @@ fun Application.configureServiceAdminRoutes() {
     val serviceDomains = get<ServiceDomainRepository>()
     val serviceRepository = get<ServiceRepository>()
     val siteRepository = get<SiteRepository>()
+    val validator = get<NginxValidationService>()
     routing {
         authenticate("auth-jwt") {
             get("/api/admin/projects/{projectId}/services") {
@@ -196,7 +198,7 @@ fun Application.configureServiceAdminRoutes() {
                     ?: return@post call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
                 val body = runCatching { call.receive<ServiceDomainBindingRequest>() }.getOrNull()
                     ?: return@post call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid domain binding request")
-                val domain = runCatching { requireValidHostname(body.domain) }.getOrElse {
+                val domain = runCatching { validator.requireValidHostname(body.domain) }.getOrElse {
                     return@post call.respondError(HttpStatusCode.BadRequest, "invalid_domain", it.message ?: "Domain is invalid")
                 }
                 val ports = DeploymentApplicationService.activeRuntime(service.id, "production")?.ports?.keys.orEmpty()
@@ -224,7 +226,7 @@ fun Application.configureServiceAdminRoutes() {
                     ?: return@put call.respondError(HttpStatusCode.BadRequest, "invalid_binding_id", "Binding ID is invalid")
                 val body = runCatching { call.receive<ServiceDomainBindingRequest>() }.getOrNull()
                     ?: return@put call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid domain binding request")
-                val domain = runCatching { requireValidHostname(body.domain) }.getOrElse {
+                val domain = runCatching { validator.requireValidHostname(body.domain) }.getOrElse {
                     return@put call.respondError(HttpStatusCode.BadRequest, "invalid_domain", it.message ?: "Domain is invalid")
                 }
                 val existing = serviceDomains.findByDomain(domain)
@@ -547,7 +549,7 @@ private fun validEnvironmentValues(values: Map<String, String>) = values.all { (
     key.matches(Regex("[A-Za-z_][A-Za-z0-9_]*")) && !key.contains('=') && !value.contains('\u0000')
 }
 
-private fun ServiceRepository.ServiceRecord.toView() = ServiceAdminView(
+private fun ServiceRecord.toView() = ServiceAdminView(
     id.toString(), projectId.toString(), name, serviceType, accessStatus, isDefault, blockReason,
     blockReasonCode?.value, blockReasonNote
 )

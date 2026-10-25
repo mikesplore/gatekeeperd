@@ -25,6 +25,7 @@ import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.decodeFromJsonElement
 import com.gatekeeper.feature.integrations.domain.repository.IntegrationOutboxRepository
 import com.gatekeeper.db.tables.AdjustmentType
+import com.gatekeeper.feature.project.domain.model.ProjectRecord
 import io.ktor.client.statement.bodyAsText
 
 @Serializable data class ScribedSuspensionPayload(val project_id: String, val project_slug: String, val status: String, val reason: String, val occurred_at: String)
@@ -81,7 +82,7 @@ class ScribedIntegrationClient(
 
     override fun close() = http.close()
 
-    suspend fun createInvoice(project: ProjectRepository.ProjectRecord, description: String, amount: String, balances: ProjectBalanceAdapter): InvoiceCreateResult {
+    suspend fun createInvoice(project: ProjectRecord, description: String, amount: String, balances: ProjectBalanceAdapter): InvoiceCreateResult {
         val base = settings.scribedCallbackUrl.trim().trimEnd('/')
         val secret = settings.scribedIntegrationSecret.trim()
         val apiToken = settings.scribedApiToken.trim()
@@ -115,7 +116,7 @@ class ScribedIntegrationClient(
     }
 
     suspend fun createServiceInvoice(
-        project: ProjectRepository.ProjectRecord,
+        project: ProjectRecord,
         serviceId: String,
         serviceName: String,
         description: String,
@@ -214,7 +215,7 @@ class ScribedIntegrationClient(
     }
 
     suspend fun receiptPdfForPayment(
-        project: ProjectRepository.ProjectRecord,
+        project: ProjectRecord,
         payment: Payment,
         payments: PaymentDomainRepository,
         balances: ProjectBalanceAdapter
@@ -278,7 +279,7 @@ class ScribedIntegrationClient(
     }
 
     suspend fun receiptPdfForServicePayment(
-        project: ProjectRepository.ProjectRecord,
+        project: ProjectRecord,
         serviceId: java.util.UUID,
         payment: Payment,
         payments: PaymentDomainRepository,
@@ -338,7 +339,7 @@ class ScribedIntegrationClient(
     }
 
     suspend fun serviceInvoicePdf(
-        project: ProjectRepository.ProjectRecord,
+        project: ProjectRecord,
         serviceId: java.util.UUID,
         payments: PaymentDomainRepository,
         balances: ProjectBalanceAdapter
@@ -394,7 +395,7 @@ class ScribedIntegrationClient(
         return invoicePdf(invoiceId)
     }
 
-    fun notifyInvoiceDue(project: ProjectRepository.ProjectRecord, outbox: IntegrationOutboxRepository) {
+    fun notifyInvoiceDue(project: ProjectRecord, outbox: IntegrationOutboxRepository) {
         runBlocking {
             val lookup = invoiceStatus(project.id.toString())
             val invoiceId = lookup.body?.get("invoice")?.jsonObject?.get("id")?.jsonPrimitive?.longOrNull ?: return@runBlocking
@@ -415,7 +416,7 @@ class ScribedIntegrationClient(
             response.status to response.body<ByteArray>().takeIf { response.status.isSuccess() }
         }.getOrElse { HttpStatusCode.BadGateway to null }
     }
-    fun notifySuspension(project: ProjectRepository.ProjectRecord, reason: String, outbox: IntegrationOutboxRepository) {
+    fun notifySuspension(project: ProjectRecord, reason: String, outbox: IntegrationOutboxRepository) {
         runBlocking {
         val base = settings.scribedCallbackUrl.trim().trimEnd('/')
         val secret = settings.scribedIntegrationSecret.trim()
@@ -424,14 +425,14 @@ class ScribedIntegrationClient(
         }
     }
 
-    fun notifyPayment(project: ProjectRepository.ProjectRecord, provider: String, reference: String, amount: String, currency: String, paidAt: String, outbox: IntegrationOutboxRepository, serviceId: java.util.UUID? = null) {
+    fun notifyPayment(project: ProjectRecord, provider: String, reference: String, amount: String, currency: String, paidAt: String, outbox: IntegrationOutboxRepository, serviceId: java.util.UUID? = null) {
         val base = settings.scribedCallbackUrl.trim().trimEnd('/'); val secret = settings.scribedIntegrationSecret.trim()
         if (base.isBlank() || secret.isBlank()) return
         val ownerKey = serviceId?.toString() ?: project.id.toString()
         outbox.enqueue("payment", "payment:$ownerKey:$provider:$reference", json.encodeToString(ScribedPaymentPayload(project.id.toString(), project.slug, provider, reference, amount, currency, paidAt, service_id = serviceId?.toString())))
     }
 
-    fun notifyLedger(project: ProjectRepository.ProjectRecord, ledgerVersion: String, balances: ProjectBalanceAdapter, outbox: IntegrationOutboxRepository) {
+    fun notifyLedger(project: ProjectRecord, ledgerVersion: String, balances: ProjectBalanceAdapter, outbox: IntegrationOutboxRepository) {
         val base = settings.scribedCallbackUrl.trim().trimEnd('/')
         if (base.isBlank() || settings.scribedIntegrationSecret.trim().isBlank()) return
         val adjustments = balances.projectAdjustments(project.id).map { ScribedLedgerAdjustment(it.id.toString(), it.type.name, it.amount.toPlainString(), it.reason, it.actor) }
@@ -454,7 +455,7 @@ class ScribedIntegrationClient(
         outbox.enqueue("service_ledger", "service-ledger:$serviceId:$ledgerVersion", json.encodeToString(payload))
     }
 
-    fun syncProject(project: ProjectRepository.ProjectRecord, payments: PaymentDomainRepository, balances: ProjectBalanceAdapter, outbox: IntegrationOutboxRepository): Int {
+    fun syncProject(project: ProjectRecord, payments: PaymentDomainRepository, balances: ProjectBalanceAdapter, outbox: IntegrationOutboxRepository): Int {
         notifyLedger(project, "sync-${java.util.UUID.randomUUID()}", balances, outbox)
         val successfulPayments = payments.findByProjectId(project.id)
             .filter { it.status == "success" }
@@ -474,7 +475,7 @@ class ScribedIntegrationClient(
     }
 
     suspend fun syncProjectNow(
-        project: ProjectRepository.ProjectRecord,
+        project: ProjectRecord,
         payments: PaymentDomainRepository,
         balances: ProjectBalanceAdapter
     ): InvoiceSyncResult {
@@ -549,7 +550,7 @@ class ScribedIntegrationClient(
         else InvoiceSyncResult(false, synced, verified.body, "Scribed totals do not match Gatekeeperd after synchronization")
     }
 
-    suspend fun ensureInvoice(project: ProjectRepository.ProjectRecord, balances: ProjectBalanceAdapter, description: String = "Services for ${project.name}"): Boolean {
+    suspend fun ensureInvoice(project: ProjectRecord, balances: ProjectBalanceAdapter, description: String = "Services for ${project.name}"): Boolean {
         val lookup = invoiceStatus(project.id.toString())
         if (lookup.body != null) return true
         if (lookup.status != HttpStatusCode.NotFound) {
