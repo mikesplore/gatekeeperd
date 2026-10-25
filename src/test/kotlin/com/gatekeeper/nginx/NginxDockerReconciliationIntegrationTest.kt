@@ -7,7 +7,7 @@ import com.gatekeeper.db.tables.ReconciliationStatus
 import com.gatekeeper.db.tables.TlsMode
 import com.gatekeeper.db.tables.UpstreamMode
 import com.gatekeeper.docker.DockerService
-import com.gatekeeper.feature.nginx.infrastructure.NginxReconciliationService
+import com.gatekeeper.feature.nginx.infrastructure.NginxSiteReconciliationService
 import java.io.File
 import java.nio.file.Files
 import java.time.LocalDateTime
@@ -45,12 +45,12 @@ class NginxDockerReconciliationIntegrationTest {
                 reconciliationStatus = ReconciliationStatus.HEALTHY, lastNginxError = null,
                 lastDockerError = null, lastReconciledAt = null
             )
-            val reconciliation = NginxReconciliationService(
+            val reconciliation = NginxSiteReconciliationService(
                 available,
                 enabled,
                 { listOf(site) },
                 { config },
-                NginxReconciliationService.dockerCheck(docker) { _, _ -> containerName },
+                NginxSiteReconciliationService.dockerCheck(docker) { _, _ -> containerName },
                 { null },
                 persist = { _, _ -> }
             )

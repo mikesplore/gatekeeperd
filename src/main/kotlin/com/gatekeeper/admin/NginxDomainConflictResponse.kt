@@ -1,14 +1,13 @@
 package com.gatekeeper.admin
 
 import com.gatekeeper.api.respondErrorWithData
-import com.gatekeeper.nginx.NginxConfigClassification
-import com.gatekeeper.nginx.NginxDomainConflict
+import com.gatekeeper.feature.nginx.presentation.NginxConfigClassification
+import com.gatekeeper.feature.nginx.presentation.NginxDomainConflict
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.ApplicationCall
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 
 internal suspend fun ApplicationCall.respondNginxDomainConflicts(conflicts: List<NginxDomainConflict>) {
