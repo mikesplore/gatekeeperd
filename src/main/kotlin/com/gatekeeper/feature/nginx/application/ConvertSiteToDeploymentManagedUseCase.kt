@@ -1,35 +1,50 @@
 package com.gatekeeper.feature.nginx.application
 
+import com.gatekeeper.core.ports.CutoverProbe
 import com.gatekeeper.db.tables.CertMode
 import com.gatekeeper.db.tables.TlsMode
 import com.gatekeeper.feature.nginx.domain.port.CertificateProvisioner
 import com.gatekeeper.feature.nginx.domain.port.NginxCommandRunner
-import com.gatekeeper.feature.nginx.domain.service.generateNginxConfig
+import com.gatekeeper.feature.nginx.domain.port.NginxSiteStorage
+import com.gatekeeper.feature.nginx.domain.service.NginxConfigRenderer
 import com.gatekeeper.feature.nginx.infrastructure.DeploymentUpstreamIncludes
 import com.gatekeeper.feature.nginx.model.ResolvedCertificate
 import com.gatekeeper.feature.service.domain.repository.SiteRecord
 import com.gatekeeper.feature.nginx.model.NginxSiteRenderModel
 import com.gatekeeper.feature.nginx.model.TlsRenderMode
+import com.gatekeeper.feature.nginx.model.nginxServiceLogger
 import com.gatekeeper.feature.nginx.presentation.NginxTestResult
 import com.gatekeeper.feature.service.domain.repository.SiteRepository
+import com.gatekeeper.infrastructure.TcpCutoverProbe
 import com.gatekeeper.plugins.DistributedLock
 import java.io.File
 
 class ConvertSiteToDeploymentManagedUseCase(
     private val upstreamIncludeDirectory: String = "/etc/nginx/conf.d/gatekeeperd-upstreams",
     private val nginxTestRunner: () -> NginxTestResult = { NginxCommandRunner().test() },
+    private val siteConfig: ApplySiteConfigUseCase,
+    private val renderer: NginxConfigRenderer,
+    private val cutoverProbe: CutoverProbe,
+    private val nginxSiteStorage: NginxSiteStorage,
+    private val inspectSite: InspectSiteConfigUseCase,
+    private val siteRepository: SiteRepository,
+    private val certificateProvisioner: CertificateProvisioner,
+    private val localProbeRunner: (String, Boolean) -> Boolean = { domain, tls ->
+        cutoverProbe.throughLocalNginx(
+            domain,
+            tls
+        )
+    },
 ) {
     fun execute(
         site: SiteRecord,
-        hostPort: Int,
-        certificateProvisioner: CertificateProvisioner,
-        siteRepository: SiteRepository
+        hostPort: Int
     ): Boolean {
         val serviceId = site.serviceId ?: return false
         val slug = site.projectSlug ?: return false
         require(hostPort in 1..65535)
         return DistributedLock.withLock("nginx-host-mutation") {
-            val previousSite = inspectSite(slug, siteRepository = siteRepository).content ?: return@withLock false
+            val previousSite = inspectSite.inspectSite(slug).content ?: return@withLock false
             val includes = DeploymentUpstreamIncludes(File(upstreamIncludeDirectory))
             val includeFile = includes.file(serviceId)
             val previousInclude = includeFile.takeIf { it.isFile }?.readText()
@@ -62,9 +77,9 @@ class ConvertSiteToDeploymentManagedUseCase(
                 includes.write(serviceId, target)
                 check(nginxTestRunner().valid) { "nginx -t failed with the service upstream include" }
                 check(
-                    enableProject(
+                    siteConfig.enableProject(
                         slug,
-                        generateNginxConfig(model)
+                        renderer.generateNginxConfig(model)
                     )
                 ) { "Unable to activate stable upstream site config" }
                 check(
@@ -81,9 +96,9 @@ class ConvertSiteToDeploymentManagedUseCase(
                 ) { "Unable to persist deployment-managed site kind" }
                 true
             } catch (error: Exception) {
-                runCatching { restoreSiteConfiguration(slug, previousSite) }
-                runCatching { restoreUpstreamInclude(includes, serviceId, previousInclude) }
-                logger.error("Unable to convert site {} to deployment-managed upstream", site.id, error)
+                runCatching { nginxSiteStorage.restoreSiteConfiguration(slug, previousSite) }
+                runCatching { nginxSiteStorage.restoreUpstreamInclude(includes, serviceId, previousInclude) }
+                nginxServiceLogger.error("Unable to convert site {} to deployment-managed upstream", site.id, error)
                 false
             }
         }
