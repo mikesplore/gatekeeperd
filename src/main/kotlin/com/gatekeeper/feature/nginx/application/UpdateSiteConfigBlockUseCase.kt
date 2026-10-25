@@ -10,26 +10,25 @@ import java.nio.file.StandardCopyOption
 import java.time.Instant
 
 class UpdateSiteConfigBlockUseCase(
-    private val nginxSiteStorage: NginxSiteStorage
+    private val nginxSiteStorage: NginxSiteStorage,
+    private val sitesAvailablePath: String = "/etc/nginx/sites-available",
+    private val inspectSite: InspectSiteConfigUseCase,
+    private val applySiteConfigUseCase: ApplySiteConfigUseCase,
 ) {
     fun execute(
-        slug: String, blockIndex: Int, replacement: String,
-        siteRepository: SiteRepository
+        slug: String, blockIndex: Int, replacement: String
     ): NginxBlockUpdateResponse {
         return DistributedLock.withLock("nginx-host-mutation") {
-            applyBlockUpdateLocked(slug, blockIndex, replacement, siteRepository, nginxSiteStorage = nginxSiteStorage)
+            applyBlockUpdateLocked(slug, blockIndex, replacement)
         }
     }
 
     fun applyBlockUpdateLocked(
         slug: String, blockIndex: Int,
         replacement: String,
-        siteRepository: SiteRepository,
-        sitesAvailablePath: String = "/etc/nginx/sites-available",
-        nginxSiteStorage: NginxSiteStorage
     ): NginxBlockUpdateResponse {
         val file = File(sitesAvailablePath, slug)
-        val proposed = previewBlockUpdate(slug, blockIndex, replacement, siteRepository)
+        val proposed = previewBlockUpdate(slug, blockIndex, replacement)
         val current = file.readText()
         val backup = File(file.parentFile, "$slug.bak-${Instant.now().toEpochMilli()}")
         Files.copy(file.toPath(), backup.toPath(), StandardCopyOption.REPLACE_EXISTING)
@@ -56,7 +55,7 @@ class UpdateSiteConfigBlockUseCase(
                 validation
             )
         }
-        nginxSiteStorage.recordManagedVersion(slug, proposed)
+        applySiteConfigUseCase.recordManagedVersion(slug, proposed)
         return NginxBlockUpdateResponse(
             true,
             "Nginx block updated and reloaded successfully",
@@ -68,8 +67,8 @@ class UpdateSiteConfigBlockUseCase(
     }
 
     @Suppress("UNUSED_PARAMETER")
-    fun previewBlockUpdate(slug: String, blockIndex: Int, replacement: String, siteRepository: SiteRepository): String {
-        val current = inspectSite(siteRepository = siteRepository, slug = slug)
+    fun previewBlockUpdate(slug: String, blockIndex: Int, replacement: String): String {
+        val current = inspectSite.inspectSite(slug = slug)
         require(current.available) { "Nginx site '$slug' does not exist" }
         require(!current.manual) { "Nginx site '$slug' is manual/unmanaged; edit the file directly. Gatekeeperd will only detect drift." }
         require(blockIndex in current.blocks.indices) { "Block index $blockIndex is out of range" }

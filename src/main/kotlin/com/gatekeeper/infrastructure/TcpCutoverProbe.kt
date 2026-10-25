@@ -1,16 +1,18 @@
 package com.gatekeeper.infrastructure
 
 import com.gatekeeper.core.ports.CutoverProbe
-import com.gatekeeper.feature.nginx.domain.service.requireValidHostname
+import com.gatekeeper.feature.nginx.domain.service.NginxValidationService
 import java.net.InetSocketAddress
 import java.net.Socket
 import javax.net.ssl.SNIHostName
 import javax.net.ssl.SSLSocket
 import javax.net.ssl.SSLSocketFactory
 
-class TcpCutoverProbe : CutoverProbe {
+class TcpCutoverProbe(
+    private val nginxValidator: NginxValidationService
+) : CutoverProbe {
     override fun throughLocalNginx(domain: String, tls: Boolean): Boolean = runCatching {
-        requireValidHostname(domain)
+        nginxValidator.requireValidHostname(domain)
         val port = if (tls) 443 else 80
         val raw = Socket()
         raw.connect(InetSocketAddress("127.0.0.1", port), 2_000)
@@ -45,7 +47,7 @@ class TcpCutoverProbe : CutoverProbe {
 
     override fun candidate(port: Int, domain: String, path: String): Boolean = runCatching {
         require(port in 1..65535)
-        requireValidHostname(domain)
+        nginxValidator.requireValidHostname(domain)
         val safePath = path.takeIf { it.startsWith("/") && !it.contains('\r') && !it.contains('\n') } ?: "/"
         Socket().use { socket ->
             socket.connect(InetSocketAddress("127.0.0.1", port), 2_000)

@@ -4,27 +4,44 @@ import com.gatekeeper.core.ports.CutoverProbe
 import com.gatekeeper.db.tables.CertMode
 import com.gatekeeper.db.tables.TlsMode
 import com.gatekeeper.db.tables.UpstreamMode
+import com.gatekeeper.feature.nginx.domain.port.CertificateProvisioner
+import com.gatekeeper.feature.nginx.domain.port.NginxCommandRunner
 import com.gatekeeper.feature.nginx.domain.port.NginxSiteStorage
+import com.gatekeeper.feature.nginx.domain.service.NginxConfigRenderer
+import com.gatekeeper.feature.nginx.infrastructure.DeploymentUpstreamIncludes
 import com.gatekeeper.feature.service.domain.repository.SiteRepository
-import com.gatekeeper.nginx.DeploymentUpstreamIncludes
-import com.gatekeeper.nginx.NginxCommandRunner
 import com.gatekeeper.feature.nginx.model.NginxSiteRenderModel
-import com.gatekeeper.nginx.ResolvedCertificate
+import com.gatekeeper.feature.nginx.model.ResolvedCertificate
 import com.gatekeeper.feature.nginx.model.TlsRenderMode
-import com.gatekeeper.nginx.logger
+import com.gatekeeper.feature.nginx.model.nginxServiceLogger
+import com.gatekeeper.feature.nginx.presentation.NginxTestResult
 import com.gatekeeper.plugins.DistributedLock
+import java.io.File
+import java.nio.file.Files
 import java.util.UUID
 
 class SwitchDeploymentUpstreamUseCase(
     private val storage: NginxSiteStorage,
     private val commandRunner: NginxCommandRunner,
     private val cutoverProbe: CutoverProbe,
-    private val siteRepository: SiteRepository
+    private val siteRepository: SiteRepository,
+    private val renderer: NginxConfigRenderer,
+    private val certificateProvisioner: CertificateProvisioner,
+    private val upstreamIncludeDirectory: String = "/etc/nginx/conf.d/gatekeeperd-upstreams",
+    private val applySiteConfigUseCase: ApplySiteConfigUseCase,
+    private val inspectSite: InspectSiteConfigUseCase,
+    private val localProbeRunner: (String, Boolean) -> Boolean = { domain, tls ->
+        cutoverProbe.throughLocalNginx(
+            domain,
+            tls
+        )
+    },
+    private val nginxTestRunner: () -> NginxTestResult = { NginxCommandRunner().test() },
+    private val nginxReloadRunner: () -> Boolean = { NginxCommandRunner().reload() },
 ) {
     fun execute(serviceId: UUID, domain: String, tls: Boolean, host: String, port: Int): Boolean {
         val previous = storage.readUpstreamInclude(serviceId)
-        val newUpstream = "server $host:$port max_fails=3 fail_timeout=10s;
-"
+        val newUpstream = "server $host:$port max_fails=3 fail_timeout=10s;"
 
         storage.writeUpstreamInclude(serviceId, newUpstream)
         if (!commandRunner.reload()) {
@@ -66,7 +83,7 @@ class SwitchDeploymentUpstreamUseCase(
             }.fold(
                 onSuccess = { PostDrainRouteCheck(false, true) },
                 onFailure = { error ->
-                    logger.error(
+                    nginxServiceLogger.error(
                         "Post-drain route failed and rollback was unsuccessful for service {}",
                         serviceId,
                         error
@@ -85,13 +102,13 @@ class SwitchDeploymentUpstreamUseCase(
                 if (port == null) Files.deleteIfExists(includes.file(serviceId).toPath())
                 else includes.write(serviceId, includes.render(serviceId, port))
                 if (!nginxTestRunner().valid || !nginxReloadRunner()) {
-                    restoreUpstreamInclude(includes, serviceId, previous)
+                    storage.restoreUpstreamInclude(includes, serviceId, previous)
                     return@withLock false
                 }
                 true
             } catch (error: Exception) {
-                runCatching { restoreUpstreamInclude(includes, serviceId, previous) }
-                logger.error("Unable to restore stable upstream for service {}", serviceId, error)
+                runCatching { storage.restoreUpstreamInclude(includes, serviceId, previous) }
+                nginxServiceLogger.error("Unable to restore stable upstream for service {}", serviceId, error)
                 false
             }
         }
@@ -99,7 +116,7 @@ class SwitchDeploymentUpstreamUseCase(
     /** Route a managed project site to a ready candidate and reload nginx before reporting success. */
     fun switchDeploymentUpstream(serviceId: java.util.UUID, slug: String, host: String, port: Int): Boolean {
         val site = siteRepository.findByServiceId(serviceId) ?: return true
-        val previousContent = inspectSite(slug).content
+        val previousContent = inspectSite.inspectSite(slug).content
         val previousPort = site.upstreamExplicitPort
         val containerPort = site.upstreamContainerPort ?: port
         return switchDeploymentUpstream(serviceId, slug, host, containerPort, port)
@@ -128,21 +145,21 @@ class SwitchDeploymentUpstreamUseCase(
                             site.tlsMode != TlsMode.HTTP_ONLY
                         )
                     ) {
-                        restoreUpstreamInclude(includes, serviceId, previous)
+                        storage.restoreUpstreamInclude(includes, serviceId, previous)
                         return@withLock false
                     }
                     true
                 } catch (error: Exception) {
-                    runCatching { restoreUpstreamInclude(includes, serviceId, previous) }
-                    logger.error("Stable upstream cutover failed for service {}", serviceId, error)
+                    runCatching { storage.restoreUpstreamInclude(includes, serviceId, previous) }
+                    nginxServiceLogger.error("Stable upstream cutover failed for service {}", serviceId, error)
                     false
                 }
             }
         }
-        val previousContent = inspectSite(slug).content
+        val previousContent = inspectSite.inspectSite(slug).content
         val previousPort = site.upstreamExplicitPort
         val certificate = when (site.certMode) {
-            CertMode.AUTO_RESOLVE -> resolveCertificateForDomain(site.domain)
+            CertMode.AUTO_RESOLVE -> certificateProvisioner.resolveCertificateForDomain(site.domain)
             CertMode.EXPLICIT_PATH -> site.certExplicitPath?.let {
                 ResolvedCertificate("explicit", it, it.replace("fullchain.pem", "privkey.pem"))
             } ?: return false
@@ -170,10 +187,10 @@ class SwitchDeploymentUpstreamUseCase(
             bypassPaths = site.bypassPaths,
             customNginxLocations = site.customNginxLocations
         )
-        val config = generateNginxConfig(model)
-        if (!enableProject(slug, config)) return false
+        val config = renderer.generateNginxConfig(model)
+        if (!applySiteConfigUseCase.enableProject(slug, config)) return false
         if (siteRepository.updateDeploymentUpstreamForSite(site.id, host, hostPort, containerPort) != null) return true
-        previousContent?.let { restoreSiteConfiguration(slug, it) }
+        previousContent?.let { storage.restoreSiteConfiguration(slug, it) }
         previousPort?.let { siteRepository.updateDeploymentUpstreamForSite(site.id, site.upstreamHost, it) }
         return false
     }
