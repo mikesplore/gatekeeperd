@@ -1,9 +1,8 @@
 package com.gatekeeper.feature.nginx.presentation
 
 import com.gatekeeper.api.respondError
+import com.gatekeeper.feature.nginx.application.NginxAdministrationService
 import com.gatekeeper.feature.nginx.domain.port.CertificateProvisioner
-import com.gatekeeper.nginx.CertificateOperationResult
-import com.gatekeeper.nginx.NginxService
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.request.receive
 import io.ktor.server.response.respond
@@ -12,13 +11,13 @@ import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 
 fun Route.nginxCertificateAdminRoutes(
-    nginxService: NginxService,
+    nginxAdministrationService: NginxAdministrationService,
     certificateProvisioner: CertificateProvisioner
 ){
     get("/api/admin/nginx/certificate/list") {
-        val certificateManagerIssue = nginxService.certificateManagerIssue()
+        val certificateManagerIssue = certificateProvisioner.certificateManagerIssue()
         call.respond(
-            certificateProvisioner.listCertificates().copy(
+            nginxAdministrationService.listCertificates().copy(
                 managerReady = certificateManagerIssue == null,
                 managerMessage = certificateManagerIssue
             )
@@ -33,7 +32,7 @@ fun Route.nginxCertificateAdminRoutes(
             return@post
         }
 
-        when (val result = nginxAdminService.installCertificate(body.domain, body.email)) {
+        when (val result = nginxAdministrationService.installCertificate(body.domain, body.email)) {
             is CertificateOperationResult.Success -> call.respond(result.value)
             CertificateOperationResult.InvalidDomain -> call.respondError(
                 HttpStatusCode.BadRequest,
@@ -74,7 +73,7 @@ fun Route.nginxCertificateAdminRoutes(
             return@post
         }
 
-        when (val result = nginxAdminService.removeCertificate(domain)) {
+        when (val result = nginxAdministrationService.removeCertificate(domain)) {
             is CertificateOperationResult.Success -> call.respond(result.value)
             is CertificateOperationResult.InUse -> call.respondError(
                 HttpStatusCode.Conflict,
@@ -108,7 +107,7 @@ fun Route.nginxCertificateAdminRoutes(
             call.respondError(HttpStatusCode.BadRequest, "missing_domain", "Missing domain path parameter")
             return@post
         }
-        when (val result = nginxAdminService.renewCertificate(domain)) {
+        when (val result = nginxAdministrationService.renewCertificate(domain)) {
             is CertificateOperationResult.Success -> call.respond(result.value)
             CertificateOperationResult.InvalidDomain -> call.respondError(
                 HttpStatusCode.BadRequest,
@@ -149,7 +148,7 @@ fun Route.nginxCertificateAdminRoutes(
             return@get
         }
 
-        when (val result = nginxAdminService.certificateStatus(domain)) {
+        when (val result = nginxAdministrationService.certificateStatus(domain)) {
             is CertificateOperationResult.Success -> call.respond(result.value)
             CertificateOperationResult.InvalidDomain -> call.respondError(
                 HttpStatusCode.BadRequest,

@@ -21,7 +21,8 @@ class NginxBackfillRunner(
     private val projectRepository: ProjectRepository,
     private val siteRepository: SiteRepository,
     private val deploymentUpstreamResolver: DeploymentUpstreamResolver,
-    private val certificate: CertificateProvisioner
+    private val certificate: CertificateProvisioner,
+    private val renderer: NginxConfigRenderer
 ) {
     fun run(
         sitesAvailablePath: String,
@@ -55,7 +56,7 @@ class NginxBackfillRunner(
                 else BackfillDockerTarget(containerName, target.port)
             },
             autoCertificatePath = { domain -> certificate.resolveCertificateForDomain(domain)?.certificatePath },
-            render = { model -> generateNginxConfig(model) },
+            render = { model -> renderer.generateNginxConfig(model) },
             createSite = { project, model ->
                 siteRepository.create(project.id, model)
                 if (model.certMode == CertMode.AUTO_RESOLVE) {
