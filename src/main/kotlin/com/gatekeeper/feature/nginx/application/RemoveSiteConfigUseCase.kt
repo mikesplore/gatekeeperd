@@ -1,13 +1,14 @@
 package com.gatekeeper.feature.nginx.application
 
-import com.gatekeeper.feature.nginx.model.isExcluded
+import com.gatekeeper.feature.nginx.model.DomainRules
 import com.gatekeeper.feature.nginx.model.nginxServiceLogger
 import com.gatekeeper.plugins.DistributedLock
 import java.io.File
 
 class RemoveSiteConfigUseCase(
     private val sitesAvailablePath: String = "/etc/nginx/sites-available",
-    private val sitesEnabledPath: String = "/etc/nginx/sites-enabled"
+    private val sitesEnabledPath: String = "/etc/nginx/sites-enabled",
+    private val domainRules: DomainRules
 ) {
     fun execute(slug: String): Boolean = removeProject(
         slug,
@@ -23,7 +24,7 @@ class RemoveSiteConfigUseCase(
             try {
                 val availableFile = File("$sitesAvailablePath/$slug")
                 val enabledFile = File("$sitesEnabledPath/$slug")
-                if (isExcluded(availableFile, enabledFile)) {
+                if (domainRules.isExcluded(availableFile, enabledFile)) {
                     nginxServiceLogger.warn("Refusing to remove nginx site $slug because it serves Gatekeeperd")
                     return@withLock false
                 }

@@ -7,7 +7,6 @@ import com.gatekeeper.docker.DockerGateway
 import com.gatekeeper.core.ports.PortProbe
 import com.gatekeeper.feature.nginx.infrastructure.DeploymentUpstreamResolver
 import com.gatekeeper.nginx.NginxService
-import com.gatekeeper.feature.nginx.domain.service.requireValidHostname
 import com.gatekeeper.security.SecretValueCipher
 import com.gatekeeper.feature.payment.data.persistence.ProjectBalanceAdapter
 import com.gatekeeper.feature.project.domain.repository.ProjectRepository
@@ -17,6 +16,12 @@ import com.gatekeeper.feature.integrations.domain.repository.RegistryCredentialS
 import com.gatekeeper.feature.customer.domain.repository.CustomerRepository as CustomerStore
 import com.gatekeeper.feature.deployment.domain.repository.DeploymentJobRepository
 import com.gatekeeper.feature.deployment.domain.repository.ServiceDomainRepository
+import com.gatekeeper.feature.nginx.application.ConvertSiteToDeploymentManagedUseCase
+import com.gatekeeper.feature.nginx.application.InspectManualConfigUseCase
+import com.gatekeeper.feature.nginx.application.InspectSiteConfigUseCase
+import com.gatekeeper.feature.nginx.application.SwitchDeploymentUpstreamUseCase
+import com.gatekeeper.feature.nginx.domain.port.NginxSiteStorage
+import com.gatekeeper.feature.nginx.domain.service.NginxValidationService
 import com.gatekeeper.feature.project.domain.model.ProjectRecord
 import com.gatekeeper.feature.service.domain.repository.ServiceRepository
 import com.gatekeeper.feature.service.domain.repository.SiteRepository
@@ -377,6 +382,12 @@ fun Application.configureProjectSetupAdminRoutes() {
     val serviceRepository = get<ServiceRepository>()
     val siteRepository = get<SiteRepository>()
     val projectRepository = get<ProjectRepository>()
+    val nginxValidation = get<NginxValidationService>()
+    val resolver = get<DeploymentUpstreamResolver>()
+    val inspector = get<InspectSiteConfigUseCase>()
+    val switchDeploymentUpstream = get<SwitchDeploymentUpstreamUseCase>()
+    val converter = get<ConvertSiteToDeploymentManagedUseCase>()
+    val nginxSiteStorage = get<NginxSiteStorage>()
     routing {
         authenticate("auth-jwt") {
             get("/api/admin/project-setup/containers") {
@@ -437,7 +448,7 @@ fun Application.configureProjectSetupAdminRoutes() {
                 if (body.name.isBlank() || body.type.lowercase() !in setOf("frontend", "backend")) {
                     return@post call.respondError(HttpStatusCode.BadRequest, "invalid_project", "Name and a valid project type are required")
                 }
-                val domain = if (body.domain.isBlank()) "" else runCatching { requireValidHostname(body.domain) }.getOrElse {
+                val domain = if (body.domain.isBlank()) "" else runCatching { nginxValidation.requireValidHostname(body.domain) }.getOrElse {
                     return@post call.respondError(HttpStatusCode.BadRequest, "invalid_domain", it.message ?: "Domain is invalid")
                 }
                 val slug = generatedProjectSlug(projects, body.name)
@@ -527,15 +538,14 @@ fun Application.configureProjectSetupAdminRoutes() {
                         return@post call.respondError(HttpStatusCode.Conflict, "container_adoption_failed", error.message ?: "Container could not be adopted")
                     }
                 val site = siteRepository.findByServiceId(adopted.serviceId)
-                val nginx = if (site != null) get<NginxService>() else null
                 val siteSlug = site?.projectSlug ?: project.slug
                 val previous = DeploymentApplicationService.activeRuntime(adopted.serviceId, "production")
-                val previousConfig = if (site != null) runCatching { nginx?.inspectSite(siteSlug)?.content }.getOrNull() else null
+                val previousConfig = if (site != null) runCatching { inspector.inspectSite(siteSlug)?.content }.getOrNull() else null
                 val routed = site == null || runCatching {
-                    if (site?.upstreamKind == "DEPLOYMENT_MANAGED") {
-                        nginx?.switchDeploymentUpstream(adopted.serviceId, siteSlug, "127.0.0.1", request.containerPort, hostPort) == true
+                    if (site.upstreamKind == "DEPLOYMENT_MANAGED") {
+                        switchDeploymentUpstream.switchDeploymentUpstream(adopted.serviceId, siteSlug, "127.0.0.1", request.containerPort, hostPort)
                     } else {
-                        nginx?.convertSiteToDeploymentManaged(site, hostPort) == true
+                        converter.execute(site, hostPort)
                     }
                 }.getOrDefault(false)
                 if (!routed) {
@@ -545,13 +555,13 @@ fun Application.configureProjectSetupAdminRoutes() {
                 val activated = runCatching { DeploymentApplicationService.activateAfterCutover(adopted.deploymentId, previous?.id) }.getOrDefault(false)
                 if (!activated) {
                     if (site != null) {
-                        previousConfig?.let { priorConfig -> runCatching { nginx?.restoreSiteConfiguration(siteSlug, priorConfig) } }
+                        previousConfig?.let { priorConfig -> runCatching { nginxSiteStorage.restoreSiteConfiguration(siteSlug, priorConfig) } }
                         runCatching { siteRepository.restoreDeploymentUpstreamForSite(site) }
                         val previousPort = if (site.upstreamKind == "DEPLOYMENT_MANAGED") {
                             val primary = previous?.containerPort ?: previous?.ports?.keys?.singleOrNull()
                             primary?.let { previous?.ports?.get(it) } ?: previous?.hostPort
                         } else null
-                        runCatching { nginx?.restoreDeploymentUpstream(adopted.serviceId, previousPort) }
+                        runCatching { switchDeploymentUpstream.restoreDeploymentUpstream(adopted.serviceId, previousPort) }
                     }
                     DeploymentApplicationService.transition(adopted.deploymentId, com.gatekeeper.db.tables.DeploymentStatus.FAILED, "Active deployment changed during container adoption")
                     return@post call.respondError(HttpStatusCode.Conflict, "container_adoption_conflict", "Project runtime changed while the container was being attached; its gateway route was restored")
@@ -684,7 +694,7 @@ fun Application.configureProjectSetupAdminRoutes() {
                     ?: return@put call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
                 val body = runCatching { call.receive<ProjectSetupGatewayRequest>() }.getOrNull()
                     ?: return@put call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid domain/gateway configuration")
-                val domain = runCatching { requireValidHostname(body.domain) }.getOrElse {
+                val domain = runCatching { nginxValidation.requireValidHostname(body.domain) }.getOrElse {
                     return@put call.respondError(HttpStatusCode.BadRequest, "invalid_domain", it.message ?: "Domain is invalid")
                 }
                 val serviceId = body.serviceId?.let { raw -> runCatching { UUID.fromString(raw) }.getOrNull() }
@@ -729,7 +739,7 @@ fun Application.configureProjectSetupAdminRoutes() {
                     ?: return@delete call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
                 val body = runCatching { call.receive<ProjectSetupGatewayRequest>() }.getOrNull()
                     ?: return@delete call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid domain/gateway configuration")
-                val domain = runCatching { requireValidHostname(body.domain) }.getOrElse {
+                val domain = runCatching { nginxValidation.requireValidHostname(body.domain) }.getOrElse {
                     return@delete call.respondError(HttpStatusCode.BadRequest, "invalid_domain", it.message ?: "Domain is invalid")
                 }
                 val serviceId = body.serviceId?.let { raw -> runCatching { UUID.fromString(raw) }.getOrNull() }
@@ -817,7 +827,7 @@ fun Application.configureProjectSetupAdminRoutes() {
                         docker.containerHealth(name)
                     }.getOrDefault("unknown")
                 } ?: "not_deployed"
-                val upstream = DeploymentUpstreamResolver.resolve(serviceId, "production")
+                val upstream = resolver.resolve(serviceId, "production")
                 val financials = projectOverviewFinancials(project, call.application.get<ProjectBalanceAdapter>())
                 call.respond(ProjectOverviewResponse(
                     project.id.toString(), project.slug, project.name, project.type,
