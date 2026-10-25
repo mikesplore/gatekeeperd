@@ -1,7 +1,9 @@
 package com.gatekeeper.feature.nginx.application
 
 import com.gatekeeper.core.util.sha256
+import com.gatekeeper.feature.nginx.domain.port.NginxCommandRunner
 import com.gatekeeper.feature.nginx.domain.port.NginxSiteStorage
+import com.gatekeeper.feature.nginx.domain.service.NginxConfigParser
 import com.gatekeeper.feature.nginx.infrastructure.DeploymentUpstreamIncludes
 import com.gatekeeper.feature.nginx.model.DomainRules
 import com.gatekeeper.feature.nginx.presentation.NginxConfigInspection
@@ -19,7 +21,9 @@ class InspectSiteConfigUseCase(
     private val siteRepository: SiteRepository,
     private val upstreamIncludeDirectory: String = "/etc/nginx/conf.d/gatekeeperd-upstreams",
     private val domainRules: DomainRules,
-    private val nginx: NginxSiteStorage
+    private val nginx: NginxSiteStorage,
+    private val nginxConfigDumpRunner: () -> String? = { NginxCommandRunner().dumpConfig() },
+    private val parser: NginxConfigParser
 ) {
     fun inspectSite(
         slug: String,
@@ -47,7 +51,7 @@ class InspectSiteConfigUseCase(
             enabled = enabledFile.exists(),
             isSymlink = Files.isSymbolicLink(enabledFile.toPath()),
             content = content,
-            blocks = content?.let(::extractBlocks).orEmpty(),
+            blocks = content?.let(parser::extractBlocks).orEmpty(),
             customLocations = runCatching { siteRepository.findByProjectSlug(slug)?.customNginxLocations.orEmpty() }.getOrDefault(
                 emptyList()
             ),

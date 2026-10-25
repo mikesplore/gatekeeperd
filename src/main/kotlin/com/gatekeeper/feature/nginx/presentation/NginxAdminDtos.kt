@@ -36,7 +36,6 @@ data class NginxWizardContextResponse(
 )
 
 
-
 @Serializable
 data class NginxWizardDomainBindingResponse(
     val id: String,
@@ -120,7 +119,7 @@ data class NginxConfigInspection(
     val managedSha256: String? = null
 )
 
-internal fun NginxConfigInspection.canDeploymentCutoverUpdateRoute(): Boolean =
+fun NginxConfigInspection.canDeploymentCutoverUpdateRoute(): Boolean =
     available && enabled && managed
 
 @Serializable

@@ -6,6 +6,7 @@ import com.gatekeeper.feature.nginx.model.parseSiteIdentityMarker
 import com.gatekeeper.feature.nginx.presentation.NginxConfigArtifact
 import com.gatekeeper.feature.nginx.presentation.NginxConfigClassification
 import com.gatekeeper.feature.service.domain.repository.SiteRecord
+import com.gatekeeper.feature.service.domain.repository.SiteRepository
 import java.io.File
 import java.nio.file.Files
 
@@ -15,16 +16,11 @@ class ListConfigArtifactsUseCase(
     private val domainRules: DomainRules,
     private val nginxConflictAnalyzer: NginxConflictAnalyzer
 ) {
-    fun execute(sites: List<SiteRecord>): List<NginxConfigArtifact> = listConfigArtifacts(
-        sites,
-        sitesAvailablePath = sitesAvailablePath,
-        sitesEnabledPath = sitesEnabledPath
-    )
+
+    fun execute(sites: List<SiteRecord> = emptyList()): List<NginxConfigArtifact> = listConfigArtifacts(sites)
 
     fun listConfigArtifacts(
-        sites: List<SiteRecord>,
-        sitesAvailablePath: String = "/etc/nginx/sites-available",
-        sitesEnabledPath: String = "/etc/nginx/sites-enabled"
+        sites: List<SiteRecord>
     ): List<NginxConfigArtifact> {
         val availableDir = File(sitesAvailablePath)
         val enabledDir = File(sitesEnabledPath)
