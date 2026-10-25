@@ -1,31 +1,40 @@
 package com.gatekeeper.feature.nginx.presentation
 
-import com.gatekeeper.admin.logger
 import com.gatekeeper.api.respondError
-import com.gatekeeper.db.tables.CertMode
-import com.gatekeeper.db.tables.TlsMode
-import com.gatekeeper.db.tables.UpstreamMode
-import com.gatekeeper.feature.service.domain.repository.SiteRecord
-import com.gatekeeper.feature.service.domain.repository.SiteRepository
+import com.gatekeeper.config.AppSettings
+import com.gatekeeper.feature.audit.domain.repository.AuditRepository
+import com.gatekeeper.feature.nginx.application.*
+import com.gatekeeper.feature.nginx.domain.port.NginxSiteStorage
+import com.gatekeeper.feature.nginx.infrastructure.CertbotCertificateProvisioner
 import com.gatekeeper.feature.nginx.infrastructure.DeploymentUpstreamResolver
-import com.gatekeeper.nginx.NginxService
-import com.gatekeeper.feature.nginx.model.NginxSiteRenderModel
-import com.gatekeeper.nginx.ResolvedCertificate
-import com.gatekeeper.feature.nginx.model.TlsRenderMode
-import io.ktor.http.HttpStatusCode
-import io.ktor.server.request.receive
-import io.ktor.server.response.respond
-import io.ktor.server.routing.Route
-import io.ktor.server.routing.delete
-import io.ktor.server.routing.get
-import io.ktor.server.routing.post
-import kotlin.text.isNullOrBlank
-import kotlin.text.toIntOrNull
+import com.gatekeeper.feature.nginx.infrastructure.RenderModelFromSite
+import com.gatekeeper.feature.nginx.model.nginxServiceLogger
+import com.gatekeeper.feature.project.domain.repository.ProjectRepository
+import com.gatekeeper.feature.service.domain.repository.ServiceRepository
+import com.gatekeeper.feature.service.domain.repository.SiteRepository
+import io.ktor.http.*
+import io.ktor.server.request.*
+import io.ktor.server.response.*
+import io.ktor.server.routing.*
 
 fun Route.nginxManualConfigRoutes(
-    nginxService: NginxService,
     siteRepository: SiteRepository,
-){
+    nginxAdministrationService: NginxAdministrationService,
+    nginxSettings: AppSettings.NginxSettings,
+    auditRepository: AuditRepository,
+    preview: UpdateSiteConfigBlockUseCase,
+    inspector: InspectSiteConfigUseCase,
+    update: UpdateSiteConfigBlockUseCase,
+    projectRepository: ProjectRepository,
+    nginx: NginxSiteStorage,
+    serviceRepository: ServiceRepository,
+    listConfigArtifactsUseCase: ListConfigArtifactsUseCase,
+    certificateProvisioner: CertbotCertificateProvisioner,
+    deploymentUpstreamResolver: DeploymentUpstreamResolver,
+    remove: RemoveSiteConfigUseCase,
+    rollback: RollbackSiteConfigUseCase,
+    renderModelFromSite: RenderModelFromSite
+) {
     post("/api/admin/nginx/config/{slug}/custom-blocks") {
         val slug = call.parameters["slug"]
         if (slug.isNullOrBlank()) return@post call.respondError(
@@ -52,11 +61,11 @@ fun Route.nginxManualConfigRoutes(
             body.directives.trim()
         )
         val result = runCatching {
-            nginxAdminService.updateCustomLocations(
+            nginxAdministrationService.updateCustomLocations(
                 slug,
                 site,
                 site.customNginxLocations + location
-            ) { updated -> renderModelFromSite(slug, updated, nginxService) }
+            ) { updated -> renderModelFromSite.renderModelFromSite(slug, updated) }
         }
             .getOrElse {
                 return@post call.respondError(
@@ -95,14 +104,13 @@ fun Route.nginxManualConfigRoutes(
                 "Custom location not found"
             )
         val result = runCatching {
-            nginxAdminService.updateCustomLocations(
+            nginxAdministrationService.updateCustomLocations(
                 slug,
                 site,
                 site.customNginxLocations.filterNot { it.id == id }) { updated ->
-                renderModelFromSite(
+                renderModelFromSite.renderModelFromSite(
                     slug,
                     updated,
-                    nginxService
                 )
             }
         }.getOrElse {
@@ -140,7 +148,7 @@ fun Route.nginxManualConfigRoutes(
             ); return@post
         }
         val preview = runCatching {
-            nginxService.previewBlockUpdate(
+            preview.previewBlockUpdate(
                 slug,
                 index,
                 body.content
@@ -161,7 +169,7 @@ fun Route.nginxManualConfigRoutes(
             call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing slug path parameter")
             return@get
         }
-        val inspection = runCatching { nginxService.inspectSite(slug) }.getOrElse {
+        val inspection = runCatching { inspector.inspectSite(slug) }.getOrElse {
             call.respondError(HttpStatusCode.BadRequest, "invalid_slug", it.message ?: "Invalid site name")
             return@get
         }
@@ -187,7 +195,7 @@ fun Route.nginxManualConfigRoutes(
             ); return@post
         }
         val result = runCatching {
-            nginxService.applyBlockUpdate(
+            update.execute(
                 slug,
                 index,
                 body.content
@@ -200,7 +208,7 @@ fun Route.nginxManualConfigRoutes(
             ); return@post
         }
         if (!result.success) call.respond(HttpStatusCode.UnprocessableEntity, result) else call.respond(result)
-        if (result.success) projects.findBySlug(slug)?.let { project ->
+        if (result.success) projectRepository.findBySlug(slug)?.let { project ->
             auditRepository.write(
                 project.id,
                 "nginx_block_updated",
@@ -219,7 +227,7 @@ fun Route.nginxManualConfigRoutes(
                 "Missing slug path parameter"
             ); return@get
         }
-        val versions = runCatching { nginxService.listBackups(slug) }.getOrElse {
+        val versions = runCatching { nginx.listBackups(slug) }.getOrElse {
             call.respondError(
                 HttpStatusCode.BadRequest,
                 "invalid_slug",
@@ -240,7 +248,7 @@ fun Route.nginxManualConfigRoutes(
             ); return@post
         }
         val result = runCatching {
-            nginxService.rollback(
+            rollback.execute(
                 slug,
                 backup
             )
@@ -252,7 +260,7 @@ fun Route.nginxManualConfigRoutes(
             ); return@post
         }
         if (!result.success) call.respond(HttpStatusCode.UnprocessableEntity, result) else call.respond(result)
-        if (result.success) projects.findBySlug(slug)?.let { project ->
+        if (result.success) projectRepository.findBySlug(slug)?.let { project ->
             auditRepository.write(
                 project.id,
                 "nginx_rollback",
@@ -268,27 +276,25 @@ fun Route.nginxManualConfigRoutes(
             return@get
         }
 
-        val project = projects.findBySlug(slug)
+        val project = projectRepository.findBySlug(slug)
         if (project == null) {
             call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
             return@get
         }
 
         val enabled =
-            nginxService.listConfigArtifacts().any { it.filename == slug && it.available && it.enabled }
+            listConfigArtifactsUseCase.execute().any { it.filename == slug && it.available && it.enabled }
 
-        val service = serviceRepository.listByProjectId(project.id).firstOrNull { it.isDefault }
-        val site = service?.let { siteRepository.findByProjectIdAndServiceId(project.id, it.id) }
         val domain = serviceRepository.findDefaultDomain(project.id)
-        val resolvedCert = domain?.let(nginxService::resolveCertificateForDomain)
-        val expiry = resolvedCert?.certificateDomain?.let(nginxService::certificateExpiry)
+        val resolvedCert = domain?.let(certificateProvisioner::resolveCertificateForDomain)
+        val expiry = resolvedCert?.certificateDomain?.let(certificateProvisioner::certificateExpiry)
 
         call.respond(
             NginxStatusResponse(
                 enabled = enabled,
                 configPath = "${nginxSettings.sitesAvailablePath}/$slug",
                 enabledPath = "${nginxSettings.sitesEnabledPath}/$slug",
-                port = DeploymentUpstreamResolver.resolveProjectDefault(project.id, "production")?.port,
+                port = deploymentUpstreamResolver.resolveProjectDefault(project.id, "production")?.port,
                 sslEnabled = resolvedCert != null,
                 certificateDomain = resolvedCert?.certificateDomain,
                 domain = domain,
@@ -301,11 +307,11 @@ fun Route.nginxManualConfigRoutes(
 
 
     get("/api/admin/nginx/diagnostics") {
-        call.respond(nginxService.testNginxConfigDetailed())
+        call.respond(nginx.testNginxConfigDetailed())
     }
 
     post("/api/admin/nginx/test") {
-        call.respond(nginxService.testNginxConfigDetailed())
+        call.respond(nginx.testNginxConfigDetailed())
     }
 
 
@@ -316,13 +322,13 @@ fun Route.nginxManualConfigRoutes(
             return@post
         }
 
-        val removed = nginxService.removeProject(slug)
+        val removed = remove.removeProject(slug)
         if (!removed) {
             call.respondError(HttpStatusCode.InternalServerError, "nginx_error", "Failed to remove nginx site")
             return@post
         }
 
-        val reloaded = nginxService.reloadNginx()
+        val reloaded = nginx.reloadNginx()
         if (!reloaded) {
             call.respondError(
                 HttpStatusCode.InternalServerError,
@@ -332,7 +338,7 @@ fun Route.nginxManualConfigRoutes(
             return@post
         }
 
-        logger.info("Nginx site removed for project: $slug")
+        nginxServiceLogger.info("Nginx site removed for project: $slug")
         call.respond(
             NginxDisableResponse(
                 success = true,
@@ -340,128 +346,4 @@ fun Route.nginxManualConfigRoutes(
             )
         )
     }
-}
-
-fun renderModelFromSite(
-    slug: String,
-    site: SiteRecord,
-    nginxService: NginxService
-): NginxSiteRenderModel {
-    val (upstreamHost, port) = if (site.upstreamKind == "DEPLOYMENT_MANAGED" || site.upstreamContainerPort != null) {
-        if (site.upstreamKind == "DEPLOYMENT_MANAGED") {
-            site.upstreamHost to (site.upstreamExplicitPort
-                ?: error("Site $slug has no persisted deployment upstream port"))
-        } else {
-            val target = site.serviceId?.let {
-                site.upstreamContainerPort?.let { containerPort ->
-                    DeploymentUpstreamResolver.resolveRuntime(it, containerPort, "production")
-                } ?: DeploymentUpstreamResolver.resolveRuntime(it, "production")
-            } ?: error("Could not resolve the active deployment upstream for managed site $slug")
-            target.host to target.port
-        }
-    } else when (site.upstreamMode) {
-        UpstreamMode.EXPLICIT_PORT -> site.upstreamHost to
-                (site.upstreamExplicitPort ?: error("Site $slug has no explicit upstream port"))
-
-        UpstreamMode.DOCKER_DISCOVERY -> {
-            val target = site.serviceId?.let { DeploymentUpstreamResolver.resolve(it, "production") }
-                ?: error("Could not resolve the active deployment upstream for Docker site $slug")
-            val containerName = target.containerName
-                ?: error("Active deployment runtime has no container name for Docker site $slug")
-            target.host to target.port
-        }
-    }
-    val certificate = when (site.certMode) {
-        CertMode.AUTO_RESOLVE -> nginxService.resolveCertificateForDomain(site.domain)
-        CertMode.EXPLICIT_PATH -> site.certExplicitPath?.let {
-            ResolvedCertificate("explicit", it, it.replace("fullchain.pem", "privkey.pem"))
-        } ?: error("Site $slug has no explicit certificate path")
-    }
-    val tls = when (site.tlsMode) {
-        TlsMode.HTTP_ONLY -> TlsRenderMode.HTTP_ONLY
-        TlsMode.HTTPS -> TlsRenderMode.HTTPS
-        TlsMode.HTTPS_HTTP2 -> TlsRenderMode.HTTPS_HTTP2
-    }
-    return NginxSiteRenderModel(
-        slug = slug,
-        projectId = site.projectId,
-        serviceId = site.serviceId,
-        siteId = site.id,
-        domain = site.domain,
-        upstreamHost = upstreamHost,
-        appPort = port,
-        // Public TLS terminates at nginx; application containers normally speak HTTP.
-        upstreamScheme = "http",
-        tlsMode = tls,
-        certificatePath = certificate?.certificatePath,
-        certificateKeyPath = certificate?.privateKeyPath,
-        upstreamMode = site.upstreamMode,
-        certMode = site.certMode,
-        gateEnabled = site.gateEnabled,
-        bypassPaths = site.bypassPaths,
-        upstreamKind = site.upstreamKind,
-        customNginxLocations = site.customNginxLocations
-    )
-}
-
-fun renderModelFromSite(
-    slug: String,
-    site: SiteRecord,
-    nginxService: NginxService
-): NginxSiteRenderModel {
-    val (upstreamHost, port) = if (site.upstreamKind == "DEPLOYMENT_MANAGED" || site.upstreamContainerPort != null) {
-        if (site.upstreamKind == "DEPLOYMENT_MANAGED") {
-            site.upstreamHost to (site.upstreamExplicitPort
-                ?: error("Site $slug has no persisted deployment upstream port"))
-        } else {
-            val target = site.serviceId?.let {
-                site.upstreamContainerPort?.let { containerPort ->
-                    DeploymentUpstreamResolver.resolveRuntime(it, containerPort, "production")
-                } ?: DeploymentUpstreamResolver.resolveRuntime(it, "production")
-            } ?: error("Could not resolve the active deployment upstream for managed site $slug")
-            target.host to target.port
-        }
-    } else when (site.upstreamMode) {
-        UpstreamMode.EXPLICIT_PORT -> site.upstreamHost to
-                (site.upstreamExplicitPort ?: error("Site $slug has no explicit upstream port"))
-
-        UpstreamMode.DOCKER_DISCOVERY -> {
-            val target = site.serviceId?.let { DeploymentUpstreamResolver.resolve(it, "production") }
-                ?: error("Could not resolve the active deployment upstream for Docker site $slug")
-            val containerName = target.containerName
-                ?: error("Active deployment runtime has no container name for Docker site $slug")
-            target.host to target.port
-        }
-    }
-    val certificate = when (site.certMode) {
-        CertMode.AUTO_RESOLVE -> nginxService.resolveCertificateForDomain(site.domain)
-        CertMode.EXPLICIT_PATH -> site.certExplicitPath?.let {
-            ResolvedCertificate("explicit", it, it.replace("fullchain.pem", "privkey.pem"))
-        } ?: error("Site $slug has no explicit certificate path")
-    }
-    val tls = when (site.tlsMode) {
-        TlsMode.HTTP_ONLY -> TlsRenderMode.HTTP_ONLY
-        TlsMode.HTTPS -> TlsRenderMode.HTTPS
-        TlsMode.HTTPS_HTTP2 -> TlsRenderMode.HTTPS_HTTP2
-    }
-    return NginxSiteRenderModel(
-        slug = slug,
-        projectId = site.projectId,
-        serviceId = site.serviceId,
-        siteId = site.id,
-        domain = site.domain,
-        upstreamHost = upstreamHost,
-        appPort = port,
-        // Public TLS terminates at nginx; application containers normally speak HTTP.
-        upstreamScheme = "http",
-        tlsMode = tls,
-        certificatePath = certificate?.certificatePath,
-        certificateKeyPath = certificate?.privateKeyPath,
-        upstreamMode = site.upstreamMode,
-        certMode = site.certMode,
-        gateEnabled = site.gateEnabled,
-        bypassPaths = site.bypassPaths,
-        upstreamKind = site.upstreamKind,
-        customNginxLocations = site.customNginxLocations
-    )
 }
