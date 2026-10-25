@@ -1,7 +1,7 @@
 package com.gatekeeper.feature.nginx.application
 
+import com.gatekeeper.feature.nginx.domain.port.NginxCommandRunner
 import com.gatekeeper.feature.nginx.domain.port.NginxSiteStorage
-import com.gatekeeper.nginx.NginxCommandRunner
 
 class DisableSiteConfigUseCase(
     private val storage: NginxSiteStorage,

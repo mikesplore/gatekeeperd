@@ -28,7 +28,7 @@ import com.gatekeeper.feature.deployment.domain.repository.DeploymentJobReposito
 import com.gatekeeper.feature.deployment.domain.repository.DeploymentJobRepository.ConfigurationSummary
 import com.gatekeeper.feature.deployment.domain.repository.DeploymentJobRepository.EnvironmentDeploymentResult
 import com.gatekeeper.feature.deployment.domain.repository.DeploymentJobRepository.AdoptedRuntimeRecord
-import com.gatekeeper.feature.deployment.domain.repository.DeploymentJobRepository.ResolvedEnvironment
+import org.flywaydb.core.internal.configuration.models.ResolvedEnvironment
 
 private data class SecretSetReference(val id: UUID, val version: Int)
 private data class SharedEnvironmentSetReference(val id: UUID, val version: Int)
@@ -1123,7 +1123,7 @@ class ExposedDeploymentJobRepository : DeploymentJobRepository {
             sharedValues.keys.forEach { put(it, "project_shared") }
             serviceValues.keys.forEach { put(it, "service") }
         }
-        ResolvedEnvironment(sharedValues + serviceValues, sources)
+        ResolvedDeploymentEnvironment(sharedValues + serviceValues, sources)
     }
 
     override fun claimNext(): DeploymentJobRecord? = transaction {
