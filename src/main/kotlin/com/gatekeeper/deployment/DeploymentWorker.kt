@@ -11,10 +11,13 @@ import com.gatekeeper.docker.DockerGateway
 import com.gatekeeper.core.ports.PortProbe
 import com.gatekeeper.core.ports.HttpPortProbe
 import com.gatekeeper.core.ports.CutoverProbe
-import com.gatekeeper.nginx.NginxService
-import com.gatekeeper.nginx.DeploymentUpstreamIncludes
-import com.gatekeeper.nginx.canDeploymentCutoverUpdateRoute
 import com.gatekeeper.feature.deployment.domain.repository.ServiceDomainRepository
+import com.gatekeeper.feature.nginx.application.InspectSiteConfigUseCase
+import com.gatekeeper.feature.nginx.application.RecoverInterruptedCutoverUseCase
+import com.gatekeeper.feature.nginx.application.SwitchDeploymentUpstreamUseCase
+import com.gatekeeper.feature.nginx.domain.port.NginxSiteStorage
+import com.gatekeeper.feature.nginx.infrastructure.DeploymentUpstreamIncludes
+import com.gatekeeper.feature.nginx.model.InterruptedCutoverResult
 import com.gatekeeper.feature.project.domain.repository.ProjectRepository
 import com.gatekeeper.feature.service.domain.repository.SiteRecord
 import com.gatekeeper.feature.service.domain.repository.SiteRepository
@@ -39,13 +42,16 @@ class DeploymentWorker(
     private val docker: DockerGateway,
     private val schedulerSettings: AppSettings.SchedulerSettings,
     private val nginxSettings: AppSettings.NginxSettings,
-    private val nginxService: NginxService,
     private val readinessPorts: PortProbe,
     private val readinessHttp: HttpPortProbe,
     private val cutoverProbe: CutoverProbe,
     private val projectRepository: ProjectRepository,
     private val siteRepository: SiteRepository,
-    private val serviceDomains: ServiceDomainRepository
+    private val serviceDomains: ServiceDomainRepository,
+    private val recoverInterruptedCutoverUseCase: RecoverInterruptedCutoverUseCase,
+    private val nginx: NginxSiteStorage,
+    private val switchDeploymentUpstreamUseCase: SwitchDeploymentUpstreamUseCase,
+    private val inspectSiteConfigUseCase: InspectSiteConfigUseCase
 ) {
     private val logger = LoggerFactory.getLogger("com.gatekeeper.deployment.DeploymentWorker")
     private val started = AtomicBoolean(false)
@@ -109,9 +115,9 @@ class DeploymentWorker(
                     site, files, candidateRunning && !restoringFailedCutover
                 )
                 when (result) {
-                    NginxService.InterruptedCutoverResult.TARGET_RELOADED,
-                    NginxService.InterruptedCutoverResult.PREVIOUS_RESTORED -> {
-                        if (restoringFailedCutover && result == NginxService.InterruptedCutoverResult.PREVIOUS_RESTORED) {
+                    InterruptedCutoverResult.TARGET_RELOADED,
+                    InterruptedCutoverResult.PREVIOUS_RESTORED -> {
+                        if (restoringFailedCutover && result == InterruptedCutoverResult.PREVIOUS_RESTORED) {
                             val removed = cleanupInterruptedCandidate(
                                 deploymentId,
                                 candidate?.name,
@@ -122,7 +128,7 @@ class DeploymentWorker(
                                     deploymentId, "restored", "Previous gateway route restored and failed candidate removed"
                                 )
                             }
-                        } else if (result == NginxService.InterruptedCutoverResult.PREVIOUS_RESTORED) {
+                        } else if (result == InterruptedCutoverResult.PREVIOUS_RESTORED) {
                             val removed = cleanupInterruptedCandidate(
                                 deploymentId,
                                 candidate?.name,
@@ -147,7 +153,7 @@ class DeploymentWorker(
                             )
                         }
                     }
-                    NginxService.InterruptedCutoverResult.CONFLICT -> {
+                    InterruptedCutoverResult.CONFLICT -> {
                         DeploymentApplicationService.updateCutoverState(deploymentId, "repair_required", "Upstream include checksum matches neither saved cutover target nor previous content")
                     }
                 }
@@ -522,8 +528,7 @@ class DeploymentWorker(
         val changesProductionRoute = job.environment == "production"
         val site = if (changesProductionRoute) siteRepository.findByServiceId(job.serviceId) else null
         val siteOwnerSlug = site?.projectSlug
-        val siteService = if (site != null && siteOwnerSlug != null) nginxService else null
-        val existingSiteConfig = if (siteService != null && siteOwnerSlug != null) siteService.inspectSite(siteOwnerSlug) else null
+        val existingSiteConfig = if (siteService != null && siteOwnerSlug != null) inspectSiteConfigUseCase.inspectSite(siteOwnerSlug) else null
         // Legacy explicit sites may already receive managed deployments. Convert them on cutover
         // so deployment changes only the stable service include after this first activation.
         val convertsLegacySite = DeploymentSiteCutoverPolicy.convertsLegacySite(site?.upstreamKind)
@@ -706,7 +711,6 @@ class DeploymentWorker(
         previous: DeploymentApplicationService.ActiveRuntime?,
         previousNginxConfig: String?,
         docker: DockerGateway,
-        nginx: NginxService?,
         ownerSlug: String?,
         site: SiteRecord?
     ) {
@@ -766,14 +770,14 @@ class DeploymentWorker(
                 ))
             },
             route = { config ->
-                if (site?.upstreamKind == "DEPLOYMENT_MANAGED" && nginx != null) {
+                if (site?.upstreamKind == "DEPLOYMENT_MANAGED") {
                     previous?.let { old ->
                         val oldHostPort = old.containerPort?.let(old.ports::get) ?: old.hostPort
-                        site.serviceId?.let { nginx.restoreDeploymentUpstream(it, oldHostPort) } ?: false
+                        site.serviceId?.let { switchDeploymentUpstreamUseCase.restoreDeploymentUpstream(it, oldHostPort) } ?: false
                     } ?: false
                 } else {
                     val routeRestored =
-                        !(nginx != null && ownerSlug != null) || nginx.restoreSiteConfiguration(ownerSlug, config)
+                        ownerSlug == null || nginx.restoreSiteConfiguration(ownerSlug, config)
                     if (routeRestored && site != null) siteRepository.restoreDeploymentUpstreamForSite(site) != null else routeRestored
                 }
             },

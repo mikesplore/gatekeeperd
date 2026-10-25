@@ -5,6 +5,7 @@ import com.gatekeeper.db.tables.Deployments
 import com.gatekeeper.db.tables.Projects
 import com.gatekeeper.db.tables.UpstreamMode
 import com.gatekeeper.docker.DockerGateway
+import com.gatekeeper.feature.nginx.application.InspectSiteConfigUseCase
 import com.gatekeeper.feature.project.domain.repository.ProjectRepository
 import com.gatekeeper.feature.service.domain.repository.SiteRepository
 import com.gatekeeper.nginx.NginxService
@@ -46,10 +47,10 @@ data class DeploymentReconciliationReport(
 /** Read-only comparison of persisted active deployments with Docker and managed nginx state. */
 class DeploymentReconciliationService(
     private val docker: DockerGateway?,
-    private val nginx: NginxService,
     private val projectRepository: ProjectRepository,
     private val siteRepository: SiteRepository,
-    private val deploymentUR: DeploymentUpstreamResolver
+    private val deploymentUR: DeploymentUpstreamResolver,
+    private val inspectSiteConfigUseCase: InspectSiteConfigUseCase
 ) {
     fun report(): DeploymentReconciliationReport {
         val errors = mutableListOf<String>()
@@ -182,7 +183,7 @@ class DeploymentReconciliationService(
         } else {
                 val deploymentManaged = site.upstreamKind == "DEPLOYMENT_MANAGED"
                 gatewayTarget = if (deploymentManaged) {
-                    val includePort = site.serviceId?.let(nginx::inspectDeploymentUpstreamPort)
+                    val includePort = site.serviceId?.let(inspectSiteConfigUseCase::inspectDeploymentUpstreamPort)
                     "gk_${site.serviceId?.toString()?.replace("-", "")}:$includePort"
                 } else when (site.upstreamMode) {
                     UpstreamMode.EXPLICIT_PORT -> "${site.upstreamHost}:${site.upstreamExplicitPort ?: "missing-port"}"
@@ -197,7 +198,7 @@ class DeploymentReconciliationService(
                         drift = drift.distinctBy { it.code to it.detail }
                     )
                 }
-                val inspection = runCatching { nginx.inspectSite(siteSlug) }.getOrElse {
+                val inspection = runCatching { inspectSiteConfigUseCase.inspectSite(siteSlug) }.getOrElse {
                     errors += "nginx inspection failed for project ${deployment.projectId}: ${it.message ?: it.javaClass.simpleName}"
                     null
                 }
@@ -222,7 +223,7 @@ class DeploymentReconciliationService(
                     }
                     if (deploymentManaged) {
                         val expectedHostPort = deployment.hostPort ?: deployment.ports.values.singleOrNull()
-                        val includePort = site.serviceId?.let(nginx::inspectDeploymentUpstreamPort)
+                        val includePort = site.serviceId?.let(inspectSiteConfigUseCase::inspectDeploymentUpstreamPort)
                         if (expectedHostPort != null && includePort != expectedHostPort) {
                             drift += DeploymentDriftItem("gateway_active_runtime_mismatch", "Stable upstream include targets port ${includePort ?: "missing"}; active deployment runtime uses $expectedHostPort")
                         }
@@ -259,8 +260,8 @@ class DeploymentReconciliationService(
             "repair_required"
         )
 
-        fun production(projectRepository: ProjectRepository, siteRepository: SiteRepository, docker: DockerGateway, nginx: NginxService): DeploymentReconciliationService {
-            return DeploymentReconciliationService(docker, nginx, projectRepository, siteRepository)
+        fun production(projectRepository: ProjectRepository, siteRepository: SiteRepository, docker: DockerGateway, deploymentUR: DeploymentUpstreamResolver, inspectSiteConfigUseCase: InspectSiteConfigUseCase): DeploymentReconciliationService {
+            return DeploymentReconciliationService(docker,  projectRepository, siteRepository, deploymentUR, inspectSiteConfigUseCase )
         }
     }
 }
