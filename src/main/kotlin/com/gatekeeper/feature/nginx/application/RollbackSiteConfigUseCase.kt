@@ -1,6 +1,7 @@
 package com.gatekeeper.feature.nginx.application
 
 import com.gatekeeper.feature.nginx.domain.port.NginxSiteStorage
+import com.gatekeeper.feature.nginx.infrastructure.NginxSelfDomainExclusion
 import com.gatekeeper.feature.nginx.model.DomainRules
 
 import com.gatekeeper.feature.nginx.presentation.NginxRollbackResponse
@@ -14,24 +15,23 @@ class RollbackSiteConfigUseCase(
     private val sitesEnabledPath: String = "/etc/nginx/sites-enabled",
     private val nginxSiteStorage: NginxSiteStorage,
     private val domainRules: DomainRules,
+    private val nginxSelfDomainExclusion: NginxSelfDomainExclusion,
+    private val applySiteConfigUseCase: ApplySiteConfigUseCase,
 ) {
     fun execute(slug: String, backupName: String): NginxRollbackResponse = rollbackLocked(slug, backupName)
 
     fun rollbackLocked(
         slug: String, backupName: String,
-        sitesAvailablePath: String = "/etc/nginx/sites-available",
-        sitesEnabledPath: String = "/etc/nginx/sites-enabled",
-        nginxSiteStorage: NginxSiteStorage
     ): NginxRollbackResponse {
-        require(backupName.matches(Regex("${Regex.escape(slug)}\.bak-[0-9]+"))) { "Invalid backup name" }
+        require(backupName.matches(Regex("${Regex.escape(slug)}.bak-[0-9]+"))) { "Invalid backup name" }
         val backup = File(sitesAvailablePath, backupName)
         require(backup.isFile) { "Backup does not exist" }
         val target = File(sitesAvailablePath, slug)
         val enabledFile = File(sitesEnabledPath, slug)
-        require(!domainRules.isExcluded(target, enabledFile) && !selfDomainExclusion.excludesFile(backup)) {
+        require(!domainRules.isExcluded(target, enabledFile) && !nginxSelfDomainExclusion.excludesFile(backup)) {
             "This nginx config serves Gatekeeperd and is excluded from site management"
         }
-        validateProtectedGateBlocks(slug, backup.readText())
+        domainRules.validateProtectedGateBlocks(slug, backup.readText())
         val stagedFile = File(sitesAvailablePath, ".${slug}.staged")
         Files.copy(backup.toPath(), stagedFile.toPath(), StandardCopyOption.REPLACE_EXISTING)
         val validation = nginxSiteStorage.testNginxConfigWithStagedSite(slug, stagedFile)
@@ -81,7 +81,7 @@ class RollbackSiteConfigUseCase(
         } finally {
             Files.deleteIfExists(stagedFile.toPath())
         }
-        nginxSiteStorage.recordManagedVersion(slug, target.readText())
+        applySiteConfigUseCase.recordManagedVersion(slug, target.readText())
         return NginxRollbackResponse(
             true,
             "Configuration rolled back and Nginx reloaded successfully",
