@@ -1,21 +1,19 @@
-package com.gatekeeper.nginx
+package com.gatekeeper.feature.nginx.application
 
 import com.gatekeeper.plugins.DistributedLock
-import com.gatekeeper.feature.certificate.domain.repository.CertificateRepository
-import com.gatekeeper.feature.nginx.application.inspectSite
+import com.gatekeeper.feature.nginx.domain.port.NginxCertificateStore
 import com.gatekeeper.feature.nginx.domain.port.CertificateProvisioner
-import com.gatekeeper.feature.nginx.domain.port.NginxSiteStorage
-import com.gatekeeper.feature.nginx.domain.service.requireValidEmail
-import com.gatekeeper.feature.nginx.domain.service.requireValidHostname
+import com.gatekeeper.feature.nginx.domain.service.NginxValidationService
+import com.gatekeeper.feature.nginx.model.DomainRules
+import com.gatekeeper.feature.nginx.infrastructure.NginxConfigRenderer as InfrastructureNginxConfigRenderer
 import com.gatekeeper.feature.nginx.model.NginxSiteRenderModel
-import com.gatekeeper.feature.nginx.model.validateCustomLocations
 import com.gatekeeper.feature.nginx.presentation.CertificateListResponse
+import com.gatekeeper.feature.nginx.presentation.CertificateOperationResult
 import com.gatekeeper.feature.nginx.presentation.CertificateRenewalResponse
 import com.gatekeeper.feature.nginx.presentation.CertificateResponse
 import com.gatekeeper.feature.nginx.presentation.InstalledCertificateInfo
 import com.gatekeeper.feature.nginx.presentation.NginxCustomLocation
 import com.gatekeeper.feature.nginx.presentation.NginxCustomLocationResponse
-import com.gatekeeper.feature.nginx.presentation.NginxEnableRequest
 import com.gatekeeper.feature.service.domain.repository.SiteDashboardUpdate
 import com.gatekeeper.feature.service.domain.repository.SiteRecord
 import com.gatekeeper.feature.service.domain.repository.SiteRepository
@@ -24,22 +22,25 @@ import java.time.LocalDateTime
 import java.time.OffsetDateTime
 
 /** Application-level operations for nginx administration routes. */
-class NginxAdminService(
-    private val certificates: CertificateStore,
+class NginxAdministrationService(
+    private val certificates: NginxCertificateStore,
     private val sslCertPath: String,
     private val siteRepository: SiteRepository,
     private val certificateProvisioner: CertificateProvisioner,
-    private val nginxSiteStorage: NginxSiteStorage,
+    private val domainRules: DomainRules,
+    private val applySiteConfig: ApplySiteConfigUseCase,
+    private val inspectSiteConfig: InspectSiteConfigUseCase,
+    private val nginxConfigRenderer: InfrastructureNginxConfigRenderer,
+    private val nValidation: NginxValidationService
 ) {
     fun updateCustomLocations(
         slug: String,
         site: SiteRecord,
         locations: List<NginxCustomLocation>,
-        certificate: CertificateProvisioner,
         renderModel: (SiteRecord) -> NginxSiteRenderModel
     ): NginxCustomLocationResponse = DistributedLock.withLock("nginx-host-mutation") {
-        validateCustomLocations(locations)
-        val inspection = inspectSite(slug, siteRepository = siteRepository)
+        domainRules.validateCustomLocations(locations)
+        val inspection = inspectSiteConfig.inspectSite(slug)
         require(inspection.available && inspection.enabled && inspection.managed) {
             "Custom locations can only be managed for an enabled Gatekeeperd-managed Nginx site"
         }
@@ -49,7 +50,7 @@ class NginxAdminService(
             SiteDashboardUpdate(customNginxLocations = locations)
         ) ?: error("Site no longer exists")
         val activation = runCatching {
-            nginxSiteStorage.enableProjectDetailed(slug, nginx.generateNginxConfig(renderModel(updated)))
+            applySiteConfig.enableProjectDetailed(slug, nginxConfigRenderer.render(renderModel(updated)))
         }.getOrElse { error ->
             siteRepository.updateDashboard(site.id, SiteDashboardUpdate(customNginxLocations = previous))
             throw error
@@ -60,11 +61,6 @@ class NginxAdminService(
         }
         NginxCustomLocationResponse(true, "Custom Nginx locations saved and reloaded", locations)
     }
-
-    fun hasRenderAffectingParameters(body: NginxEnableRequest): Boolean =
-        body.port != null || body.domain != null || body.upstreamScheme != null ||
-            body.certificateDomain != null || body.sslCertificatePath != null ||
-            body.sslCertificateKeyPath != null || body.requireSsl != null
 
     fun listCertificates(): CertificateListResponse = CertificateListResponse(
         certificateProvisioner.listInstalledCertificates().map { cert ->
@@ -89,7 +85,7 @@ class NginxAdminService(
     fun installCertificate(domainInput: String, emailInput: String): CertificateOperationResult<CertificateResponse> {
         val domain = validateDomain(domainInput) ?: return CertificateOperationResult.InvalidDomain
         val email = try {
-            requireValidEmail(emailInput.trim())
+            nValidation.requireValidEmail(emailInput.trim())
         } catch (e: IllegalArgumentException) {
             return CertificateOperationResult.InvalidEmail(e.message ?: "Invalid email")
         }
@@ -152,36 +148,7 @@ class NginxAdminService(
     }
 
     private fun validateDomain(value: String): String? = try {
-        requireValidHostname(value.trim())
+        nValidation.requireValidHostname(value.trim())
     } catch (_: IllegalArgumentException) { null }
 }
 
-sealed interface CertificateOperationResult<out T> {
-    data class Success<T>(val value: T) : CertificateOperationResult<T>
-    data object InvalidDomain : CertificateOperationResult<Nothing>
-    data class InvalidEmail(val message: String) : CertificateOperationResult<Nothing>
-    data object CertbotUnavailable : CertificateOperationResult<Nothing>
-    data object Failed : CertificateOperationResult<Nothing>
-    data object NotFound : CertificateOperationResult<Nothing>
-    data object RenewalFailed : CertificateOperationResult<Nothing>
-    data class InUse(val message: String) : CertificateOperationResult<Nothing>
-}
-
-interface CertificateStore {
-    data class Record(val id: java.util.UUID)
-    fun syncInventory(domain: String, expiresAt: LocalDateTime?, status: String)
-    fun upsert(domain: String, issuedAt: LocalDateTime?, expiresAt: LocalDateTime?, status: String): Record
-    fun linkSites(domain: String, certificateId: java.util.UUID)
-    fun requireRemovable(domain: String)
-    fun delete(domain: String)
-    fun recordRenewal(domain: String, expiresAt: LocalDateTime?, status: String, error: String?)
-}
-
-class ExposedCertificateStore(private val repository: CertificateRepository, private val siteRepository: SiteRepository) : CertificateStore {
-    override fun syncInventory(domain: String, expiresAt: LocalDateTime?, status: String) { repository.syncInventory(domain, expiresAt, status) }
-    override fun upsert(domain: String, issuedAt: LocalDateTime?, expiresAt: LocalDateTime?, status: String) = CertificateStore.Record(repository.upsert(domain, issuedAt, expiresAt, status).id)
-    override fun linkSites(domain: String, certificateId: java.util.UUID) { siteRepository.linkCertificateForDomain(domain, certificateId) }
-    override fun requireRemovable(domain: String) = repository.requireRemovable(domain)
-    override fun delete(domain: String) { repository.deleteByDomain(domain) }
-    override fun recordRenewal(domain: String, expiresAt: LocalDateTime?, status: String, error: String?) { repository.recordRenewalResult(domain, expiresAt, status, error) }
-}
