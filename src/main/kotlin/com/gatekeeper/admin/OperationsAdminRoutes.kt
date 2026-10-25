@@ -10,15 +10,26 @@ import com.gatekeeper.core.ports.PortProbe
 import com.gatekeeper.db.tables.CertMode
 import com.gatekeeper.db.tables.TlsMode
 import com.gatekeeper.db.tables.UpstreamMode
-import com.gatekeeper.feature.nginx.domain.service.requireCertificatePath
-import com.gatekeeper.feature.nginx.domain.service.requireValidHostname
+import com.gatekeeper.feature.nginx.application.ApplySiteConfigUseCase
+import com.gatekeeper.feature.nginx.application.DeleteManualConfigUseCase
+import com.gatekeeper.feature.nginx.application.InspectManualConfigUseCase
+import com.gatekeeper.feature.nginx.application.InspectSiteConfigUseCase
+import com.gatekeeper.feature.nginx.application.ListConfigArtifactsUseCase
+import com.gatekeeper.feature.nginx.application.RemoveSiteConfigUseCase
+import com.gatekeeper.feature.nginx.domain.port.NginxSiteStorage
+import com.gatekeeper.feature.nginx.domain.service.NginxConfigRenderer
+import com.gatekeeper.feature.nginx.domain.service.NginxConflictAnalyzer
+import com.gatekeeper.feature.nginx.domain.service.NginxValidationService
+import com.gatekeeper.feature.nginx.infrastructure.CertbotCertificateProvisioner
 import com.gatekeeper.feature.nginx.infrastructure.DeploymentUpstreamResolver
 import com.gatekeeper.feature.nginx.infrastructure.NginxSelfDomainExclusion
 import com.gatekeeper.feature.nginx.model.NginxSiteRenderModel
 import com.gatekeeper.feature.nginx.model.TlsRenderMode
+import com.gatekeeper.feature.nginx.presentation.NginxConfigClassification
 import com.gatekeeper.feature.payment.data.persistence.ProjectBalanceAdapter
 import com.gatekeeper.feature.payment.domain.usecase.GetPaymentDashboardData
 import com.gatekeeper.feature.payment.domain.usecase.ListPaymentsByProject
+import com.gatekeeper.feature.project.domain.model.ProjectRecord
 import com.gatekeeper.nginx.*
 import com.gatekeeper.plugins.Metrics
 import io.ktor.http.*
@@ -170,14 +181,14 @@ data class DashboardCustomerCreateRequest(
 @Serializable
 data class DashboardConfirmationRequest(val confirm: Boolean = false)
 
-private fun dashboardUpstreamState(siteRepository: SiteRepository, site: SiteRecord, dockerService: DockerGateway?, portProbe: PortProbe): String {
+private fun dashboardUpstreamState(deploymentUpstreamResolver: DeploymentUpstreamResolver, site: SiteRecord, dockerService: DockerGateway?, portProbe: PortProbe): String {
     val port = when (site.upstreamMode) {
-        com.gatekeeper.db.tables.UpstreamMode.EXPLICIT_PORT -> site.upstreamExplicitPort ?: return "unknown"
-        com.gatekeeper.db.tables.UpstreamMode.DOCKER_DISCOVERY -> {
+       UpstreamMode.EXPLICIT_PORT -> site.upstreamExplicitPort ?: return "unknown"
+       UpstreamMode.DOCKER_DISCOVERY -> {
             val target = site.serviceId?.let {
                 site.upstreamContainerPort?.let { containerPort ->
-                    DeploymentUpstreamResolver.resolve(it, containerPort, "production")
-                } ?: DeploymentUpstreamResolver.resolve(it, "production")
+                    deploymentUpstreamResolver.resolve(it, containerPort, "production")
+                } ?: deploymentUpstreamResolver.resolve(it, "production")
             } ?: return "unknown"
             val docker = dockerService ?: return "unknown"
             val name = target.containerName ?: return "unknown"
@@ -195,7 +206,7 @@ private fun Throwable.isUniqueConstraintViolation(): Boolean = generateSequence(
     .any { it.sqlState == "23505" }
 
 private data class CustomerOwnedProject(
-    val project: ProjectRepository.ProjectRecord,
+    val project: ProjectRecord,
     val site: SiteRecord?
 )
 
@@ -210,6 +221,7 @@ private fun dashboardSite(
     projectRepository: ProjectRepository,
     customerStore: CustomerStore,
     nginxSettings: AppSettings.NginxSettings,
+    deploymentUpstreamResolver: DeploymentUpstreamResolver,
     dockerService: DockerGateway? = null
 ): DashboardSiteResponse {
     val project = projectRepository.findById(site.projectId)
@@ -222,8 +234,8 @@ private fun dashboardSite(
     }
     val resolved = site.serviceId?.let {
         site.upstreamContainerPort?.let { containerPort ->
-            DeploymentUpstreamResolver.resolve(it, containerPort, "production")
-        } ?: DeploymentUpstreamResolver.resolve(it, "production")
+            deploymentUpstreamResolver.resolve(it, containerPort, "production")
+        } ?: deploymentUpstreamResolver.resolve(it, "production")
     }
     val configuredHost = site.upstreamHost
     val configuredPort = site.upstreamExplicitPort
@@ -265,7 +277,7 @@ private data class DashboardProjectFinancials(
 )
 
 private fun dashboardProjectFinancials(
-    project: ProjectRepository.ProjectRecord,
+    project: ProjectRecord,
     balances: ProjectBalanceAdapter
 ): DashboardProjectFinancials {
     val financials = balances.financials(project)
@@ -300,6 +312,18 @@ fun Application.configureOperationsAdminRoutes() {
     val docker = get<DockerGateway>()
     val portProbe = get<PortProbe>()
     val siteRepository = get<SiteRepository>()
+    val deploymentUpstreamResolver = get<DeploymentUpstreamResolver>()
+    val certificateProvisioner: CertbotCertificateProvisioner = get<CertbotCertificateProvisioner>()
+    val inspectSiteConfig: InspectSiteConfigUseCase = get<InspectSiteConfigUseCase>()
+    val nginx: NginxSiteStorage = get<NginxSiteStorage>()
+    val nginxValidation: NginxValidationService = get<NginxValidationService>()
+    val render: NginxConfigRenderer = get<NginxConfigRenderer>()
+    val conflictAnalyzer: NginxConflictAnalyzer = get<NginxConflictAnalyzer>()
+    val applySiteConfig: ApplySiteConfigUseCase = get<ApplySiteConfigUseCase>()
+    val removesite: RemoveSiteConfigUseCase = get<RemoveSiteConfigUseCase>()
+    val artifacts: ListConfigArtifactsUseCase= get<ListConfigArtifactsUseCase>()
+    val inspector: InspectManualConfigUseCase = get<InspectManualConfigUseCase>()
+    val delManualConfigUseCase: DeleteManualConfigUseCase = get<DeleteManualConfigUseCase>()
     routing {
         authenticate("auth-jwt") {
             get("/api/admin/metrics") {
@@ -320,6 +344,7 @@ fun Application.configureOperationsAdminRoutes() {
                             projects,
                             call.application.get<CustomerStore>(),
                             nginxSettings,
+                            deploymentUpstreamResolver,
                             gateway
                         )
                     }
@@ -344,17 +369,17 @@ fun Application.configureOperationsAdminRoutes() {
                 }
                 val site = siteRepository.findByProjectSlug(slug) ?: siteRepository.findByDomain(slug)
                 ?: run { call.respondError(HttpStatusCode.NotFound, "site_not_found", "Site not found"); return@get }
-                val nginx = get<NginxService>()
                 val siteSlug = site.projectSlug ?: slug
-                val inspection = nginx.inspectSite(siteSlug)
-                val cert = nginx.resolveCertificateForDomain(site.domain)
-                val expiry = cert?.let { nginx.certificateExpiry(it.certificateDomain) }
+                val inspection = inspectSiteConfig.inspectSite(siteSlug)
+                val cert = certificateProvisioner.resolveCertificateForDomain(site.domain)
+                val expiry = cert?.let { certificateProvisioner.certificateExpiry(it.certificateDomain) }
                 val response = withDashboardDocker(docker, listOf(site)) { gateway ->
                     dashboardSite(
                         site,
                         projects,
                         call.application.get<CustomerStore>(),
                         nginxSettings,
+                        deploymentUpstreamResolver,
                         gateway
                     )
                 }
@@ -387,13 +412,13 @@ fun Application.configureOperationsAdminRoutes() {
                 }
                 val update = runCatching {
                     SiteDashboardUpdate(
-                        domain = body.domain?.let { requireValidHostname(it) }, upstreamHost = body.upstreamHost,
+                        domain = body.domain?.let { nginxValidation.requireValidHostname(it) }, upstreamHost = body.upstreamHost,
                         upstreamMode = body.upstreamMode?.let { UpstreamMode.valueOf(it.uppercase()) },
                         upstreamExplicitPort = body.upstreamExplicitPort?.also { require(it in 1..65535) },
                         tlsMode = body.tlsMode?.let { TlsMode.valueOf(it.uppercase()) },
                         certMode = body.certMode?.let { CertMode.valueOf(it.uppercase()) },
                         certExplicitPath = body.certExplicitPath?.let {
-                            requireCertificatePath(
+                            nginxValidation.requireCertificatePath(
                                 it,
                                 nginxSettings.sslCertPath
                             )
@@ -416,14 +441,14 @@ fun Application.configureOperationsAdminRoutes() {
                 }
                 val nginx = get<NginxService>()
                 val resolved =
-                    if (updated.upstreamMode == com.gatekeeper.db.tables.UpstreamMode.DOCKER_DISCOVERY) updated.serviceId?.let {
-                        DeploymentUpstreamResolver.resolve(
+                    if (updated.upstreamMode == UpstreamMode.DOCKER_DISCOVERY) updated.serviceId?.let {
+                        deploymentUpstreamResolver.resolve(
                             it,
                             "production"
                         )
                     } else null
                 val port =
-                    (if (updated.upstreamMode == com.gatekeeper.db.tables.UpstreamMode.EXPLICIT_PORT) updated.upstreamExplicitPort else resolved?.port)
+                    (if (updated.upstreamMode == UpstreamMode.EXPLICIT_PORT) updated.upstreamExplicitPort else resolved?.port)
                         ?: run {
                             call.respondError(
                                 HttpStatusCode.UnprocessableEntity,
@@ -432,10 +457,10 @@ fun Application.configureOperationsAdminRoutes() {
                             ); return@patch
                         }
                 val cert =
-                    if (updated.certMode == com.gatekeeper.db.tables.CertMode.AUTO_RESOLVE) nginx.resolveCertificateForDomain(
+                    if (updated.certMode == CertMode.AUTO_RESOLVE) certificateProvisioner.resolveCertificateForDomain(
                         updated.domain
                     ) else null
-                val config = nginx.generateNginxConfig(
+                val config =render.generateNginxConfig(
                     NginxSiteRenderModel(
                         slug = slug,
                         projectId = updated.projectId,
@@ -460,7 +485,7 @@ fun Application.configureOperationsAdminRoutes() {
                     )
                 )
                 val siteSlug = updated.projectSlug ?: slug
-                val conflicts = runCatching { nginx.findDomainConflicts(config, siteSlug) }.getOrElse { error ->
+                val conflicts = runCatching { conflictAnalyzer.findDomainConflicts(config, siteSlug) }.getOrElse { error ->
                     call.respondError(
                         HttpStatusCode.InternalServerError,
                         "nginx_config_scan_failed",
@@ -472,10 +497,10 @@ fun Application.configureOperationsAdminRoutes() {
                     call.respondNginxDomainConflicts(conflicts)
                     return@patch
                 }
-                val activation = nginx.enableProjectDetailed(siteSlug, config)
+                val activation = applySiteConfig.enableProjectDetailed(siteSlug, config)
                 if (!activation.success) {
                     val racedConflicts =
-                        runCatching { nginx.findDomainConflicts(config, siteSlug) }.getOrNull().orEmpty()
+                        runCatching { conflictAnalyzer.findDomainConflicts(config, siteSlug) }.getOrNull().orEmpty()
                     if (racedConflicts.isNotEmpty()) {
                         call.respondNginxDomainConflicts(racedConflicts)
                         return@patch
@@ -495,6 +520,7 @@ fun Application.configureOperationsAdminRoutes() {
                         projects,
                         call.application.get<CustomerStore>(),
                         nginxSettings,
+                        deploymentUpstreamResolver,
                         gateway
                     )
                 })
@@ -507,9 +533,8 @@ fun Application.configureOperationsAdminRoutes() {
                         "Missing slug"
                     ); return@delete
                 }
-                val nginx = get<NginxService>()
                 val site = siteRepository.findByProjectSlug(slug) ?: siteRepository.findByDomain(slug)
-                val removed = site?.let(nginx::removeSiteArtifacts) ?: nginx.removeProject(slug)
+                val removed = site?.let(nginx::removeSiteArtifacts) ?: removesite.removeProject(slug)
                 if (!removed) {
                     call.respondError(
                         HttpStatusCode.InternalServerError,
@@ -528,7 +553,7 @@ fun Application.configureOperationsAdminRoutes() {
                 call.respond(DashboardSiteDeleteResponse(deleted = true, slug = slug))
             }
             get("/api/admin/nginx/configs") {
-                call.respond(get<NginxService>().listConfigArtifacts())
+                call.respond(artifacts.execute())
             }
             get("/api/admin/nginx/manual-configs/{filename}") {
                 val filename = call.parameters["filename"] ?: run {
@@ -539,7 +564,7 @@ fun Application.configureOperationsAdminRoutes() {
                     ); return@get
                 }
                 val detail =
-                    runCatching { get<NginxService>().inspectManualConfig(filename) }.getOrElse { error ->
+                    runCatching { inspector.inspectManualConfig(filename) }.getOrElse { error ->
                         val message = error.message ?: "Unable to inspect nginx config"
                         val status = if (message.contains(
                                 "not found",
@@ -573,8 +598,7 @@ fun Application.configureOperationsAdminRoutes() {
                         "Set confirm=true to back up and disable this manual config"
                     ); return@post
                 }
-                val nginx = get<NginxService>()
-                val artifact = nginx.listConfigArtifacts().firstOrNull { it.filename == filename }
+                val artifact = artifacts.execute().firstOrNull { it.filename == filename }
                     ?: run {
                         call.respondError(
                             HttpStatusCode.NotFound,
@@ -637,7 +661,7 @@ fun Application.configureOperationsAdminRoutes() {
                     ); return@delete
                 }
                 val nginx = get<NginxService>()
-                val detail = runCatching { nginx.inspectManualConfig(filename) }.getOrElse { error ->
+                val detail = runCatching { inspector.inspectManualConfig(filename) }.getOrElse { error ->
                     val message = error.message ?: "Unable to inspect nginx config"
                     val status = if (message.contains(
                             "not found",
@@ -654,7 +678,7 @@ fun Application.configureOperationsAdminRoutes() {
                         "Disable the manual config before deleting it"
                     ); return@delete
                 }
-                val backup = runCatching { nginx.deleteDisabledManualConfig(filename) }.getOrElse { error ->
+                val backup = runCatching { delManualConfigUseCase.execute(filename) }.getOrElse { error ->
                     call.respondError(
                         HttpStatusCode.UnprocessableEntity,
                         "manual_config_delete_failed",
@@ -665,7 +689,7 @@ fun Application.configureOperationsAdminRoutes() {
                 call.respond(NginxManualConfigActionResponse(filename, backup, deleted = true))
             }
             get("/api/admin/dashboard/dead-configs") {
-                call.respond(get<NginxService>().listConfigArtifacts().filter { it.orphaned })
+                call.respond(artifacts.execute().filter { it.orphaned })
             }
             delete("/api/admin/dashboard/dead-configs/{filename}") {
                 val filename = call.parameters["filename"] ?: run {
@@ -696,8 +720,7 @@ fun Application.configureOperationsAdminRoutes() {
                         "Set confirm=true to move this dead config to backup"
                     ); return@delete
                 }
-                val nginx = get<NginxService>()
-                val artifact = nginx.listConfigArtifacts().firstOrNull { it.filename == filename }
+                val artifact = artifacts.execute().firstOrNull { it.filename == filename }
                     ?: run {
                         call.respondError(
                             HttpStatusCode.NotFound,
@@ -955,7 +978,7 @@ fun Application.configureOperationsAdminRoutes() {
                 val allProjects = projects.findAll()
                 val paymentDashboard = call.application.get<GetPaymentDashboardData>()()
                 val outbox = integrationOutboxRepository.summary()
-                val nginxArtifacts = get<NginxService>().listConfigArtifacts()
+                val nginxArtifacts = artifacts.execute()
                 val available = nginxArtifacts.count { it.available }.toLong()
                 val enabled = nginxArtifacts.count { it.enabled }.toLong()
                 val selfDomains = nginxSettings.selfDomains.toSet()
@@ -1115,8 +1138,8 @@ fun Application.configureOperationsAdminRoutes() {
                     }.getOrNull()
                 }
                 val nginx = get<NginxService>()
-                val nginxEnabled = nginx.listConfigArtifacts().any { it.filename == slug && it.available && it.enabled }
-                val certificateInstalled = nginx.isCertificateInstalled(project.domain)
+                val nginxEnabled = artifacts.execute().any { it.filename == slug && it.available && it.enabled }
+                val certificateInstalled = certificateProvisioner.isCertificateInstalled(project.domain)
                 val ready =
                     project.status == "active" && active != null && (containerHealth == null || containerHealth == "running")
                 call.respond(

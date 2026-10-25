@@ -33,6 +33,8 @@ import com.gatekeeper.docker.ImageStatusResponse
 import com.gatekeeper.docker.PortsAvailabilityRequest
 import com.gatekeeper.docker.PortsAvailabilityResponse
 import com.gatekeeper.docker.parseImageRef
+import com.gatekeeper.feature.nginx.application.RemoveSiteConfigUseCase
+import com.gatekeeper.feature.nginx.domain.port.NginxSiteStorage
 import com.gatekeeper.nginx.NginxService
 import com.gatekeeper.feature.payment.data.persistence.ProjectBalanceAdapter
 import io.ktor.http.*
@@ -116,6 +118,8 @@ fun Application.configureProjectAdminRoutes() {
     val dockerService = get<DockerGateway>()
     val dockerSettings = get<AppSettings>().docker
     val scribed = get<ScribedIntegrationClient>()
+    val nginx = get<NginxSiteStorage>()
+    val removeSiteConfig = get<RemoveSiteConfigUseCase>()
     routing {
         authenticate("auth-jwt") {
             get("/api/admin/projects") {
@@ -385,8 +389,7 @@ fun Application.configureProjectAdminRoutes() {
                 }
 
                 runCatching {
-                    val nginx = get<NginxService>()
-                    val removed = nginx.removeProject(slug)
+                    val removed = removeSiteConfig.removeProject(slug)
                     if (!removed) {
                         logger.warn("Project archived but nginx cleanup failed for slug=$slug (removeProject returned false)")
                         return@runCatching
