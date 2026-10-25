@@ -1,7 +1,6 @@
 package com.gatekeeper.feature.nginx.domain.service
 
 import com.gatekeeper.feature.nginx.model.DEFAULT_GATEKEEPER_BYPASS_PATHS
-import com.gatekeeper.feature.nginx.infrastructure.NginxConfigRenderer
 import com.gatekeeper.feature.nginx.model.NginxSiteRenderModel
 import com.gatekeeper.feature.nginx.model.TlsRenderMode
 import com.gatekeeper.feature.nginx.presentation.NginxCustomLocation

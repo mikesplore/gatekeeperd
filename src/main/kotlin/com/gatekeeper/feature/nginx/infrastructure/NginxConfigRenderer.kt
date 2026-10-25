@@ -1,10 +1,9 @@
 package com.gatekeeper.feature.nginx.infrastructure
 
+import com.gatekeeper.feature.nginx.domain.service.NginxValidationService
 import com.gatekeeper.feature.nginx.model.DEFAULT_GATEKEEPER_BYPASS_PATHS
 import com.gatekeeper.feature.nginx.model.NginxSiteRenderModel
 import com.gatekeeper.feature.nginx.model.TlsRenderMode
-import com.gatekeeper.feature.nginx.domain.service.requireCertificatePath
-import com.gatekeeper.feature.nginx.domain.service.requireValidHostname
 import com.gatekeeper.feature.nginx.presentation.NginxCustomLocation
 import java.io.File
 import java.util.UUID
@@ -13,7 +12,8 @@ import java.util.UUID
 class NginxConfigRenderer(
     private val gatekeeperPort: Int = 8080,
     private val sslCertPath: String = "/etc/letsencrypt/live",
-    private val upstreamIncludeDirectory: String = "/etc/nginx/conf.d/gatekeeperd-upstreams"
+    private val upstreamIncludeDirectory: String = "/etc/nginx/conf.d/gatekeeperd-upstreams",
+    private val nginxValidation: NginxValidationService
 ) {
 
     fun render(site: NginxSiteRenderModel): String = render(
@@ -53,10 +53,10 @@ class NginxConfigRenderer(
         upstreamKind: String? = null,
         customNginxLocations: List<NginxCustomLocation> = emptyList()
     ): String {
-        requireValidHostname(domain)
-        val effectiveSslCert = sslCertificatePath?.let { requireCertificatePath(it, sslCertPath) }
+        nginxValidation.requireValidHostname(domain)
+        val effectiveSslCert = sslCertificatePath?.let { nginxValidation.requireCertificatePath(it, sslCertPath) }
             ?: "$sslCertPath/$domain/fullchain.pem"
-        val effectiveSslKey = sslCertificateKeyPath?.let { requireCertificatePath(it, sslCertPath) }
+        val effectiveSslKey = sslCertificateKeyPath?.let { nginxValidation.requireCertificatePath(it, sslCertPath) }
             ?: "$sslCertPath/$domain/privkey.pem"
         val effectiveUpstreamScheme = normalizeUpstreamScheme(appPort, upstreamScheme)
         val managedUpstream = upstreamKind == "DEPLOYMENT_MANAGED" && serviceId != null

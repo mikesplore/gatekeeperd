@@ -1,5 +1,6 @@
 package com.gatekeeper.feature.nginx.domain.service
 
+import com.gatekeeper.feature.nginx.application.ClassifyConfigsUseCase
 import com.gatekeeper.feature.nginx.domain.port.NginxSiteStorage
 import com.gatekeeper.feature.nginx.infrastructure.NginxSelfDomainExclusion
 import com.gatekeeper.feature.nginx.model.DomainRules
@@ -12,7 +13,8 @@ import kotlin.collections.mapNotNull
 class NginxConflictAnalyzer(
     private val nginxSelfDomainExclusion: NginxSelfDomainExclusion,
     private val nginxSiteStorage: NginxSiteStorage,
-    private val domainRules: DomainRules
+    private val domainRules: DomainRules,
+    private val classifyAvailableConfigs: ClassifyConfigsUseCase
 ) {
     fun classifyConfig(filename: String, content: String): ClassifiedNginxConfig = classifyConfig(
         filename = filename,
@@ -89,7 +91,7 @@ class NginxConflictAnalyzer(
             )
         }
 
-        return classifyAvailableConfigs(nginxSiteStorage = nginxSiteStorage, selfDomainExclusion = nginxSelfDomainExclusion).mapNotNull { existing ->
+        return classifyAvailableConfigs.classifyAvailableConfigs(nginxSiteStorage = nginxSiteStorage, selfDomainExclusion = nginxSelfDomainExclusion).mapNotNull { existing ->
             val linked = candidate.siteId != null && candidate.siteId == existing.siteId
             if (existing.filename == targetFilename && linked &&
                 existing.classification == NginxConfigClassification.GATEKEEPER_MANAGED
