@@ -4,22 +4,34 @@ package com.gatekeeper.feature.nginx.presentation
 import com.gatekeeper.admin.respondNginxDomainConflicts
 import com.gatekeeper.api.respondError
 import com.gatekeeper.api.respondErrorWithData
+import com.gatekeeper.config.AppSettings
 import com.gatekeeper.db.tables.CertMode
 import com.gatekeeper.db.tables.ServiceDomainStatus
 import com.gatekeeper.db.tables.TlsMode
 import com.gatekeeper.db.tables.UpstreamMode
 import com.gatekeeper.deployment.DeploymentApplicationService
+import com.gatekeeper.feature.audit.domain.repository.AuditRepository
+import com.gatekeeper.feature.deployment.domain.repository.ServiceDomainRepository
 import com.gatekeeper.feature.nginx.application.ApplySiteConfigUseCase
-import com.gatekeeper.feature.nginx.application.DisableSiteConfigUseCase
+import com.gatekeeper.feature.nginx.application.DisableProjectUseCase
+import com.gatekeeper.feature.nginx.application.RemoveSiteConfigUseCase
+import com.gatekeeper.feature.nginx.application.RollbackSiteConfigUseCase
+import com.gatekeeper.feature.nginx.application.SwitchDeploymentUpstreamUseCase
 import com.gatekeeper.feature.nginx.domain.port.NginxSiteStorage
+import com.gatekeeper.feature.nginx.domain.service.NginxConfigRenderer
+import com.gatekeeper.feature.nginx.domain.service.NginxConflictAnalyzer
+import com.gatekeeper.feature.nginx.domain.service.NginxValidationService
+import com.gatekeeper.feature.nginx.infrastructure.CertbotCertificateProvisioner
 import com.gatekeeper.feature.project.domain.repository.ProjectRepository
 import com.gatekeeper.feature.service.domain.repository.ServiceRepository
 import com.gatekeeper.feature.service.domain.repository.SiteDashboardUpdate
 import com.gatekeeper.feature.service.domain.repository.SiteRepository
 import com.gatekeeper.feature.nginx.infrastructure.DeploymentUpstreamResolver
+import com.gatekeeper.feature.nginx.infrastructure.RenderModelFromSite
+import com.gatekeeper.feature.nginx.model.NginxPlanResult
 import com.gatekeeper.feature.nginx.model.NginxSiteRenderModel
 import com.gatekeeper.feature.nginx.model.TlsRenderMode
-import com.gatekeeper.feature.nginx.domain.service.requireValidHostname
+import com.gatekeeper.feature.nginx.model.nginxServiceLogger
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.auth.authenticate
 import io.ktor.server.request.receive
@@ -31,11 +43,24 @@ import kotlin.collections.orEmpty
 
 fun Route.nginxSiteAdminRoutes(
     applySiteConfig: ApplySiteConfigUseCase,
-    disableSiteConfigUseCase: DisableSiteConfigUseCase,
-    siteStorage: NginxSiteStorage,
+    disableProjectUseCase: DisableProjectUseCase,
     projectRepository: ProjectRepository,
     siteRepository: SiteRepository,
-    serviceRepository: ServiceRepository
+    serviceRepository: ServiceRepository,
+    validator: NginxValidationService,
+    serviceDomainRepository: ServiceDomainRepository,
+    deploymentUpstreamResolver: DeploymentUpstreamResolver,
+    renderer: NginxConfigRenderer,
+    certificateProvisioner: CertbotCertificateProvisioner,
+    nginx: NginxSiteStorage,
+    rollback: RollbackSiteConfigUseCase,
+    conflictAnalyzer: NginxConflictAnalyzer,
+    switchDeploymentUpstreamUseCase: SwitchDeploymentUpstreamUseCase,
+    auditRepository: AuditRepository,
+    removeSiteConfigUseCase: RemoveSiteConfigUseCase,
+    renderModelFromSite: RenderModelFromSite,
+    planNginxEnableRequest: PlanNginxEnableRequest,
+    nginxSettings: AppSettings.NginxSettings
 ){
 
     authenticate("auth-jwt") {
@@ -76,7 +101,7 @@ fun Route.nginxSiteAdminRoutes(
             }
             val activeRuntime = DeploymentApplicationService.activeRuntime(serviceId, "production")
             val requestedDomain = body.domain?.let { raw ->
-                runCatching { requireValidHostname(raw) }.getOrElse {
+                runCatching { validator.requireValidHostname(raw) }.getOrElse {
                     call.respondError(
                         HttpStatusCode.BadRequest,
                         "invalid_domain",
@@ -93,7 +118,7 @@ fun Route.nginxSiteAdminRoutes(
                 )
                 return@post
             }
-            val binding = serviceDomains.findByServiceAndDomain(serviceId, requestedDomain)
+            val binding = serviceDomainRepository.findByServiceAndDomain(serviceId, requestedDomain)
             if (binding == null) {
                 call.respondError(
                     HttpStatusCode.BadRequest,
@@ -167,10 +192,9 @@ fun Route.nginxSiteAdminRoutes(
             } else site
             val config = if (siteForRender != null && siteForRender.domain == requestedDomain) {
                 runCatching {
-                    renderModelFromSite(
+                    renderModelFromSite.renderModelFromSite(
                         siteForRender.projectSlug ?: siteSlug,
-                        siteForRender,
-                        nginxService
+                        siteForRender
                     )
                 }
                     .getOrElse {
@@ -185,26 +209,24 @@ fun Route.nginxSiteAdminRoutes(
                         responseAppPort = it.appPort
                         responseSslEnabled = it.tlsMode != TlsRenderMode.HTTP_ONLY
                         responseCertificateDomain =
-                            if (siteForRender.certMode == CertMode.AUTO_RESOLVE) nginxService.resolveCertificateForDomain(
+                            if (siteForRender.certMode == CertMode.AUTO_RESOLVE) certificateProvisioner.resolveCertificateForDomain(
                                 siteForRender.domain
                             )?.certificateDomain else "explicit"
                     }
-                    .let { nginxService.generateNginxConfig(it) }
+                    .let { renderer.generateNginxConfig(it) }
             } else {
-                val plan = when (val result = createNginxEnablePlan(
+                val plan = when (val result = planNginxEnableRequest.planNginxEnableRequest(
                     slug = siteSlug,
                     projectDomain = requestedDomain,
                     activeRuntimeTarget = requestedContainerPort?.let {
-                        DeploymentUpstreamResolver.resolve(
+                        deploymentUpstreamResolver.resolve(
                             serviceId,
                             it,
                             "production"
                         )
                     }
-                        ?: DeploymentUpstreamResolver.resolve(serviceId, "production"),
+                        ?: deploymentUpstreamResolver.resolve(serviceId, "production"),
                     request = body,
-                    nginxService = nginxService,
-                    dockerService = dockerService,
                     sslCertPath = nginxSettings.sslCertPath
                 )) {
                     is NginxPlanResult.Err -> {
@@ -234,7 +256,7 @@ fun Route.nginxSiteAdminRoutes(
                     upstreamMode = UpstreamMode.EXPLICIT_PORT,
                     certMode = if (body.sslCertificatePath != null) CertMode.EXPLICIT_PATH else CertMode.AUTO_RESOLVE
                 )
-                nginxService.generateNginxConfig(
+                renderer.generateNginxConfig(
                     slug = siteSlug,
                     domain = plan.domain,
                     appPort = responseAppPort,
@@ -247,9 +269,9 @@ fun Route.nginxSiteAdminRoutes(
                 )
             }
 
-            val enabledSlug = siteToPersist?.slug ?: siteSlug
+            val enabledSlug = siteToPersist?.slug ?: ""
             val conflicts =
-                runCatching { nginxService.findDomainConflicts(config, enabledSlug) }.getOrElse { error ->
+                runCatching { conflictAnalyzer.findDomainConflicts(config, enabledSlug) }.getOrElse { error ->
                     call.respondError(
                         HttpStatusCode.InternalServerError,
                         "nginx_config_scan_failed",
@@ -261,10 +283,10 @@ fun Route.nginxSiteAdminRoutes(
                 call.respondNginxDomainConflicts(conflicts)
                 return@post
             }
-            val enabled = nginxService.enableProject(enabledSlug, config)
+            val enabled = applySiteConfig.enableProject(enabledSlug, config)
             if (!enabled) {
                 val racedConflicts =
-                    runCatching { nginxService.findDomainConflicts(config, enabledSlug) }.getOrNull().orEmpty()
+                    runCatching { conflictAnalyzer.findDomainConflicts(config, enabledSlug) }.getOrNull().orEmpty()
                 if (racedConflicts.isNotEmpty()) {
                     call.respondNginxDomainConflicts(racedConflicts)
                     return@post
@@ -277,9 +299,9 @@ fun Route.nginxSiteAdminRoutes(
                 return@post
             }
 
-            val reloaded = nginxService.reloadNginx()
+            val reloaded = nginx.reloadNginx()
             if (!reloaded) {
-                nginxService.disableProject(enabledSlug)
+                disableProjectUseCase.disableProject(enabledSlug)
                 call.respondError(HttpStatusCode.InternalServerError, "nginx_error", "Failed to reload nginx")
                 return@post
             }
@@ -311,9 +333,9 @@ fun Route.nginxSiteAdminRoutes(
                     )
                 }
                     .onFailure { error ->
-                        logger.error("Nginx site enabled but database registration failed for project $slug", error)
-                        nginxService.removeProject(enabledSlug)
-                        nginxService.reloadNginx()
+                        nginxServiceLogger.error("Nginx site enabled but database registration failed for project $slug", error)
+                        removeSiteConfigUseCase.execute(enabledSlug)
+                        nginx.reloadNginx()
                         call.respondError(
                             HttpStatusCode.InternalServerError,
                             "site_registration_failed",
@@ -322,8 +344,8 @@ fun Route.nginxSiteAdminRoutes(
                         return@post
                     }
                 if (persisted.getOrNull() == null) {
-                    nginxService.removeProject(enabledSlug)
-                    nginxService.reloadNginx()
+                    removeSiteConfigUseCase.execute(enabledSlug)
+                    nginx.reloadNginx()
                     call.respondError(
                         HttpStatusCode.InternalServerError,
                         "site_registration_failed",
@@ -333,7 +355,7 @@ fun Route.nginxSiteAdminRoutes(
                 }
             }
 
-            logger.info("Nginx enabled for project: $slug")
+            nginxServiceLogger.info("Nginx enabled for project: $slug")
             call.respond(
                 NginxEnableResponse(
                     success = true,
@@ -353,13 +375,13 @@ fun Route.nginxSiteAdminRoutes(
                 return@post
             }
 
-            val disabled = nginxService.disableProject(slug)
+            val disabled = disableProjectUseCase.disableProject(slug)
             if (!disabled) {
                 call.respondError(HttpStatusCode.InternalServerError, "nginx_error", "Failed to disable nginx site")
                 return@post
             }
 
-            val reloaded = nginxService.reloadNginx()
+            val reloaded = nginx.reloadNginx()
             if (!reloaded) {
                 call.respondError(
                     HttpStatusCode.InternalServerError,
@@ -369,7 +391,7 @@ fun Route.nginxSiteAdminRoutes(
                 return@post
             }
 
-            logger.info("Nginx disabled for project: $slug")
+            nginxServiceLogger.info("Nginx disabled for project: $slug")
             call.respond(
                 NginxDisableResponse(
                     success = true,
@@ -384,7 +406,7 @@ fun Route.nginxSiteAdminRoutes(
                 call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing slug path parameter")
                 return@post
             }
-            val latest = runCatching { nginxService.listBackups(slug).firstOrNull()?.name }
+            val latest = runCatching { nginx.listBackups(slug).firstOrNull()?.name }
                 .getOrElse {
                     call.respondError(
                         HttpStatusCode.BadRequest,
@@ -400,7 +422,7 @@ fun Route.nginxSiteAdminRoutes(
                 )
                 return@post
             }
-            val result = runCatching { nginxService.rollback(slug, latest) }
+            val result = runCatching { rollback.execute(slug, latest) }
                 .getOrElse {
                     call.respondError(
                         HttpStatusCode.BadRequest,
@@ -409,7 +431,7 @@ fun Route.nginxSiteAdminRoutes(
                     ); return@post
                 }
             if (!result.success) call.respond(HttpStatusCode.UnprocessableEntity, result) else call.respond(result)
-            if (result.success) projects.findBySlug(slug)?.let { project ->
+            if (result.success) projectRepository.findBySlug(slug)?.let { project ->
                 auditRepository.write(
                     project.id,
                     "nginx_rollback",
@@ -448,7 +470,7 @@ fun Route.nginxSiteAdminRoutes(
                     "site_slug_missing",
                     "Site has no nginx configuration name"
                 )
-            val result = runCatching { nginxService.rollback(slug, request.backupName) }.getOrElse { error ->
+            val result = runCatching { rollback.execute(slug, request.backupName) }.getOrElse { error ->
                 return@post call.respondError(
                     HttpStatusCode.BadRequest,
                     "upstream_migration_rollback_failed",
@@ -466,7 +488,7 @@ fun Route.nginxSiteAdminRoutes(
                 site.id,
                 if (site.upstreamMode == UpstreamMode.EXPLICIT_PORT) "EXPLICIT_PORT" else null
             )
-            val includeRemoved = site.serviceId?.let { nginxService.restoreDeploymentUpstream(it, null) } ?: true
+            val includeRemoved = site.serviceId?.let { switchDeploymentUpstreamUseCase.restoreDeploymentUpstream(it, null) } ?: true
             call.respond(
                 mapOf(
                     "success" to true,

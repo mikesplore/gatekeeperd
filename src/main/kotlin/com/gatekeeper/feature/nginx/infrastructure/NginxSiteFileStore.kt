@@ -1,8 +1,9 @@
 package com.gatekeeper.feature.nginx.infrastructure
 
 import com.gatekeeper.config.AppSettings
-import com.gatekeeper.feature.nginx.application.listConfigArtifacts
-import com.gatekeeper.feature.nginx.application.removeProject
+import com.gatekeeper.feature.nginx.application.ApplySiteConfigUseCase
+import com.gatekeeper.feature.nginx.application.ListConfigArtifactsUseCase
+import com.gatekeeper.feature.nginx.application.RemoveSiteConfigUseCase
 import com.gatekeeper.feature.nginx.domain.port.NginxCommandRunner
 import com.gatekeeper.feature.nginx.domain.port.NginxSiteStorage
 import com.gatekeeper.feature.nginx.model.DomainRules
@@ -23,9 +24,13 @@ class NginxSiteFileStore(
     private val sitesEnabledPath: String = "/etc/nginx/sites-enabled",
     private val sitesAvailablePath: String = "/etc/nginx/sites-available",
     private val nginxDomainRules: DomainRules,
-    private val nginxReloadRunner: NginxCommandRunner
+    private val nginxTestRunner: () -> NginxTestResult = { NginxCommandRunner().test() },
+    private val nginxReloadRunner: () -> Boolean = { NginxCommandRunner().reload() },
+    private val removeSiteConfigUseCase: RemoveSiteConfigUseCase,
+    private val listConfigArtifacts: ListConfigArtifactsUseCase,
+    private val applySiteConfigUseCase: ApplySiteConfigUseCase,
 
-) : NginxSiteStorage {
+    ) : NginxSiteStorage {
     private val availableDir = File(settings.sitesAvailablePath)
     private val enabledDir = File(settings.sitesEnabledPath)
     private val upstreamDir = File(settings.upstreamIncludeDirectory)
@@ -204,11 +209,11 @@ class NginxSiteFileStore(
             ?: error("Unable to list nginx config directory '${directory.absolutePath}'")
     }
 
-    override fun restoreSiteConfiguration(slug: String, previousConfig: String): Boolean = enableProject(slug, previousConfig)
+    override fun restoreSiteConfiguration(slug: String, previousConfig: String): Boolean = applySiteConfigUseCase.enableProject(slug, previousConfig)
 
 
     override fun removeSiteArtifacts(site: SiteRecord): Boolean {
-        val matches = listConfigArtifacts(listOf(site)).filter { artifact ->
+        val matches = listConfigArtifacts.execute(listOf(site)).filter { artifact ->
             artifact.siteId == site.id.toString() ||
                     artifact.projectId == site.projectId.toString() && (
                     artifact.serviceId == site.serviceId?.toString() ||
@@ -221,7 +226,7 @@ class NginxSiteFileStore(
                     )
         }.map { it.filename }.toMutableSet()
         site.projectSlug?.let(matches::add)
-        return matches.all(::removeProject)
+        return matches.all(removeSiteConfigUseCase::execute)
     }
 
    override fun listBackups(slug: String): List<NginxBackup> {
