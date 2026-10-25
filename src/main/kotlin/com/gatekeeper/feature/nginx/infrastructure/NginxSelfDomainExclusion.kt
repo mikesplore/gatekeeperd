@@ -7,7 +7,7 @@ import java.nio.file.Files
 class NginxSelfDomainExclusion(
     selfDomains: Collection<String>
 ) {
-    private val selfDomains = selfDomains.map(::normalizeHost).filter(String::isNotBlank).toSet()
+     val selfDomains = selfDomains.map(::normalizeHost).filter(String::isNotBlank).toSet()
 
     fun excludesDomain(domain: String): Boolean {
         return selfDomains.any { host -> serverNameMatches(domain, host) }
@@ -29,7 +29,7 @@ class NginxSelfDomainExclusion(
         return excludesConfig(content)
     }
 
-    private fun serverNameMatches(pattern: String, host: String): Boolean {
+     fun serverNameMatches(pattern: String, host: String): Boolean {
         val normalized = pattern.lowercase().trimEnd('.')
         return when {
             normalized.startsWith("*.") -> host.endsWith(normalized.removePrefix("*").let { ".$it" })
@@ -38,5 +38,5 @@ class NginxSelfDomainExclusion(
         }
     }
 
-    private fun normalizeHost(value: String): String = value.trim().trimEnd('.').lowercase()
+     fun normalizeHost(value: String): String = value.trim().trimEnd('.').lowercase()
 }

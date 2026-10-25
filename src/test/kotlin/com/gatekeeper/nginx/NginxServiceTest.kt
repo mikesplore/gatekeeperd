@@ -20,7 +20,7 @@ import com.gatekeeper.feature.nginx.domain.service.requireValidEmail
 import com.gatekeeper.feature.nginx.domain.service.requireValidHostname
 import com.gatekeeper.feature.nginx.infrastructure.BackfillDockerTarget
 import com.gatekeeper.feature.nginx.infrastructure.BackfillProject
-import com.gatekeeper.feature.nginx.infrastructure.NginxReconciliationService
+import com.gatekeeper.feature.nginx.infrastructure.NginxSiteReconciliationService
 import com.gatekeeper.feature.nginx.infrastructure.NginxSelfDomainExclusion
 import com.gatekeeper.feature.nginx.infrastructure.NginxSiteBackfill
 import com.gatekeeper.feature.nginx.model.NginxSiteRenderModel
@@ -658,7 +658,7 @@ class NginxServiceTest {
         listOf("healthy", "drifted", "docker", "error").forEach {
             Files.createSymbolicLink(File(enabled, it).toPath(), File(available, it).toPath())
         }
-        val report = NginxReconciliationService(
+        val report = NginxSiteReconciliationService(
             available, enabled, { sites },
             renderExpected = { site ->
                 if (site.projectSlug == "drifted") "expected" else File(
@@ -701,7 +701,7 @@ class NginxServiceTest {
         oldSlugFile.writeText(config)
         Files.createSymbolicLink(File(enabled, oldSlugFile.name).toPath(), oldSlugFile.toPath())
 
-        val report = NginxReconciliationService(
+        val report = NginxSiteReconciliationService(
             available, enabled, { listOf(site) }, { config }, { null }, { null }, persist = { _, _ -> },
             selfDomainExclusion = NginxSelfDomainExclusion(emptyList())
         ).reconcile()
@@ -729,7 +729,7 @@ class NginxServiceTest {
         markedFile.writeText("# gatekeeperd:project_id:${java.util.UUID.randomUUID()}\nserver {}\n")
         Files.createSymbolicLink(File(enabled, markedFile.name).toPath(), markedFile.toPath())
 
-        val report = NginxReconciliationService(
+        val report = NginxSiteReconciliationService(
             available, enabled, { listOf(site) }, { "unused" }, { null }, { null }, persist = { _, _ -> },
             selfDomainExclusion = NginxSelfDomainExclusion(emptyList())
         ).reconcile()
@@ -758,7 +758,7 @@ class NginxServiceTest {
         var nginxChecks = 0
         var dockerChecks = 0
         val persisted = mutableListOf<NginxReconciliationResult>()
-        val service = NginxReconciliationService(
+        val service = NginxSiteReconciliationService(
             available, enabled, { listOf(site) }, { config },
             { dockerChecks++; "container stopped" },
             { nginxChecks++; if (nginxChecks == 1) "/etc/nginx/sites-available/faulty: syntax error" else null },
