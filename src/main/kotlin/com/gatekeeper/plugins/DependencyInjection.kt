@@ -5,10 +5,7 @@ import com.gatekeeper.feature.customer.domain.repository.CustomerRepository as C
 import com.gatekeeper.feature.customer.data.persistence.ExposedCustomerRepository
 import com.gatekeeper.gate.GateApplicationService
 import com.gatekeeper.gate.GateService
-import com.gatekeeper.nginx.NginxAdminService
 import com.gatekeeper.nginx.NginxService
-import com.gatekeeper.nginx.NginxCommandRunner
-import com.gatekeeper.nginx.ExposedCertificateStore
 import com.gatekeeper.config.AppSettings
 import com.gatekeeper.docker.DockerGateway
 import com.gatekeeper.docker.DockerGatewayFactory
@@ -121,7 +118,11 @@ import com.gatekeeper.integrations.GitHubAppClient
 import com.gatekeeper.integrations.ResendClient
 import com.gatekeeper.integrations.ScribedIntegrationClient
 import com.gatekeeper.feature.nginx.infrastructure.DeploymentUpstreamResolver
-import com.gatekeeper.feature.nginx.infrastructure.NginxReconciliationService
+import com.gatekeeper.feature.nginx.infrastructure.NginxSiteReconciliationService
+import com.gatekeeper.feature.nginx.infrastructure.ExposedNginxCertificateStore
+import com.gatekeeper.feature.nginx.domain.port.NginxCertificateStore
+import com.gatekeeper.feature.nginx.application.NginxAdministrationService
+import com.gatekeeper.feature.nginx.domain.port.NginxCommandRunner
 import com.gatekeeper.scheduler.AutoBlockerJob
 import org.koin.dsl.module
 import org.koin.core.qualifier.named
@@ -137,7 +138,7 @@ private val applicationModule = module {
     single { DeploymentTriggerService(get<ProcessRunner>()) }
     single<PortProbe> { TcpPortProbe() }
     single<HttpPortProbe> { TcpHttpPortProbe() }
-    single<CutoverProbe> { TcpCutoverProbe() }
+    single<CutoverProbe> { TcpCutoverProbe(get()) }
     single<FileStore> { LocalFileStore() }
     single<TransactionRunner> { ExposedTransactionRunner() }
     single { NginxCommandRunner(get<ProcessRunner>()) }
@@ -167,15 +168,14 @@ private val applicationModule = module {
     single { SourceFetcher(get<DeploymentCommandRunner>(), get<GitHubTokenProvider>()) }
     single { ImageBuilder(get<DeploymentCommandRunner>()) }
     single<DeploymentLock> { DistributedDeploymentLock() }
-    single { DeploymentWorker(get(), get(), get(),get(), get(), get(), get(),get(), get(), get(), get(), get(), get(), get(), get(), get()) }
+    single { DeploymentWorker(get(), get(),get(),get(),get(), get(),get(), get(), get(), get(),get(), get(), get(), get(), get(), get(), get(), get(), get()) }
     single<ProjectQueryRepository> { ExposedProjectQueryRepository(get<ProjectStore>(), get(), get()) }
     single<SupportRequestRepository> { ExposedSupportRequestRepository() }
     single { CustomerApplicationService(get<ProjectQueryRepository>(), get(), get(), get<SupportRequestRepository>()) }
     single { GateService(get<ProjectQueryRepository>(), get<GetLatestPaymentLink>(), get(), get<AppSettings>().application) }
     single { GateApplicationService(get<ProjectQueryRepository>(), get<GateService>()) }
-    single { NginxService.configured(get<AppSettings>().nginx, get<NginxCommandRunner>(), get<PortProbe>(), get<CutoverProbe>()) }
-    single { ExposedCertificateStore(get<CertificateRepository>(), get()) }
-    single { NginxAdminService(get(), get<ExposedCertificateStore>(), get<AppSettings>().nginx.sslCertPath, get()) }
+    single<NginxCertificateStore> { ExposedNginxCertificateStore(get(), get()) }
+    single { NginxAdministrationService(get(), get<AppSettings>().nginx.sslCertPath, get(), get(), get(), get(), get(), get(), get()) }
     single<PaymentDomainRepository> { ExposedPaymentRepository() }
     single { ProjectBalanceAdapter(get<PaymentDomainRepository>(), get<ProjectAdjustmentStore>(), get(),  get()) }
     single<PaymentEventDomainRepository> { ExposedPaymentEventRepository() }
@@ -217,7 +217,7 @@ private val applicationModule = module {
     single<SiteRepository> { ExposedSiteRepository() }
     single { AutoBlockerJob(get(), get(), get(), get()) }
     single { DeploymentUpstreamResolver(get(), get()) }
-    single { NginxReconciliationService(get(), get(), get(), get(), get()) }
+    single { NginxSiteReconciliationService(get(), get(), get(), get(), get()) }
 }
 
 fun Application.configureDependencyInjection() {
