@@ -41,6 +41,7 @@ import com.gatekeeper.scheduler.ReconciliationJob
 import io.ktor.server.application.*
 import io.ktor.server.engine.*
 import io.ktor.server.netty.*
+import io.ktor.server.routing.routing
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import org.jetbrains.exposed.sql.insert
@@ -84,7 +85,7 @@ private fun operationalCommand(command: String, args: Array<String>) {
             ); try {
                 val docker = DockerGatewayFactory.create(settings.docker, ProcessRunnerImpl())
                 try {
-                    NginxBackfillRunner.run(
+                    NginxBackfillRunner.create(settings).run(
                         args.firstOrNull { !it.startsWith("--") } ?: settings.nginx.sitesAvailablePath,
                         args.contains("--dry-run"),
                         docker,
@@ -126,6 +127,7 @@ private fun Array<String>.portArg(): Int? =
     firstOrNull { it.startsWith("-port=") }?.substringAfter("=")?.toIntOrNull()
 
 fun Application.module() {
+    configureDependencyInjection()
     val dockerService: DockerGateway = get<DockerGateway>()
     val inspectSiteConfigUseCase = get<InspectSiteConfigUseCase>()
     val serviceRepository = get<ServiceRepository>()
@@ -136,7 +138,6 @@ fun Application.module() {
     configureSerialization()
     configureMonitoring()
     configureApiDocumentation()
-    configureDependencyInjection()
     val settings = get<AppSettings>()
     SecretValueCipher.configure(settings.application)
     configureDatabase()
@@ -148,6 +149,9 @@ fun Application.module() {
     }
     configureRedis()
     configureSecurity()
+    routing {
+        configureNginxAdminRoutes()
+    }
     configureRouting()
     configureGateRoutes(serviceRepository)
     configurePaymentRoutes()
@@ -159,7 +163,6 @@ fun Application.module() {
     configureOperationsAdminRoutes()
     configureIntegrationAdminRoutes()
     configurePaymentAdminRoutes()
-    configureNginxAdminRoutes()
     configureDeploymentAdminRoutes(dockerService, projectRepository, siteRepository, inspectSiteConfigUseCase, get())
     configureSystemAdminRoutes()
     configureLogAdminRoutes()

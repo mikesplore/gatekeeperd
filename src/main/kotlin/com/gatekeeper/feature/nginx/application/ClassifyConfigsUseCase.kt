@@ -14,7 +14,7 @@ class ClassifyConfigsUseCase(
     private val selfDomainExclusion: NginxSelfDomainExclusion,
     private val sitesEnabledPath: String = "/etc/nginx/sites-enabled",
     private val sitesAvailablePath: String = "/etc/nginx/sites-available",
-    private val configAnalyzer: NginxConflictAnalyzer
+    private val configAnalyzer: Lazy<NginxConflictAnalyzer>
 ) {
     fun execute(): List<ClassifiedNginxConfig> = classifyAvailableConfigs(
         sitesEnabledPath = sitesEnabledPath,
@@ -59,13 +59,13 @@ class ClassifyConfigsUseCase(
                         )
                     }
                 } else null
-                val classification = configAnalyzer.classifyConfig(
+                val classification = configAnalyzer.value.classifyConfig(
                     listedFile.name,
                     content,
                     nginxSelfDomainExclusion = selfDomainExclusion
                 )
                 if (enabledContent == null) classification else {
-                    val enabledClassification = configAnalyzer.classifyConfig(
+                    val enabledClassification = configAnalyzer.value.classifyConfig(
                         listedFile.name,
                         enabledContent,
                         nginxSelfDomainExclusion = selfDomainExclusion

@@ -33,7 +33,7 @@ class ApplySiteConfigUseCase(
         val testResult = commandRunner.test()
         if (testResult.exitCode != 0) {
             if (previousConfig != null) nginxSiteStorage.writeAvailable(slug, previousConfig) else nginxSiteStorage.removeSite(slug)
-            return NginxSiteActivationResult(success = false, message = "Nginx validation failed: ${testResult.stderr}")
+            return NginxSiteActivationResult(success = false, message = "Nginx validation failed: ${testResult.output}")
         }
 
         val enabled = nginxSiteStorage.enableSite(slug)
