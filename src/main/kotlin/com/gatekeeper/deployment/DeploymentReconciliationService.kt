@@ -8,7 +8,6 @@ import com.gatekeeper.docker.DockerGateway
 import com.gatekeeper.feature.nginx.application.InspectSiteConfigUseCase
 import com.gatekeeper.feature.project.domain.repository.ProjectRepository
 import com.gatekeeper.feature.service.domain.repository.SiteRepository
-import com.gatekeeper.nginx.NginxService
 import com.gatekeeper.feature.nginx.infrastructure.DeploymentUpstreamResolver
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json

@@ -1315,7 +1315,8 @@ class ExposedDeploymentJobRepository : DeploymentJobRepository {
         DeploymentJobs.selectAll().where { DeploymentJobs.id eq id }.singleOrNull()?.get(DeploymentJobs.status) == "cancelled"
     }
 
-    override fun update(id: UUID, claimToken: UUID, step: String?, log: String?, commitSha: String?, imageDigest: String?, status: String?, error: String?) = transaction {
+    override fun update(id: UUID, claimToken: UUID, step: String?, log: String?, commitSha: String?, imageDigest: String?, status: String?, error: String?) {
+        transaction {
         val existing = DeploymentJobs.selectAll().where {
             (DeploymentJobs.id eq id) and (DeploymentJobs.status eq "running") and (DeploymentJobs.claimToken eq claimToken)
         }.singleOrNull() ?: return@transaction
@@ -1365,6 +1366,7 @@ class ExposedDeploymentJobRepository : DeploymentJobRepository {
         }
         lifecycleTarget?.let {
             DeploymentApplicationService.transition(id, it, failureReason = redactedError)
+        }
         }
     }
 

@@ -108,12 +108,42 @@ import com.gatekeeper.deployment.DeploymentWorker
 import com.gatekeeper.deployment.DeploymentTriggerService
 import com.gatekeeper.feature.customer.data.persistence.ExposedSupportRequestRepository
 import com.gatekeeper.feature.customer.domain.repository.SupportRequestRepository
+import com.gatekeeper.feature.nginx.application.ApplySiteConfigUseCase
+import com.gatekeeper.feature.nginx.application.ClassifyConfigsUseCase
+import com.gatekeeper.feature.nginx.application.ConvertSiteToDeploymentManagedUseCase
+import com.gatekeeper.feature.nginx.application.DeleteManualConfigUseCase
+import com.gatekeeper.feature.nginx.application.DisableManualConfigUseCase
+import com.gatekeeper.feature.nginx.application.DisableProjectUseCase
+import com.gatekeeper.feature.nginx.application.InspectManualConfigUseCase
+import com.gatekeeper.feature.nginx.application.InspectSiteConfigUseCase
+import com.gatekeeper.feature.nginx.application.ListConfigArtifactsUseCase
 import com.gatekeeper.feature.project.data.persistence.ExposedProjectQueryRepository
 import com.gatekeeper.feature.project.domain.repository.ProjectQueryRepository
 import com.gatekeeper.feature.service.data.persistence.ExposedServiceRepository
 import com.gatekeeper.feature.service.data.persistence.ExposedSiteRepository
 import com.gatekeeper.feature.service.domain.repository.ServiceRepository
 import com.gatekeeper.feature.service.domain.repository.SiteRepository
+import com.gatekeeper.feature.nginx.application.RecoverInterruptedCutoverUseCase
+import com.gatekeeper.feature.nginx.application.RemoveSiteConfigUseCase
+import com.gatekeeper.feature.nginx.application.RepairDeploymentUpstreamUseCase
+import com.gatekeeper.feature.nginx.application.RollbackSiteConfigUseCase
+import com.gatekeeper.feature.nginx.application.SwitchDeploymentUpstreamUseCase
+import com.gatekeeper.feature.nginx.application.UpdateSiteConfigBlockUseCase
+import com.gatekeeper.feature.nginx.domain.port.CertificateProvisioner
+import com.gatekeeper.feature.nginx.domain.port.NginxSiteStorage
+import com.gatekeeper.feature.nginx.domain.port.PortProbe as NginxPortProbe
+import com.gatekeeper.feature.nginx.domain.service.NginxConfigParser
+import com.gatekeeper.feature.nginx.domain.service.NginxConfigRendererService
+import com.gatekeeper.feature.nginx.domain.service.NginxConflictAnalyzer
+import com.gatekeeper.feature.nginx.domain.service.NginxValidationService
+import com.gatekeeper.feature.nginx.domain.service.UpstreamValidation
+import com.gatekeeper.feature.nginx.infrastructure.CertbotCertificateProvisioner
+import com.gatekeeper.feature.nginx.infrastructure.NginxConfigRenderer
+import com.gatekeeper.feature.nginx.infrastructure.NginxSelfDomainExclusion
+import com.gatekeeper.feature.nginx.infrastructure.NginxSiteFileStore
+import com.gatekeeper.feature.nginx.infrastructure.RenderModelFromSite
+import com.gatekeeper.feature.nginx.model.DomainRules
+import com.gatekeeper.feature.nginx.presentation.PlanNginxEnableRequest
 import com.gatekeeper.integrations.GitHubAppClient
 import com.gatekeeper.integrations.ResendClient
 import com.gatekeeper.integrations.ScribedIntegrationClient
@@ -132,11 +162,14 @@ import io.ktor.server.application.install
 
 private val applicationModule = module {
     single { AppSettings.fromEnv() }
+    single<AppSettings.NginxSettings> { get<AppSettings>().nginx }
+    single<AppSettings.SchedulerSettings> { get<AppSettings>().scheduler }
     single<ProcessRunner> { ProcessRunnerImpl() }
     single<DockerGateway> { DockerGatewayFactory.create(get<AppSettings>().docker, get<ProcessRunner>()) }
     single { DockerCleanupService(get<DockerGateway>(), get<AuditRepository>()) }
     single { DeploymentTriggerService(get<ProcessRunner>()) }
     single<PortProbe> { TcpPortProbe() }
+    single<NginxPortProbe> { NginxPortProbe(get<PortProbe>()) }
     single<HttpPortProbe> { TcpHttpPortProbe() }
     single<CutoverProbe> { TcpCutoverProbe(get()) }
     single<FileStore> { LocalFileStore() }
@@ -172,10 +205,133 @@ private val applicationModule = module {
     single<ProjectQueryRepository> { ExposedProjectQueryRepository(get<ProjectStore>(), get(), get()) }
     single<SupportRequestRepository> { ExposedSupportRequestRepository() }
     single { CustomerApplicationService(get<ProjectQueryRepository>(), get(), get(), get<SupportRequestRepository>()) }
-    single { GateService(get<ProjectQueryRepository>(), get<GetLatestPaymentLink>(), get(), get<AppSettings>().application) }
     single { GateApplicationService(get<ProjectQueryRepository>(), get<GateService>()) }
     single<NginxCertificateStore> { ExposedNginxCertificateStore(get(), get()) }
     single { NginxAdministrationService(get(), get<AppSettings>().nginx.sslCertPath, get(), get(), get(), get(), get(), get(), get()) }
+    single { NginxValidationService() }
+    single { UpstreamValidation() }
+    single { NginxConfigParser() }
+    single { NginxSelfDomainExclusion(get<AppSettings>().nginx.selfDomains) }
+    single { DomainRules(get(), get<SiteRepository>()) }
+    single<NginxSiteStorage> {
+        NginxSiteFileStore(
+            settings = get<AppSettings>().nginx,
+            nginxDomainRules = get(),
+            removeSiteConfigUseCase = lazy { get<RemoveSiteConfigUseCase>() },
+            listConfigArtifacts = lazy { get<ListConfigArtifactsUseCase>() },
+            applySiteConfigUseCase = lazy { get<ApplySiteConfigUseCase>() },
+            disableManConfig = lazy { get<DisableManualConfigUseCase>() }
+        )
+    }
+    single {
+        NginxConfigRenderer(
+            sslCertPath = get<AppSettings>().nginx.sslCertPath,
+            upstreamIncludeDirectory = get<AppSettings>().nginx.upstreamIncludeDirectory,
+            nginxValidation = get()
+        )
+    }
+    single { NginxConfigRendererService(get<NginxConfigRenderer>()) }
+    single { CertbotCertificateProvisioner(get(), get<AppSettings>().nginx.sslCertPath, get(), get(), get()) }
+    single<CertificateProvisioner> { get<CertbotCertificateProvisioner>() }
+    single { RenderModelFromSite(get(), get()) }
+    single {
+        PlanNginxEnableRequest(
+            dockerService = get<DockerGateway>(),
+            parser = get(),
+            portProbe = get(),
+            validator = get(),
+            certificateProvisioner = get()
+        )
+    }
+    single {
+        ClassifyConfigsUseCase(
+            nginxSiteStorage = get(),
+            selfDomainExclusion = get(),
+            configAnalyzer = lazy { get<NginxConflictAnalyzer>() }
+        )
+    }
+    single { NginxConflictAnalyzer(get(), get(), get(), get()) }
+    single {
+        InspectSiteConfigUseCase(
+            siteRepository = get(),
+            upstreamIncludeDirectory = get<AppSettings>().nginx.upstreamIncludeDirectory,
+            domainRules = get(),
+            nginx = get(),
+            parser = get()
+        )
+    }
+    single { ListConfigArtifactsUseCase(domainRules = get(), nginxConflictAnalyzer = get()) }
+    single {
+        ApplySiteConfigUseCase(
+            commandRunner = get(),
+            nginxSiteStorage = get(),
+            selfDomainExclusion = get(),
+            domainRules = get(),
+            nginxConflictAnalyzer = get()
+        )
+    }
+    single { RemoveSiteConfigUseCase(domainRules = get()) }
+    single { DisableProjectUseCase(domainRules = get()) }
+    single { DisableManualConfigUseCase(get(), get(), get(), get(), get()) }
+    single { InspectManualConfigUseCase(domainRules = get(), nginxConflictAnalyzer = get()) }
+    single { DeleteManualConfigUseCase(get(), get(), get()) }
+    single {
+        UpdateSiteConfigBlockUseCase(
+            nginxSiteStorage = get(),
+            inspectSite = get(),
+            applySiteConfigUseCase = get()
+        )
+    }
+    single {
+        RollbackSiteConfigUseCase(
+            nginxSiteStorage = get(),
+            domainRules = get(),
+            nginxSelfDomainExclusion = get(),
+            applySiteConfigUseCase = get()
+        )
+    }
+    single {
+        SwitchDeploymentUpstreamUseCase(
+            storage = get(),
+            commandRunner = get(),
+            cutoverProbe = get(),
+            siteRepository = get(),
+            renderer = get(),
+            certificateProvisioner = get(),
+            upstreamIncludeDirectory = get<AppSettings>().nginx.upstreamIncludeDirectory,
+            applySiteConfigUseCase = get(),
+            inspectSite = get()
+        )
+    }
+    single {
+        ConvertSiteToDeploymentManagedUseCase(
+            upstreamIncludeDirectory = get<AppSettings>().nginx.upstreamIncludeDirectory,
+            siteConfig = get(),
+            renderer = get(),
+            cutoverProbe = get(),
+            nginxSiteStorage = get(),
+            inspectSite = get(),
+            siteRepository = get(),
+            certificateProvisioner = get()
+        )
+    }
+    single {
+        RecoverInterruptedCutoverUseCase(
+            upstreamIncludeDirectory = get<AppSettings>().nginx.upstreamIncludeDirectory,
+            nginxSiteStorage = get(),
+            convertSiteToDeploymentManagedUseCase = get(),
+            localProbeRunner = { domain, tls -> get<CutoverProbe>().throughLocalNginx(domain, tls) },
+            siteRepository = get()
+        )
+    }
+    single {
+        RepairDeploymentUpstreamUseCase(
+            upstreamIncludeDirectory = get<AppSettings>().nginx.upstreamIncludeDirectory,
+            nginxStorage = get(),
+            localProbeRunner = { domain, tls -> get<CutoverProbe>().throughLocalNginx(domain, tls) }
+        )
+    }
+    single { NginxService(selfDomainExclusion = get(), upstreamIncludeDirectory = get<AppSettings>().nginx.upstreamIncludeDirectory, cutoverProbe = get()) }
     single<PaymentDomainRepository> { ExposedPaymentRepository() }
     single { ProjectBalanceAdapter(get<PaymentDomainRepository>(), get<ProjectAdjustmentStore>(), get(),  get()) }
     single<PaymentEventDomainRepository> { ExposedPaymentEventRepository() }
@@ -215,9 +371,39 @@ private val applicationModule = module {
     single { ReconcilePayments(get(), mapOf("paystack" to get(named("paystackGateway")), "mpesa" to get(named("mpesaGateway"))), get()) }
     single<ServiceRepository> { ExposedServiceRepository(get()) }
     single<SiteRepository> { ExposedSiteRepository() }
-    single { AutoBlockerJob(get(), get(), get(), get()) }
-    single { DeploymentUpstreamResolver(get(), get()) }
-    single { NginxSiteReconciliationService(get(), get(), get(), get(), get()) }
+    single {
+        AutoBlockerJob(
+            projectRepository = get(),
+            serviceRepository = get(),
+            outboxRepository = get(),
+            scribedClient = get()
+        )
+    }
+    single {
+        DeploymentUpstreamResolver(
+            siteRepository = get(),
+            deploymentApplicationService = com.gatekeeper.deployment.DeploymentApplicationService
+        )
+    }
+    single {
+        NginxSiteReconciliationService(
+            settings = get<AppSettings>().nginx,
+            siteRepository = get(),
+            deploymentUpstreamResolver = get(),
+            dockerGateway = get(),
+            nginxConfigRenderer = get(),
+            selfDomainExclusion = get()
+        )
+    }
+    single {
+        GateService(
+            projects = get<ProjectQueryRepository>(),
+            latestPaymentLink = get<GetLatestPaymentLink>(),
+            projectBalances = get(),
+            applicationSettings = get<AppSettings>().application
+        )
+    }
+
 }
 
 fun Application.configureDependencyInjection() {
