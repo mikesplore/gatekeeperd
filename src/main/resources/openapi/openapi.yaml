@@ -2503,9 +2503,16 @@ paths:
       tags:
       - Projects
       summary: Remove a project setup domain binding
+      parameters:
+      - name: projectId
+        in: path
+        required: true
+        schema:
+          type: string
       responses:
         '200':
           description: Domain binding removed
+      operationId: DeleteApiAdminProjectSetupProjectsByprojectIdDomainGateway
   /api/admin/project-setup/projects/{projectId}/source-runtime:
     put:
       tags:
@@ -3019,6 +3026,9 @@ paths:
       summary: Get the invoice linked to a service
       description: Return the service invoice and payment summary used for service-scoped payment capture.
       operationId: GetApiAdminProjectsByprojectIdServicesByserviceIdInvoice
+      parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - $ref: '#/components/parameters/ServiceId'
       responses:
         '200':
           description: Service invoice status
@@ -3088,6 +3098,9 @@ paths:
           $ref: '#/components/responses/Unauthorized'
       operationId: GetApiAdminProjectsByprojectIdServicesByserviceIdRuntime
   /api/admin/projects/{projectId}/services/{serviceId}/domains:
+    parameters:
+    - $ref: '#/components/parameters/ProjectId'
+    - $ref: '#/components/parameters/ServiceId'
     get:
       tags:
       - Services and deployments
@@ -3103,6 +3116,14 @@ paths:
         '201':
           description: Domain binding created
   /api/admin/projects/{projectId}/services/{serviceId}/domains/{bindingId}:
+    parameters:
+    - $ref: '#/components/parameters/ProjectId'
+    - $ref: '#/components/parameters/ServiceId'
+    - name: bindingId
+      in: path
+      required: true
+      schema:
+        type: string
     put:
       tags:
       - Services and deployments
@@ -5165,6 +5186,23 @@ paths:
               schema:
                 $ref: '#/components/schemas/ApiError'
       x-code-location: com/gatekeeper/plugins/ApiDocumentation.kt:14
+      security: []
+  /openapi.json:
+    get:
+      tags:
+      - Operations
+      summary: Get openapi.json
+      description: 'Implementation: `com/gatekeeper/plugins/ApiDocumentation.kt:24`. Returns the OpenAPI document
+        in JSON format.'
+      operationId: GetOpenapiJson
+      responses:
+        '200':
+          description: OpenAPI document in JSON format.
+          content:
+            application/json:
+              schema:
+                type: object
+      x-code-location: com/gatekeeper/plugins/ApiDocumentation.kt:24
       security: []
 components:
   securitySchemes:

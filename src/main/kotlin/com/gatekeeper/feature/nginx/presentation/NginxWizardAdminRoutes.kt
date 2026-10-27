@@ -6,7 +6,7 @@ import com.gatekeeper.api.respondErrorWithData
 import com.gatekeeper.config.AppSettings
 import com.gatekeeper.db.tables.ServiceDomainStatus
 import com.gatekeeper.deployment.DeploymentApplicationService
-import com.gatekeeper.docker.DockerService
+import com.gatekeeper.docker.DockerGateway
 import com.gatekeeper.feature.deployment.domain.repository.ServiceDomainRepository
 import com.gatekeeper.feature.nginx.application.ListConfigArtifactsUseCase
 import com.gatekeeper.feature.nginx.domain.service.NginxConfigRendererService
@@ -28,7 +28,7 @@ import io.ktor.server.routing.post
 
 fun Route.nginxWizardAdminRoutes(
     siteRepository: SiteRepository,
-    dockerService: DockerService,
+    dockerService: DockerGateway,
     serviceRepository: ServiceRepository,
     serviceDomains: ServiceDomainRepository,
     projectRepository: ProjectRepository,

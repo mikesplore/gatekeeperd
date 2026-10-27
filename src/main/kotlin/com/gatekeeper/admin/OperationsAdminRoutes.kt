@@ -1137,7 +1137,6 @@ fun Application.configureOperationsAdminRoutes() {
                         docker.containerHealth(name)
                     }.getOrNull()
                 }
-                val nginx = get<NginxService>()
                 val nginxEnabled = artifacts.execute().any { it.filename == slug && it.available && it.enabled }
                 val certificateInstalled = certificateProvisioner.isCertificateInstalled(project.domain)
                 val ready =
