@@ -33,6 +33,11 @@ class ServerTest {
         kotlin.test.assertTrue(specification.bodyAsText().contains("openapi: 3.0.3"))
         kotlin.test.assertTrue(specification.bodyAsText().contains("/api/admin/projects"))
 
+        val jsonSpecification = client.get("/openapi.json")
+        assertEquals(HttpStatusCode.OK, jsonSpecification.status)
+        kotlin.test.assertTrue(jsonSpecification.bodyAsText().contains("\"openapi\": \"3.0.3\""))
+        kotlin.test.assertTrue(jsonSpecification.bodyAsText().contains("/api/admin/projects"))
+
         val swagger = client.get("/swagger")
         assertEquals(HttpStatusCode.OK, swagger.status)
         kotlin.test.assertTrue(swagger.bodyAsText().contains("SwaggerUIBundle"))

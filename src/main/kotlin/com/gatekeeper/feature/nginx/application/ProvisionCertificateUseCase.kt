@@ -13,7 +13,7 @@ class ProvisionCertificateUseCase(
         val success = provisioner.installCertificate(domain, email)
         if (!success) return false
 
-        certificateRepository.recordCertificate(domain = domain)
+        certificateRepository.syncInventory(domain, expiresAt = null, renewalStatus = "installed")
         return commandRunner.reload()
     }
 }
