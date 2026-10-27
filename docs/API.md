@@ -3,9 +3,11 @@
 Base URL: `http://localhost:8080` (development)  
 Content-Type: `application/json` unless noted otherwise
 
-Interactive API reference: [`/swagger`](https://gateapi.mikesplore.me/swagger)
+Interactive API reference: [`/swagger`](http://localhost:8080/swagger)
 
-OpenAPI 3.0.3 document: [`/openapi.yaml`](https://gateapi.mikesplore.me/openapi.yaml)
+OpenAPI 3.0.3 document: [`/openapi.yaml`](http://localhost:8080/openapi.yaml)
+
+JSON OpenAPI document: [`/openapi.json`](http://localhost:8080/openapi.json)
 
 The OpenAPI document lists all route operations declared by the backend, including
 public, authentication, project, service, deployment, container, nginx, payment,

@@ -20,6 +20,15 @@ fun Application.configureApiDocumentation() {
             call.respondText(specification, ContentType.parse("application/yaml"))
         }
 
+        get("/openapi.json") {
+            val specification = requireNotNull(
+                this::class.java.classLoader.getResourceAsStream("openapi/openapi.json")
+            ) { "OpenAPI specification resource 'openapi/openapi.json' is missing" }
+                .bufferedReader()
+                .use { it.readText() }
+            call.respondText(specification, ContentType.Application.Json)
+        }
+
         swaggerUI(path = "/swagger", swaggerFile = OPENAPI_RESOURCE)
     }
 }
