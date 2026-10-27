@@ -5,8 +5,6 @@ import com.gatekeeper.docker.DockerGatewayFactory
 import com.gatekeeper.infrastructure.ProcessRunnerImpl
 import com.gatekeeper.plugins.DatabaseFactory
 import com.gatekeeper.security.SecretValueCipher
-import kotlin.run
-
 /** Dedicated manual command entry point; invoke through the project's JVM launcher. */
 fun main(args: Array<String>) {
     val settings = AppSettings.fromEnv()
@@ -17,7 +15,7 @@ fun main(args: Array<String>) {
         val path = args.firstOrNull { it != "--dry-run" } ?: settings.nginx.sitesAvailablePath
         val docker = DockerGatewayFactory.create(settings.docker, ProcessRunnerImpl())
         try {
-            NginxBackfillRunner.run(path, dryRun, docker, settings)
+            NginxBackfillRunner.create(settings).run(path, dryRun, docker, settings)
         } finally {
             docker.close()
         }
