@@ -4,7 +4,7 @@ import com.gatekeeper.api.respondError
 import com.gatekeeper.db.tables.TlsMode
 import com.gatekeeper.db.tables.UpstreamMode
 import com.gatekeeper.deployment.DeploymentApplicationService
-import com.gatekeeper.docker.DockerService
+import com.gatekeeper.docker.DockerGateway
 import com.gatekeeper.feature.deployment.domain.repository.DeploymentJobRepository
 import com.gatekeeper.feature.nginx.application.ConvertSiteToDeploymentManagedUseCase
 import com.gatekeeper.feature.nginx.application.RepairDeploymentUpstreamUseCase
@@ -20,7 +20,7 @@ import io.ktor.server.routing.*
 
 fun Route.nginxUpstreamRoutes(
     siteRepository: SiteRepository,
-    dockerService: DockerService,
+    dockerService: DockerGateway,
     deploymentJobs: DeploymentJobRepository,
     nginxSiteStorage: NginxSiteStorage,
     repairDeploymentUpstreamUseCase: RepairDeploymentUpstreamUseCase,

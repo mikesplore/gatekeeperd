@@ -27,10 +27,10 @@ class NginxSiteFileStore(
     private val nginxDomainRules: DomainRules,
     private val nginxTestRunner: () -> NginxTestResult = { NginxCommandRunner().test() },
     private val nginxReloadRunner: () -> Boolean = { NginxCommandRunner().reload() },
-    private val removeSiteConfigUseCase: RemoveSiteConfigUseCase,
-    private val listConfigArtifacts: ListConfigArtifactsUseCase,
-    private val applySiteConfigUseCase: ApplySiteConfigUseCase,
-    private val disableManConfig: DisableManualConfigUseCase
+    private val removeSiteConfigUseCase: Lazy<RemoveSiteConfigUseCase>,
+    private val listConfigArtifacts: Lazy<ListConfigArtifactsUseCase>,
+    private val applySiteConfigUseCase: Lazy<ApplySiteConfigUseCase>,
+    private val disableManConfig: Lazy<DisableManualConfigUseCase>
 
     ) : NginxSiteStorage {
     private val availableDir = File(settings.sitesAvailablePath)
@@ -115,7 +115,7 @@ class NginxSiteFileStore(
 
     override fun disableManualConfig(filename: String): NginxManualConfigDisableResult {
         disableSite(filename)
-        return disableManConfig.execute(filename = filename)
+        return disableManConfig.value.execute(filename = filename)
     }
 
     override fun deleteDisabledManualConfig(filename: String): String {
@@ -211,11 +211,12 @@ class NginxSiteFileStore(
             ?: error("Unable to list nginx config directory '${directory.absolutePath}'")
     }
 
-    override fun restoreSiteConfiguration(slug: String, previousConfig: String): Boolean = applySiteConfigUseCase.enableProject(slug, previousConfig)
+    override fun restoreSiteConfiguration(slug: String, previousConfig: String): Boolean =
+        applySiteConfigUseCase.value.enableProject(slug, previousConfig)
 
 
     override fun removeSiteArtifacts(site: SiteRecord): Boolean {
-        val matches = listConfigArtifacts.execute(listOf(site)).filter { artifact ->
+        val matches = listConfigArtifacts.value.execute(listOf(site)).filter { artifact ->
             artifact.siteId == site.id.toString() ||
                     artifact.projectId == site.projectId.toString() && (
                     artifact.serviceId == site.serviceId?.toString() ||
@@ -228,7 +229,7 @@ class NginxSiteFileStore(
                     )
         }.map { it.filename }.toMutableSet()
         site.projectSlug?.let(matches::add)
-        return matches.all(removeSiteConfigUseCase::execute)
+        return matches.all(removeSiteConfigUseCase.value::execute)
     }
 
    override fun listBackups(slug: String): List<NginxBackup> {

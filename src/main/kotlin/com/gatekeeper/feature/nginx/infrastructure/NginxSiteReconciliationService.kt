@@ -6,11 +6,13 @@ import com.gatekeeper.db.tables.UpstreamMode
 import com.gatekeeper.docker.DockerGateway
 import com.gatekeeper.feature.nginx.model.NginxSiteRenderModel
 import com.gatekeeper.feature.nginx.model.SiteIdentityMarker
+import com.gatekeeper.feature.nginx.model.TlsRenderMode
 import com.gatekeeper.feature.nginx.model.parseSiteIdentityMarker
 import com.gatekeeper.feature.nginx.presentation.NginxReconciliationReport
 import com.gatekeeper.feature.nginx.presentation.NginxReconciliationResult
 import com.gatekeeper.feature.service.domain.repository.SiteRecord
 import com.gatekeeper.feature.service.domain.repository.SiteRepository
+import com.gatekeeper.db.tables.TlsMode
 import org.slf4j.LoggerFactory
 import java.io.File
 import java.nio.file.Files
@@ -108,7 +110,7 @@ class NginxSiteReconciliationService(
             return NginxReconciliationResult(slug, ReconciliationStatus.ERROR, nginxOutput, projectId = site.projectId)
         }
 
-        val expected = runCatching { renderExpectedConfig(site) }.getOrElse {
+        val expected = runCatching { renderExpectedConfig(site.toRenderModel(slug)) }.getOrElse {
             return NginxReconciliationResult(slug, ReconciliationStatus.ERROR, it.message ?: "Unable to render expected configuration", projectId = site.projectId)
         }
 
@@ -135,10 +137,32 @@ class NginxSiteReconciliationService(
     }
 
     private fun renderExpectedConfig(site: NginxSiteRenderModel): String {
-        // Delegate to your Nginx template renderer here
-        /*TODO*/
         return nginxConfigRenderer.render(site)
     }
+
+    private fun SiteRecord.toRenderModel(slug: String) = NginxSiteRenderModel(
+        slug = slug,
+        projectId = projectId,
+        serviceId = serviceId,
+        siteId = id,
+        domain = domain,
+        upstreamHost = upstreamHost,
+        appPort = upstreamExplicitPort ?: upstreamContainerPort ?: 80,
+        upstreamScheme = "http",
+        tlsMode = when (tlsMode) {
+            TlsMode.HTTP_ONLY -> TlsRenderMode.HTTP_ONLY
+            TlsMode.HTTPS -> TlsRenderMode.HTTPS
+            TlsMode.HTTPS_HTTP2 -> TlsRenderMode.HTTPS_HTTP2
+        },
+        certificatePath = certExplicitPath,
+        certificateKeyPath = certExplicitPath?.replace("fullchain.pem", "privkey.pem"),
+        upstreamMode = upstreamMode,
+        certMode = certMode,
+        gateEnabled = gateEnabled,
+        bypassPaths = bypassPaths,
+        upstreamKind = upstreamKind,
+        customNginxLocations = customNginxLocations
+    )
 
     private fun testNginxConfiguration(): String? = runCatching {
         val process = ProcessBuilder("nginx", "-t").redirectErrorStream(true).start()
