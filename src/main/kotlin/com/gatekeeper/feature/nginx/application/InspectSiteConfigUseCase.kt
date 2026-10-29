@@ -16,13 +16,14 @@ import kotlin.text.Regex
 import kotlin.text.contains
 import kotlin.text.matches
 import kotlin.text.trim
+import com.gatekeeper.feature.nginx.domain.port.NginxEnvironmentPolicy
 
 class InspectSiteConfigUseCase(
     private val siteRepository: SiteRepository,
     private val upstreamIncludeDirectory: String = "/etc/nginx/conf.d/gatekeeperd-upstreams",
     private val domainRules: DomainRules,
     private val nginx: NginxSiteStorage,
-    private val nginxConfigDumpRunner: () -> String? = { NginxCommandRunner().dumpConfig() },
+    private val nginxConfigDumpRunner: () -> String?,
     private val parser: NginxConfigParser
 ) {
     fun inspectSite(

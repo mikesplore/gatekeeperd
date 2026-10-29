@@ -8,6 +8,7 @@ import com.gatekeeper.feature.nginx.presentation.NginxManualConfigDisableResult
 import java.io.File
 import java.nio.file.Files
 import java.time.Instant
+import com.gatekeeper.feature.nginx.domain.port.NginxEnvironmentPolicy
 
 class DisableManualConfigUseCase(
     private val nginxSiteStorage: NginxSiteStorage,
@@ -15,7 +16,7 @@ class DisableManualConfigUseCase(
     private val inspectManualConfig: InspectManualConfigUseCase,
     private val restManConfUsc: RestoreEnabledManualConfigUseCase,
     private val listConfArtifacts: ListConfigArtifactsUseCase,
-    private val nginxReloadRunner: () -> Boolean = { NginxCommandRunner().reload() },
+    private val nginxReloadRunner: () -> Boolean,
 
 
 ) {
