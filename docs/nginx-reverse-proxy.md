@@ -7,6 +7,19 @@ If you want to expose gatekeeperd behind nginx with SSL, use this configuration.
 - SSL certificate for your domain (e.g., via Let's Encrypt)
 - gatekeeperd container running on port 8080
 
+## Gatekeeperd environment policy
+
+Gatekeeperd reads `GATEKEEPERD_ENVIRONMENT` to control host-privilege policy. The nginx reverse-proxy docs assume **PROD** (system paths and restricted sudo). For local development:
+
+```env
+GATEKEEPERD_ENVIRONMENT=DEV
+GATEKEEPERD_NGINX_HOST_SUDO=true
+NGINX_SITES_AVAILABLE=/home/mike/IdeaProjects/gatekeeperd/nginx/sites-available
+NGX_SITES_ENABLED=/home/mike/IdeaProjects/gatekeeperd/nginx/sites-enabled
+```
+
+In DEV, nginx host commands are **no-op by default** and certbot is disabled. Setting `GATEKEEPERD_NGINX_HOST_SUDO=true` enables a local nginx binary without `sudo`. The nginx system paths (`/etc/nginx`, `/etc/letsencrypt`) are only used in PROD.
+
 ## Nginx Configuration
 
 Create `/etc/nginx/sites-available/gatekeeperd`:

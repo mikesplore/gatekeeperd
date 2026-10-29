@@ -129,6 +129,25 @@ Apply:
 sudo nginx -t && sudo systemctl reload nginx
 ```
 
+## Gatekeeperd environment policy (DEV/PROD)
+
+See the root `docs/README.md` for the full environment-variable reference.
+
+### DEV (local development)
+
+```env
+GATEKEEPERD_ENVIRONMENT=DEV
+GATEKEEPERD_NGINX_HOST_SUDO=true
+NGINX_SITES_AVAILABLE=/home/mike/IdeaProjects/gatekeeperd/nginx/sites-available
+NGX_SITES_ENABLED=/home/mike/IdeaProjects/gatekeeperd/nginx/sites-enabled
+```
+
+In DEV, nginx host operations are **no-op by default** and certbot install/renew/remove are disabled. With `GATEKEEPERD_NGINX_HOST_SUDO=true` an explicit local `nginx` binary runs without `sudo -n`. All nginx paths are overridable to local directories, so the full site-creation, staging, and activation flow can be tested inside your project directory.
+
+### PROD (VPS)
+
+Keep the defaults: Gatekeeperd uses `/etc/nginx`, `/etc/letsencrypt`, and the `gatekeeperd-certbot` helper with restricted `sudo -n`.
+
 ## gatekeeperd `.env` (VPS)
 
 ```env
