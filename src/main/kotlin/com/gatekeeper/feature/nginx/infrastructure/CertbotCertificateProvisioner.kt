@@ -2,6 +2,7 @@ package com.gatekeeper.feature.nginx.infrastructure
 
 import com.gatekeeper.core.ports.ProcessRunner
 import com.gatekeeper.feature.nginx.domain.port.CertificateProvisioner
+import com.gatekeeper.feature.nginx.domain.port.NginxEnvironmentPolicy
 import com.gatekeeper.feature.nginx.domain.port.NginxSiteStorage
 import com.gatekeeper.feature.nginx.domain.service.NginxValidationService
 import com.gatekeeper.feature.nginx.model.ResolvedCertificate
@@ -18,9 +19,17 @@ class CertbotCertificateProvisioner(
     private val sslCertPath: String = "/etc/letsencrypt/live",
     private val nginxSiteStorage: NginxSiteStorage,
     private val selfDomainExclusion: NginxSelfDomainExclusion,
-    private val validator: NginxValidationService
+    private val validator: NginxValidationService,
+    private val policy: NginxEnvironmentPolicy = NginxEnvironmentPolicy(
+        environment = com.gatekeeper.config.AppEnvironment.DEV,
+        nginxHostSudoEnabled = false,
+        nginxCertbotEnabled = false,
+        customCertDirectory = null
+    )
 ) : CertificateProvisioner {
     private val logger = LoggerFactory.getLogger("com.gatekeeper.admin.NginxAdminRoutes")
+
+    private val isDev: Boolean = policy.isDev
 
 
     override fun isCertbotAvailable(): Boolean {
@@ -93,6 +102,7 @@ class CertbotCertificateProvisioner(
     }
 
     override fun renewCertificate(domain: String): Boolean {
+        if (isDev && !policy.certbotEnabled) return false
         validator.requireValidHostname(domain)
         return !(!isCertificateInstalled(domain) || certificateManagerIssue() != null) && DistributedLock.withLock("nginx-host-mutation") {
             try {

@@ -17,10 +17,11 @@ import com.gatekeeper.feature.nginx.presentation.NginxTestResult
 import com.gatekeeper.feature.service.domain.repository.SiteRepository
 import com.gatekeeper.plugins.DistributedLock
 import java.io.File
+import com.gatekeeper.feature.nginx.domain.port.NginxEnvironmentPolicy
 
 class ConvertSiteToDeploymentManagedUseCase(
     private val upstreamIncludeDirectory: String = "/etc/nginx/conf.d/gatekeeperd-upstreams",
-    private val nginxTestRunner: () -> NginxTestResult = { NginxCommandRunner().test() },
+    private val nginxTestRunner: () -> NginxTestResult,
     private val siteConfig: ApplySiteConfigUseCase,
     private val renderer: NginxConfigRendererService,
     private val cutoverProbe: CutoverProbe,
