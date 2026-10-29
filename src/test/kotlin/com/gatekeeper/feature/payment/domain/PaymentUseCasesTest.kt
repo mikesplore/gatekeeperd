@@ -19,12 +19,14 @@ import com.gatekeeper.feature.payment.domain.usecase.InitiatePayment
 import com.gatekeeper.feature.payment.domain.usecase.PaymentBalancePort
 import com.gatekeeper.feature.payment.domain.usecase.PaymentProject
 import com.gatekeeper.feature.payment.domain.usecase.PaymentProjectPort
+import com.gatekeeper.feature.payment.domain.usecase.PaymentServicePort
 import com.gatekeeper.feature.payment.domain.usecase.ProcessPaymentEvent
 import com.gatekeeper.feature.payment.domain.usecase.HandleMpesaCallback
 import com.gatekeeper.feature.payment.domain.usecase.MpesaCallbackData
 import com.gatekeeper.feature.payment.domain.usecase.GetPaymentMethodAvailability
 import com.gatekeeper.feature.payment.domain.usecase.PaymentProviderReadiness
 import com.gatekeeper.feature.service.domain.repository.ServiceRecord
+import com.gatekeeper.feature.service.domain.repository.ServiceRepository
 import java.math.BigDecimal
 import java.time.LocalDateTime
 import java.time.LocalDate
@@ -69,6 +71,8 @@ class PaymentUseCasesTest {
     fun `payment initiation asks gateway then persists provider reference`() = kotlinx.coroutines.runBlocking {
         val projectId = UUID.randomUUID()
         val repository = FakePaymentRepository(null)
+        val serviceRepository = unusedServiceRepository()
+        val serviceId = UUID.randomUUID()
         var received: InitiatePaymentCommand? = null
         val gateway = object : PaymentGateway {
             override val provider = "mpesa"
@@ -81,11 +85,11 @@ class PaymentUseCasesTest {
         val useCase = InitiatePayment(
             repository,
             object : PaymentProjectPort { override fun find(slug: String) = PaymentProject(projectId, slug, "KES", null) },
-            object : PaymentBalancePort { override suspend fun availableAmount(projectId: UUID, requestedAmount: BigDecimal?) = requestedAmount ?: BigDecimal("50.00") },
-            mapOf("mpesa" to gateway)
+            object : PaymentBalancePort { override suspend fun availableAmount(serviceRepository: ServiceRepository, projectId: UUID, requestedAmount: BigDecimal?) = requestedAmount ?: BigDecimal("50.00") },
+            mapOf("mpesa" to gateway), serviceRepository, PaymentServicePort { _, _, _ -> true }
         )
 
-        val result = useCase(InitiatePayment.Command("mpesa", "demo", BigDecimal("25"), phone = "254712345678", currency = "KES"))
+        val result = useCase(InitiatePayment.Command("mpesa", "demo", BigDecimal("25"), phone = "254712345678", currency = "KES", serviceId = serviceId))
 
         assertTrue(result.isSuccess)
         assertEquals("checkout-1", repository.payment?.providerReference)
@@ -96,6 +100,7 @@ class PaymentUseCasesTest {
     @Test
     fun `mpesa initiation rejects fractional KES amounts before calling provider`() = kotlinx.coroutines.runBlocking {
         val projectId = UUID.randomUUID()
+        val serviceId = UUID.randomUUID()
         var gatewayCalled = false
         val gateway = object : PaymentGateway {
             override val provider = "mpesa"
@@ -108,11 +113,11 @@ class PaymentUseCasesTest {
         val useCase = InitiatePayment(
             FakePaymentRepository(null),
             object : PaymentProjectPort { override fun find(slug: String) = PaymentProject(projectId, slug, "KES", null) },
-            object : PaymentBalancePort { override suspend fun availableAmount(projectId: UUID, requestedAmount: BigDecimal?) = requestedAmount ?: BigDecimal("50.00") },
-            mapOf("mpesa" to gateway)
+            object : PaymentBalancePort { override suspend fun availableAmount(serviceRepository: ServiceRepository, projectId: UUID, requestedAmount: BigDecimal?) = requestedAmount ?: BigDecimal("50.00") },
+            mapOf("mpesa" to gateway), unusedServiceRepository(), PaymentServicePort { _, _, _ -> true }
         )
 
-        val result = useCase(InitiatePayment.Command("mpesa", "demo", BigDecimal("25.50"), phone = "0712345678", currency = "KES"))
+        val result = useCase(InitiatePayment.Command("mpesa", "demo", BigDecimal("25.50"), phone = "0712345678", currency = "KES", serviceId = serviceId))
 
         assertTrue(result.isFailure)
         assertFalse(gatewayCalled)
@@ -172,7 +177,16 @@ class PaymentUseCasesTest {
         provider = "paystack", reference = "ref-1", status = "success", verifiedVia = "test", amount = amount, currency = "KES"
     )
 
-    private fun payment() = Payment(UUID.randomUUID(), UUID.randomUUID(), "paystack", "ref-1", BigDecimal("20.00"), "pending", currency = "KES")
+    private fun payment() = Payment(
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        "paystack",
+        "ref-1",
+        BigDecimal("20.00"),
+        "pending",
+        currency = "KES",
+        serviceId = UUID.randomUUID()
+    )
 
     private class FakePaymentRepository(var payment: Payment?) : PaymentRepository {
         override fun findByProviderReference(provider: String, reference: String) = payment?.takeIf { it.provider == provider && it.providerReference == reference }
@@ -200,15 +214,12 @@ class PaymentUseCasesTest {
         override fun revenueByMonth(months: Int): List<PaymentRevenueMonth> = emptyList()
         override fun paymentCounts() = PaymentCounts(0, 0, 0, 0)
         override fun latestPendingAuthorizationUrl(projectId: UUID): String? = null
-        var autoBlockedCalled = false
-
-        override fun listAll(): List<ServiceRecord> = emptyList() // or return test records if needed
-
-        override fun autoBlockForPayment(projectId: UUID, serviceId: UUID): Boolean {
-            autoBlockedCalled = true
-            return true
-        }
     }
+
+    private fun unusedServiceRepository(): ServiceRepository = java.lang.reflect.Proxy.newProxyInstance(
+        ServiceRepository::class.java.classLoader,
+        arrayOf(ServiceRepository::class.java)
+    ) { _, _, _ -> throw UnsupportedOperationException("Service repository is not used by this test") } as ServiceRepository
 
     private class FakePaymentEffects : PaymentEffects {
         var successCount = 0

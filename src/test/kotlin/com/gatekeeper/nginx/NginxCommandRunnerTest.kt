@@ -2,6 +2,7 @@ package com.gatekeeper.nginx
 
 import com.gatekeeper.core.ports.ProcessResult
 import com.gatekeeper.core.ports.ProcessRunner
+import com.gatekeeper.feature.nginx.domain.port.NginxCommandRunner
 import java.nio.file.Path
 import kotlin.test.Test
 import kotlin.test.assertEquals

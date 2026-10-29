@@ -3496,6 +3496,51 @@ paths:
         required: true
         schema:
           type: string
+  /api/admin/projects/{projectId}/services/{serviceId}/invoice/download:
+    get:
+      tags:
+      - Services and deployments
+      summary: Download service invoice
+      operationId: GetApiAdminProjectServiceInvoiceDownload
+      responses:
+        '200':
+          description: Invoice PDF
+  /api/admin/projects/{projectId}/services/{serviceId}/payments:
+    get:
+      tags:
+      - Payments
+      summary: List service payments
+      operationId: GetApiAdminProjectServicePayments
+      responses:
+        '200':
+          description: Successful response
+  /api/admin/projects/{projectId}/services/{serviceId}/payments/{paymentId}/receipt:
+    get:
+      tags:
+      - Payments
+      summary: Download service payment receipt
+      operationId: GetApiAdminProjectServicePaymentReceipt
+      responses:
+        '200':
+          description: Receipt PDF
+  /api/admin/projects/{slug}/services/{serviceId}/payment/initialize:
+    post:
+      tags:
+      - Payments
+      summary: Initialize service payment
+      operationId: PostApiAdminProjectServicePaymentInitialize
+      responses:
+        '200':
+          description: Payment initialized
+  /api/admin/projects/{slug}/services/{serviceId}/payments/cash:
+    post:
+      tags:
+      - Payments
+      summary: Record service cash payment
+      operationId: PostApiAdminProjectServicePaymentsCash
+      responses:
+        '200':
+          description: Payment recorded
   /api/admin/projects/{slug}/invoice:
     get:
       tags:

@@ -20,6 +20,11 @@ import kotlin.collections.contains
 import kotlin.collections.isNotEmpty
 import kotlin.collections.orEmpty
 import kotlin.collections.sorted
+internal fun nginxHasRenderAffectingParameters(body: NginxEnableRequest): Boolean =
+    body.port != null || body.domain != null || body.upstreamScheme != null ||
+        body.certificateDomain != null || body.sslCertificatePath != null ||
+        body.sslCertificateKeyPath != null || body.requireSsl != null
+
 class PlanNginxEnableRequest(
     private val dockerService: DockerGateway?,
     private val parser: UpstreamValidation,
@@ -251,7 +256,5 @@ class PlanNginxEnableRequest(
     }
 
     internal fun hasRenderAffectingNginxParameters(body: NginxEnableRequest): Boolean =
-        body.port != null || body.domain != null || body.upstreamScheme != null ||
-                body.certificateDomain != null || body.sslCertificatePath != null ||
-                body.sslCertificateKeyPath != null || body.requireSsl != null
+        nginxHasRenderAffectingParameters(body)
 }

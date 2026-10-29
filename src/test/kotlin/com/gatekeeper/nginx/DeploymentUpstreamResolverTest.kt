@@ -1,13 +1,22 @@
 package com.gatekeeper.nginx
 
 import com.gatekeeper.db.tables.UpstreamMode
+import com.gatekeeper.deployment.DeploymentApplicationService
 import com.gatekeeper.feature.nginx.infrastructure.DeploymentUpstreamResolver
+import com.gatekeeper.feature.service.domain.repository.SiteRepository
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 
 class DeploymentUpstreamResolverTest {
+    private val resolver = DeploymentUpstreamResolver(
+        java.lang.reflect.Proxy.newProxyInstance(
+            SiteRepository::class.java.classLoader,
+            arrayOf(SiteRepository::class.java)
+        ) { _, _, _ -> throw UnsupportedOperationException("Site repository is not used by this test") } as SiteRepository,
+        DeploymentApplicationService
+    )
     private val projectId = UUID.randomUUID()
     private val serviceId = UUID.randomUUID()
     private val dockerSite = DeploymentUpstreamResolver.SiteTarget(UpstreamMode.DOCKER_DISCOVERY, "127.0.0.1", null)
@@ -20,7 +29,7 @@ class DeploymentUpstreamResolverTest {
 
         assertEquals(
             DeploymentUpstreamResolver.Target("127.0.0.1", 49152, "candidate-container", 8080),
-            DeploymentUpstreamResolver.resolve(serviceId, "production", dockerSite, runtime)
+            resolver.resolve(serviceId, "production", dockerSite, runtime)
         )
     }
 
@@ -33,7 +42,7 @@ class DeploymentUpstreamResolverTest {
 
         assertEquals(
             DeploymentUpstreamResolver.Target("127.0.0.1", 32005, "candidate-container", 8765),
-            DeploymentUpstreamResolver.resolve(serviceId, "production", site, runtime)
+            resolver.resolve(serviceId, "production", site, runtime)
         )
     }
 
@@ -45,7 +54,7 @@ class DeploymentUpstreamResolverTest {
 
         assertEquals(
             DeploymentUpstreamResolver.Target("127.0.0.1", 32940, "mtaaniwatch-container", 9002),
-            DeploymentUpstreamResolver.resolveRuntime(serviceId, "production", runtime)
+            resolver.resolveRuntime(serviceId, "production", runtime)
         )
     }
 
@@ -57,7 +66,7 @@ class DeploymentUpstreamResolverTest {
 
         assertEquals(
             DeploymentUpstreamResolver.Target("127.0.0.1", 32923, "ready-service-container", 9002),
-            DeploymentUpstreamResolver.resolve(serviceId, "production", dockerSite, readyCandidate)
+            resolver.resolve(serviceId, "production", dockerSite, readyCandidate)
         )
     }
 
@@ -67,7 +76,7 @@ class DeploymentUpstreamResolverTest {
 
         assertEquals(
             DeploymentUpstreamResolver.Target("10.0.0.8", 9000),
-            DeploymentUpstreamResolver.resolve(serviceId, "production", explicitSite, null)
+            resolver.resolve(serviceId, "production", explicitSite, null)
         )
     }
 
@@ -80,7 +89,7 @@ class DeploymentUpstreamResolverTest {
 
         assertEquals(
             DeploymentUpstreamResolver.Target("127.0.0.1", 9000),
-            DeploymentUpstreamResolver.resolve(serviceId, "production", explicitSite, runtime)
+            resolver.resolve(serviceId, "production", explicitSite, runtime)
         )
     }
 
@@ -93,7 +102,7 @@ class DeploymentUpstreamResolverTest {
 
         assertEquals(
             DeploymentUpstreamResolver.Target("127.0.0.1", 49152, "managed-container", 9000),
-            DeploymentUpstreamResolver.resolve(serviceId, "production", explicitSite, runtime)
+            resolver.resolve(serviceId, "production", explicitSite, runtime)
         )
     }
 
@@ -106,7 +115,7 @@ class DeploymentUpstreamResolverTest {
 
         assertEquals(
             DeploymentUpstreamResolver.Target("127.0.0.1", 49152, "active-container", 8080),
-            DeploymentUpstreamResolver.resolve(serviceId, "production", siteAfterCutover, runtime)
+            resolver.resolve(serviceId, "production", siteAfterCutover, runtime)
         )
     }
 
@@ -116,7 +125,7 @@ class DeploymentUpstreamResolverTest {
             serviceId, "production", true, "active-container", 8080, emptyMap()
         )
 
-        assertNull(DeploymentUpstreamResolver.resolve(serviceId, "production", dockerSite, runtime))
+        assertNull(resolver.resolve(serviceId, "production", dockerSite, runtime))
     }
 
     @Test
@@ -126,8 +135,8 @@ class DeploymentUpstreamResolverTest {
         )
         val otherEnvironment = otherService.copy(serviceId = serviceId, environment = "staging")
 
-        assertNull(DeploymentUpstreamResolver.resolve(serviceId, "production", dockerSite, otherService))
-        assertNull(DeploymentUpstreamResolver.resolve(serviceId, "production", dockerSite, otherEnvironment))
+        assertNull(resolver.resolve(serviceId, "production", dockerSite, otherService))
+        assertNull(resolver.resolve(serviceId, "production", dockerSite, otherEnvironment))
     }
 
     @Test
@@ -136,7 +145,7 @@ class DeploymentUpstreamResolverTest {
             UUID.randomUUID(), "production", true, "sibling-container", 8080, mapOf(8080 to 49152)
         )
 
-        assertNull(DeploymentUpstreamResolver.resolve(serviceId, "production", dockerSite, runtime))
+        assertNull(resolver.resolve(serviceId, "production", dockerSite, runtime))
     }
 
 }

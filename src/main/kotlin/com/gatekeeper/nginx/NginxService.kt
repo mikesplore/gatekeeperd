@@ -5,7 +5,7 @@ import com.gatekeeper.feature.nginx.domain.port.NginxCommandRunner
 import com.gatekeeper.feature.nginx.infrastructure.NginxSelfDomainExclusion
 import com.gatekeeper.feature.nginx.presentation.NginxTestResult
 
-
+/**Dont call this service anywhere**/
 class NginxService(
     private val sitesAvailablePath: String = "/etc/nginx/sites-available",
     private val sitesEnabledPath: String = "/etc/nginx/sites-enabled",

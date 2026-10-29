@@ -2,11 +2,14 @@ package com.gatekeeper.nginx
 
 import com.gatekeeper.feature.nginx.domain.service.UpstreamValidation
 import com.gatekeeper.feature.nginx.infrastructure.NginxConfigRenderer
+import com.gatekeeper.feature.nginx.domain.service.NginxValidationService
+import com.gatekeeper.feature.nginx.domain.service.NginxConfigParser
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 class NginxPureBehaviorTest {
+    private val validation = UpstreamValidation()
     @Test
     fun `upstream parsing handles supported docker forms`() {
         listOf(
@@ -14,13 +17,13 @@ class NginxPureBehaviorTest {
             "0.0.0.0:32768->9921/tcp, 8443:443/tcp" to mapOf(9921 to 32768, 443 to 8443),
             "9921/tcp" to emptyMap()
         ).forEach { (input, expected) ->
-            assertEquals(expected, UpstreamValidation.parsePublishedPorts(input))
+            assertEquals(expected, validation.parsePublishedPorts(input))
         }
     }
 
     @Test
     fun `renderer and parser preserve managed blocks`() {
-        val config = NginxConfigRenderer().render(
+        val config = NginxConfigRenderer(nginxValidation = NginxValidationService()).render(
             slug = "acw",
             domain = "acw.example.com",
             appPort = 3001,
@@ -31,7 +34,7 @@ class NginxPureBehaviorTest {
         assertTrue(config.contains("proxy_pass http://127.0.0.1:3001;"))
         assertEquals(
             listOf("server", "bypass", "upstream", "auth_request", "paywall"),
-            NginxConfigParser.parseBlocks(config).map { it.type }
+            NginxConfigParser().parseBlocks(config).map { it.type }
         )
     }
 }

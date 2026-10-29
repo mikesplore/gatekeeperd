@@ -2,6 +2,7 @@ package com.gatekeeper.nginx
 
 import java.nio.file.Files
 import java.util.UUID
+import com.gatekeeper.feature.nginx.infrastructure.DeploymentUpstreamIncludes
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
