@@ -13,14 +13,14 @@ import java.io.File
 class RepairDeploymentUpstreamUseCase(
     private val upstreamIncludeDirectory: String = "/etc/nginx/conf.d/gatekeeperd-upstreams",
     private val nginxStorage: NginxSiteStorage,
-    private val localProbeRunner: (String, Boolean) -> Boolean
+    private val localProbeRunner: (String, Boolean) -> Boolean,
+    private val nginxReloadRunner: () -> Boolean,
+    private val nginxTestRunner: () -> NginxTestResult
 ) {
     fun execute(
         serviceId: java.util.UUID,
         domain: String, tls: Boolean,
-        port: Int,
-        nginxReloadRunner: () -> Boolean = { NginxCommandRunner().reload() },
-        nginxTestRunner: () -> NginxTestResult = { NginxCommandRunner().test() }
+        port: Int
     ): Boolean {
         return DistributedLock.withLock("nginx-host-mutation") {
             val includes = DeploymentUpstreamIncludes(File(upstreamIncludeDirectory))

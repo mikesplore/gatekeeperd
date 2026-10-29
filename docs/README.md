@@ -236,6 +236,8 @@ Gatekeeperd persists Scribed suspension and payment notifications in the Postgre
 | `NGINX_DEPLOYMENT_UPSTREAMS_ENABLED` | No | Run the strict nginx include directory/configuration bootstrap; defaults to `true`. Set `false` only for local development without nginx. |
 | `NGINX_UPSTREAM_INCLUDE_DIR` | No | Writable per-service upstream include directory; default `/etc/nginx/conf.d/gatekeeperd-upstreams`. Nginx must include `<directory>/*.conf` inside `http {}`. |
 | `GATEKEEPER_INTERNAL_NETWORK` | No | Default `gatekeeper-internal` |
+| `GATEKEEPERD_ENVIRONMENT` | No | `DEV` or `PROD`; default `DEV`. Switches nginx/certbot privilege and host-operation policy. DEV disables sudo/certbot install-rename operations by default and routes nginx/certbot paths to local-directory overrides. PROD uses /etc/nginx + /etc/letsencrypt with restricted sudo -n. |
+| `NGINX_CUSTOM_CERT_DIR` | No | DEV-only. Filesystem path (e.g. `/etc/letsencrypt/custom`) where certbot helper output is written instead of `NGINX_SSL_CERT_PATH` when present. |
 | `DEFAULT_GRACE_PERIOD_DAYS` | No | Default `3` |
 | `FAIL_MODE` | No | `open` or `closed` |
 | `AUTOBLOCKER_INTERVAL_MINUTES` | No | Auto-block scan interval; default `60` |

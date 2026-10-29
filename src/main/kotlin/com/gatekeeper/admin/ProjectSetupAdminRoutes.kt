@@ -6,7 +6,6 @@ import com.gatekeeper.deployment.*
 import com.gatekeeper.docker.DockerGateway
 import com.gatekeeper.core.ports.PortProbe
 import com.gatekeeper.feature.nginx.infrastructure.DeploymentUpstreamResolver
-import com.gatekeeper.nginx.NginxService
 import com.gatekeeper.security.SecretValueCipher
 import com.gatekeeper.feature.payment.data.persistence.ProjectBalanceAdapter
 import com.gatekeeper.feature.project.domain.repository.ProjectRepository

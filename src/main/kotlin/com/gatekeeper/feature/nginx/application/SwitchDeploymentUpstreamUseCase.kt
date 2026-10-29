@@ -36,8 +36,8 @@ class SwitchDeploymentUpstreamUseCase(
             tls
         )
     },
-    private val nginxTestRunner: () -> NginxTestResult = { NginxCommandRunner().test() },
-    private val nginxReloadRunner: () -> Boolean = { NginxCommandRunner().reload() },
+    private val nginxTestRunner: () -> NginxTestResult,
+    private val nginxReloadRunner: () -> Boolean,
 ) {
     fun execute(serviceId: UUID, domain: String, tls: Boolean, host: String, port: Int): Boolean {
         val previous = storage.readUpstreamInclude(serviceId)

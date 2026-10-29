@@ -13,11 +13,12 @@ import com.gatekeeper.feature.service.domain.repository.SiteRepository
 import com.gatekeeper.plugins.DistributedLock
 import java.io.File
 import java.nio.file.Files
+import com.gatekeeper.feature.nginx.domain.port.NginxEnvironmentPolicy
 
 class RecoverInterruptedCutoverUseCase(
     private val upstreamIncludeDirectory: String = "/etc/nginx/conf.d/gatekeeperd-upstreams",
-    private val nginxTestRunner: () -> NginxTestResult = { NginxCommandRunner().test() },
-    private val nginxReloadRunner: () -> Boolean = { NginxCommandRunner().reload() },
+    private val nginxTestRunner: () -> NginxTestResult,
+    private val nginxReloadRunner: () -> Boolean,
     private val nginxSiteStorage: NginxSiteStorage,
     private val convertSiteToDeploymentManagedUseCase: ConvertSiteToDeploymentManagedUseCase,
     private val localProbeRunner: (String, Boolean) -> Boolean,
