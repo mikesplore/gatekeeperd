@@ -35,7 +35,6 @@ import com.gatekeeper.docker.PortsAvailabilityResponse
 import com.gatekeeper.docker.parseImageRef
 import com.gatekeeper.feature.nginx.application.RemoveSiteConfigUseCase
 import com.gatekeeper.feature.nginx.domain.port.NginxSiteStorage
-import com.gatekeeper.nginx.NginxService
 import com.gatekeeper.feature.payment.data.persistence.ProjectBalanceAdapter
 import io.ktor.http.*
 import io.ktor.server.application.*

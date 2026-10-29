@@ -12,7 +12,6 @@ import com.gatekeeper.feature.nginx.domain.port.NginxSiteStorage
 import com.gatekeeper.feature.service.domain.repository.SiteRecord
 import com.gatekeeper.feature.service.domain.repository.SiteRepository
 import com.gatekeeper.feature.nginx.infrastructure.DeploymentUpstreamResolver
-import com.gatekeeper.nginx.NginxService
 import io.ktor.http.*
 import io.ktor.server.auth.*
 import io.ktor.server.response.*

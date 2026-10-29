@@ -30,7 +30,6 @@ import com.gatekeeper.feature.payment.data.persistence.ProjectBalanceAdapter
 import com.gatekeeper.feature.payment.domain.usecase.GetPaymentDashboardData
 import com.gatekeeper.feature.payment.domain.usecase.ListPaymentsByProject
 import com.gatekeeper.feature.project.domain.model.ProjectRecord
-import com.gatekeeper.nginx.*
 import com.gatekeeper.plugins.Metrics
 import io.ktor.http.*
 import io.ktor.server.application.*
@@ -439,7 +438,6 @@ fun Application.configureOperationsAdminRoutes() {
                         "Site not found"
                     ); return@patch
                 }
-                val nginx = get<NginxService>()
                 val resolved =
                     if (updated.upstreamMode == UpstreamMode.DOCKER_DISCOVERY) updated.serviceId?.let {
                         deploymentUpstreamResolver.resolve(
@@ -660,7 +658,6 @@ fun Application.configureOperationsAdminRoutes() {
                         "Set confirm=true to permanently delete this disabled manual config"
                     ); return@delete
                 }
-                val nginx = get<NginxService>()
                 val detail = runCatching { inspector.inspectManualConfig(filename) }.getOrElse { error ->
                     val message = error.message ?: "Unable to inspect nginx config"
                     val status = if (message.contains(
