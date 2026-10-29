@@ -5,7 +5,6 @@ import com.gatekeeper.feature.nginx.application.ApplySiteConfigUseCase
 import com.gatekeeper.feature.nginx.application.DisableManualConfigUseCase
 import com.gatekeeper.feature.nginx.application.ListConfigArtifactsUseCase
 import com.gatekeeper.feature.nginx.application.RemoveSiteConfigUseCase
-import com.gatekeeper.feature.nginx.domain.port.NginxCommandRunner
 import com.gatekeeper.feature.nginx.domain.port.NginxSiteStorage
 import com.gatekeeper.feature.nginx.model.DomainRules
 import com.gatekeeper.feature.nginx.model.nginxServiceLogger
@@ -13,7 +12,6 @@ import com.gatekeeper.feature.nginx.presentation.NginxBackup
 import com.gatekeeper.feature.nginx.presentation.NginxManualConfigDisableResult
 import com.gatekeeper.feature.nginx.presentation.NginxTestResult
 import com.gatekeeper.feature.service.domain.repository.SiteRecord
-import com.gatekeeper.nginx.*
 import com.gatekeeper.plugins.DistributedLock
 import java.io.File
 import java.nio.file.Files
@@ -25,8 +23,8 @@ class NginxSiteFileStore(
     private val sitesEnabledPath: String = "/etc/nginx/sites-enabled",
     private val sitesAvailablePath: String = "/etc/nginx/sites-available",
     private val nginxDomainRules: DomainRules,
-    private val nginxTestRunner: () -> NginxTestResult = { NginxCommandRunner().test() },
-    private val nginxReloadRunner: () -> Boolean = { NginxCommandRunner().reload() },
+    private val nginxTestRunner: () -> NginxTestResult,
+    private val nginxReloadRunner: () -> Boolean,
     private val removeSiteConfigUseCase: Lazy<RemoveSiteConfigUseCase>,
     private val listConfigArtifacts: Lazy<ListConfigArtifactsUseCase>,
     private val applySiteConfigUseCase: Lazy<ApplySiteConfigUseCase>,

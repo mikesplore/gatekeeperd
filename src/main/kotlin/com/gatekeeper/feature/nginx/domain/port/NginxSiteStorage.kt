@@ -1,12 +1,10 @@
 package com.gatekeeper.feature.nginx.domain.port
 
 import com.gatekeeper.feature.nginx.infrastructure.DeploymentUpstreamIncludes
-import com.gatekeeper.feature.nginx.model.ResolvedCertificate
 import com.gatekeeper.feature.nginx.presentation.NginxBackup
 import com.gatekeeper.feature.nginx.presentation.NginxManualConfigDisableResult
 import com.gatekeeper.feature.nginx.presentation.NginxTestResult
 import com.gatekeeper.feature.service.domain.repository.SiteRecord
-import com.gatekeeper.nginx.*
 import java.io.File
 
 interface NginxSiteStorage {
