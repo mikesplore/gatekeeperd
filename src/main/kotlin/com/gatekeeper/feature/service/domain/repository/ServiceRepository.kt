@@ -5,6 +5,7 @@ import java.util.UUID
 
 /** Persistence port for service identity and service-level customer access policy. */
 interface ServiceRepository {
+    fun findById(id: UUID): ServiceRecord?
     fun listByProjectId(projectId: UUID): List<ServiceRecord>
     fun listAll(): List<ServiceRecord>
     fun findByProjectAndId(projectId: UUID, id: UUID): ServiceRecord?

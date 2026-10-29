@@ -80,54 +80,42 @@ fun Route.nginxWizardAdminRoutes(
                     )
                     return@get
                 }
-            val bindings = serviceDomains.listByService(serviceId).map {
+            val artifacts = artifactsUseCase.execute()
+            val bindings = serviceDomains.listByService(serviceId).map { binding ->
+                val target = binding.containerPort?.let {
+                    deploymentUR.resolveRuntime(serviceId, it, "production")
+                } ?: deploymentUR.resolveRuntime(serviceId, "production")
                 NginxWizardDomainBindingResponse(
-                    it.id.toString(),
-                    it.serviceId.toString(),
-                    it.containerPort,
-                    it.domain,
-                    it.status
+                    id = binding.id.toString(),
+                    serviceId = binding.serviceId.toString(),
+                    containerPort = binding.containerPort,
+                    domain = binding.domain,
+                    status = binding.status,
+                    resolvedHostPort = target?.port,
+                    nginxEnabled = siteRepository.findByDomain(binding.domain)?.let { bindingSite ->
+                        artifacts.any { artifact ->
+                            artifact.filename == bindingSite.projectSlug && artifact.available && artifact.enabled
+                        }
+                    } ?: false
                 )
             }
-            val site = siteRepository.findByProjectIdAndServiceId(project.id, serviceId)
             val activeRuntime = runCatching {
                 DeploymentApplicationService.activeDeploymentRuntime(
                     serviceId,
                     "production"
                 )
             }.getOrNull()
-            val resolvedTarget = deploymentUR.resolve(serviceId, "production")
-            val configuredPort = resolvedTarget?.port
-
             val dockerHealth = runCatching {
                 activeRuntime?.containerName?.let(dockerService::containerHealth)
             }.getOrNull()
 
             val installedCerts = certificationService.listInstalledCertificates().map { it.certificateDomain }.sorted()
-            val domain = selectedService.domain
-            val siteSlug = domain?.let {
-                site?.projectSlug ?: nginxSiteSlug(
-                    slug,
-                    selectedService.isDefault,
-                    it,
-                    selectedService.domain
-                )
-            }
-            val nginxEnabled = siteSlug?.let { name ->
-                artifactsUseCase.execute().any { it.filename == name && it.available && it.enabled }
-            } ?: false
-            val resolvedCert = domain?.let(certificationService::resolveCertificateForDomain)
-
             call.respond(
                 NginxWizardContextResponse(
-                    slug = slug,
-                    domain = domain?:"",
-                    nginxEnabled = nginxEnabled,
-                    resolvedUpstreamHost = resolvedTarget?.host,
-                    configuredPort = configuredPort,
+                    serviceId = serviceId.toString(),
+                    domainBindings = bindings,
                     runtimeHealth = dockerHealth,
                     installedCertificates = installedCerts,
-                    resolvedCertificateDomain = resolvedCert?.certificateDomain,
                 )
             )
         }
@@ -152,12 +140,12 @@ fun Route.nginxWizardAdminRoutes(
                 return@post
             }
 
-            val serviceId = body.serviceId?.let { runCatching { java.util.UUID.fromString(it) }.getOrNull() }
-            if (body.serviceId != null && serviceId == null) {
+            val serviceId = runCatching { java.util.UUID.fromString(body.serviceId) }.getOrNull()
+            if (serviceId == null) {
                 call.respondError(HttpStatusCode.BadRequest, "invalid_service", "Selected service ID is invalid")
                 return@post
             }
-            val selectedServiceId = serviceId ?: siteRepository.findDefaultServiceId(project.id)
+            val selectedServiceId = serviceId
             val service = serviceRepository.findByProjectAndId(project.id, selectedServiceId)
             if (service == null) {
                 call.respondError(
@@ -167,27 +155,17 @@ fun Route.nginxWizardAdminRoutes(
                 )
                 return@post
             }
-            val requestedDomain = body.domain?.let { raw ->
-                runCatching { validator.requireValidHostname(raw) }.getOrElse {
-                    call.respondError(
-                        HttpStatusCode.BadRequest,
-                        "invalid_domain",
-                        it.message ?: "Domain is invalid"
-                    )
-                    return@post
-                }
-            } ?: service.domain
-            val serviceDomain = requestedDomain
-            if (serviceDomain == null) {
+            val bindingId = runCatching { java.util.UUID.fromString(body.domainBindingId) }.getOrNull()
+            if (bindingId == null) {
                 call.respondError(
                     HttpStatusCode.BadRequest,
-                    "service_domain_required",
-                    "Configure a domain for this service before creating its Nginx site"
+                    "invalid_domain_binding",
+                    "Selected domain binding ID is invalid"
                 )
                 return@post
             }
-            val binding = serviceDomains.findByServiceAndDomain(selectedServiceId, serviceDomain)
-            if (binding == null || binding.status == ServiceDomainStatus.PORT_UNAVAILABLE.value) {
+            val binding = serviceDomains.findById(selectedServiceId, bindingId)
+            if (binding == null || binding.status != ServiceDomainStatus.BOUND.value) {
                 call.respondError(
                     HttpStatusCode.Conflict,
                     "domain_binding_unavailable",
@@ -195,14 +173,7 @@ fun Route.nginxWizardAdminRoutes(
                 )
                 return@post
             }
-            if (body.containerPort != null && body.containerPort != binding.containerPort) {
-                call.respondError(
-                    HttpStatusCode.Conflict,
-                    "binding_port_mismatch",
-                    "The selected domain is bound to a different container port"
-                )
-                return@post
-            }
+            val serviceDomain = binding.domain
             val site = siteRepository.findByDomain(serviceDomain)
             if (site != null && site.serviceId != selectedServiceId) {
                 call.respondError(
@@ -212,22 +183,16 @@ fun Route.nginxWizardAdminRoutes(
                 )
                 return@post
             }
-            val siteSlug =
-                site?.projectSlug ?: nginxSiteSlug(slug, service.isDefault, serviceDomain, service.domain)
+            val siteSlug = site?.projectSlug
+                ?: nginxSiteSlug(slug, service.isDefault, serviceDomain, service.domain)
 
             when (val result = planNginxEnableRequest.planNginxEnableRequest(
                 slug = siteSlug,
                 projectDomain = serviceDomain,
                 activeRuntimeTarget = binding.containerPort?.let {
-                    deploymentUR.resolve(
-                        selectedServiceId,
-                        it,
-                        "production"
-                    )
-                }
-                    ?: deploymentUR.resolve(selectedServiceId, "production"),
-                request = body,
-                sslCertPath = nginxSettings.sslCertPath
+                    deploymentUR.resolveRuntime(selectedServiceId, it, "production")
+                } ?: deploymentUR.resolveRuntime(selectedServiceId, "production"),
+                request = body
             )) {
                 is NginxPlanResult.Err -> {
                     if (result.data != null) {
