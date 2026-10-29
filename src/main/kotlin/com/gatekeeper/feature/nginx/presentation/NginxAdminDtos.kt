@@ -25,14 +25,10 @@ data class NginxDisableResponse(val success: Boolean, val message: String)
 
 @Serializable
 data class NginxWizardContextResponse(
-    val slug: String,
-    val domain: String,
-    val nginxEnabled: Boolean,
-    val resolvedUpstreamHost: String? = null,
-    val configuredPort: Int? = null,
-    val runtimeHealth: String? = null,
-    val installedCertificates: List<String> = emptyList(),
-    val resolvedCertificateDomain: String? = null
+    val serviceId: String,
+    val domainBindings: List<NginxWizardDomainBindingResponse>,
+    val installedCertificates: List<String>,
+    val runtimeHealth: String? = null
 )
 
 
@@ -42,7 +38,9 @@ data class NginxWizardDomainBindingResponse(
     val serviceId: String,
     val containerPort: Int?,
     val domain: String,
-    val status: String
+    val status: String,
+    val resolvedHostPort: Int? = null,
+    val nginxEnabled: Boolean = false
 )
 
 
@@ -75,15 +73,9 @@ data class NginxReconciliationReport(
 
 @Serializable
 data class NginxEnableRequest(
-    val serviceId: String? = null,
-    val port: Int? = null,
-    val containerPort: Int? = null,
-    val domain: String? = null,
-    val upstreamScheme: String? = null,
-    val certificateDomain: String? = null,
-    val sslCertificatePath: String? = null,
-    val sslCertificateKeyPath: String? = null,
-    val requireSsl: Boolean? = null
+    val serviceId: String,
+    val domainBindingId: String,
+    val requireSsl: Boolean = true
 )
 
 @Serializable
