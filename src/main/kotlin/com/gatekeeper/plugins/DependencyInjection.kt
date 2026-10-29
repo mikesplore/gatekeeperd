@@ -5,7 +5,6 @@ import com.gatekeeper.feature.customer.domain.repository.CustomerRepository as C
 import com.gatekeeper.feature.customer.data.persistence.ExposedCustomerRepository
 import com.gatekeeper.gate.GateApplicationService
 import com.gatekeeper.gate.GateService
-import com.gatekeeper.nginx.NginxService
 import com.gatekeeper.config.AppSettings
 import com.gatekeeper.docker.DockerGateway
 import com.gatekeeper.docker.DockerGatewayFactory
@@ -153,6 +152,7 @@ import com.gatekeeper.feature.nginx.infrastructure.ExposedNginxCertificateStore
 import com.gatekeeper.feature.nginx.domain.port.NginxCertificateStore
 import com.gatekeeper.feature.nginx.application.NginxAdministrationService
 import com.gatekeeper.feature.nginx.domain.port.NginxCommandRunner
+import com.gatekeeper.feature.nginx.domain.port.NginxEnvironmentPolicy
 import com.gatekeeper.scheduler.AutoBlockerJob
 import org.koin.dsl.module
 import org.koin.core.qualifier.named
@@ -174,7 +174,13 @@ private val applicationModule = module {
     single<CutoverProbe> { TcpCutoverProbe(get()) }
     single<FileStore> { LocalFileStore() }
     single<TransactionRunner> { ExposedTransactionRunner() }
-    single { NginxCommandRunner(get<ProcessRunner>()) }
+    single { NginxEnvironmentPolicy(
+        environment = get<AppSettings.NginxSettings>().environment,
+        nginxHostSudoEnabled = false,
+        nginxCertbotEnabled = false,
+        customCertDirectory = null
+    ) }
+    single<NginxCommandRunner> { NginxCommandRunner(get<ProcessRunner>(), get<NginxEnvironmentPolicy>()) }
     single<NotificationRepository> { ExposedNotificationRepository() }
     single<CustomerStore> { ExposedCustomerRepository() }
     single<AuditRepository> { ExposedAuditRepository(get()) }
@@ -217,6 +223,8 @@ private val applicationModule = module {
         NginxSiteFileStore(
             settings = get<AppSettings>().nginx,
             nginxDomainRules = get(),
+            nginxTestRunner = { get<NginxCommandRunner>().test() },
+            nginxReloadRunner = { get<NginxCommandRunner>().reload() },
             removeSiteConfigUseCase = lazy { get<RemoveSiteConfigUseCase>() },
             listConfigArtifacts = lazy { get<ListConfigArtifactsUseCase>() },
             applySiteConfigUseCase = lazy { get<ApplySiteConfigUseCase>() },
@@ -257,7 +265,8 @@ private val applicationModule = module {
             upstreamIncludeDirectory = get<AppSettings>().nginx.upstreamIncludeDirectory,
             domainRules = get(),
             nginx = get(),
-            parser = get()
+            parser = get(),
+            nginxConfigDumpRunner = { get<NginxCommandRunner>().dumpConfig() }
         )
     }
     single { ListConfigArtifactsUseCase(domainRules = get(), nginxConflictAnalyzer = get()) }
@@ -272,7 +281,7 @@ private val applicationModule = module {
     }
     single { RemoveSiteConfigUseCase(domainRules = get()) }
     single { DisableProjectUseCase(domainRules = get()) }
-    single { DisableManualConfigUseCase(get(), get(), get(), get(), get()) }
+    single { DisableManualConfigUseCase(get(), get(), get(), get(), get(), { get<NginxCommandRunner>().reload() }) }
     single { InspectManualConfigUseCase(domainRules = get(), nginxConflictAnalyzer = get()) }
     single { DeleteManualConfigUseCase(get(), get(), get()) }
     single {
@@ -300,7 +309,9 @@ private val applicationModule = module {
             certificateProvisioner = get(),
             upstreamIncludeDirectory = get<AppSettings>().nginx.upstreamIncludeDirectory,
             applySiteConfigUseCase = get(),
-            inspectSite = get()
+            inspectSite = get(),
+            nginxTestRunner = { get<NginxCommandRunner>().test() },
+            nginxReloadRunner = { get<NginxCommandRunner>().reload() }
         )
     }
     single {
@@ -312,7 +323,8 @@ private val applicationModule = module {
             nginxSiteStorage = get(),
             inspectSite = get(),
             siteRepository = get(),
-            certificateProvisioner = get()
+            certificateProvisioner = get(),
+            nginxTestRunner = { get<NginxCommandRunner>().test() }
         )
     }
     single {
@@ -321,17 +333,20 @@ private val applicationModule = module {
             nginxSiteStorage = get(),
             convertSiteToDeploymentManagedUseCase = get(),
             localProbeRunner = { domain, tls -> get<CutoverProbe>().throughLocalNginx(domain, tls) },
-            siteRepository = get()
+            siteRepository = get(),
+            nginxTestRunner = { get<NginxCommandRunner>().test() },
+            nginxReloadRunner = { get<NginxCommandRunner>().reload() }
         )
     }
     single {
         RepairDeploymentUpstreamUseCase(
             upstreamIncludeDirectory = get<AppSettings>().nginx.upstreamIncludeDirectory,
             nginxStorage = get(),
-            localProbeRunner = { domain, tls -> get<CutoverProbe>().throughLocalNginx(domain, tls) }
+            localProbeRunner = { domain, tls -> get<CutoverProbe>().throughLocalNginx(domain, tls) },
+            nginxReloadRunner = { get<NginxCommandRunner>().reload() },
+            nginxTestRunner = { get<NginxCommandRunner>().test() },
         )
     }
-    single { NginxService(selfDomainExclusion = get(), upstreamIncludeDirectory = get<AppSettings>().nginx.upstreamIncludeDirectory, cutoverProbe = get()) }
     single<PaymentDomainRepository> { ExposedPaymentRepository() }
     single { ProjectBalanceAdapter(get<PaymentDomainRepository>(), get<ProjectAdjustmentStore>(), get(),  get()) }
     single<PaymentEventDomainRepository> { ExposedPaymentEventRepository() }
