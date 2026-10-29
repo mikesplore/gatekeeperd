@@ -9,7 +9,6 @@ import com.gatekeeper.feature.nginx.infrastructure.CertbotCertificateProvisioner
 import com.gatekeeper.feature.nginx.model.NginxEnablePlan
 import com.gatekeeper.feature.nginx.model.NginxPlanResult
 import com.gatekeeper.feature.nginx.infrastructure.DeploymentUpstreamResolver
-import com.gatekeeper.nginx.NginxService
 import io.ktor.http.HttpStatusCode
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
