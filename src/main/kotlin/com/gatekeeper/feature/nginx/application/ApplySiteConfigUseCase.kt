@@ -32,7 +32,10 @@ class ApplySiteConfigUseCase(
         nginxSiteStorage.writeAvailable(slug, configContent)
         val testResult = commandRunner.test()
         if (testResult.exitCode != 0) {
-            if (previousConfig != null) nginxSiteStorage.writeAvailable(slug, previousConfig) else nginxSiteStorage.removeSite(slug)
+            if (previousConfig != null) nginxSiteStorage.writeAvailable(
+                slug,
+                previousConfig
+            ) else nginxSiteStorage.removeSite(slug)
             return NginxSiteActivationResult(success = false, message = "Nginx validation failed: ${testResult.output}")
         }
 
@@ -53,6 +56,7 @@ class ApplySiteConfigUseCase(
 
         return NginxSiteActivationResult(success = true)
     }
+
     fun recordManagedVersion(slug: String, content: String) {
         Files.writeString(File(sitesAvailablePath, ".$slug.gatekeeperd.sha256").toPath(), sha256(content))
     }
@@ -62,9 +66,25 @@ class ApplySiteConfigUseCase(
     }
 
     fun enableProjectDetailed(slug: String, configContent: String): NginxSiteActivationResult {
+        nginxServiceLogger.info("Enabling nginx site: $slug")
         return DistributedLock.withLock("nginx-host-mutation") {
             try {
-                val conflicts = nginxConflictAnalyzer.findDomainConflicts(configContent, slug, nginxSiteStorage = nginxSiteStorage, nginxSelfDomainExclusion = selfDomainExclusion, domainRules = domainRules)
+                val conflicts = try {
+                    nginxConflictAnalyzer.findDomainConflicts(
+                        configContent,
+                        slug,
+                        nginxSiteStorage = nginxSiteStorage,
+                        nginxSelfDomainExclusion = selfDomainExclusion,
+                        domainRules = domainRules
+                    )
+                } catch (e: Exception) {
+                    nginxServiceLogger.error("Failed to analyze domain conflicts for site $slug", e)
+                    return@withLock NginxSiteActivationResult(
+                        false,
+                        "Conflict analysis failed: ${e.message ?: "unknown error"}"
+                    )
+                }
+
                 if (conflicts.isNotEmpty()) {
                     val message =
                         "Nginx domain conflict: ${conflicts.joinToString { it.filename ?: "Gatekeeperd self domain" }}"
@@ -80,16 +100,42 @@ class ApplySiteConfigUseCase(
                         "This config is excluded from Gatekeeperd management"
                     )
                 }
-                availableFile.parentFile?.mkdirs()
-                enabledFile.parentFile?.mkdirs()
+                try {
+                    availableFile.parentFile?.mkdirs()
+                    enabledFile.parentFile?.mkdirs()
+                } catch (e: Exception) {
+                    nginxServiceLogger.error("Failed to create parent directories for site $slug", e)
+                    return@withLock NginxSiteActivationResult(
+                        false,
+                        "Failed to create directories: ${e.message ?: "unknown error"}"
+                    )
+                }
 
                 val stagedFile = File(availableFile.parent, ".${slug}.staged")
-                Files.deleteIfExists(stagedFile.toPath())
-                Files.writeString(stagedFile.toPath(), configContent)
+                try {
+                    Files.deleteIfExists(stagedFile.toPath())
+                    Files.writeString(stagedFile.toPath(), configContent)
+                } catch (e: Exception) {
+                    nginxServiceLogger.error("Failed to write staged file for site $slug", e)
+                    return@withLock NginxSiteActivationResult(
+                        false,
+                        "Failed to write staged configuration: ${e.message ?: "unknown error"}"
+                    )
+                }
 
                 // Validate the staged site through nginx's normal include tree while
                 // leaving the live site and its enabled link untouched.
-                val validation = nginxSiteStorage.testNginxConfigWithStagedSite(slug, stagedFile)
+                val validation = try {
+                    nginxSiteStorage.testNginxConfigWithStagedSite(slug, stagedFile)
+                } catch (e: Exception) {
+                    nginxServiceLogger.error("Exception during nginx test invocation for site $slug", e)
+                    Files.deleteIfExists(stagedFile.toPath())
+                    return@withLock NginxSiteActivationResult(
+                        false,
+                        "Nginx validation execution failed: ${e.message ?: "unknown error"}"
+                    )
+                }
+
                 if (!validation.valid) {
                     Files.deleteIfExists(stagedFile.toPath())
                     val detail = validation.output.trim().take(3000)
@@ -102,11 +148,16 @@ class ApplySiteConfigUseCase(
                     return@withLock NginxSiteActivationResult(false, "nginx -t failed: $detail")
                 }
 
-                val backup = if (availableFile.isFile) {
-                    File(availableFile.parent, "$slug.bak-${Instant.now().toEpochMilli()}").also {
-                        Files.copy(availableFile.toPath(), it.toPath(), StandardCopyOption.COPY_ATTRIBUTES)
-                    }
-                } else null
+                val backup = try {
+                    if (availableFile.isFile) {
+                        File(availableFile.parent, "$slug.bak-${Instant.now().toEpochMilli()}").also {
+                            Files.copy(availableFile.toPath(), it.toPath(), StandardCopyOption.COPY_ATTRIBUTES)
+                        }
+                    } else null
+                } catch (e: Exception) {
+                    nginxServiceLogger.warn("Failed to create backup for site $slug, continuing without backup", e)
+                    null
+                }
 
                 try {
                     try {
@@ -123,7 +174,11 @@ class ApplySiteConfigUseCase(
 
                     if (!nginxSiteStorage.reloadNginx()) {
                         nginxSiteStorage.restoreActivatedSite(availableFile, enabledFile, backup)
-                        nginxSiteStorage.reloadNginx()
+                        try {
+                            nginxSiteStorage.reloadNginx()
+                        } catch (e: Exception) {
+                            nginxServiceLogger.error("Failed to reload nginx during rollback for $slug", e)
+                        }
                         nginxServiceLogger.error("Nginx reload failed for $slug; previous configuration was restored")
                         return@withLock NginxSiteActivationResult(
                             false,
@@ -131,20 +186,40 @@ class ApplySiteConfigUseCase(
                         )
                     }
                 } catch (e: Exception) {
-                    nginxSiteStorage.restoreActivatedSite(availableFile, enabledFile, backup)
-                    runCatching { nginxSiteStorage.reloadNginx() }
-                    nginxServiceLogger.error("Failed to activate nginx site $slug; previous configuration was restored", e)
+                    nginxServiceLogger.error("Exception during file activation or reload for site $slug", e)
+                    try {
+                        nginxSiteStorage.restoreActivatedSite(availableFile, enabledFile, backup)
+                    } catch (ex: Exception) {
+                        nginxServiceLogger.error(
+                            "Failed to restore activated site during exception handling for $slug",
+                            ex
+                        )
+                    }
+                    try {
+                        nginxSiteStorage.reloadNginx()
+                    } catch (ex: Exception) {
+                        nginxServiceLogger.error("Failed to reload nginx during exception handling for $slug", ex)
+                    }
                     return@withLock NginxSiteActivationResult(
                         false,
                         "Nginx activation failed and the previous configuration was restored: ${e.message ?: "unknown error"}"
                     )
                 } finally {
-                    Files.deleteIfExists(stagedFile.toPath())
+                    try {
+                        Files.deleteIfExists(stagedFile.toPath())
+                    } catch (e: Exception) {
+                        nginxServiceLogger.warn("Failed to clean up staged file for site $slug", e)
+                    }
                 }
 
                 // Read the activated file rather than hashing the input so drift
                 // tracking always reflects the exact bytes now on disk.
-                recordManagedVersion(slug, availableFile.readText())
+                try {
+                    recordManagedVersion(slug, availableFile.readText())
+                } catch (e: Exception) {
+                    nginxServiceLogger.warn("Failed to record managed version for site $slug", e)
+                }
+
                 nginxServiceLogger.info("Enabled nginx site: $slug")
                 NginxSiteActivationResult(true)
             } catch (e: Exception) {

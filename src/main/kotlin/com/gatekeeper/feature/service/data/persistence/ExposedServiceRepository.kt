@@ -1,28 +1,15 @@
 package com.gatekeeper.feature.service.data.persistence
 
-import com.gatekeeper.db.tables.Services
-import com.gatekeeper.db.tables.AccessBlockReason
-import com.gatekeeper.db.tables.DeploymentConfigurations
-import com.gatekeeper.db.tables.DeploymentExecutions
-import com.gatekeeper.db.tables.DeploymentJobs
-import com.gatekeeper.db.tables.Deployments
-import com.gatekeeper.db.tables.ProjectSecretSetVersions
-import com.gatekeeper.db.tables.ProjectAdjustments
-import com.gatekeeper.db.tables.Sites
+import com.gatekeeper.db.tables.*
 import com.gatekeeper.feature.service.domain.repository.AccessRecord
 import com.gatekeeper.feature.service.domain.repository.ServiceRecord
-import com.gatekeeper.plugins.RedisService
 import com.gatekeeper.feature.service.domain.repository.ServiceRepository
 import com.gatekeeper.feature.service.domain.repository.SiteRepository
+import com.gatekeeper.plugins.RedisService
+import org.jetbrains.exposed.sql.*
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
-import org.jetbrains.exposed.sql.and
-import org.jetbrains.exposed.sql.insert
-import org.jetbrains.exposed.sql.insertIgnore
-import org.jetbrains.exposed.sql.selectAll
 import org.jetbrains.exposed.sql.transactions.transaction
-import org.jetbrains.exposed.sql.update
-import org.jetbrains.exposed.sql.deleteWhere
-import java.util.UUID
+import java.util.*
 
 /** Persistence for service-level customer access policy. Runtime health is deliberately separate. */
 class ExposedServiceRepository(private val siteRepository: SiteRepository) : ServiceRepository {
@@ -31,8 +18,18 @@ class ExposedServiceRepository(private val siteRepository: SiteRepository) : Ser
             .orderBy(Services.name).map(::toRecord)
     }
 
+    override fun findById(id: UUID): ServiceRecord? = transaction {
+        Services.selectAll().where { Services.id eq id }.singleOrNull()?.let {
+            toRecord(it)
+        }
+    }
+
+
     override fun listAll(): List<ServiceRecord> = transaction {
-        Services.selectAll().orderBy(Services.projectId to org.jetbrains.exposed.sql.SortOrder.ASC, Services.name to org.jetbrains.exposed.sql.SortOrder.ASC).map(::toRecord)
+        Services.selectAll().orderBy(
+            Services.projectId to SortOrder.ASC,
+            Services.name to SortOrder.ASC
+        ).map(::toRecord)
     }
 
     override fun findByProjectAndId(projectId: UUID, id: UUID): ServiceRecord? = transaction {
@@ -95,7 +92,15 @@ class ExposedServiceRepository(private val siteRepository: SiteRepository) : Ser
         makeDefault: Boolean,
         serviceType: String?
     ): ServiceRecord? {
-        accessStatus?.let { require(it in setOf("active", "blocked", "manual_block")) { "Unsupported service access status" } }
+        accessStatus?.let {
+            require(
+                it in setOf(
+                    "active",
+                    "blocked",
+                    "manual_block"
+                )
+            ) { "Unsupported service access status" }
+        }
         val previousGateSlugs = if (makeDefault) siteRepository.findGateSlugsByProjectId(projectId) else emptyList()
         val updated = transaction {
             val existing = Services.selectAll().where {
@@ -117,7 +122,7 @@ class ExposedServiceRepository(private val siteRepository: SiteRepository) : Ser
                     it[Services.blockReasonNote] = null
                 } else if (accessStatus != null) {
                     val reasonCode = blockReasonCode ?: AccessBlockReason.fromLegacy(blockReason, accessStatus)
-                        ?: AccessBlockReason.MANUAL_HOLD
+                    ?: AccessBlockReason.MANUAL_HOLD
                     val note = blockReasonNote ?: AccessBlockReason.legacyNote(blockReason)
                     it[Services.blockReason] = blockReason ?: reasonCode.value
                     it[Services.blockReasonCode] = reasonCode
@@ -145,13 +150,15 @@ class ExposedServiceRepository(private val siteRepository: SiteRepository) : Ser
             (Services.projectId eq projectId) and (Services.id eq id)
         }.singleOrNull() ?: return@transaction false
         if (service[Services.isDefault]) return@transaction false
-        val inUse = DeploymentConfigurations.selectAll().where { DeploymentConfigurations.serviceId eq id }.count() > 0L ||
-            DeploymentExecutions.selectAll().where { DeploymentExecutions.serviceId eq id }.count() > 0L ||
-            DeploymentJobs.selectAll().where { DeploymentJobs.serviceId eq id }.count() > 0L ||
-            Deployments.selectAll().where { Deployments.serviceId eq id }.count() > 0L ||
-            ProjectSecretSetVersions.selectAll().where { ProjectSecretSetVersions.serviceId eq id }.count() > 0L ||
-            ProjectAdjustments.selectAll().where { ProjectAdjustments.serviceId eq id }.count() > 0L ||
-            Sites.selectAll().where { Sites.serviceId eq id }.count() > 0L
+        val inUse =
+            DeploymentConfigurations.selectAll().where { DeploymentConfigurations.serviceId eq id }.count() > 0L ||
+                    DeploymentExecutions.selectAll().where { DeploymentExecutions.serviceId eq id }.count() > 0L ||
+                    DeploymentJobs.selectAll().where { DeploymentJobs.serviceId eq id }.count() > 0L ||
+                    Deployments.selectAll().where { Deployments.serviceId eq id }.count() > 0L ||
+                    ProjectSecretSetVersions.selectAll().where { ProjectSecretSetVersions.serviceId eq id }
+                        .count() > 0L ||
+                    ProjectAdjustments.selectAll().where { ProjectAdjustments.serviceId eq id }.count() > 0L ||
+                    Sites.selectAll().where { Sites.serviceId eq id }.count() > 0L
         if (inUse) return@transaction false
         Services.deleteWhere { (Services.projectId eq projectId) and (Services.id eq id) } > 0
     }
@@ -169,7 +176,7 @@ class ExposedServiceRepository(private val siteRepository: SiteRepository) : Ser
         }
     }
 
-    private fun toRecord(row: org.jetbrains.exposed.sql.ResultRow) = ServiceRecord(
+    private fun toRecord(row: ResultRow) = ServiceRecord(
         row[Services.id],
         row[Services.projectId],
         row[Services.name],
@@ -188,8 +195,11 @@ class ExposedServiceRepository(private val siteRepository: SiteRepository) : Ser
             Services.update({ Services.id eq id }) {
                 it[Services.accessStatus] = status
                 it[Services.blockReason] = if (status == "active") null else blockReason
-                it[Services.blockReasonCode] = if (status == "active") null else AccessBlockReason.fromLegacy(blockReason, status) ?: AccessBlockReason.MANUAL_HOLD
-                it[Services.blockReasonNote] = if (status == "active") null else AccessBlockReason.legacyNote(blockReason)
+                it[Services.blockReasonCode] =
+                    if (status == "active") null else AccessBlockReason.fromLegacy(blockReason, status)
+                        ?: AccessBlockReason.MANUAL_HOLD
+                it[Services.blockReasonNote] =
+                    if (status == "active") null else AccessBlockReason.legacyNote(blockReason)
             }
         }
         if (updated > 0) {
