@@ -8,7 +8,6 @@ import com.gatekeeper.feature.nginx.domain.service.UpstreamValidation
 import com.gatekeeper.feature.nginx.infrastructure.CertbotCertificateProvisioner
 import com.gatekeeper.feature.nginx.model.NginxEnablePlan
 import com.gatekeeper.feature.nginx.model.NginxPlanResult
-import com.gatekeeper.feature.nginx.model.ResolvedCertificate
 import com.gatekeeper.feature.nginx.infrastructure.DeploymentUpstreamResolver
 import com.gatekeeper.nginx.NginxService
 import io.ktor.http.HttpStatusCode
@@ -20,11 +19,6 @@ import kotlin.collections.contains
 import kotlin.collections.isNotEmpty
 import kotlin.collections.orEmpty
 import kotlin.collections.sorted
-internal fun nginxHasRenderAffectingParameters(body: NginxEnableRequest): Boolean =
-    body.port != null || body.domain != null || body.upstreamScheme != null ||
-        body.certificateDomain != null || body.sslCertificatePath != null ||
-        body.sslCertificateKeyPath != null || body.requireSsl != null
-
 class PlanNginxEnableRequest(
     private val dockerService: DockerGateway?,
     private val parser: UpstreamValidation,
@@ -36,22 +30,8 @@ class PlanNginxEnableRequest(
         slug: String,
         projectDomain: String,
         activeRuntimeTarget: DeploymentUpstreamResolver.Target?,
-        request: NginxEnableRequest,
-        sslCertPath: String
+        request: NginxEnableRequest
     ): NginxPlanResult {
-        val explicitPort = request.port
-        val requestedContainerPort = request.containerPort
-        if (requestedContainerPort != null && requestedContainerPort !in 1..65535) {
-            return NginxPlanResult.Err(
-                HttpStatusCode.BadRequest,
-                "invalid_request",
-                "containerPort must be between 1 and 65535"
-            )
-        }
-        if (explicitPort != null && explicitPort !in 1..65535) {
-            return NginxPlanResult.Err(HttpStatusCode.BadRequest, "invalid_request", "port must be between 1 and 65535")
-        }
-
         val configuredContainerName = activeRuntimeTarget?.containerName?.takeIf(String::isNotBlank)
         val dockerPublishedPorts = run {
             if (dockerService == null || configuredContainerName == null) return@run null
@@ -68,15 +48,13 @@ class PlanNginxEnableRequest(
         }
         val dockerPublishedHostPorts = dockerPublishedPorts?.values?.toSet()
 
-        val selectedContainerPort = requestedContainerPort ?: activeRuntimeTarget?.containerPort
+        val selectedContainerPort = activeRuntimeTarget?.containerPort
         val actualRuntimeHostPort = selectedContainerPort?.let { dockerPublishedPorts?.get(it) }
             ?: dockerPublishedHostPorts?.singleOrNull()
         // Docker's current binding is authoritative when the recorded host port has gone stale,
         // which can happen if an adopted/recreated container receives a new dynamic host port.
         val appPort = when {
-            requestedContainerPort != null && actualRuntimeHostPort != null -> explicitPort ?: actualRuntimeHostPort
-            actualRuntimeHostPort != null && (explicitPort == null || explicitPort == activeRuntimeTarget?.port || explicitPort !in dockerPublishedHostPorts.orEmpty()) -> actualRuntimeHostPort
-            explicitPort != null -> explicitPort
+            actualRuntimeHostPort != null -> actualRuntimeHostPort
             else -> activeRuntimeTarget?.port?.takeIf { it in 1..65535 } ?: actualRuntimeHostPort
         }
 
@@ -110,11 +88,11 @@ class PlanNginxEnableRequest(
 
         // Prefer Docker-based validation: works even when gatekeeperd runs in a container (127.0.0.1 differs).
         if (dockerPublishedHostPorts != null) {
-            if (requestedContainerPort != null && requestedContainerPort !in dockerPublishedPorts.orEmpty()) {
+            if (selectedContainerPort != null && selectedContainerPort !in dockerPublishedPorts.orEmpty()) {
                 return NginxPlanResult.Err(
                     HttpStatusCode.BadRequest,
                     "container_port_not_published",
-                    "Container '$configuredContainerName' does not publish container port $requestedContainerPort (published: ${
+                    "Container '$configuredContainerName' does not publish container port $selectedContainerPort (published: ${
                         dockerPublishedPorts.keys.sorted().joinToString(", ")
                     })."
                 )
@@ -138,14 +116,7 @@ class PlanNginxEnableRequest(
             }
         }
 
-        val upstreamScheme = request.upstreamScheme?.trim()?.lowercase()?.takeIf { it.isNotBlank() } ?: "http"
-        if (upstreamScheme !in listOf("http", "https")) {
-            return NginxPlanResult.Err(
-                HttpStatusCode.BadRequest,
-                "invalid_request",
-                "upstreamScheme must be 'http' or 'https'"
-            )
-        }
+        val upstreamScheme = "http"
 
         val domain = try {
             validator.requireValidHostname(projectDomain)
@@ -160,75 +131,8 @@ class PlanNginxEnableRequest(
             return NginxPlanResult.Err(HttpStatusCode.BadRequest, "no_domain", "Project has no domain configured")
         }
 
-        val explicitCertPath = request.sslCertificatePath?.trim()?.takeIf { it.isNotBlank() }
-        val explicitKeyPath = request.sslCertificateKeyPath?.trim()?.takeIf { it.isNotBlank() }
-        val requireSsl = request.requireSsl ?: true
-
-        if ((explicitCertPath == null) != (explicitKeyPath == null)) {
-            return NginxPlanResult.Err(
-                HttpStatusCode.BadRequest,
-                "invalid_request",
-                "Provide both sslCertificatePath and sslCertificateKeyPath (or neither)."
-            )
-        }
-
-        val resolvedCertificate = when {
-            explicitCertPath != null && explicitKeyPath != null -> {
-                val certPath = try {
-                    validator.requireCertificatePath(explicitCertPath, sslCertPath)
-                } catch (e: IllegalArgumentException) {
-                    return NginxPlanResult.Err(
-                        HttpStatusCode.BadRequest,
-                        "invalid_certificate_path",
-                        e.message ?: "Invalid SSL certificate path"
-                    )
-                }
-                val keyPath = try {
-                    validator.requireCertificatePath(explicitKeyPath, sslCertPath)
-                } catch (e: IllegalArgumentException) {
-                    return NginxPlanResult.Err(
-                        HttpStatusCode.BadRequest,
-                        "invalid_certificate_path",
-                        e.message ?: "Invalid SSL certificate path"
-                    )
-                }
-                val certFile = java.io.File(certPath)
-                val keyFile = java.io.File(keyPath)
-                if (!certFile.exists() || !keyFile.exists()) {
-                    return NginxPlanResult.Err(
-                        HttpStatusCode.BadRequest,
-                        "certificate_not_found",
-                        "SSL certificate files are not accessible at the specified paths. " +
-                                "certPath='${certFile.absolutePath}' (exists=${certFile.exists()}, readable=${certFile.canRead()}), " +
-                                "keyPath='${keyFile.absolutePath}' (exists=${keyFile.exists()}, readable=${keyFile.canRead()})."
-                    )
-                }
-
-                ResolvedCertificate(
-                    certificateDomain = "custom",
-                    certificatePath = certFile.absolutePath,
-                    privateKeyPath = keyFile.absolutePath
-                )
-            }
-
-            else -> certificateProvisioner.resolveCertificateForDomain(
-                domain = domain,
-                requestedCertificateDomain = request.certificateDomain
-            )
-        }
-
-        if (request.certificateDomain != null && resolvedCertificate == null) {
-            val installed = certificateProvisioner.listInstalledCertificates().map { it.certificateDomain }
-            return NginxPlanResult.Err(
-                HttpStatusCode.BadRequest,
-                "certificate_not_found",
-                "No installed certificate found for '${request.certificateDomain}'.",
-                buildJsonObject {
-                    put("requestedCertificateDomain", JsonPrimitive(request.certificateDomain))
-                    putJsonArray("installedCertificates") { installed.forEach { add(JsonPrimitive(it)) } }
-                }
-            )
-        }
+        val requireSsl = request.requireSsl
+        val resolvedCertificate = certificateProvisioner.resolveCertificateForDomain(domain)
 
         if (requireSsl && resolvedCertificate == null) {
             val installed = certificateProvisioner.listInstalledCertificates().map { it.certificateDomain }
@@ -255,6 +159,4 @@ class PlanNginxEnableRequest(
         )
     }
 
-    internal fun hasRenderAffectingNginxParameters(body: NginxEnableRequest): Boolean =
-        nginxHasRenderAffectingParameters(body)
 }

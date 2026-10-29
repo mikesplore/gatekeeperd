@@ -1,20 +1,19 @@
 package com.gatekeeper.admin
 
 import com.gatekeeper.feature.nginx.presentation.NginxEnableRequest
-import com.gatekeeper.feature.nginx.presentation.nginxHasRenderAffectingParameters
 import kotlin.test.Test
-import kotlin.test.assertFalse
-import kotlin.test.assertTrue
+import kotlin.test.assertEquals
 
 class NginxAdminRoutesTest {
     @Test
-    fun `empty body is allowed for DB driven site`() {
-        assertFalse(nginxHasRenderAffectingParameters(NginxEnableRequest()))
-    }
+    fun `enable request selects service domain binding and requires ssl by default`() {
+        val request = NginxEnableRequest(
+            serviceId = "b0ee7a11-1a47-4fcb-9325-4e6c704f0311",
+            domainBindingId = "9f6fcb7a-625a-4bc5-8827-56ff516eed55"
+        )
 
-    @Test
-    fun `render affecting body is rejected for DB driven site`() {
-        assertTrue(nginxHasRenderAffectingParameters(NginxEnableRequest(port = 8080)))
-        assertTrue(nginxHasRenderAffectingParameters(NginxEnableRequest(domain = "override.example.com")))
+        assertEquals("b0ee7a11-1a47-4fcb-9325-4e6c704f0311", request.serviceId)
+        assertEquals("9f6fcb7a-625a-4bc5-8827-56ff516eed55", request.domainBindingId)
+        assertEquals(true, request.requireSsl)
     }
 }
