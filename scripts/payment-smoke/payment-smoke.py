@@ -186,11 +186,22 @@ def create_test_resources(api: GatekeeperApi, customer_id: str, run_id: str) -> 
 
 
 def invoice(api: GatekeeperApi, project_id: str, service_id: str) -> dict[str, Any]:
-    _, result = api.request(
-        "GET",
-        f"/api/admin/projects/{project_id}/services/{service_id}/invoice",
-    )
-    return require_dict(result, "service invoice")
+    path = f"/api/admin/projects/{project_id}/services/{service_id}/invoice"
+    delays = (5, 10, 20, 30)
+    for attempt in range(len(delays) + 1):
+        try:
+            _, result = api.request("GET", path)
+            return require_dict(result, "service invoice")
+        except ApiFailure as error:
+            if error.status != 502 or attempt == len(delays):
+                raise
+            delay = delays[attempt]
+            print(
+                f"WARN service invoice lookup returned 502 (attempt {attempt + 1}); "
+                f"retrying in {delay}s. Scribed may be rate-limiting requests."
+            )
+            time.sleep(delay)
+    raise SmokeFailure("Service invoice lookup retries were exhausted")
 
 
 def invoice_values(api: GatekeeperApi, project_id: str, service_id: str) -> tuple[Decimal, Decimal, str]:
@@ -212,6 +223,7 @@ def wait_for_invoice_balance(
 ) -> dict[str, Any]:
     deadline = time.monotonic() + timeout_seconds
     last_balance: Decimal | None = None
+    poll_delay = 5
     while time.monotonic() < deadline:
         result = invoice(api, project_id, service_id)
         data = require_dict(result.get("invoice"), "invoice details")
@@ -222,7 +234,8 @@ def wait_for_invoice_balance(
         if last_balance == expected_balance:
             print(f"PASS {label}; invoice balance is {data['currency']} {last_balance}")
             return result
-        time.sleep(2)
+        time.sleep(min(poll_delay, max(0, deadline - time.monotonic())))
+        poll_delay = min(poll_delay * 2, 20)
     raise SmokeFailure(
         f"Timed out waiting for {label}; expected balance {expected_balance}, last balance was {last_balance}"
     )
@@ -240,16 +253,16 @@ def service_payments(api: GatekeeperApi, project_id: str, service_id: str) -> li
     return [item for item in payments if isinstance(item, dict)]
 
 
-def pending_paystack_payment(api: GatekeeperApi, project_id: str, service_id: str) -> dict[str, Any]:
+def pending_paystack_payment(api: GatekeeperApi, project_id: str, service_id: str) -> dict[str, Any] | None:
     payments = service_payments(api, project_id, service_id)
     pending = [
         item for item in payments
         if str(item.get("provider", "")).lower() == "paystack"
         and str(item.get("status", "")).lower() == "pending"
     ]
-    if len(pending) != 1:
+    if len(pending) > 1:
         raise SmokeFailure(f"Expected one pending Paystack payment for the service, found {len(pending)}")
-    return pending[0]
+    return pending[0] if pending else None
 
 
 def signed_webhook(
@@ -314,9 +327,28 @@ def assert_status(payment: dict[str, Any], expected: str) -> None:
         raise SmokeFailure(f"Expected payment {payment.get('providerReference')} to be {expected}, got {status or 'unknown'}")
 
 
+def resume_cash_payment(api: GatekeeperApi, project_id: str, service_id: str) -> dict[str, str]:
+    matches = [
+        item for item in service_payments(api, project_id, service_id)
+        if str(item.get("provider", "")).lower() == "cash"
+        and str(item.get("status", "")).lower() == "success"
+        and Decimal(str(item.get("amount", "0"))) == CASH_AMOUNT
+    ]
+    if len(matches) != 1:
+        raise SmokeFailure(f"Resume expected one successful KES {CASH_AMOUNT} cash payment, found {len(matches)}")
+    reference = str(matches[0].get("providerReference", ""))
+    if not reference:
+        raise SmokeFailure("Existing cash payment has no provider reference")
+    return {"reference": reference}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--timeout", type=int, default=120, help="Scribed invoice balance synchronization timeout in seconds")
+    parser.add_argument(
+        "--resume", nargs=3, metavar=("PROJECT_ID", "PROJECT_SLUG", "SERVICE_ID"),
+        help="continue from an existing smoke invoice after the cash payment; avoids creating another invoice",
+    )
     args = parser.parse_args()
 
     settings = load_environment()
@@ -334,45 +366,61 @@ def main() -> int:
     print("PASS admin login")
 
     try:
-        customer_id = customer_for_smoke(api)
-        print("PASS dedicated smoke customer available")
-        project = create_test_resources(api, customer_id, run_id)
-        project_id, slug, service_id = project["project_id"], project["slug"], project["service_id"]
-        print(f"PASS project and service created: {slug}")
-
-        _, created = api.request(
-            "POST",
-            f"/api/admin/projects/{project_id}/services/{service_id}/invoice",
-            {"description": f"Payment smoke test {run_id}", "amount": float(INVOICE_AMOUNT)},
-        )
-        if require_dict(created, "service invoice creation").get("status") not in {"created", "already_exists"}:
-            raise SmokeFailure("Service invoice creation returned an unexpected status")
-        total, balance, currency = invoice_values(api, project_id, service_id)
-        if total != INVOICE_AMOUNT or balance != INVOICE_AMOUNT or currency.upper() != CURRENCY:
-            raise SmokeFailure(f"Invoice mismatch: amount={total}, balance={balance}, currency={currency}")
-        print(f"PASS service invoice created and linked: {currency} {total} outstanding")
-
-        cash_receipt = f"smoke-{run_id}"
-        _, cash_result = api.request(
-            "POST",
-            f"/api/admin/services/{service_id}/payments/cash",
-            {
-                "amount": float(CASH_AMOUNT),
-                "currency": CURRENCY,
-                "receiptNumber": cash_receipt,
-                "notes": "Automated payment smoke test; test environment only",
-            },
-        )
-        cash_payment = require_dict(cash_result, "cash payment")
-        if str(cash_payment.get("status", "")).lower() != "success":
-            raise SmokeFailure("Cash payment was not recorded as successful")
-        print("PASS partial cash payment recorded against the service invoice")
         remaining = INVOICE_AMOUNT - CASH_AMOUNT
-        wait_for_invoice_balance(api, project_id, service_id, remaining, args.timeout, "cash payment synced to Scribed")
+        if args.resume:
+            project_id, slug, service_id = args.resume
+            project = {"project_id": project_id, "slug": slug, "service_id": service_id}
+            total, balance, currency = invoice_values(api, project_id, service_id)
+            if total != INVOICE_AMOUNT or balance != remaining or currency.upper() != CURRENCY:
+                raise SmokeFailure(
+                    f"Resume expects a KES {INVOICE_AMOUNT} invoice with KES {remaining} outstanding; "
+                    f"found amount={total}, balance={balance}, currency={currency}"
+                )
+            cash_payment = resume_cash_payment(api, project_id, service_id)
+            print(f"PASS resumed existing invoice and cash payment: {slug}")
+        else:
+            customer_id = customer_for_smoke(api)
+            print("PASS dedicated smoke customer available")
+            project = create_test_resources(api, customer_id, run_id)
+            project_id, slug, service_id = project["project_id"], project["slug"], project["service_id"]
+            print(f"PASS project and service created: {slug}")
+
+            _, created = api.request(
+                "POST",
+                f"/api/admin/projects/{project_id}/services/{service_id}/invoice",
+                {"description": f"Payment smoke test {run_id}", "amount": float(INVOICE_AMOUNT)},
+            )
+            if require_dict(created, "service invoice creation").get("status") not in {"created", "already_exists"}:
+                raise SmokeFailure("Service invoice creation returned an unexpected status")
+            total, balance, currency = invoice_values(api, project_id, service_id)
+            if total != INVOICE_AMOUNT or balance != INVOICE_AMOUNT or currency.upper() != CURRENCY:
+                raise SmokeFailure(f"Invoice mismatch: amount={total}, balance={balance}, currency={currency}")
+            print(f"PASS service invoice created and linked: {currency} {total} outstanding")
+
+            cash_receipt = f"smoke-{run_id}"
+            _, cash_result = api.request(
+                "POST",
+                f"/api/admin/services/{service_id}/payments/cash",
+                {
+                    "amount": float(CASH_AMOUNT),
+                    "currency": CURRENCY,
+                    "receiptNumber": cash_receipt,
+                    "notes": "Automated payment smoke test; test environment only",
+                },
+            )
+            cash_payment = require_dict(cash_result, "cash payment")
+            if str(cash_payment.get("status", "")).lower() != "success":
+                raise SmokeFailure("Cash payment was not recorded as successful")
+            print("PASS partial cash payment recorded against the service invoice")
+            wait_for_invoice_balance(api, project_id, service_id, remaining, args.timeout, "cash payment synced to Scribed")
 
         failed_amount = remaining
-        initiate_paystack(api, slug, service_id, failed_amount)
         failed_pending = pending_paystack_payment(api, project_id, service_id)
+        if failed_pending is None:
+            initiate_paystack(api, slug, service_id, failed_amount)
+            failed_pending = pending_paystack_payment(api, project_id, service_id)
+        if failed_pending is None:
+            raise SmokeFailure("Paystack initialization did not create a pending service payment")
         failed_reference = str(failed_pending.get("providerReference", ""))
         if not failed_reference or Decimal(str(failed_pending.get("amount", "0"))) != failed_amount:
             raise SmokeFailure("Pending Paystack payment does not match the requested service amount")
@@ -401,8 +449,12 @@ def main() -> int:
         wait_for_invoice_balance(api, project_id, service_id, remaining, args.timeout, "failed payment left invoice balance unchanged")
         print("PASS failed Paystack event is recorded without reducing the service balance")
 
-        initiate_paystack(api, slug, service_id, remaining)
         success_pending = pending_paystack_payment(api, project_id, service_id)
+        if success_pending is None:
+            initiate_paystack(api, slug, service_id, remaining)
+            success_pending = pending_paystack_payment(api, project_id, service_id)
+        if success_pending is None:
+            raise SmokeFailure("Paystack retry initialization did not create a pending service payment")
         success_reference = str(success_pending.get("providerReference", ""))
         if not success_reference or success_reference == failed_reference:
             raise SmokeFailure("Paystack did not create a new reference for the retry")
