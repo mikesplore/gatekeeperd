@@ -80,6 +80,20 @@ The `/api/admin/nginx/*` endpoints need host access to:
 - run `nginx -t` and `systemctl reload nginx`
 
 The simplest setup is to run **gatekeeperd on the host (systemd)** and run client apps in Docker.
+Gatekeeperd does not need to run as root. Provision write access to the two nginx directories for the
+systemd service account once during host setup. For example, when the account is `gatekeeperd` and
+POSIX ACL tools are installed:
+
+```bash
+sudo setfacl -m u:gatekeeperd:rwx /etc/nginx/sites-available /etc/nginx/sites-enabled
+sudo setfacl -m d:u:gatekeeperd:rwx /etc/nginx/sites-available /etc/nginx/sites-enabled
+```
+
+Replace `gatekeeperd` with the `User=` configured for `gatekeeperd.service`. If the systemd unit
+uses filesystem sandboxing, also allow these directories with `ReadWritePaths=`. The application
+uses local `nginx/sites-available` and `nginx/sites-enabled` paths in DEV mode; no host nginx
+permissions or sudo are needed for local development.
+
 The admin logs page reads `gatekeeperd.service` from the systemd journal; the Gatekeeperd service account must be allowed to read that journal.
 
 ### Certbot certificate management
