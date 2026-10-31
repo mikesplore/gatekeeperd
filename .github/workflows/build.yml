@@ -40,7 +40,8 @@ jobs:
             deploy.sh \
             scripts/gatekeeperd-auto-deploy \
             scripts/gatekeeperd-auto-deploy.service \
-            scripts/gatekeeperd-auto-deploy.timer
+            scripts/gatekeeperd-auto-deploy.timer \
+            'scripts/gatekeeperd-slot@.service'
           sha256sum build/libs/gatekeeperd-deploy-tools.tar.gz | awk '{print $1}' > build/libs/gatekeeperd-deploy-tools.tar.gz.sha256
 
       - name: Upload jar artifact

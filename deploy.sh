@@ -12,6 +12,14 @@
 #   auto-deploy.hold                      (commit that was rolled back; auto-deploy will not redeploy it)
 set -euo pipefail
 
+# Optional, root-owned deployment settings. This file contains paths and the
+# public Gatekeeperd origin, never application secrets.
+DEPLOY_CONFIG_FILE="${DEPLOY_CONFIG_FILE:-/etc/gatekeeperd/deploy.env}"
+if [[ -r "${DEPLOY_CONFIG_FILE}" ]]; then
+  # shellcheck disable=SC1090
+  source "${DEPLOY_CONFIG_FILE}"
+fi
+
 REPO="mikesplore/gatekeeperd"
 BRANCH="${DEPLOY_BRANCH:-main}"
 WORKFLOW="build.yml"
@@ -24,10 +32,20 @@ HOLD_FILE="${TARGET_DIR}/auto-deploy.hold"
 SERVICE_NAME="gatekeeperd"
 LOCK_FILE="/run/lock/gatekeeperd-deploy.lock"
 KEEP_RELEASES="${DEPLOY_KEEP_RELEASES:-5}"
-HEALTH_URL="${DEPLOY_HEALTH_URL:-http://127.0.0.1:8080/api/health/live}"
-READY_URL="${DEPLOY_READY_URL:-${HEALTH_URL}}"   # point at a deeper check (DB etc.) if one exists
 SOAK_SECONDS="${DEPLOY_SOAK_SECONDS:-30}"        # must stay healthy and not restart for this long
+NGINX_DRAIN_TIMEOUT_SECONDS="${DEPLOY_NGINX_DRAIN_TIMEOUT_SECONDS:-620}"
 PRE_HOOK="${DEPLOY_PRE_HOOK:-}"                  # e.g. a pg_dump command; deploy aborts if it fails
+APP_ENV_FILE="${DEPLOY_APP_ENV_FILE:-/etc/gatekeeperd/gatekeeperd.env}"
+SLOT_ENV_DIR="${DEPLOY_SLOT_ENV_DIR:-/etc/gatekeeperd/slots}"
+SLOT_DIR="${TARGET_DIR}/slots"
+ACTIVE_UPSTREAM_FILE="${DEPLOY_NGINX_UPSTREAM_FILE:-/etc/nginx/conf.d/gatekeeperd-upstream.conf}"
+GATEWAY_UPSTREAM="gatekeeperd_backend"
+LEGACY_PORT="${DEPLOY_LEGACY_PORT:-8080}"
+BLUE_PORT="${DEPLOY_BLUE_PORT:-18081}"
+GREEN_PORT="${DEPLOY_GREEN_PORT:-18082}"
+READY_PATH="${DEPLOY_READY_PATH:-/api/health/ready}"
+GATEWAY_URL="${DEPLOY_GATEWAY_URL:-}"
+DEPLOY_TOOLS_DIR=""
 
 MODE="deploy"
 RUN_ID=""
@@ -76,65 +94,306 @@ list_releases() {
 }
 
 probe() { curl --fail --silent --show-error --max-time 3 "$1" >/dev/null 2>&1; }
-probe_all() { probe "${HEALTH_URL}" && probe "${READY_URL}"; }
 
-# Wait for health, then soak: service must stay active, keep the same PID,
-# and not restart. Catches crash loops that a single successful probe misses.
-verify_service() {
-  local ok=false pid restarts end
-  for _ in $(seq 1 30); do
-    if sudo systemctl is-active --quiet "${SERVICE_NAME}" && probe_all; then ok=true; break; fi
-    sleep 2
-  done
-  if [[ "${ok}" != true ]]; then
-    echo "Error: ${SERVICE_NAME} did not become healthy (${HEALTH_URL}, ${READY_URL})." >&2
+slot_port() {
+  case "$1" in
+    blue) echo "${BLUE_PORT}" ;;
+    green) echo "${GREEN_PORT}" ;;
+    *) return 1 ;;
+  esac
+}
+
+other_slot() { [[ "$1" == blue ]] && echo green || echo blue; }
+slot_service() { echo "gatekeeperd-slot@$1.service"; }
+
+slot_for_port() {
+  case "$1" in
+    "${BLUE_PORT}") echo blue ;;
+    "${GREEN_PORT}") echo green ;;
+    "${LEGACY_PORT}") echo legacy ;;
+    *) return 1 ;;
+  esac
+}
+
+active_port() {
+  sudo grep -Eo 'server[[:space:]]+127\.0\.0\.1:[0-9]+' "${ACTIVE_UPSTREAM_FILE}" 2>/dev/null \
+    | head -n1 | grep -Eo '[0-9]+$'
+}
+
+gateway_probe() {
+  [[ -n "${GATEWAY_URL}" ]] || return 1
+  local origin="${GATEWAY_URL%/}" authority host_port port
+  [[ "${origin}" =~ ^https?://[A-Za-z0-9.-]+(:[0-9]+)?$ ]] || return 1
+  authority="${origin#*://}"
+  if [[ "${authority}" == *:* ]]; then
+    host_port="${authority}"
+  elif [[ "${origin}" == https://* ]]; then
+    host_port="${authority}:443"
+  else
+    host_port="${authority}:80"
+  fi
+  port="${host_port##*:}"
+  curl --fail --silent --show-error --max-time 4 \
+    --resolve "${host_port}:127.0.0.1" "${origin}${READY_PATH}" >/dev/null 2>&1
+}
+
+write_upstream() {
+  local port="$1" prior="" had_file=false tmp
+  if sudo test -f "${ACTIVE_UPSTREAM_FILE}"; then
+    had_file=true
+    prior="$(sudo cat "${ACTIVE_UPSTREAM_FILE}")"
+  fi
+  sudo install -d -o root -g root -m 0755 "$(dirname "${ACTIVE_UPSTREAM_FILE}")"
+  tmp="$(sudo mktemp "${ACTIVE_UPSTREAM_FILE}.XXXXXX")"
+  printf 'upstream %s {\n    server 127.0.0.1:%s;\n    keepalive 32;\n}\n' "${GATEWAY_UPSTREAM}" "${port}" \
+    | sudo tee "${tmp}" >/dev/null
+  sudo chmod 0644 "${tmp}"
+  sudo mv -f "${tmp}" "${ACTIVE_UPSTREAM_FILE}"
+  if ! sudo nginx -t >/dev/null 2>&1; then
+    warn "nginx -t rejected upstream port ${port}; restoring the previous upstream."
+    if [[ "${had_file}" == true ]]; then printf '%s\n' "${prior}" | sudo tee "${ACTIVE_UPSTREAM_FILE}" >/dev/null
+    else sudo rm -f "${ACTIVE_UPSTREAM_FILE}"; fi
     return 1
   fi
-  pid="$(sudo systemctl show -p MainPID --value "${SERVICE_NAME}")"
-  restarts="$(sudo systemctl show -p NRestarts --value "${SERVICE_NAME}")"
+  if ! sudo systemctl reload nginx; then
+    warn "Nginx reload failed for upstream port ${port}; restoring the previous upstream."
+    if [[ "${had_file}" == true ]]; then printf '%s\n' "${prior}" | sudo tee "${ACTIVE_UPSTREAM_FILE}" >/dev/null
+    else sudo rm -f "${ACTIVE_UPSTREAM_FILE}"; fi
+    sudo nginx -t >/dev/null 2>&1 && sudo systemctl reload nginx || true
+    return 1
+  fi
+}
+
+nginx_has_draining_workers() {
+  sudo ps -eo args= | grep -F 'nginx: worker process is shutting down' | grep -qv grep
+}
+
+wait_for_nginx_drain() {
+  local end=$((SECONDS + NGINX_DRAIN_TIMEOUT_SECONDS))
+  while nginx_has_draining_workers; do
+    if (( SECONDS >= end )); then
+      warn "Nginx still has old workers after ${NGINX_DRAIN_TIMEOUT_SECONDS}s; keeping the retired Gatekeeperd slot running and delaying this deployment."
+      return 1
+    fi
+    sleep 2
+  done
+}
+
+retire_slot_after_cutover() {
+  local slot="$1" service
+  service="$(slot_service "${slot}")"
+  if wait_for_nginx_drain; then
+    sudo systemctl disable --now "${service}" >/dev/null 2>&1 || true
+  else
+    # Keep the process alive for connections owned by old Nginx workers. It is
+    # disabled so systemd will not automatically start it on the next boot.
+    sudo systemctl disable "${service}" >/dev/null 2>&1 || true
+  fi
+}
+
+ensure_proxy_configuration() {
+  local dump
+  [[ -n "${GATEWAY_URL}" ]] || die "Set DEPLOY_GATEWAY_URL in ${DEPLOY_CONFIG_FILE} to the public Gatekeeperd origin (for example https://gateapi.example.net)."
+  [[ "${BLUE_PORT}" != "${GREEN_PORT}" && "${LEGACY_PORT}" != "${BLUE_PORT}" && "${LEGACY_PORT}" != "${GREEN_PORT}" ]] \
+    || die "DEPLOY_LEGACY_PORT, DEPLOY_BLUE_PORT, and DEPLOY_GREEN_PORT must be distinct."
+  sudo install -d -o root -g root -m 0755 "$(dirname "${ACTIVE_UPSTREAM_FILE}")"
+  if ! sudo test -f "${ACTIVE_UPSTREAM_FILE}"; then
+    printf 'upstream %s {\n    server 127.0.0.1:%s;\n    keepalive 32;\n}\n' "${GATEWAY_UPSTREAM}" "${LEGACY_PORT}" \
+      | sudo tee "${ACTIVE_UPSTREAM_FILE}" >/dev/null
+    sudo chmod 0644 "${ACTIVE_UPSTREAM_FILE}"
+  fi
+  dump="$(sudo nginx -T 2>&1)" || die "Nginx configuration is invalid. Run 'sudo nginx -t' and fix it before deploying."
+  if ! grep -Fq "${ACTIVE_UPSTREAM_FILE}" <<<"${dump}" \
+      || ! grep -Fq "proxy_pass http://${GATEWAY_UPSTREAM}" <<<"${dump}"; then
+    die "Configure Gatekeeperd's Nginx vhost to include ${ACTIVE_UPSTREAM_FILE} in the http context and use 'proxy_pass http://${GATEWAY_UPSTREAM};' before enabling blue/green deployments. The current listener is left untouched."
+  fi
+}
+
+install_slot_unit() {
+  local source rendered user group supplementary identity="" env_file="${APP_ENV_FILE}"
+  if [[ -n "${DEPLOY_TOOLS_DIR}" && -f "${DEPLOY_TOOLS_DIR}/scripts/gatekeeperd-slot@.service" ]]; then
+    source="${DEPLOY_TOOLS_DIR}/scripts/gatekeeperd-slot@.service"
+  else
+    source="${TARGET_DIR}/gatekeeperd-slot@.service.in"
+  fi
+  sudo test -f "${source}" || die "Blue/green systemd template is missing: ${source}. Deploy a build containing gatekeeperd-slot@.service first."
+  [[ "${env_file}" =~ ^/[A-Za-z0-9_./-]+$ ]] || die "DEPLOY_APP_ENV_FILE must be an absolute path without spaces or shell metacharacters."
+  user="${DEPLOY_SERVICE_USER:-$(sudo systemctl show -p User --value "${SERVICE_NAME}")}"; user="${user:-root}"
+  group="${DEPLOY_SERVICE_GROUP:-$(sudo systemctl show -p Group --value "${SERVICE_NAME}")}"
+  supplementary="${DEPLOY_SUPPLEMENTARY_GROUPS:-$(sudo systemctl show -p SupplementaryGroups --value "${SERVICE_NAME}")}"
+  [[ "${user}" =~ ^[A-Za-z_][A-Za-z0-9_.-]*$ ]] || die "Invalid DEPLOY_SERVICE_USER value."
+  [[ -z "${group}" || "${group}" =~ ^[A-Za-z_][A-Za-z0-9_.-]*$ ]] || die "Invalid DEPLOY_SERVICE_GROUP value."
+  sudo test -r "${env_file}" && sudo -u "${user}" test -r "${env_file}" \
+    || die "Shared application environment file is not readable by ${user}: ${env_file}. Set DEPLOY_APP_ENV_FILE and adjust its read permissions."
+  for group_name in ${supplementary}; do
+    [[ "${group_name}" =~ ^[A-Za-z_][A-Za-z0-9_.-]*$ ]] || die "Invalid supplementary service group."
+  done
+  identity="User=${user}"
+  [[ -z "${group}" ]] || identity+=$'\n'"Group=${group}"
+  [[ -z "${supplementary}" ]] || identity+=$'\n'"SupplementaryGroups=${supplementary}"
+  rendered="$(mktemp)"
+  awk -v identity="${identity}" -v env_file="${env_file}" '
+    $0 == "@IDENTITY_DIRECTIVES@" { print identity; next }
+    { gsub(/@APP_ENV_FILE@/, env_file); print }
+  ' "${source}" >"${rendered}"
+  sudo install -o root -g root -m 0644 "${rendered}" /etc/systemd/system/gatekeeperd-slot@.service
+  rm -f "${rendered}"
+  sudo install -d -o root -g root -m 0755 "${SLOT_ENV_DIR}" "${SLOT_DIR}/blue" "${SLOT_DIR}/green"
+  printf 'PORT=%s\n' "${BLUE_PORT}" | sudo tee "${SLOT_ENV_DIR}/blue.env" >/dev/null
+  printf 'PORT=%s\n' "${GREEN_PORT}" | sudo tee "${SLOT_ENV_DIR}/green.env" >/dev/null
+  sudo chmod 0644 "${SLOT_ENV_DIR}/blue.env" "${SLOT_ENV_DIR}/green.env"
+  sudo systemctl daemon-reload
+}
+
+verify_slot_service() {
+  local slot="$1" port pid restarts end ok=false service
+  port="$(slot_port "${slot}")"
+  service="$(slot_service "${slot}")"
+  for _ in $(seq 1 60); do
+    if sudo systemctl is-active --quiet "${service}" && probe "http://127.0.0.1:${port}${READY_PATH}"; then ok=true; break; fi
+    sleep 2
+  done
+  [[ "${ok}" == true ]] || { echo "Error: ${service} did not become ready on port ${port}." >&2; return 1; }
+  pid="$(sudo systemctl show -p MainPID --value "${service}")"
+  restarts="$(sudo systemctl show -p NRestarts --value "${service}")"
   end=$((SECONDS + SOAK_SECONDS))
   while (( SECONDS < end )); do
     sleep 2
-    if ! sudo systemctl is-active --quiet "${SERVICE_NAME}" || ! probe_all; then
-      echo "Error: ${SERVICE_NAME} became unhealthy during the ${SOAK_SECONDS}s soak." >&2
+    if ! sudo systemctl is-active --quiet "${service}" || ! probe "http://127.0.0.1:${port}${READY_PATH}"; then
+      echo "Error: ${service} became unready during the ${SOAK_SECONDS}s pre-cutover soak." >&2
+      return 1
+    fi
+    if [[ "$(sudo systemctl show -p MainPID --value "${service}")" != "${pid}" \
+       || "$(sudo systemctl show -p NRestarts --value "${service}")" != "${restarts}" ]]; then
+      echo "Error: ${service} restarted during its pre-cutover soak." >&2
       return 1
     fi
   done
-  if [[ "$(sudo systemctl show -p MainPID --value "${SERVICE_NAME}")" != "${pid}" \
-     || "$(sudo systemctl show -p NRestarts --value "${SERVICE_NAME}")" != "${restarts}" ]]; then
-    echo "Error: ${SERVICE_NAME} restarted during the soak window." >&2
-    return 1
-  fi
-  return 0
 }
 
-# Point everything at a release and restart. Caller verifies.
+verify_gateway() {
+  local end=$((SECONDS + SOAK_SECONDS))
+  for _ in $(seq 1 30); do
+    gateway_probe && break
+    sleep 2
+  done
+  gateway_probe || { echo "Error: the public Gatekeeperd Nginx route is not ready at ${GATEWAY_URL}${READY_PATH}." >&2; return 1; }
+  while (( SECONDS < end )); do
+    sleep 2
+    gateway_probe || { echo "Error: the Gatekeeperd Nginx route became unhealthy during post-cutover verification." >&2; return 1; }
+  done
+}
+
+verify_service() {
+  local port slot
+  port="$(active_port)"
+  slot="$(slot_for_port "${port}")" || { echo "Error: Nginx upstream has an unknown Gatekeeperd port: ${port:-unset}." >&2; return 1; }
+  if [[ "${slot}" == legacy ]]; then
+    sudo systemctl is-active --quiet "${SERVICE_NAME}" && probe "http://127.0.0.1:${port}${READY_PATH}" && gateway_probe
+    return $?
+  fi
+  sudo systemctl is-active --quiet "$(slot_service "${slot}")" \
+    && probe "http://127.0.0.1:${port}${READY_PATH}" && gateway_probe
+}
+
+stage_slot_release() {
+  local slot="$1" id="$2" service
+  service="$(slot_service "${slot}")"
+  sudo systemctl stop "${service}" >/dev/null 2>&1 || true
+  sudo install -d -o root -g root -m 0755 "${SLOT_DIR}/${slot}"
+  sudo ln -sfn "../../releases/${id}" "${SLOT_DIR}/${slot}/current.new"
+  sudo mv -Tf "${SLOT_DIR}/${slot}/current.new" "${SLOT_DIR}/${slot}/current"
+}
+
+bootstrap_legacy_service() {
+  local id="$1" slot=blue port
+  [[ "$(slot_for_port "$(active_port)")" == legacy ]] || return 0
+  sudo systemctl is-active --quiet "${SERVICE_NAME}" \
+    || die "Nginx still routes to ${LEGACY_PORT}, but ${SERVICE_NAME} is not active; refusing to cut over."
+  log "Starting a blue/green copy of the current release before changing Nginx traffic..."
+  stage_slot_release "${slot}" "${id}"
+  sudo systemctl enable --now "$(slot_service "${slot}")"
+  verify_slot_service "${slot}" || { sudo systemctl disable --now "$(slot_service "${slot}")" >/dev/null 2>&1 || true; return 1; }
+  port="$(slot_port "${slot}")"
+  if ! write_upstream "${port}" || ! verify_gateway; then
+    warn "The blue/green bootstrap route did not pass verification; returning Nginx to the still-running legacy service."
+    if ! write_upstream "${LEGACY_PORT}" || ! gateway_probe; then
+      echo "CRITICAL: Could not restore or verify the legacy Gatekeeperd route. Both processes are being left running for recovery." >&2
+      return 1
+    fi
+    retire_slot_after_cutover "${slot}"
+    return 1
+  fi
+  if wait_for_nginx_drain; then
+    sudo systemctl disable --now "${SERVICE_NAME}" >/dev/null 2>&1 \
+      || warn "The legacy ${SERVICE_NAME} service could not be stopped; Nginx now routes to the verified blue slot."
+  else
+    sudo systemctl disable "${SERVICE_NAME}" >/dev/null 2>&1 || true
+    warn "The legacy process remains running until its old Nginx workers drain."
+  fi
+  log "Blue/green mode is active on port ${port}; the legacy process is no longer on the request path."
+}
+
+# Switch Nginx only after an inactive systemd slot has passed readiness and soak.
+# The old slot remains running after the switch as the immediate rollback target.
 activate_release() {
-  local id="$1" dir="${RELEASES_DIR}/$1" commit
+  local id="$1" dir="${RELEASES_DIR}/$1" active_port_value active_slot candidate_slot candidate_port old_service new_service commit
   sudo test -f "${dir}/gatekeeperd-all.jar" || { echo "Error: release ${id} has no JAR." >&2; return 1; }
+  ensure_proxy_configuration
+  install_slot_unit
   if sudo test -f "${dir}/gatekeeperd-certbot"; then
     sudo install -o root -g root -m 0755 "${dir}/gatekeeperd-certbot" /usr/local/sbin/gatekeeperd-certbot
   fi
-  sudo ln -sfn "releases/${id}" "${CURRENT_LINK}.new"
-  sudo mv -T "${CURRENT_LINK}.new" "${CURRENT_LINK}"
-  commit="$(release_commit "${id}")"
-  if [[ -n "${commit}" ]]; then
-    printf '%s\n' "${commit}" | sudo tee "${TARGET_DIR}/source-commit.txt" >/dev/null
-  else
-    sudo rm -f "${TARGET_DIR}/source-commit.txt"
+  bootstrap_legacy_service "$(current_id)" || return 1
+  active_port_value="$(active_port)"
+  active_slot="$(slot_for_port "${active_port_value}")" || { echo "Error: Nginx routes to unknown backend port ${active_port_value:-unset}." >&2; return 1; }
+  [[ "${active_slot}" != legacy ]] || { echo "Error: blue/green bootstrap did not move traffic off the legacy listener." >&2; return 1; }
+  candidate_slot="$(other_slot "${active_slot}")"
+  candidate_port="$(slot_port "${candidate_slot}")"
+  if [[ "$(sudo readlink "${SLOT_DIR}/${active_slot}/current" 2>/dev/null | xargs basename 2>/dev/null || true)" == "${id}" ]]; then
+    ln -sfn "releases/${id}" "${CURRENT_LINK}.new"
+    sudo mv -Tf "${CURRENT_LINK}.new" "${CURRENT_LINK}"
+    commit="$(release_commit "${id}")"
+    if [[ -n "${commit}" ]]; then printf '%s\n' "${commit}" | sudo tee "${TARGET_DIR}/source-commit.txt" >/dev/null
+    else sudo rm -f "${TARGET_DIR}/source-commit.txt"; fi
+    return 0
   fi
-  log "Restarting ${SERVICE_NAME} on release ${id}..."
-  sudo systemctl restart "${SERVICE_NAME}" || { echo "Error: restart failed on release ${id}." >&2; return 1; }
+  wait_for_nginx_drain || return 1
+  log "Staging release ${id} in inactive ${candidate_slot} slot on port ${candidate_port}; ${active_slot} continues serving traffic."
+  stage_slot_release "${candidate_slot}" "${id}"
+  sudo systemctl enable --now "$(slot_service "${candidate_slot}")"
+  if ! verify_slot_service "${candidate_slot}"; then
+    sudo systemctl disable --now "$(slot_service "${candidate_slot}")" >/dev/null 2>&1 || true
+    return 1
+  fi
+  if ! write_upstream "${candidate_port}" || ! verify_gateway; then
+    warn "Candidate ${candidate_slot} failed post-cutover checks; restoring traffic to ${active_slot}."
+    if ! write_upstream "${active_port_value}" || ! verify_gateway; then
+      echo "CRITICAL: Could not verify restoration to ${active_slot}. Both Gatekeeperd slots are being left running for recovery." >&2
+      return 1
+    fi
+    retire_slot_after_cutover "${candidate_slot}"
+    return 1
+  fi
+  sudo systemctl disable "$(slot_service "${active_slot}")" >/dev/null 2>&1 || true
+  sudo ln -sfn "releases/${id}" "${CURRENT_LINK}.new"
+  sudo mv -Tf "${CURRENT_LINK}.new" "${CURRENT_LINK}"
+  commit="$(release_commit "${id}")"
+  if [[ -n "${commit}" ]]; then printf '%s\n' "${commit}" | sudo tee "${TARGET_DIR}/source-commit.txt" >/dev/null
+  else sudo rm -f "${TARGET_DIR}/source-commit.txt"; fi
+  log "Nginx now routes to ${candidate_slot} (${candidate_port}); ${active_slot} remains running for rollback."
 }
 
 prune_releases() {
-  local cur ids n drop i
+  local cur blue green ids n drop i
   cur="$(current_id)"
+  blue="$(sudo readlink "${SLOT_DIR}/blue/current" 2>/dev/null | xargs basename 2>/dev/null || true)"
+  green="$(sudo readlink "${SLOT_DIR}/green/current" 2>/dev/null | xargs basename 2>/dev/null || true)"
   mapfile -t ids < <(release_ids)
   n=${#ids[@]}
   drop=$((n - KEEP_RELEASES))
   for ((i = 0; i < drop; i++)); do
-    if [[ "${ids[i]}" != "${cur}" && -n "${ids[i]}" ]]; then
+    if [[ "${ids[i]}" != "${cur}" && "${ids[i]}" != "${blue}" && "${ids[i]}" != "${green}" && -n "${ids[i]}" ]]; then
       sudo rm -rf -- "${RELEASES_DIR:?}/${ids[i]}"
     fi
   done
@@ -256,6 +515,7 @@ install_auto_deploy() {
   local tools_dir="$1" gh_dir
   log "Installing automatic deployment checker..."
   sudo install -o root -g root -m 0755 "${tools_dir}/deploy.sh" "${TARGET_DIR}/deploy.sh"
+  sudo install -o root -g root -m 0644 "${tools_dir}/scripts/gatekeeperd-slot@.service" "${TARGET_DIR}/gatekeeperd-slot@.service.in"
   sudo install -o root -g root -m 0755 "${tools_dir}/scripts/gatekeeperd-auto-deploy" "${TARGET_DIR}/gatekeeperd-auto-deploy"
   sudo install -o root -g root -m 0644 "${tools_dir}/scripts/gatekeeperd-auto-deploy.service" /etc/systemd/system/gatekeeperd-auto-deploy.service
   sudo install -o root -g root -m 0644 "${tools_dir}/scripts/gatekeeperd-auto-deploy.timer" /etc/systemd/system/gatekeeperd-auto-deploy.timer
@@ -341,12 +601,13 @@ do_deploy() {
   mkdir -p "${tools_dir}"
   while IFS= read -r member; do
     case "${member}" in
-      deploy.sh|scripts/gatekeeperd-auto-deploy|scripts/gatekeeperd-auto-deploy.service|scripts/gatekeeperd-auto-deploy.timer) ;;
+      deploy.sh|scripts/gatekeeperd-auto-deploy|scripts/gatekeeperd-auto-deploy.service|scripts/gatekeeperd-auto-deploy.timer|scripts/gatekeeperd-slot@.service) ;;
       *) die "Unexpected path in deployment tools archive: ${member}" ;;
     esac
   done < <(tar -tzf "${tools}")
   tar -xzf "${tools}" -C "${tools_dir}" --no-same-owner
-  for f in deploy.sh scripts/gatekeeperd-auto-deploy scripts/gatekeeperd-auto-deploy.service scripts/gatekeeperd-auto-deploy.timer; do
+  DEPLOY_TOOLS_DIR="${tools_dir}"
+  for f in deploy.sh scripts/gatekeeperd-auto-deploy scripts/gatekeeperd-auto-deploy.service scripts/gatekeeperd-auto-deploy.timer scripts/gatekeeperd-slot@.service; do
     [[ -f "${tools_dir}/${f}" ]] || die "Deployment tools archive is missing ${f##*/}."
   done
 
@@ -388,7 +649,10 @@ do_deploy() {
 
   sudo rm -f "${HOLD_FILE}"
   log "Source commit: ${COMMIT_SHA}"
-  sudo systemctl status "${SERVICE_NAME}" --no-pager || true
+  local active_slot="$(slot_for_port "$(active_port)")"
+  if [[ "${active_slot}" == blue || "${active_slot}" == green ]]; then
+    sudo systemctl status "$(slot_service "${active_slot}")" --no-pager || true
+  fi
   prune_releases
   install_auto_deploy "${tools_dir}"
   log "Deployment complete: commit ${COMMIT_SHA}, release ${rel_id}. Roll back with: ${TARGET_DIR}/deploy.sh --rollback"

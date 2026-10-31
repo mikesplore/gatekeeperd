@@ -427,7 +427,7 @@ For production debugging, inspect the service journal as well as the dashboard l
 
 ## 19. Build, deployment, and version reporting
 
-CI uses Java 21 and runs `./gradlew --no-daemon test buildFatJar`. It publishes `gatekeeperd-all.jar`, SHA-256 checksums, Certbot helper and deployment-tool archive. `deploy.sh` downloads an exact successful GitHub Actions artifact, verifies checksums, installs the JAR and helper/configuration, restarts the systemd service, checks `/api/health/live`, and restores the prior JAR if restart/liveness verification fails.
+CI uses Java 21 and runs `./gradlew --no-daemon test buildFatJar`. It publishes `gatekeeperd-all.jar`, SHA-256 checksums, Certbot helper and deployment-tool archive. `deploy.sh` downloads an exact successful GitHub Actions artifact, verifies checksums, starts the inactive systemd slot, checks `/api/health/ready` and stability, then switches the stable Nginx upstream gracefully. The previous slot stays running through cutover and remains the immediate rollback target; a failed candidate check does not restart or stop the active slot.
 
 After the first deployment with the current tools, deploy script installs a VPS systemd timer that checks the latest successful `build.yml` run on `main` every five minutes using the VPS GitHub CLI authentication. It deploys a new successful commit automatically. This is host software delivery, separate from application container deployments managed from the dashboard.
 

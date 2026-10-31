@@ -64,14 +64,72 @@ chmod +x deploy.sh
 ./deploy.sh
 ```
 
-The script downloads from a specific workflow run, checks the JAR and Certbot helper
-SHA-256 values, installs the jar and helper, prints the full source commit, saves it to
-`/opt/gatekeeperd/source-commit.txt`, and restarts the systemd service. It restores the
-previous JAR and commit marker if restart or health verification fails. A JAR-only
-update does not run `systemctl daemon-reload` because the service unit has not changed.
-It also detects
-the service account and configures a validated, restricted sudoers entry for the
-root-owned Certbot helper. The printed commit identifies the exact CI artifact installed.
+The script downloads a specific workflow artifact and checks its JAR, Certbot helper,
+and deployment-tool checksums. Systemd deployments use blue/green slots: the inactive
+slot starts on a separate localhost port, passes dependency readiness and a stability
+soak, then Nginx switches traffic with a graceful reload. The previous slot remains
+running as a rollback target. If the candidate fails before or after cutover, traffic
+stays on or returns to the previous slot; the script never restarts the active slot to
+test a new release. It records the active commit in
+`/opt/gatekeeperd/source-commit.txt` and preserves the current and previous slot releases.
+
+### One-time systemd blue/green setup
+
+The first blue/green deployment needs a stable Nginx upstream and a shared environment
+file. Keep the current `gatekeeperd.service` running while preparing these settings.
+
+1. Copy the existing application environment to `/etc/gatekeeperd/gatekeeperd.env`.
+   Keep it readable by the same service user and group as `gatekeeperd.service`; protect
+   its secrets with appropriate file permissions. Do not set a fixed `PORT` here; each
+   slot supplies its own port.
+2. Create `/etc/gatekeeperd/deploy.env` with deployment-only settings:
+
+   ```env
+   DEPLOY_APP_ENV_FILE=/etc/gatekeeperd/gatekeeperd.env
+   DEPLOY_GATEWAY_URL=https://gateapi.example.net
+   DEPLOY_SOAK_SECONDS=30
+   DEPLOY_NGINX_DRAIN_TIMEOUT_SECONDS=620
+   ```
+
+   `DEPLOY_GATEWAY_URL` must be the public origin served by the Gatekeeperd Nginx vhost.
+   This file contains no application secrets and must be readable by the account that
+   runs `deploy.sh`.
+3. Ensure `/etc/nginx/conf.d/*.conf` is included inside Nginx's `http` block. Create
+   `/etc/nginx/conf.d/gatekeeperd-upstream.conf` with the current single-process target:
+
+   ```nginx
+   upstream gatekeeperd_backend {
+       server 127.0.0.1:8080;
+       keepalive 32;
+   }
+   ```
+
+4. In the Gatekeeperd reverse-proxy vhost, change
+   `proxy_pass http://localhost:8080;` to `proxy_pass http://gatekeeperd_backend;`.
+   Check and gracefully reload Nginx:
+
+   ```bash
+   sudo nginx -t && sudo systemctl reload nginx
+   ```
+
+5. Run one manual deployment to migrate the current release into a blue/green slot and
+   verify the setup:
+
+   ```bash
+   ./deploy.sh --force
+   ```
+
+   This starts a second copy of the current release, checks it directly, switches Nginx
+   to it, and verifies the public readiness URL before stopping the legacy service. The
+   legacy process stays available until Nginx's old workers drain. If any check fails,
+   the request route remains on the old process. After this setup, automatic deployments
+   use the same blue/green flow.
+
+The slot systemd unit inherits the legacy service's user, group, and supplementary groups.
+Scheduled worker loops use PostgreSQL advisory locks, so only one overlapping instance
+runs each scheduled operation at a time. Keep schema changes backward-compatible across
+the overlap: add new columns/tables first, deploy code that supports both shapes, then
+remove obsolete schema in a later release.
 
 ## Running gatekeeperd on the host (for nginx management)
 
@@ -122,8 +180,8 @@ renewal requests; update the existing site config and reload nginx after changin
 ### Install jar on VPS
 
 Run the repository's `deploy.sh` on the VPS. It selects a specific successful workflow
-run, reports its source commit, validates the downloaded checksum, installs the JAR at
-`/opt/gatekeeperd/gatekeeperd-all.jar`, and restarts the systemd service.
+run, reports its source commit, validates the downloaded checksums, and promotes the
+release through blue/green systemd slots behind the stable Nginx upstream.
 
 ### Automatic deployment from successful builds
 
@@ -131,8 +189,9 @@ After deploying a build that includes the deployment checker, `deploy.sh` instal
 and enables a systemd timer. It checks GitHub every five minutes for the newest
 successful `build.yml` run on `main`. When that run's commit differs from
 `/opt/gatekeeperd/source-commit.txt`, it deploys that exact workflow run, verifies
-the JAR and helper checksums, restarts Gatekeeperd, and confirms the liveness
-endpoint responds. A failed restart or health check restores the previous JAR. A
+the artifact checksums, starts the inactive slot, verifies `/api/health/ready`, switches
+Nginx gracefully, and verifies the public route before recording success. A failed
+candidate check leaves or restores the previous slot as the Nginx upstream. A
 systemd reload failure while installing the separate auto-deploy timer is reported
 as a warning and does not mark a healthy application deployment as failed. A failed
 application commit is held back until a newer successful build appears.

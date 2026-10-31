@@ -1,0 +1,22 @@
+[Unit]
+Description=Gatekeeperd %i blue/green slot
+Wants=network-online.target
+After=network-online.target
+Before=nginx.service
+
+[Service]
+Type=simple
+@IDENTITY_DIRECTIVES@
+WorkingDirectory=/opt/gatekeeperd
+EnvironmentFile=@APP_ENV_FILE@
+EnvironmentFile=/etc/gatekeeperd/slots/%i.env
+ExecStart=/usr/bin/java -jar /opt/gatekeeperd/slots/%i/current/gatekeeperd-all.jar
+Restart=on-failure
+RestartSec=3
+KillSignal=SIGTERM
+TimeoutStopSec=60
+SuccessExitStatus=143
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

@@ -22,6 +22,13 @@ In DEV, nginx host commands are **no-op by default** and Certbot is disabled. Se
 
 ## Nginx Configuration
 
+For zero-downtime JAR deployments with systemd, Gatekeeperd's proxy vhost must use the
+stable `gatekeeperd_backend` upstream. The blue/green deployment setup keeps the upstream
+definition in `/etc/nginx/conf.d/gatekeeperd-upstream.conf` and changes its localhost port
+only after the candidate slot passes readiness and stability checks. See the
+[systemd blue/green setup](staging-deployment.md#one-time-systemd-bluegreen-setup) before
+changing an existing deployment.
+
 Create `/etc/nginx/sites-available/gatekeeperd`:
 
 ```nginx
@@ -50,9 +57,9 @@ server {
     add_header X-Content-Type-Options "nosniff";
     add_header X-XSS-Protection "1; mode=block";
 
-    # Proxy to gatekeeperd container
+    # Proxy through the stable blue/green upstream managed by deploy.sh.
     location / {
-        proxy_pass http://localhost:8080;
+        proxy_pass http://gatekeeperd_backend;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection 'upgrade';

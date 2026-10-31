@@ -7,5 +7,6 @@ After=network-online.target
 Type=oneshot
 User=root
 EnvironmentFile=/etc/gatekeeperd/auto-deploy.env
+EnvironmentFile=-/etc/gatekeeperd/deploy.env
 ExecStart=/opt/gatekeeperd/gatekeeperd-auto-deploy
-TimeoutStartSec=15min
+TimeoutStartSec=30min
