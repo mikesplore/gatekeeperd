@@ -174,9 +174,9 @@ def wait_for_deployment(
     )
 
 
-def active_deployment(api: GatekeeperApi, project_id: str, service_id: str) -> dict[str, Any]:
+def active_deployment(api: GatekeeperApi, slug: str, service_id: str) -> dict[str, Any]:
     query = urllib.parse.urlencode({"environment": "production", "serviceId": service_id})
-    path = f"/api/admin/projects/{project_id}/deployments/history?{query}"
+    path = f"/api/admin/projects/{urllib.parse.quote(slug, safe='')}/deployments/history?{query}"
     _, result = api.request("GET", path)
     history = require_dict(result, "deployment history")
     items = history.get("items")
@@ -407,7 +407,7 @@ def main() -> int:
         configure_service(api, project_id, service_id, registry, image_name, image_tag, db_password)
         first_id = queue_deployment(api, project_id, service_id)
         first = wait_for_deployment(api, slug, service_id, first_id, {"active"}, args.timeout, "deployment 1")
-        active = active_deployment(api, project_id, service_id)
+        active = active_deployment(api, slug, service_id)
         if active.get("deploymentId") != first_id:
             raise SmokeFailure("First deployment became active, but the active pointer does not match it")
         print("PASS deployment 1 becomes active with POSTGRES_PASSWORD")
@@ -418,7 +418,7 @@ def main() -> int:
         print("Updating service environment: POSTGRES_PASSWORD is NOT SET for deployment 2")
         second_id = update_environment(api, project_id, service_id, {})
         second = wait_for_deployment(api, slug, service_id, second_id, {"failed"}, args.timeout, "deployment 2")
-        active = active_deployment(api, project_id, service_id)
+        active = active_deployment(api, slug, service_id)
         if active.get("deploymentId") != first_id:
             raise SmokeFailure("Failed deployment replaced or cleared the previous active deployment")
         if args.nginx:
@@ -432,7 +432,7 @@ def main() -> int:
         print("Updating service environment: restoring POSTGRES_PASSWORD for deployment 3 (actual value hidden)")
         third_id = update_environment(api, project_id, service_id, {"POSTGRES_PASSWORD": db_password})
         wait_for_deployment(api, slug, service_id, third_id, {"active"}, args.timeout, "deployment 3")
-        active = active_deployment(api, project_id, service_id)
+        active = active_deployment(api, slug, service_id)
         if active.get("deploymentId") != third_id:
             raise SmokeFailure("Third deployment became active, but the active pointer does not match it")
         print("PASS deployment 3 recovers after restoring POSTGRES_PASSWORD")
