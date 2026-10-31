@@ -18,7 +18,7 @@ class ApplyWebhookEvent(
             if (amount <= BigDecimal.ZERO) return false
             if (current?.serviceId == null && command.serviceId == null) return false
             val projectId = current?.projectId ?: command.projectId ?: return false
-            if (!effects.acceptSuccessfulPayment(current, projectId, amount, command.currency)) return false
+            if (!effects.acceptSuccessfulPayment(current, projectId, command.serviceId, amount, command.currency)) return false
             if (current == null) current = payments.create(
                 projectId, command.provider, command.reference, amount, command.status, command.rawPayload,
                 serviceId = command.serviceId
@@ -55,7 +55,7 @@ class ApplyWebhookEvent(
 }
 
 interface PaymentEffects {
-    fun acceptSuccessfulPayment(payment: com.gatekeeper.feature.payment.domain.model.Payment?, projectId: UUID, amount: BigDecimal, currency: String?): Boolean
+    fun acceptSuccessfulPayment(payment: com.gatekeeper.feature.payment.domain.model.Payment?, projectId: UUID, serviceId: UUID?, amount: BigDecimal, currency: String?): Boolean
     fun paymentSucceeded(payment: com.gatekeeper.feature.payment.domain.model.Payment, amount: BigDecimal, currency: String?, paidAt: LocalDateTime?, actor: String)
     fun paymentFailed(payment: com.gatekeeper.feature.payment.domain.model.Payment)
     fun paymentReversed(payment: com.gatekeeper.feature.payment.domain.model.Payment)

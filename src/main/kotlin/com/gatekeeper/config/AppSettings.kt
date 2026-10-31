@@ -133,20 +133,26 @@ class AppSettings private constructor(
         )
     }
     val nginx: NginxSettings by lazy {
+        val hostOperationsEnabled = boolean("GATEKEEPERD_NGINX_HOST_SUDO", false)
+        val isolatedDevelopmentNginx = environment == AppEnvironment.DEV && !hostOperationsEnabled
+        val localSitesAvailable = "nginx/sites-available"
+        val localSitesEnabled = "nginx/sites-enabled"
+        val localUpstreamDirectory = "nginx/conf.d/gatekeeperd-upstreams"
+        val localCertificateDirectory = "nginx/custom-certs"
         NginxSettings(
             deploymentUpstreamsEnabled = boolean("NGINX_DEPLOYMENT_UPSTREAMS_ENABLED", environment != AppEnvironment.DEV),
-            hostOperationsEnabled = boolean("GATEKEEPERD_NGINX_HOST_SUDO", false),
+            hostOperationsEnabled = hostOperationsEnabled,
             certbotEnabled = boolean("GATEKEEPERD_NGINX_CERTBOT_ENABLED", false),
             nginxBinary = optional("NGINX_BINARY", "/usr/sbin/nginx"),
             developmentConfigPath = if (environment == AppEnvironment.DEV) optional("NGINX_CONFIG_PATH", "nginx/nginx.conf") else null,
-            sitesAvailablePath = sitesAvailablePath(),
-            sitesEnabledPath = sitesEnabledPath(),
-            upstreamIncludeDirectory = optional(
+            sitesAvailablePath = if (isolatedDevelopmentNginx) localSitesAvailable else sitesAvailablePath(),
+            sitesEnabledPath = if (isolatedDevelopmentNginx) localSitesEnabled else sitesEnabledPath(),
+            upstreamIncludeDirectory = if (isolatedDevelopmentNginx) localUpstreamDirectory else optional(
                 "NGINX_UPSTREAM_INCLUDE_DIR",
                 if (environment == AppEnvironment.DEV) "nginx/conf.d/gatekeeperd-upstreams" else "/etc/nginx/conf.d/gatekeeperd-upstreams"
             ),
-            sslCertPath = sslCertPath(),
-            customCertDirectory = customCertDirectory(),
+            sslCertPath = if (isolatedDevelopmentNginx) localCertificateDirectory else sslCertPath(),
+            customCertDirectory = if (isolatedDevelopmentNginx) localCertificateDirectory else customCertDirectory(),
             selfDomains = required("GATEKEEPERD_SELF_DOMAIN").split(',').map { it.trim().trimEnd('.').lowercase() },
             environment = environment
         )

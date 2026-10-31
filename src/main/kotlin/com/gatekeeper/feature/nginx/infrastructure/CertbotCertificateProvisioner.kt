@@ -16,7 +16,7 @@ import java.time.ZoneOffset
 
 class CertbotCertificateProvisioner(
     private val processRunner: ProcessRunner,
-    private val sslCertPath: String = "/etc/letsencrypt/live",
+    private val sslCertPath: String,
     private val nginxSiteStorage: NginxSiteStorage,
     private val selfDomainExclusion: NginxSelfDomainExclusion,
     private val validator: NginxValidationService,
