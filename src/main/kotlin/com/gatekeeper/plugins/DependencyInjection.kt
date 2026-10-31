@@ -276,6 +276,8 @@ private val applicationModule = module {
     single {
         ApplySiteConfigUseCase(
             commandRunner = get(),
+            sitesAvailablePath = get<AppSettings>().nginx.sitesAvailablePath,
+            sitesEnabledPath = get<AppSettings>().nginx.sitesEnabledPath,
             nginxSiteStorage = get(),
             selfDomainExclusion = get(),
             domainRules = get(),
