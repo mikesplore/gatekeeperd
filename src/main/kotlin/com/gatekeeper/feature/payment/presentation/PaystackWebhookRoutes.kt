@@ -87,7 +87,11 @@ fun Application.configurePaystackWebhookRoutes() {
             } catch (e: Exception) {
                 Metrics.increment("webhook.failed")
                 logger.error("Error processing webhook ${event.event}, ref=$reference", e)
-                call.respond(HttpStatusCode.OK, mapOf("status" to "failed"))
+                call.respondError(
+                    HttpStatusCode.InternalServerError,
+                    "payment_event_processing_failed",
+                    "The payment event could not be processed"
+                )
                 return@post
             }
         }

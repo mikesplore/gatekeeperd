@@ -1278,6 +1278,7 @@ Required configuration: `MPESA_CONSUMER_KEY`, `MPESA_CONSUMER_SECRET`, `MPESA_SH
 
 ### POST /api/paystack/webhook
 Paystack webhook handler. Verifies HMAC-SHA512 signature via `x-paystack-signature` header.
+Transient processing errors return `500` so Paystack can retry delivery.
 
 **Headers:**
 - `x-paystack-signature`: HMAC-SHA512 of raw request body using `PAYSTACK_SECRET_KEY`

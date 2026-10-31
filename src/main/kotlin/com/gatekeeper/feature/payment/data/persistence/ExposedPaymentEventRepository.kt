@@ -6,6 +6,7 @@ import com.gatekeeper.feature.payment.domain.model.PaymentEvent
 import com.gatekeeper.feature.payment.domain.model.PaymentEventReplay
 import org.jetbrains.exposed.sql.*
 import org.jetbrains.exposed.sql.transactions.transaction
+import java.sql.SQLException
 import java.time.LocalDateTime
 import java.util.UUID
 
@@ -37,8 +38,8 @@ class ExposedPaymentEventRepository : PaymentEventRepository {
                 }
             }
             id
-        } catch (_: Exception) {
-            null
+        } catch (error: Exception) {
+            if (error.isUniqueConstraintViolation()) null else throw error
         }
     }
 
@@ -89,3 +90,7 @@ class ExposedPaymentEventRepository : PaymentEventRepository {
         }
     }
 }
+
+private fun Throwable.isUniqueConstraintViolation(): Boolean = generateSequence(this) { it.cause }
+    .filterIsInstance<SQLException>()
+    .any { it.sqlState == "23505" }
