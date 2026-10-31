@@ -189,7 +189,20 @@ def active_deployment(api: GatekeeperApi, slug: str, service_id: str) -> dict[st
         if isinstance(item, dict) and str(item.get("status", "")).lower() == "active"
     ]
     if len(active) != 1:
-        raise SmokeFailure(f"Expected one active deployment in history, found {len(active)}")
+        summary = [
+            {
+                "id": item.get("id"),
+                "status": item.get("status"),
+                "failureReason": item.get("failureReason"),
+                "runtimePresent": item.get("runtimePresent"),
+                "runtimeState": item.get("runtimeState"),
+            }
+            for item in items if isinstance(item, dict)
+        ]
+        raise SmokeFailure(
+            f"Expected one active deployment in history, found {len(active)}. "
+            f"Deployment history: {json.dumps(summary, separators=(',', ':'))}"
+        )
     deployment_id = active[0].get("id")
     if not deployment_id:
         raise SmokeFailure("Active deployment history entry has no ID")
@@ -389,6 +402,7 @@ def main() -> int:
     service_id = ""
     cleanup_errors: list[str] = []
     nginx_domain: str | None = None
+    smoke_succeeded = False
 
     print(f"Target: {base_url} ({os.environ['GATEKEEPER_SMOKE_TARGET']})")
     print(f"Fixture: {registry}/{image_name}:{image_tag}")
@@ -439,9 +453,15 @@ def main() -> int:
             raise SmokeFailure("Third deployment became active, but the active pointer does not match it")
         print("PASS deployment 3 recovers after restoring POSTGRES_PASSWORD")
         print("SMOKE TEST PASSED")
+        smoke_succeeded = True
         return 0
     finally:
-        if not args.keep_resources and project is not None:
+        if not smoke_succeeded and project is not None:
+            print(
+                "PRESERVED test project/service after failure for inspection: "
+                f"project={slug} serviceId={service_id}"
+            )
+        elif not args.keep_resources and project is not None:
             if service_id:
                 try:
                     history_query = urllib.parse.urlencode({"environment": "production", "serviceId": service_id})

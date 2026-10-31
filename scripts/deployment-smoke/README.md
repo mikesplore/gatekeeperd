@@ -8,7 +8,7 @@ This external API smoke test targets a running local or staging Gatekeeperd inst
 
 No image build, registry account, or image environment variables are needed. Gatekeeperd pulls the official image from Docker Hub. If `DOCKER_ALLOWED_REGISTRIES` is configured, `docker.io` must be allowed. The image exposes PostgreSQL on port 5432; the smoke test does not connect to or store customer data in it.
 
-The script deletes its test service (including its deployment containers and domain) and archives its project. The API has no customer-delete endpoint, so the dedicated smoke-test customer is reused across runs. Pass `--keep-resources` to leave the project and service for investigation.
+After a successful run, the script deletes its test service (including its deployment containers and domain) and archives its project. Failed runs preserve the project and service for investigation and print their IDs. The API has no customer-delete endpoint, so the dedicated smoke-test customer is reused across runs. Pass `--keep-resources` to retain resources after a successful run too.
 
 ## Run against local or staging
 
