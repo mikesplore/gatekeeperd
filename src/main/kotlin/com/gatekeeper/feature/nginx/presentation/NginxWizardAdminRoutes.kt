@@ -120,19 +120,7 @@ fun Route.nginxWizardAdminRoutes(
             )
         }
 
-        post("/api/admin/nginx/wizard/validate/{slug}") {
-            val slug = call.parameters["slug"]
-            if (slug == null) {
-                call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing slug path parameter")
-                return@post
-            }
-
-            val project = projectRepository.findBySlug(slug)
-            if (project == null) {
-                call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
-                return@post
-            }
-
+        post("/api/admin/nginx/wizard/validate") {
             val body = try {
                 call.receive<NginxEnableRequest>()
             } catch (_: Exception) {
@@ -146,12 +134,12 @@ fun Route.nginxWizardAdminRoutes(
                 return@post
             }
             val selectedServiceId = serviceId
-            val service = serviceRepository.findByProjectAndId(project.id, selectedServiceId)
+            val service = serviceRepository.findById(selectedServiceId)
             if (service == null) {
                 call.respondError(
                     HttpStatusCode.BadRequest,
                     "invalid_service",
-                    "Selected service does not belong to this project"
+                    "Selected service was not found"
                 )
                 return@post
             }
@@ -173,7 +161,20 @@ fun Route.nginxWizardAdminRoutes(
                 )
                 return@post
             }
-            val serviceDomain = binding.domain
+            val serviceDomain = body.domain.trim().trimEnd('.').lowercase()
+            if (serviceDomain.isBlank() || serviceDomain != binding.domain.trim().trimEnd('.').lowercase()) {
+                call.respondError(
+                    HttpStatusCode.Conflict,
+                    "domain_binding_mismatch",
+                    "Selected domain does not match the selected service domain binding"
+                )
+                return@post
+            }
+            val project = projectRepository.findById(service.projectId)
+            if (project == null) {
+                call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project for this service was not found")
+                return@post
+            }
             val site = siteRepository.findByDomain(serviceDomain)
             if (site != null && site.serviceId != selectedServiceId) {
                 call.respondError(
@@ -184,7 +185,7 @@ fun Route.nginxWizardAdminRoutes(
                 return@post
             }
             val siteSlug = site?.projectSlug
-                ?: nginxSiteSlug(slug, service.isDefault, serviceDomain, service.domain)
+                ?: nginxSiteSlug(project.slug, service.isDefault, serviceDomain, service.domain)
 
             when (val result = planNginxEnableRequest.planNginxEnableRequest(
                 slug = siteSlug,

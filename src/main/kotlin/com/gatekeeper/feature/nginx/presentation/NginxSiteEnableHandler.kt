@@ -51,7 +51,11 @@ class NginxSiteEnableHandler(
 ) {
     suspend fun enable(call: ApplicationCall) {
         val body = call.receiveEnableRequestOrRespond() ?: return
-        val serviceId = fromString(body.serviceId)
+        val serviceId = runCatching { fromString(body.serviceId) }.getOrNull()
+        if (serviceId == null) {
+            call.respondError(HttpStatusCode.BadRequest, "invalid_service", "Selected service ID is invalid")
+            return
+        }
 
         val service = serviceRepository.findById(serviceId)
         if (service == null) {
@@ -84,7 +88,16 @@ class NginxSiteEnableHandler(
             return
         }
 
-        val requestedDomain = binding.domain
+        val requestedDomain = body.domain.trim().trimEnd('.').lowercase()
+        val boundDomain = binding.domain.trim().trimEnd('.').lowercase()
+        if (requestedDomain.isBlank() || requestedDomain != boundDomain) {
+            call.respondError(
+                HttpStatusCode.Conflict,
+                "domain_binding_mismatch",
+                "Selected domain does not match the selected service domain binding"
+            )
+            return
+        }
         val requestedContainerPort = binding.containerPort
         val site = siteRepository.findByDomain(requestedDomain)
         nginxServiceLogger.info("Selected domain: $requestedDomain, and ${site?.serviceId} is the service ID for the site")

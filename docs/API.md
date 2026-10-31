@@ -727,14 +727,14 @@ Fetch nginx state for a project's selected service, its active deployment's reso
 }
 ```
 
-### POST /api/admin/nginx/wizard/validate/{slug}
-Wizard helper: validate nginx enable inputs and return a config preview without applying changes.
+### POST /api/admin/nginx/wizard/validate
+Wizard helper: validate a selected service domain binding and return a config preview without applying changes.
 
 The selected service must have a saved gateway domain. Otherwise the request returns `service_domain_required`.
 
-**Request:** same as `POST /api/admin/nginx/enable/{slug}`
+**Request:** same structured body as `POST /api/admin/nginx/enable`.
 
-**Response:** same shape as `POST /api/admin/nginx/enable/{slug}`, but `message` indicates no changes were applied.
+**Response:** same shape as `POST /api/admin/nginx/enable`, but `message` indicates no changes were applied.
 
 ### GET /api/admin/nginx/status/{slug}
 Check if a project has an nginx site configured and enabled, and whether SSL is set up.
@@ -757,29 +757,20 @@ Check if a project has an nginx site configured and enabled, and whether SSL is 
 - `sslEnabled` is `true` if Gatekeeper can find a usable certificate for the project's `domain` (either a direct match, or a parent domain certificate).
 - `port` comes from the active deployment runtime record for Docker-discovery sites.
 
-### POST /api/admin/nginx/enable/{slug}
-Generate and enable an nginx site config for a service domain binding. `serviceId` is optional and defaults to the project's default service. `domain` selects a binding; `containerPort` may select the binding's published container port. If one port is published, it is selected automatically. When several ports are published, a port selection is required. The service's active deployment must publish the selected port.
+### POST /api/admin/nginx/enable
+Generate and enable an nginx site config for the selected service domain binding. The service ID, domain, and binding ID are required together. Gatekeeper verifies that the binding belongs to the service, is bound, and has the supplied domain.
 
 **Request:**
 ```json
 {
   "serviceId": "b0ee7a11-1a47-4fcb-9325-4e6c704f0311",
   "domain": "app.example.com",
-  "containerPort": 8080,
-  "port": 9921,
-  "upstreamScheme": "http",
-  "certificateDomain": "example.com",
-  "sslCertificatePath": "/etc/letsencrypt/live/example.com/fullchain.pem",
-  "sslCertificateKeyPath": "/etc/letsencrypt/live/example.com/privkey.pem",
+  "domainBindingId": "9f6fcb7a-625a-4bc5-8827-56ff516eed55",
   "requireSsl": false
 }
 ```
 
-- `port` is optional when the project has an active deployment with a resolvable runtime port.
-- `upstreamScheme` is optional. If omitted, Gatekeeper uses HTTP between nginx and the app; public TLS terminates at nginx.
-- `certificateDomain` is optional. If provided, it selects an installed certificate under `/etc/letsencrypt/live/{certificateDomain}/`.
-- `sslCertificatePath` and `sslCertificateKeyPath` are optional. If both are provided, they override all other certificate selection.
-- If no certificate selection is provided, Gatekeeper tries to reuse an installed certificate for the project's `domain` or its parent domains (e.g. reuse `example.com` for `acw.example.com`).
+- `domain` must match the selected bound domain (case-insensitive; an optional trailing dot is ignored).
 - `requireSsl` is optional. If `true` (the wizard default), the request fails when no certificate is found. If `false`, the site is enabled without SSL (port 80) when no certificate is found.
 
 **Response:**

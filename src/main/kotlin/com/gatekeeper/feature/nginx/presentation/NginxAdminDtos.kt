@@ -74,6 +74,7 @@ data class NginxReconciliationReport(
 @Serializable
 data class NginxEnableRequest(
     val serviceId: String,
+    val domain: String,
     val domainBindingId: String,
     val requireSsl: Boolean = true
 )

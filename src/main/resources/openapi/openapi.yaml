@@ -1637,14 +1637,14 @@ paths:
             schema:
               type: object
               additionalProperties: true
-  /api/admin/nginx/enable/{slug}:
+  /api/admin/nginx/enable:
     post:
       tags:
       - Nginx
-      summary: Submit or create nginx enable by slug
+      summary: Enable nginx for a selected service domain binding
       description: 'Implementation: `com/gatekeeper/admin/NginxAdminRoutes.kt:782`. This entry completes the route
         inventory; consult docs/API.md for operation-specific rules and payload details.'
-      operationId: PostApiAdminNginxEnableByslug
+      operationId: PostApiAdminNginxEnable
       responses:
         '200':
           description: Successful response; payload shape depends on the operation.
@@ -1655,12 +1655,6 @@ paths:
               schema:
                 $ref: '#/components/schemas/ApiError'
       x-code-location: com/gatekeeper/admin/NginxAdminRoutes.kt:782
-      parameters:
-      - name: slug
-        in: path
-        required: true
-        schema:
-          type: string
       requestBody:
         required: false
         description: JSON request fields are operation-specific; see the referenced source and docs/API.md.
@@ -2005,14 +1999,14 @@ paths:
         required: false
         schema:
           type: string
-  /api/admin/nginx/wizard/validate/{slug}:
+  /api/admin/nginx/wizard/validate:
     post:
       tags:
       - Nginx
-      summary: Submit or create nginx wizard validate by slug
+      summary: Preview nginx for a selected service domain binding
       description: 'Implementation: `com/gatekeeper/admin/NginxAdminRoutes.kt:561`. This entry completes the route
         inventory; consult docs/API.md for operation-specific rules and payload details.'
-      operationId: PostApiAdminNginxWizardValidateByslug
+      operationId: PostApiAdminNginxWizardValidate
       responses:
         '200':
           description: Successful response; payload shape depends on the operation.
@@ -2023,12 +2017,6 @@ paths:
               schema:
                 $ref: '#/components/schemas/ApiError'
       x-code-location: com/gatekeeper/admin/NginxAdminRoutes.kt:561
-      parameters:
-      - name: slug
-        in: path
-        required: true
-        schema:
-          type: string
       requestBody:
         required: false
         description: JSON request fields are operation-specific; see the referenced source and docs/API.md.

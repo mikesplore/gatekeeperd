@@ -174,8 +174,8 @@ The dashboard can resume setup using `GET /api/admin/project-setup/projects/{pro
 ### Nginx enable wizard
 
 1. **Context + options**: `GET /api/admin/nginx/wizard/context/{slug}` (cert list + inferred port hints)
-2. **Validate + preview**: `POST /api/admin/nginx/wizard/validate/{slug}` (returns config preview; no changes applied)
-3. **Apply**: `POST /api/admin/nginx/enable/{slug}`
+2. **Validate + preview**: `POST /api/admin/nginx/wizard/validate` with service ID, domain, and binding ID (returns config preview; no changes applied)
+3. **Apply**: `POST /api/admin/nginx/enable` with the same structured target
 
 ---
 
