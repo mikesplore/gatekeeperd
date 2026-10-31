@@ -41,6 +41,7 @@ import com.gatekeeper.feature.payment.domain.usecase.ApplyWebhookEvent
 import com.gatekeeper.feature.payment.domain.usecase.PaymentEffects
 import com.gatekeeper.feature.payment.domain.usecase.ReconcilePayments
 import com.gatekeeper.feature.payment.domain.usecase.InitiatePayment
+import com.gatekeeper.feature.payment.domain.usecase.PaymentServicePort
 import com.gatekeeper.feature.payment.domain.usecase.ProcessPaymentEvent
 import com.gatekeeper.feature.payment.domain.usecase.HandlePaystackWebhook
 import com.gatekeeper.feature.payment.domain.usecase.ReplayPaystackEvent
@@ -356,10 +357,10 @@ private val applicationModule = module {
     single { ProjectBalanceAdapter(get<PaymentDomainRepository>(), get<ProjectAdjustmentStore>(), get(),  get()) }
     single<PaymentEventDomainRepository> { ExposedPaymentEventRepository() }
     single { PaymentProjectAdapter(get<ProjectStore>(), get()) }
-    single { PaymentServiceAdapter() }
+    single<PaymentServicePort> { PaymentServiceAdapter() }
     single<ServiceMembershipRepository> { ExposedServiceMembershipRepository(get()) }
     single { PaymentBalanceAdapter(get<PaymentDomainRepository>(), get(), get(), get(), get()) }
-    single<PaymentEffects> { PaymentEffectsAdapter(get(), get(), get(), get(), get<ProjectStore>(), get()) }
+    single<PaymentEffects> { PaymentEffectsAdapter(get(), get(), get(), get<ProjectStore>(), get()) }
     single { ApplyWebhookEvent(get(), get()) }
     single { PaystackClient(get<AppSettings>().payment) }
     single<PaymentGateway>(named("paystackGateway")) { PaystackGateway(get<AppSettings>().payment, get<AppSettings>().integrations, get()) }
