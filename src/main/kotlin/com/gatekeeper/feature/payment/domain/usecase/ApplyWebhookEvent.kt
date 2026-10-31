@@ -12,7 +12,6 @@ class ApplyWebhookEvent(
 ) {
     operator fun invoke(command: Command): Boolean {
         var current = payments.findByProviderReference(command.provider, command.reference)
-            ?: payments.findByReference(command.reference)
         if (current?.status == command.status) return false
         val amount = command.amount ?: current?.amount ?: BigDecimal.ZERO
         if (command.status == "success") {

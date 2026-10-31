@@ -14,11 +14,11 @@ Gatekeeperd reads `GATEKEEPERD_ENVIRONMENT` to control host-privilege policy. Th
 ```env
 GATEKEEPERD_ENVIRONMENT=DEV
 GATEKEEPERD_NGINX_HOST_SUDO=true
-NGINX_SITES_AVAILABLE=/home/mike/IdeaProjects/gatekeeperd/nginx/sites-available
-NGX_SITES_ENABLED=/home/mike/IdeaProjects/gatekeeperd/nginx/sites-enabled
+NGINX_SITES_AVAILABLE=nginx/sites-available
+NGINX_SITES_ENABLED=nginx/sites-enabled
 ```
 
-In DEV, nginx host commands are **no-op by default** and certbot is disabled. Setting `GATEKEEPERD_NGINX_HOST_SUDO=true` enables a local nginx binary without `sudo`. The nginx system paths (`/etc/nginx`, `/etc/letsencrypt`) are only used in PROD.
+In DEV, nginx host commands are **no-op by default** and Certbot is disabled. Setting `GATEKEEPERD_NGINX_HOST_SUDO=true` enables direct, sudo-less nginx validation and reload against `nginx/nginx.conf`. Set `NGINX_BINARY` and `NGINX_CONFIG_PATH` for local overrides. Set `GATEKEEPERD_NGINX_CERTBOT_ENABLED=true` only when the restricted helper is installed. Nginx files and certificates use the configured local directories; system paths are used in PROD.
 
 ## Nginx Configuration
 

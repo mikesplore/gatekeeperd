@@ -31,6 +31,10 @@ class AppSettings private constructor(
 
     data class NginxSettings(
         val deploymentUpstreamsEnabled: Boolean,
+        val hostOperationsEnabled: Boolean,
+        val certbotEnabled: Boolean,
+        val nginxBinary: String,
+        val developmentConfigPath: String?,
         val sitesAvailablePath: String,
         val sitesEnabledPath: String,
         val upstreamIncludeDirectory: String,
@@ -115,7 +119,7 @@ class AppSettings private constructor(
 
     val environment: AppEnvironment by lazy {
         // Check the raw source or property value instead of the lazy property 'environment'
-        val rawEnv = optional("GATEKEEPERD_ENVIRONMENT", "PROD")
+        val rawEnv = optional("GATEKEEPERD_ENVIRONMENT", "DEV")
         AppEnvironment.fromValue(rawEnv)
     }
     val redis: RedisSettings by lazy { RedisSettings(required("REDIS_HOST"), optional("REDIS_PORT", "6379").toInt()) }
@@ -130,10 +134,17 @@ class AppSettings private constructor(
     }
     val nginx: NginxSettings by lazy {
         NginxSettings(
-            deploymentUpstreamsEnabled = boolean("NGINX_DEPLOYMENT_UPSTREAMS_ENABLED", true),
+            deploymentUpstreamsEnabled = boolean("NGINX_DEPLOYMENT_UPSTREAMS_ENABLED", environment != AppEnvironment.DEV),
+            hostOperationsEnabled = boolean("GATEKEEPERD_NGINX_HOST_SUDO", false),
+            certbotEnabled = boolean("GATEKEEPERD_NGINX_CERTBOT_ENABLED", false),
+            nginxBinary = optional("NGINX_BINARY", "/usr/sbin/nginx"),
+            developmentConfigPath = if (environment == AppEnvironment.DEV) optional("NGINX_CONFIG_PATH", "nginx/nginx.conf") else null,
             sitesAvailablePath = sitesAvailablePath(),
             sitesEnabledPath = sitesEnabledPath(),
-            upstreamIncludeDirectory = optional("NGINX_UPSTREAM_INCLUDE_DIR", "/etc/nginx/conf.d/gatekeeperd-upstreams"),
+            upstreamIncludeDirectory = optional(
+                "NGINX_UPSTREAM_INCLUDE_DIR",
+                if (environment == AppEnvironment.DEV) "nginx/conf.d/gatekeeperd-upstreams" else "/etc/nginx/conf.d/gatekeeperd-upstreams"
+            ),
             sslCertPath = sslCertPath(),
             customCertDirectory = customCertDirectory(),
             selfDomains = required("GATEKEEPERD_SELF_DOMAIN").split(',').map { it.trim().trimEnd('.').lowercase() },
@@ -209,10 +220,10 @@ class AppSettings private constructor(
         return start..end
     }
 
-    private fun sitesAvailablePath(): String = optional("NGINX_SITES_AVAILABLE", if (environment == AppEnvironment.DEV) "/home/mike/IdeaProjects/gatekeeperd/nginx/sites-available" else "/etc/nginx/sites-available")
-    private fun sitesEnabledPath(): String = optional("NGINX_SITES_ENABLED", if (environment == AppEnvironment.DEV) "/home/mike/IdeaProjects/gatekeeperd/nginx/sites-enabled" else "/etc/nginx/sites-enabled")
+    private fun sitesAvailablePath(): String = optional("NGINX_SITES_AVAILABLE", if (environment == AppEnvironment.DEV) "nginx/sites-available" else "/etc/nginx/sites-available")
+    private fun sitesEnabledPath(): String = optional("NGINX_SITES_ENABLED", if (environment == AppEnvironment.DEV) "nginx/sites-enabled" else "/etc/nginx/sites-enabled")
     private fun sslCertPath(): String = optional("NGINX_SSL_CERT_PATH", if (environment == AppEnvironment.DEV) customCertDirectory() else "/etc/letsencrypt/live")
-    private fun customCertDirectory(): String = optional("NGINX_CUSTOM_CERT_DIR", if (environment == AppEnvironment.DEV) "/home/mike/IdeaProjects/gatekeeperd/nginx/custom-certs" else "/etc/letsencrypt")
+    private fun customCertDirectory(): String = optional("NGINX_CUSTOM_CERT_DIR", if (environment == AppEnvironment.DEV) "nginx/custom-certs" else "/etc/letsencrypt")
     private fun corsHosts(): List<CorsHost> = optional(
         "CORS_ALLOWED_ORIGINS",
         "https://gatekeeperd.mikesplore.me,http://localhost:5173,http://localhost:8080"

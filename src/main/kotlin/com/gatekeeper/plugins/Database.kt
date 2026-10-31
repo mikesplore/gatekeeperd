@@ -7,6 +7,9 @@ import com.zaxxer.hikari.HikariDataSource
 import io.ktor.server.application.*
 import org.jetbrains.exposed.sql.Database
 import org.slf4j.LoggerFactory
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 
 private val logger = LoggerFactory.getLogger("com.gatekeeper.plugins.Database")
 
@@ -67,6 +70,39 @@ object DatabaseFactory {
                     statement.execute()
                 }
                 connection.commit()
+            }
+        }
+    }
+
+    /** Holds a PostgreSQL session advisory lock across a suspending operation. */
+    suspend fun <T> withAdvisoryLockSuspend(key: String, block: suspend () -> T): T {
+        val connection = withContext(Dispatchers.IO) { dataSource.connection }
+        var acquired = false
+        try {
+            withContext(Dispatchers.IO) {
+                connection.autoCommit = false
+                connection.prepareStatement("SELECT pg_advisory_lock(?)").use { statement ->
+                    statement.setLong(1, DistributedLock.lockId(key))
+                    statement.execute()
+                }
+                acquired = true
+            }
+            return block()
+        } finally {
+            withContext(NonCancellable + Dispatchers.IO) {
+                try {
+                    if (acquired) {
+                        connection.prepareStatement("SELECT pg_advisory_unlock(?)").use { statement ->
+                            statement.setLong(1, DistributedLock.lockId(key))
+                            statement.execute()
+                        }
+                        connection.commit()
+                    } else {
+                        connection.rollback()
+                    }
+                } finally {
+                    connection.close()
+                }
             }
         }
     }

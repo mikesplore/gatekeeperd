@@ -49,6 +49,7 @@ import com.gatekeeper.feature.payment.domain.usecase.VerifyPayment
 import com.gatekeeper.feature.payment.domain.usecase.ListPaymentEvents
 import com.gatekeeper.feature.payment.domain.usecase.GetPaymentMethodAvailability
 import com.gatekeeper.feature.payment.domain.usecase.HandleMpesaCallback
+import com.gatekeeper.feature.payment.domain.usecase.MpesaPaymentVerifier
 import com.gatekeeper.feature.payment.domain.usecase.MpesaCallbackDecoder
 import com.gatekeeper.feature.payment.domain.usecase.ListPayments
 import com.gatekeeper.feature.payment.domain.usecase.ReconcilePayment
@@ -176,9 +177,11 @@ private val applicationModule = module {
     single<TransactionRunner> { ExposedTransactionRunner() }
     single { NginxEnvironmentPolicy(
         environment = get<AppSettings.NginxSettings>().environment,
-        nginxHostSudoEnabled = false,
-        nginxCertbotEnabled = false,
-        customCertDirectory = null
+        nginxHostSudoEnabled = get<AppSettings.NginxSettings>().hostOperationsEnabled,
+        nginxCertbotEnabled = get<AppSettings.NginxSettings>().certbotEnabled,
+        customCertDirectory = get<AppSettings.NginxSettings>().customCertDirectory,
+        nginxBinary = get<AppSettings.NginxSettings>().nginxBinary,
+        developmentConfigPath = get<AppSettings.NginxSettings>().developmentConfigPath
     ) }
     single<NginxCommandRunner> { NginxCommandRunner(get<ProcessRunner>(), get<NginxEnvironmentPolicy>()) }
     single<NotificationRepository> { ExposedNotificationRepository() }
@@ -239,7 +242,7 @@ private val applicationModule = module {
         )
     }
     single { NginxConfigRendererService(get<NginxConfigRenderer>()) }
-    single { CertbotCertificateProvisioner(get(), get<AppSettings>().nginx.sslCertPath, get(), get(), get()) }
+    single { CertbotCertificateProvisioner(get(), get<AppSettings>().nginx.sslCertPath, get(), get(), get(), get()) }
     single<CertificateProvisioner> { get<CertbotCertificateProvisioner>() }
     single { RenderModelFromSite(get(), get()) }
     single {
@@ -379,7 +382,12 @@ private val applicationModule = module {
     single { ReplayPaystackEvent(get(), get()) }
     single { GetPaymentEventForReplay(get()) }
     single<MpesaCallbackDecoder> { JsonMpesaCallbackDecoder() }
-    single { HandleMpesaCallback(get(), get()) }
+    single<MpesaPaymentVerifier> {
+        MpesaPaymentVerifier { reference ->
+            get<ReconcilePayments>().reconcile("mpesa", reference)
+        }
+    }
+    single { HandleMpesaCallback(get(), get(), get()) }
     single { ListPaymentEvents(get()) }
     single { VerifyPayment(mapOf("paystack" to get(named("paystackGateway")), "mpesa" to get(named("mpesaGateway"))), get()) }
     single { CompletePaystackCallback(get<PaymentProjectAdapter>(), get()) }

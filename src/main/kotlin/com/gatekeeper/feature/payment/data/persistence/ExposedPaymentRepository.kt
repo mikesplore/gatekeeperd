@@ -21,7 +21,7 @@ class ExposedPaymentRepository : PaymentRepository {
             (Payments.provider eq provider.lowercase()) and
                 ((Payments.providerReference eq reference) or (Payments.paystackReference eq reference))
         }.singleOrNull()?.toDomain()
-    } ?: findByReference(reference)
+    } ?: if (provider.equals("paystack", ignoreCase = true)) findByReference(reference) else null
 
     override fun findById(id: UUID): Payment? = transaction {
         Payments.selectAll().where { Payments.id eq id }.singleOrNull()?.toDomain()

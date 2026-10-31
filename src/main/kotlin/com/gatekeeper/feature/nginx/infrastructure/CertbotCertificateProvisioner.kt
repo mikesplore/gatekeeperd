@@ -76,6 +76,7 @@ class CertbotCertificateProvisioner(
     }
 
     override fun installCertificate(domain: String, email: String): Boolean {
+        if (isDev && !policy.certbotEnabled) return false
         validator.requireValidHostname(domain)
         validator.requireValidEmail(email)
         certificateManagerIssue()?.let { issue ->
@@ -125,6 +126,7 @@ class CertbotCertificateProvisioner(
     }
 
     override fun removeCertificate(domain: String): Boolean {
+        if (isDev && !policy.certbotEnabled) return false
         validator.requireValidHostname(domain)
         if (selfDomainExclusion.excludesDomain(domain)) {
             logger.warn("Refusing to remove certificate $domain because it covers a Gatekeeperd self domain")

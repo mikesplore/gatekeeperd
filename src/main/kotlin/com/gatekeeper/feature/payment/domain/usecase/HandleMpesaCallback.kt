@@ -1,12 +1,11 @@
 package com.gatekeeper.feature.payment.domain.usecase
 
-import java.math.BigDecimal
-
 class HandleMpesaCallback(
     private val decoder: MpesaCallbackDecoder,
-    private val processPaymentEvent: ProcessPaymentEvent
+    private val processPaymentEvent: ProcessPaymentEvent,
+    private val paymentVerifier: MpesaPaymentVerifier
 ) {
-    operator fun invoke(rawPayload: String): ProcessPaymentEvent.Outcome {
+    suspend operator fun invoke(rawPayload: String): ProcessPaymentEvent.Outcome {
         val callback = decoder.decode(rawPayload)
             ?: return processPaymentEvent(
                 ProcessPaymentEvent.Command(
@@ -22,19 +21,27 @@ class HandleMpesaCallback(
             else -> null
         }
 
-        return processPaymentEvent(
+        val outcome = processPaymentEvent(
             ProcessPaymentEvent.Command(
                 provider = "mpesa", eventType = "stk_callback",
                 dedupeKey = "mpesa-callback:${callback.reference.orEmpty()}:${callback.resultCode}",
                 rawPayload = rawPayload, reference = callback.reference,
-                status = if (validationError == null) if (callback.resultCode == 0) "success" else "failed" else null,
-                verifiedVia = "webhook", amount = callback.amount, validationError = validationError
+                // Callback data is retained for audit, but never trusted to
+                // settle a payment. Daraja's STK query is authoritative.
+                status = null,
+                verifiedVia = "webhook", validationError = validationError
             )
         )
+        if (validationError == null) paymentVerifier.verify(callback.reference!!)
+        return outcome
     }
 }
 
-data class MpesaCallbackData(val reference: String?, val resultCode: Int?, val amount: BigDecimal?)
+fun interface MpesaPaymentVerifier {
+    suspend fun verify(reference: String)
+}
+
+data class MpesaCallbackData(val reference: String?, val resultCode: Int?)
 
 fun interface MpesaCallbackDecoder {
     fun decode(rawPayload: String): MpesaCallbackData?

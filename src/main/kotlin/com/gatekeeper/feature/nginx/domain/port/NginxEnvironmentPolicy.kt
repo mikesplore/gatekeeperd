@@ -17,7 +17,9 @@ class NginxEnvironmentPolicy(
     val environment: AppEnvironment,
     val nginxHostSudoEnabled: Boolean,
     val nginxCertbotEnabled: Boolean,
-    val customCertDirectory: String?
+    val customCertDirectory: String?,
+    val nginxBinary: String = "/usr/sbin/nginx",
+    val developmentConfigPath: String? = null
 ) {
     val isDev: Boolean = environment == AppEnvironment.DEV
 
@@ -31,20 +33,29 @@ class NginxEnvironmentPolicy(
     val customCertDirectoryAllowed: Boolean = isDev && customCertDirectory != null
 
     fun nginxTestCommand(): List<String> = if (isHostMutationAllowed) {
-        listOf("/usr/sbin/nginx", "-t")
+        nginxCommand("-t")
     } else {
         listOf("true")
     }
 
     fun nginxReloadCommand(): List<String> = if (isHostMutationAllowed) {
-        listOf("/bin/systemctl", "reload", "nginx")
+        if (isDev && developmentConfigPath != null) nginxCommand("-s", "reload")
+        else listOf("/bin/systemctl", "reload", "nginx")
     } else {
         listOf("true")
     }
 
     fun nginxDumpCommand(): List<String> = if (isHostMutationAllowed) {
-        listOf("/usr/sbin/nginx", "-T")
+        nginxCommand("-T")
     } else {
         listOf("true")
+    }
+
+    private fun nginxCommand(vararg arguments: String): List<String> = buildList {
+        add(nginxBinary)
+        addAll(arguments)
+        if (isDev && developmentConfigPath != null) {
+            addAll(listOf("-c", developmentConfigPath, "-p", "."))
+        }
     }
 }

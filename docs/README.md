@@ -233,10 +233,14 @@ Gatekeeperd persists Scribed suspension and payment notifications in the Postgre
 | `DOCKER_SOCKET` | No | Default `unix:///var/run/docker.sock` |
 | `DEPLOYMENT_HOST_PORT_RANGE` | No | Stable host-port pool for managed blue/green deployments; default `32000-40000`. Reserve the range for Gatekeeperd on the Docker host. |
 | `DEPLOYMENT_DRAIN_DELAY_SECONDS` | No | Delay before retiring the previous runtime after a successful nginx cutover probe; default `5`, range `0-300`. |
-| `NGINX_DEPLOYMENT_UPSTREAMS_ENABLED` | No | Run the strict nginx include directory/configuration bootstrap; defaults to `true`. Set `false` only for local development without nginx. |
-| `NGINX_UPSTREAM_INCLUDE_DIR` | No | Writable per-service upstream include directory; default `/etc/nginx/conf.d/gatekeeperd-upstreams`. Nginx must include `<directory>/*.conf` inside `http {}`. |
+| `NGINX_DEPLOYMENT_UPSTREAMS_ENABLED` | No | Run the strict nginx include directory/configuration bootstrap; defaults to `false` in DEV and `true` in PROD. |
+| `NGINX_UPSTREAM_INCLUDE_DIR` | No | Writable per-service upstream include directory; defaults under `./nginx` in DEV and `/etc/nginx/conf.d/gatekeeperd-upstreams` in PROD. Nginx must include `<directory>/*.conf` inside `http {}`. |
 | `GATEKEEPER_INTERNAL_NETWORK` | No | Default `gatekeeper-internal` |
-| `GATEKEEPERD_ENVIRONMENT` | No | `DEV` or `PROD`; default `DEV`. Switches nginx/certbot privilege and host-operation policy. DEV disables sudo/certbot install-rename operations by default and routes nginx/certbot paths to local-directory overrides. PROD uses /etc/nginx + /etc/letsencrypt with restricted sudo -n. |
+| `GATEKEEPERD_ENVIRONMENT` | No | `DEV` or `PROD`; default `DEV`. Switches nginx and certificate paths and host-operation policy. DEV uses local-directory overrides and disables host commands and Certbot by default. PROD uses system nginx and `/etc/letsencrypt` paths; the service account must have the host permissions required by the installation. |
+| `GATEKEEPERD_NGINX_HOST_SUDO` | No | DEV-only opt-in to invoke local nginx/systemctl directly, without sudo. Defaults to `false`; the name is retained for compatibility. |
+| `GATEKEEPERD_NGINX_CERTBOT_ENABLED` | No | DEV-only opt-in to certificate helper operations. Defaults to `false`; requires the restricted Certbot helper and its sudoers rule. |
+| `NGINX_BINARY` | No | Nginx executable; defaults to `/usr/sbin/nginx`. Can be overridden for local development. |
+| `NGINX_CONFIG_PATH` | No | DEV-only nginx config file; defaults to `nginx/nginx.conf` and is used for local validation and reload commands. |
 | `NGINX_CUSTOM_CERT_DIR` | No | DEV-only. Filesystem path (e.g. `/etc/letsencrypt/custom`) where certbot helper output is written instead of `NGINX_SSL_CERT_PATH` when present. |
 | `DEFAULT_GRACE_PERIOD_DAYS` | No | Default `3` |
 | `FAIL_MODE` | No | `open` or `closed` |

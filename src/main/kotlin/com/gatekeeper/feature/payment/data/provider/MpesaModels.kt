@@ -12,6 +12,7 @@ import kotlinx.serialization.Serializable
 @Serializable data class MpesaStkResponse(
     val MerchantRequestID: String? = null, val CheckoutRequestID: String? = null,
     val ResponseCode: String? = null, val ResponseDescription: String? = null,
+    val ResultCode: Int? = null, val ResultDesc: String? = null,
     val CustomerMessage: String? = null
 )
 @Serializable data class MpesaCallback(val Body: MpesaCallbackBody? = null)

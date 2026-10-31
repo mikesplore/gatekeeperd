@@ -67,9 +67,17 @@ class MpesaGateway(private val settings: AppSettings.PaymentSettings) : PaymentG
             bearerAuth(token()); contentType(ContentType.Application.Json)
             setBody(mapOf("BusinessShortCode" to settings.mpesaShortCode, "Password" to password, "Timestamp" to timestamp, "CheckoutRequestID" to reference))
         }.body<MpesaStkResponse>()
-        val status = when (response.ResponseCode) { "0" -> "success"; "1032" -> "abandoned"; else -> "pending" }
-        VerifiedPayment(status)
+        // ResponseCode only confirms that Daraja accepted the query. ResultCode
+        // carries the checkout transaction outcome and must drive payment state.
+        VerifiedPayment(mpesaQueryStatus(response.ResultCode))
     }
 
     fun close() = http.close()
+}
+
+internal fun mpesaQueryStatus(resultCode: Int?): String = when (resultCode) {
+    0 -> "success"
+    1032 -> "abandoned"
+    null -> "pending"
+    else -> "failed"
 }

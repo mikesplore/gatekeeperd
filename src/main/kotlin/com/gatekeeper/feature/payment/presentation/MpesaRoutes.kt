@@ -1,6 +1,7 @@
 package com.gatekeeper.feature.payment.presentation
 
 import com.gatekeeper.api.respondError
+import com.gatekeeper.api.InputValidators
 import com.gatekeeper.feature.payment.domain.usecase.HandleMpesaCallback
 import com.gatekeeper.feature.payment.domain.usecase.InitiatePayment
 import org.koin.ktor.ext.get
@@ -12,23 +13,38 @@ import io.ktor.server.routing.*
 import kotlinx.serialization.Serializable
 
 @Serializable
+data class MpesaPaymentRequest(
+    val projectSlug: String,
+    val serviceId: String,
+    val phoneNumber: String,
+    val amount: String? = null
+)
+
+@Serializable
 data class MpesaCallbackAck(val ResultCode: Int = 0, val ResultDesc: String = "Accepted")
 
 fun Application.configureMpesaRoutes() {
     val handleMpesaCallback = get<HandleMpesaCallback>()
     routing {
         post("/api/mpesa/pay") {
-            val slug = call.request.queryParameters["project"]
-            val phone = call.request.queryParameters["phone"]
-            val amountText = call.request.queryParameters["amount"]
+            val request = runCatching { call.receive<MpesaPaymentRequest>() }.getOrElse {
+                call.respondError(HttpStatusCode.BadRequest, "invalid_request", "A valid M-Pesa payment request body is required")
+                return@post
+            }
+            val slug = InputValidators.normalizeSlug(request.projectSlug)
+            if (slug == null) {
+                call.respondError(HttpStatusCode.BadRequest, "invalid_project_slug", "A valid project slug is required")
+                return@post
+            }
+            val phone = request.phoneNumber
+            val amountText = request.amount
             val amount = amountText?.toBigDecimalOrNull()
             if (amountText != null && amount == null) {
                 call.respondError(HttpStatusCode.BadRequest, "invalid_payment_amount", "M-Pesa payment amount must be a whole KES amount")
                 return@post
             }
-            val serviceIdText = call.request.queryParameters["serviceId"]
-            val serviceId = serviceIdText?.let { runCatching { java.util.UUID.fromString(it) }.getOrNull() }
-            if (serviceIdText != null && serviceId == null) {
+            val serviceId = runCatching { java.util.UUID.fromString(request.serviceId) }.getOrNull()
+            if (serviceId == null) {
                 call.respondError(HttpStatusCode.BadRequest, "invalid_service_id", "A valid service ID is required")
                 return@post
             }

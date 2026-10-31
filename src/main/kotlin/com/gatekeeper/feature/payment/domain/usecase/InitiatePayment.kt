@@ -5,6 +5,7 @@ import com.gatekeeper.feature.payment.domain.gateway.PaymentGateway
 import com.gatekeeper.feature.payment.domain.repository.PaymentRepository
 import com.gatekeeper.feature.payment.domain.model.MpesaPhoneNumber
 import com.gatekeeper.feature.service.domain.repository.ServiceRepository
+import com.gatekeeper.plugins.DistributedLock
 import java.math.BigDecimal
 import java.util.UUID
 
@@ -19,6 +20,7 @@ class InitiatePayment(
     suspend operator fun invoke(command: Command): Result<PaymentInitiation> = runCatching {
         if (command.projectSlug.isBlank()) invalid("missing_payment_details", "project is required")
         val serviceId = command.serviceId ?: invalid("service_required", "Choose a service to pay for")
+        DistributedLock.withSuspendLock("payment-initiation:$serviceId") {
         val project = projects.find(command.projectSlug) ?: fail("project_not_found", "Project not found", FailureKind.NOT_FOUND)
         if (!services.belongsToProject(serviceRepository, project.id, serviceId)) {
             fail("service_not_found", "Service not found for this project", FailureKind.NOT_FOUND)
@@ -53,6 +55,7 @@ class InitiatePayment(
         }
         payments.create(project.id, gateway.provider, initiated.reference, amount, "pending", authorizationUrl = initiated.authorizationUrl, serviceId = serviceId)
         PaymentInitiation(initiated.reference, initiated.authorizationUrl, amount)
+        }
     }
 
     data class Command(

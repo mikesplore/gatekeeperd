@@ -23,6 +23,8 @@ import com.gatekeeper.feature.payment.domain.usecase.PaymentServicePort
 import com.gatekeeper.feature.payment.domain.usecase.ProcessPaymentEvent
 import com.gatekeeper.feature.payment.domain.usecase.HandleMpesaCallback
 import com.gatekeeper.feature.payment.domain.usecase.MpesaCallbackData
+import com.gatekeeper.feature.payment.domain.usecase.MpesaPaymentVerifier
+import com.gatekeeper.feature.payment.data.provider.mpesaQueryStatus
 import com.gatekeeper.feature.payment.domain.usecase.GetPaymentMethodAvailability
 import com.gatekeeper.feature.payment.domain.usecase.PaymentProviderReadiness
 import com.gatekeeper.feature.service.domain.repository.ServiceRecord
@@ -35,6 +37,10 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.runBlocking
 
 class PaymentUseCasesTest {
     @Test
@@ -48,6 +54,24 @@ class PaymentUseCasesTest {
         assertFalse(useCase(command()))
         assertEquals("success", repository.payment?.status)
         assertEquals(1, effects.successCount)
+    }
+
+    @Test
+    fun `provider event cannot settle a payment recorded under another provider`() {
+        val repository = FakePaymentRepository(payment())
+        val effects = FakePaymentEffects()
+        val useCase = ApplyWebhookEvent(repository, effects)
+
+        assertFalse(
+            useCase(
+                ApplyWebhookEvent.Command(
+                    provider = "mpesa", reference = "ref-1", status = "success",
+                    verifiedVia = "test", amount = BigDecimal("20.00"), currency = "KES"
+                )
+            )
+        )
+        assertEquals("pending", repository.payment?.status)
+        assertEquals(0, effects.successCount)
     }
 
     @Test
@@ -124,6 +148,41 @@ class PaymentUseCasesTest {
     }
 
     @Test
+    fun `payment initiation serializes balance check provider call and pending record per service`() = runBlocking {
+        val projectId = UUID.randomUUID()
+        val serviceId = UUID.randomUUID()
+        val repository = FakePaymentRepository(null)
+        var gatewayCalls = 0
+        val gateway = object : PaymentGateway {
+            override val provider = "mpesa"
+            override suspend fun initiate(command: InitiatePaymentCommand): Result<InitiatedPayment> {
+                gatewayCalls++
+                delay(30)
+                return Result.success(InitiatedPayment("checkout-$gatewayCalls"))
+            }
+            override suspend fun verify(reference: String) = Result.failure<VerifiedPayment>(UnsupportedOperationException())
+        }
+        val useCase = InitiatePayment(
+            repository,
+            object : PaymentProjectPort { override fun find(slug: String) = PaymentProject(projectId, slug, "KES", null) },
+            object : PaymentBalancePort {
+                override suspend fun availableAmount(serviceRepository: ServiceRepository, projectId: UUID, requestedAmount: BigDecimal?) =
+                    if (repository.payment?.status == "pending") error("A payment is already pending") else BigDecimal("50")
+            },
+            mapOf("mpesa" to gateway), unusedServiceRepository(), PaymentServicePort { _, _, _ -> true }
+        )
+        val command = InitiatePayment.Command("mpesa", "demo", BigDecimal("25"), phone = "254712345678", currency = "KES", serviceId = serviceId)
+
+        val first = async(Dispatchers.Default) { useCase(command) }
+        val second = async(Dispatchers.Default) { useCase(command) }
+        val results = listOf(first.await(), second.await())
+
+        assertEquals(1, results.count { it.isSuccess })
+        assertEquals(1, gatewayCalls)
+        assertEquals("pending", repository.payment?.status)
+    }
+
+    @Test
     fun `provider event is applied once and recorded as processed`() {
         val repository = FakePaymentRepository(payment())
         val events = FakePaymentEventRepository()
@@ -144,21 +203,26 @@ class PaymentUseCasesTest {
     }
 
     @Test
-    fun `mpesa callback use case translates successful result and applies payment`() {
+    fun `mpesa callback never applies callback result without provider verification`() = kotlinx.coroutines.runBlocking {
         val repository = FakePaymentRepository(payment().copy(provider = "mpesa", reference = "checkout-1", providerReference = "checkout-1"))
         val events = FakePaymentEventRepository()
+        val effects = FakePaymentEffects()
         val process = ProcessPaymentEvent(
             repository, events,
             object : PaymentProjectPort { override fun find(slug: String) = null },
-            ApplyWebhookEvent(repository, FakePaymentEffects())
+            ApplyWebhookEvent(repository, effects)
         )
+        var verifiedReference: String? = null
         val useCase = HandleMpesaCallback(
-            { MpesaCallbackData("checkout-1", 0, BigDecimal("20.00")) },
-            process
+            { MpesaCallbackData("checkout-1", 0) },
+            process,
+            MpesaPaymentVerifier { reference -> verifiedReference = reference }
         )
 
         assertEquals(ProcessPaymentEvent.Outcome.PROCESSED, useCase("callback"))
-        assertEquals("success", repository.payment?.status)
+        assertEquals("checkout-1", verifiedReference)
+        assertEquals("pending", repository.payment?.status)
+        assertEquals(0, effects.successCount)
         assertEquals("processed", events.status)
     }
 
@@ -171,6 +235,14 @@ class PaymentUseCasesTest {
         assertTrue(useCase("KES").mpesa)
         assertFalse(useCase("USD").mpesa)
         assertTrue(useCase("USD").paystack)
+    }
+
+    @Test
+    fun `mpesa query acceptance alone does not mean payment succeeded`() {
+        assertEquals("pending", mpesaQueryStatus(null))
+        assertEquals("success", mpesaQueryStatus(0))
+        assertEquals("abandoned", mpesaQueryStatus(1032))
+        assertEquals("failed", mpesaQueryStatus(1))
     }
 
     private fun command(amount: BigDecimal = BigDecimal("20.00")) = ApplyWebhookEvent.Command(

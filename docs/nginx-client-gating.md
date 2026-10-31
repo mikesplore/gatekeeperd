@@ -138,11 +138,11 @@ See the root `docs/README.md` for the full environment-variable reference.
 ```env
 GATEKEEPERD_ENVIRONMENT=DEV
 GATEKEEPERD_NGINX_HOST_SUDO=true
-NGINX_SITES_AVAILABLE=/home/mike/IdeaProjects/gatekeeperd/nginx/sites-available
-NGX_SITES_ENABLED=/home/mike/IdeaProjects/gatekeeperd/nginx/sites-enabled
+NGINX_SITES_AVAILABLE=nginx/sites-available
+NGINX_SITES_ENABLED=nginx/sites-enabled
 ```
 
-In DEV, nginx host operations are **no-op by default** and certbot install/renew/remove are disabled. With `GATEKEEPERD_NGINX_HOST_SUDO=true` an explicit local `nginx` binary runs without `sudo -n`. All nginx paths are overridable to local directories, so the full site-creation, staging, and activation flow can be tested inside your project directory.
+In DEV, nginx host commands are **no-op by default**. Set `GATEKEEPERD_NGINX_HOST_SUDO=true` only when a local nginx installation is available; Gatekeeperd then runs `nginx -t` and `nginx -s reload` directly against `nginx/nginx.conf`, without sudo or systemd. Set `NGINX_BINARY` and `NGINX_CONFIG_PATH` if your local installation differs. Nginx files and certificates use project-local paths. Certbot install, renewal, and removal remain disabled in DEV unless `GATEKEEPERD_NGINX_CERTBOT_ENABLED=true` is explicitly set and the restricted helper is installed.
 
 ### PROD (VPS)
 

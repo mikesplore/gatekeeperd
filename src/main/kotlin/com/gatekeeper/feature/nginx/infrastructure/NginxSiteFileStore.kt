@@ -52,7 +52,7 @@ class NginxSiteFileStore(
         if (!target.exists()) return false
         if (link.exists()) link.delete()
         return try {
-            Files.createSymbolicLink(link.toPath(), target.toPath())
+            Files.createSymbolicLink(link.toPath(), target.toPath().toAbsolutePath())
             true
         } catch (e: Exception) {
             false
@@ -189,7 +189,7 @@ class NginxSiteFileStore(
 
     override fun replaceEnabledSymlink(availableFile: File, enabledFile: File) {
         Files.deleteIfExists(enabledFile.toPath())
-        Files.createSymbolicLink(enabledFile.toPath(), availableFile.toPath())
+        Files.createSymbolicLink(enabledFile.toPath(), availableFile.toPath().toAbsolutePath())
     }
 
     override fun restoreActivatedSite(availableFile: File, enabledFile: File, backup: File?) {

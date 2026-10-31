@@ -7666,11 +7666,11 @@
           "Payments"
         ],
         "summary": "Submit or create mpesa pay",
-        "description": "Implementation: `com/gatekeeper/feature/payment/presentation/MpesaRoutes.kt:20`. This entry completes the route inventory; consult docs/API.md for operation-specific rules and payload details.",
+        "description": "Starts an M-Pesa STK Push from a structured payment request. A callback is audited and verified against Daraja before settlement.",
         "operationId": "PostApiMpesaPay",
         "responses": {
-          "200": {
-            "description": "Successful response; payload shape depends on the operation."
+          "202": {
+            "description": "Payment request accepted."
           },
           "default": {
             "description": "Operation-specific error response. The API uses the standard error object when applicable.",
@@ -7683,49 +7683,20 @@
             }
           }
         },
-        "x-code-location": "com/gatekeeper/feature/payment/presentation/MpesaRoutes.kt:20",
-        "parameters": [
-          {
-            "name": "amount",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "phone",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "project",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "serviceId",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
+        "x-code-location": "com/gatekeeper/feature/payment/presentation/MpesaRoutes.kt:29",
         "requestBody": {
-          "required": false,
-          "description": "JSON request fields are operation-specific; see the referenced source and docs/API.md.",
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "additionalProperties": true
+                "required": ["projectSlug", "serviceId", "phoneNumber"],
+                "properties": {
+                  "projectSlug": { "type": "string" },
+                  "serviceId": { "type": "string", "format": "uuid" },
+                  "phoneNumber": { "type": "string" },
+                  "amount": { "type": "string", "description": "Optional whole-KES amount; defaults to the outstanding balance." }
+                }
               }
             }
           }

@@ -5,10 +5,13 @@ import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock as withSuspendMutex
 
 /** PostgreSQL advisory lock with a process-local fallback for isolated tests. */
 object DistributedLock {
     private val localLocks = ConcurrentHashMap<String, ReentrantLock>()
+    private val localSuspendLocks = ConcurrentHashMap<String, Mutex>()
     private val heldKeys = ThreadLocal.withInitial { mutableSetOf<String>() }
 
     fun <T> withLock(key: String, block: () -> T): T {
@@ -34,6 +37,13 @@ object DistributedLock {
             return try { guarded() } finally { lock.unlock() }
         }
         return DatabaseFactory.tryWithAdvisoryLock(key, ::guarded)
+    }
+
+    suspend fun <T> withSuspendLock(key: String, block: suspend () -> T): T {
+        if (!DatabaseFactory.isInitialized()) {
+            return localSuspendLocks.computeIfAbsent(key) { Mutex() }.withSuspendMutex { block() }
+        }
+        return DatabaseFactory.withAdvisoryLockSuspend(key, block)
     }
 
     internal fun lockId(key: String): Long {
