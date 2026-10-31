@@ -20,8 +20,8 @@ import java.time.Instant
 
 class NginxSiteFileStore(
     private val settings: AppSettings.NginxSettings,
-    private val sitesEnabledPath: String = "/etc/nginx/sites-enabled",
-    private val sitesAvailablePath: String = "/etc/nginx/sites-available",
+    private val sitesEnabledPath: String = settings.sitesEnabledPath,
+    private val sitesAvailablePath: String = settings.sitesAvailablePath,
     private val nginxDomainRules: DomainRules,
     private val nginxTestRunner: () -> NginxTestResult,
     private val nginxReloadRunner: () -> Boolean,
@@ -168,6 +168,7 @@ class NginxSiteFileStore(
         // Keep the name visible to nginx's usual `sites-enabled/*` include glob.
         val stagedLink = File(sitesEnabledPath, "gatekeeperd-staged-$slug-${System.nanoTime()}")
         return try {
+            stagedLink.parentFile.mkdirs()
             Files.createSymbolicLink(stagedLink.toPath(), stagedFile.toPath())
             testNginxConfigDetailed()
         } finally {

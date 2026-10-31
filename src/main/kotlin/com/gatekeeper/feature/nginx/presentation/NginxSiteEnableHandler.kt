@@ -100,7 +100,9 @@ class NginxSiteEnableHandler(
         }
         val requestedContainerPort = binding.containerPort
         val site = siteRepository.findByDomain(requestedDomain)
-        nginxServiceLogger.info("Selected domain: $requestedDomain, and ${site?.serviceId} is the service ID for the site")
+        nginxServiceLogger.info(
+            "Selected domain: $requestedDomain; existing site service ID: ${site?.serviceId?.toString() ?: "none"}; selected service ID: $serviceId"
+        )
 
         if (site != null && site.serviceId != serviceId) {
             call.respondError(

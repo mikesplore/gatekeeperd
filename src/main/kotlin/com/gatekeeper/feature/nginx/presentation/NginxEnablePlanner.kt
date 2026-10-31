@@ -1,7 +1,6 @@
 package com.gatekeeper.feature.nginx.presentation
 
 import com.gatekeeper.docker.DockerGateway
-import com.gatekeeper.feature.nginx.domain.port.NginxSiteStorage
 import com.gatekeeper.feature.nginx.domain.port.PortProbe
 import com.gatekeeper.feature.nginx.domain.service.NginxValidationService
 import com.gatekeeper.feature.nginx.domain.service.UpstreamValidation
@@ -13,7 +12,6 @@ import io.ktor.http.HttpStatusCode
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.putJsonArray
-import org.slf4j.LoggerFactory
 import kotlin.collections.contains
 import kotlin.collections.isNotEmpty
 import kotlin.collections.orEmpty
