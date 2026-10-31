@@ -17,25 +17,24 @@ import kotlinx.serialization.json.contentOrNull
 
 /** Adapter for project state and integration effects owned by other features. */
 class PaymentEffectsAdapter(
-    private val projectBalances: ProjectBalanceAdapter,
     private val auditRepository: AuditRepository,
     private val outbox: IntegrationOutboxRepository,
     private val scribed: ScribedIntegrationClient,
     private val projects: ProjectRepository,
     private val serviceRepository: ServiceRepository
 ) : PaymentEffects {
-    override fun acceptSuccessfulPayment(payment: Payment?, projectId: java.util.UUID, amount: BigDecimal, currency: String?): Boolean {
+    override fun acceptSuccessfulPayment(payment: Payment?, projectId: java.util.UUID, serviceId: java.util.UUID?, amount: BigDecimal, currency: String?): Boolean {
         val project = projects.findById(projectId) ?: return false
         if (!currency.isNullOrBlank() && !project.currency.equals(currency, ignoreCase = true)) return false
-        val serviceId = payment?.serviceId ?: return false
-        val invoice = runBlocking { scribed.serviceInvoiceStatus(serviceId.toString()) }
+        val paymentServiceId = payment?.serviceId ?: serviceId ?: return false
+        val invoice = runBlocking { scribed.serviceInvoiceStatus(paymentServiceId.toString()) }
         if (invoice.status?.value !in 200..299) return false
         val invoiceData = invoice.body?.get("invoice")?.jsonObject ?: return false
         val serviceCurrency = invoiceData["currency"]?.jsonPrimitive?.contentOrNull
         if (!currency.isNullOrBlank() && !serviceCurrency.isNullOrBlank() && !currency.equals(serviceCurrency, ignoreCase = true)) return false
         val outstanding = invoiceData["balance"]?.jsonPrimitive?.contentOrNull?.toBigDecimalOrNull() ?: return false
         return outstanding > BigDecimal.ZERO && amount <= outstanding &&
-            (payment.status != "pending" || amount.compareTo(payment.amount) == 0)
+            (payment?.status != "pending" || amount.compareTo(payment.amount) == 0)
     }
 
     override fun paymentSucceeded(payment: Payment, amount: BigDecimal, currency: String?, paidAt: LocalDateTime?, actor: String) {

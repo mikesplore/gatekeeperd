@@ -2870,9 +2870,8 @@ paths:
     delete:
       tags:
       - Projects
-      summary: Delete projects by projectid services by serviceid
-      description: 'Implementation: `com/gatekeeper/admin/ServiceAdminRoutes.kt:224`. This entry completes the route
-        inventory; consult docs/API.md for operation-specific rules and payload details.'
+      summary: Delete a service and its runtime resources
+      description: 'Removes service Nginx sites and exclusively associated deployment containers. Container cleanup must complete before the service record is deleted; payment, audit, notification, and deployment history is retained.'
       operationId: DeleteApiAdminProjectsByprojectIdServicesByserviceId
       responses:
         '200':
@@ -3529,6 +3528,23 @@ paths:
       responses:
         '200':
           description: Payment recorded
+  /api/admin/services/{serviceId}/payments/cash:
+    post:
+      tags:
+      - Payments
+      summary: Record service cash payment
+      operationId: PostApiAdminServicePaymentsCash
+      responses:
+        '201':
+          description: Payment recorded
+        '404':
+          description: Service not found
+      parameters:
+      - name: serviceId
+        in: path
+        required: true
+        schema:
+          type: string
   /api/admin/projects/{slug}/invoice:
     get:
       tags:

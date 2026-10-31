@@ -20,6 +20,7 @@ import com.gatekeeper.feature.payment.domain.usecase.ReconcilePayment
 import com.gatekeeper.feature.payment.domain.usecase.RecordCashPayment
 import com.gatekeeper.feature.payment.domain.usecase.GetPaymentRevenue
 import com.gatekeeper.feature.payment.domain.repository.ServiceMembershipRepository
+import com.gatekeeper.feature.service.domain.repository.ServiceRepository
 import com.gatekeeper.feature.payment.domain.usecase.ListProjectPayments
 import com.gatekeeper.feature.payment.domain.usecase.ListServicePayments
 import com.gatekeeper.feature.payment.domain.usecase.InitiatePayment
@@ -53,6 +54,26 @@ data class ProjectPaymentsPageResponse(val payments: List<PaymentResponse>, val 
 
 @Serializable
 data class ReconcilePaymentResponse(val id: String, val reconciled: Boolean, val gatewayStatus: String?)
+
+private suspend fun ApplicationCall.captureCashPayment(serviceId: UUID) {
+    val request = receive<CaptureCashPaymentRequest>()
+    if (request.amount <= 0.0 || !request.amount.isFinite()) {
+        respondError(HttpStatusCode.BadRequest, "invalid_payment_amount", "Payment amount must be greater than zero")
+        return
+    }
+    val paidAt = request.paidAt?.let { runCatching { LocalDateTime.parse(it) }.getOrNull() }
+    val actor = principal<io.ktor.server.auth.jwt.JWTPrincipal>()?.payload?.subject ?: "unknown"
+    application.get<RecordCashPayment>()(
+        RecordCashPayment.Command(serviceId, BigDecimal.valueOf(request.amount), request.currency, paidAt, request.receiptNumber, request.notes, actor)
+    ).fold(
+        onSuccess = { payment -> respond(HttpStatusCode.Created, mapOf("provider" to payment.provider, "reference" to payment.providerReference, "status" to payment.status)) },
+        onFailure = { error ->
+            val code = if (error.message == "Service not found") "service_not_found" else "payment_capture_rejected"
+            val status = if (error.message == "Service not found") HttpStatusCode.NotFound else HttpStatusCode.BadRequest
+            respondError(status, code, error.message ?: "Cash payment was rejected")
+        }
+    )
+}
 
 fun Application.configurePaymentAdminRoutes() {
     routing {
@@ -90,29 +111,21 @@ fun Application.configurePaymentAdminRoutes() {
                 )
             }
 
+            post("/api/admin/services/{serviceId}/payments/cash") {
+                val serviceId = runCatching { UUID.fromString(call.parameters["serviceId"]) }.getOrNull()
+                    ?: return@post call.respondError(HttpStatusCode.BadRequest, "invalid_service_id", "Service ID is invalid")
+                call.captureCashPayment(serviceId)
+            }
+
             post("/api/admin/projects/{projectId}/services/{serviceId}/payments/cash") {
                 val projectId = runCatching { UUID.fromString(call.parameters["projectId"]) }.getOrNull()
                     ?: return@post call.respondError(HttpStatusCode.BadRequest, "invalid_project_id", "Project ID is invalid")
-                val project = call.application.get<ProjectRepository>().findById(projectId)
-                    ?: return@post call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
                 val serviceId = runCatching { UUID.fromString(call.parameters["serviceId"]) }.getOrNull()
                     ?: return@post call.respondError(HttpStatusCode.BadRequest, "invalid_service_id", "Service ID is invalid")
-                val request = call.receive<CaptureCashPaymentRequest>()
-                if (request.amount <= 0.0 || !request.amount.isFinite()) {
-                    return@post call.respondError(HttpStatusCode.BadRequest, "invalid_payment_amount", "Payment amount must be greater than zero")
+                if (call.application.get<ServiceRepository>().findByProjectAndId(projectId, serviceId) == null) {
+                    return@post call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found for this project")
                 }
-                val paidAt = request.paidAt?.let { runCatching { LocalDateTime.parse(it) }.getOrNull() }
-                val actor = call.principal<io.ktor.server.auth.jwt.JWTPrincipal>()?.payload?.subject ?: "unknown"
-                call.application.get<RecordCashPayment>()(
-                    RecordCashPayment.Command(project.slug, BigDecimal.valueOf(request.amount), request.currency, paidAt, request.receiptNumber, request.notes, actor, serviceId)
-                ).fold(
-                    onSuccess = { payment -> call.respond(HttpStatusCode.Created, mapOf("provider" to payment.provider, "reference" to payment.providerReference, "status" to payment.status)) },
-                    onFailure = { error ->
-                        val code = if (error.message == "Project not found") "project_not_found" else "payment_capture_rejected"
-                        val status = if (error.message == "Project not found") HttpStatusCode.NotFound else HttpStatusCode.BadRequest
-                        call.respondError(status, code, error.message ?: "Cash payment was rejected")
-                    }
-                )
+                call.captureCashPayment(serviceId)
             }
 
             get("/api/admin/projects/{projectId}/payments") {
