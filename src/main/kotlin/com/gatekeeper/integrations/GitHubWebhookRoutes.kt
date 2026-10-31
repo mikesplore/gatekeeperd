@@ -80,7 +80,6 @@ private fun queuePushDeployments(body: String, deploymentJobs: DeploymentJobRepo
         val request = if (saved != null) {
             CreateDeploymentRequest(
                 repository = target.repository, gitRef = target.gitRef, registry = target.registry,
-                registryCredentialId = target.registryCredentialId?.toString(),
                 imageName = target.imageName, imageTag = target.imageTag,
                 hostPort = saved.hostPort, containerPort = saved.containerPort, network = saved.network,
                 restartPolicy = saved.restartPolicy, projectId = target.projectId.toString(),
@@ -92,7 +91,6 @@ private fun queuePushDeployments(body: String, deploymentJobs: DeploymentJobRepo
         } else {
             CreateDeploymentRequest(
                 repository = target.repository, gitRef = target.gitRef, registry = target.registry,
-                registryCredentialId = target.registryCredentialId?.toString(),
                 imageName = target.imageName, imageTag = target.imageTag, projectId = target.projectId.toString(),
                 serviceId = target.serviceId.toString(), triggerSource = "github_push",
                 environment = target.environment, autoDeploy = true
