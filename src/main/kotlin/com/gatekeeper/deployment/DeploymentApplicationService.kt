@@ -7,6 +7,7 @@ import com.gatekeeper.db.tables.Services
 import org.jetbrains.exposed.sql.insert
 import org.jetbrains.exposed.sql.and
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
+import org.jetbrains.exposed.sql.SqlExpressionBuilder.neq
 import org.jetbrains.exposed.sql.or
 import org.jetbrains.exposed.sql.selectAll
 import org.jetbrains.exposed.sql.update
@@ -38,13 +39,14 @@ object DeploymentApplicationService {
         ACTIVE,
         NOT_TERMINAL,
         RUNTIME_ATTACHED,
+        RUNTIME_IN_USE,
         REFERENCED
     }
 
     /**
      * Permanently removes an unreferenced terminal deployment and its private
-     * execution/job snapshots. Active, running, runtime-attached, and
-     * rollback-related records are intentionally retained.
+     * execution/job snapshots. The API must clear a terminal runtime pointer
+     * only after confirming/removing its Docker container.
      */
     fun deleteDeployment(id: UUID): DeleteDeploymentResult = transaction {
         val deployment = Deployments.selectAll().where { Deployments.id eq id }.singleOrNull()
@@ -54,7 +56,13 @@ object DeploymentApplicationService {
         if (status !in setOf(DeploymentStatus.FAILED, DeploymentStatus.CANCELLED, DeploymentStatus.SUPERSEDED, DeploymentStatus.ROLLED_BACK)) {
             return@transaction DeleteDeploymentResult.NOT_TERMINAL
         }
-        if (deployment[Deployments.runtimeContainerName] != null) {
+        val runtimeName = deployment[Deployments.runtimeContainerName]
+        if (runtimeName != null && Deployments.selectAll().where {
+                (Deployments.id neq id) and (Deployments.runtimeContainerName eq runtimeName) and
+                    (Deployments.status eq DeploymentStatus.ACTIVE)
+            }.count() > 0
+        ) return@transaction DeleteDeploymentResult.RUNTIME_IN_USE
+        if (runtimeName != null) {
             return@transaction DeleteDeploymentResult.RUNTIME_ATTACHED
         }
         if (Deployments.selectAll().where {
@@ -72,6 +80,82 @@ object DeploymentApplicationService {
             com.gatekeeper.db.tables.DeploymentJobs.id eq id
         }
         DeleteDeploymentResult.DELETED
+    }
+
+    /** Marks an active record failed only after Docker inventory confirmed the runtime is not running. */
+    fun markActiveRuntimeUnavailable(id: UUID, observedContainerName: String?, reason: String): Boolean = transaction {
+        val row = Deployments.selectAll().where { Deployments.id eq id }.singleOrNull()
+            ?: return@transaction false
+        if (row[Deployments.status] != DeploymentStatus.ACTIVE ||
+            row[Deployments.runtimeContainerName] != observedContainerName
+        ) return@transaction false
+        val now = LocalDateTime.now()
+        val updated = Deployments.update({
+            (Deployments.id eq id) and (Deployments.status eq DeploymentStatus.ACTIVE)
+        }) {
+            it[status] = DeploymentStatus.FAILED
+            it[failedAt] = now
+            it[failureReason] = reason
+            it[updatedAt] = now
+        }
+        if (updated != 1) return@transaction false
+        com.gatekeeper.db.tables.DeploymentExecutions.update({
+            com.gatekeeper.db.tables.DeploymentExecutions.id eq row[Deployments.executionId]
+        }) {
+            it[com.gatekeeper.db.tables.DeploymentExecutions.status] = "failed"
+            it[com.gatekeeper.db.tables.DeploymentExecutions.currentStep] = "failed"
+            it[com.gatekeeper.db.tables.DeploymentExecutions.errorMessage] = reason
+            it[com.gatekeeper.db.tables.DeploymentExecutions.completedAt] = now
+            it[com.gatekeeper.db.tables.DeploymentExecutions.updatedAt] = now
+        }
+        AuditLog.insert {
+            it[AuditLog.projectId] = row[Deployments.projectId]
+            it[AuditLog.action] = "deployment_runtime_missing"
+            it[AuditLog.actor] = "deployment-reconciler"
+            it[AuditLog.reason] = "deployment=$id container=${observedContainerName ?: "missing"} reason=$reason"
+        }
+        true
+    }
+
+    /** Clears a terminal record's runtime pointer after the worker/API has removed or confirmed absence of its container. */
+    fun clearTerminalRuntimeForDeletion(id: UUID, expectedContainerName: String): Boolean = transaction {
+        val row = Deployments.selectAll().where { Deployments.id eq id }.singleOrNull()
+            ?: return@transaction false
+        val status = row[Deployments.status]
+        if (status !in setOf(DeploymentStatus.FAILED, DeploymentStatus.CANCELLED, DeploymentStatus.SUPERSEDED, DeploymentStatus.ROLLED_BACK) ||
+            row[Deployments.runtimeContainerName] != expectedContainerName || row[Deployments.cutoverState] == "repair_required"
+        ) return@transaction false
+        val activeUse = Deployments.selectAll().where {
+            (Deployments.id neq id) and
+                (Deployments.runtimeContainerName eq expectedContainerName) and
+                (Deployments.status eq DeploymentStatus.ACTIVE)
+        }.count() > 0
+        if (activeUse) return@transaction false
+        Deployments.update({
+            (Deployments.id eq id) and (Deployments.status eq status) and
+                (Deployments.runtimeContainerName eq expectedContainerName)
+        }) {
+            it[Deployments.runtimeContainerName] = null
+            it[Deployments.runtimeHostPort] = null
+            it[Deployments.runtimePortsJson] = "{}"
+            it[Deployments.runtimePortHostIpsJson] = "{}"
+            it[Deployments.runtimeNetworksJson] = "[]"
+            it[updatedAt] = LocalDateTime.now()
+        } == 1
+    }
+
+    fun runtimeUsedByAnotherActiveDeployment(id: UUID, containerName: String): Boolean = transaction {
+        Deployments.selectAll().where {
+            (Deployments.id neq id) and
+                (Deployments.runtimeContainerName eq containerName) and
+                (Deployments.status eq DeploymentStatus.ACTIVE)
+        }.count() > 0
+    }
+
+    fun deploymentHasReferences(id: UUID): Boolean = transaction {
+        Deployments.selectAll().where {
+            (Deployments.replacesDeploymentId eq id) or (Deployments.rolledBackToDeploymentId eq id)
+        }.count() > 0
     }
 
     private fun defaultServiceId(projectId: UUID): UUID = Services.selectAll().where {

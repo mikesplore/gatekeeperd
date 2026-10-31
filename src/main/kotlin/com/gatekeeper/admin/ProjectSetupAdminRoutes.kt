@@ -299,7 +299,10 @@ data class ProjectDeploymentHistoryItem(
     val cutoverError: String?,
     val runtimeContainerName: String?,
     val runtimeHostPort: Int?,
-    val runtimePorts: Map<String, Int>
+    val runtimePorts: Map<String, Int>,
+    val runtimePresent: Boolean? = null,
+    val runtimeState: String? = null,
+    val restartCount: Int? = null
 )
 
 @Serializable
@@ -331,7 +334,10 @@ data class AdminDeploymentHistoryItem(
     val cutoverError: String?,
     val runtimeContainerName: String?,
     val runtimeHostPort: Int?,
-    val runtimePorts: Map<String, Int>
+    val runtimePorts: Map<String, Int>,
+    val runtimePresent: Boolean? = null,
+    val runtimeState: String? = null,
+    val restartCount: Int? = null
 )
 
 @Serializable
@@ -417,7 +423,29 @@ fun Application.configureProjectSetupAdminRoutes() {
             get("/api/admin/deployment-history") {
                 val limit = call.request.queryParameters["limit"]?.toIntOrNull()?.coerceIn(1, 100) ?: 50
                 val offset = call.request.queryParameters["offset"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0
-                val (page, total) = DeploymentApplicationService.deploymentHistoryPage(limit, offset)
+                var (page, total) = DeploymentApplicationService.deploymentHistoryPage(limit, offset)
+                val observedContainers = if (docker.available) runCatching { docker.listContainers(all = true) }.getOrNull() else null
+                if (observedContainers != null) {
+                    page.map { it.second }.filter { it.status == DeploymentStatus.ACTIVE.value }.forEach { active ->
+                        val container = active.runtimeContainerName?.let { name ->
+                            observedContainers.firstOrNull { it.name.removePrefix("/") == name }
+                        }
+                        if (container == null || !container.state.equals("running", ignoreCase = true)) {
+                            DeploymentApplicationService.markActiveRuntimeUnavailable(
+                                active.id,
+                                active.runtimeContainerName,
+                                if (container == null) "Active deployment container is missing from Docker" else "Active deployment container is ${container.state}"
+                            )
+                        }
+                    }
+                    if (page.any { (_, item) -> item.status == DeploymentStatus.ACTIVE.value &&
+                            (item.runtimeContainerName == null || observedContainers.none { it.name.removePrefix("/") == item.runtimeContainerName && it.state.equals("running", ignoreCase = true) })
+                        }) {
+                        val refreshed = DeploymentApplicationService.deploymentHistoryPage(limit, offset)
+                        page = refreshed.first
+                        total = refreshed.second
+                    }
+                }
                 call.respond(
                     AdminDeploymentHistoryResponse(
                         items = page.map { (slug, item) ->
@@ -432,7 +460,11 @@ fun Application.configureProjectSetupAdminRoutes() {
                                 canRedeploy = item.canRedeploy, canCancel = item.canCancel,
                                 cutoverState = item.cutoverState, cutoverError = item.cutoverError,
                                 runtimeContainerName = item.runtimeContainerName, runtimeHostPort = item.runtimeHostPort,
-                                runtimePorts = item.runtimePorts.mapKeys { it.key.toString() }
+                                runtimePorts = item.runtimePorts.mapKeys { it.key.toString() },
+                                runtimePresent = if (observedContainers == null) null else item.runtimeContainerName?.let { name -> observedContainers.any { it.name.removePrefix("/") == name } } ?: false,
+                                runtimeState = item.runtimeContainerName?.let { name -> observedContainers?.firstOrNull { it.name.removePrefix("/") == name }?.state }
+                                    ?: if (observedContainers != null && item.runtimeContainerName != null) "missing" else null,
+                                restartCount = item.runtimeContainerName?.let { name -> observedContainers?.firstOrNull { it.name.removePrefix("/") == name }?.restartCount }
                             )
                         },
                         total = total,
@@ -875,7 +907,28 @@ fun Application.configureProjectSetupAdminRoutes() {
                 if (serviceId != null && serviceRepository.findByProjectAndId(project.id, serviceId) == null) {
                     return@get call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
                 }
-                val items = DeploymentApplicationService.deploymentHistory(project.id, environment, serviceId).map { item ->
+                val observedContainers = if (docker.available) runCatching { docker.listContainers(all = true) }.getOrNull() else null
+                val storedHistory = DeploymentApplicationService.deploymentHistory(project.id, environment, serviceId)
+                if (observedContainers != null) {
+                    storedHistory.filter { it.status == DeploymentStatus.ACTIVE.value }.forEach { active ->
+                        val container = active.runtimeContainerName?.let { name ->
+                            observedContainers.firstOrNull { it.name.removePrefix("/") == name }
+                        }
+                        if (container == null || !container.state.equals("running", ignoreCase = true)) {
+                            DeploymentApplicationService.markActiveRuntimeUnavailable(
+                                active.id,
+                                active.runtimeContainerName,
+                                if (container == null) "Active deployment container is missing from Docker" else "Active deployment container is ${container.state}"
+                            )
+                        }
+                    }
+                }
+                val history = if (observedContainers == null) storedHistory
+                    else DeploymentApplicationService.deploymentHistory(project.id, environment, serviceId)
+                val items = history.map { item ->
+                    val observed = item.runtimeContainerName?.let { name ->
+                        observedContainers?.firstOrNull { it.name.removePrefix("/") == name }
+                    }
                     ProjectDeploymentHistoryItem(
                         item.id.toString(), item.environment, item.sourceCommit, item.imageName, item.imageTag,
                         item.imageDigest, item.triggerSource, item.actor, item.status, item.createdAt.toString(),
@@ -884,7 +937,10 @@ fun Application.configureProjectSetupAdminRoutes() {
                         item.secretSetId?.toString(), item.secretSetVersion, item.configurationId.toString(),
                         buildList { if (item.canRollback) add("rollback"); if (item.canRedeploy) add("redeploy"); if (item.canCancel) add("cancel") },
                         item.cutoverState, item.cutoverError, item.runtimeContainerName, item.runtimeHostPort,
-                        item.runtimePorts.mapKeys { it.key.toString() }
+                        item.runtimePorts.mapKeys { it.key.toString() },
+                        runtimePresent = if (observedContainers == null) null else observed != null,
+                        runtimeState = observed?.state ?: if (observedContainers != null && item.runtimeContainerName != null) "missing" else null,
+                        restartCount = observed?.restartCount
                     )
                 }
                     call.respond(ProjectDeploymentHistoryResponse(project.id.toString(), environment, items))
@@ -926,9 +982,58 @@ fun Application.configureProjectSetupAdminRoutes() {
                     ?: return@delete call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
                 val id = call.parameters["id"]?.let { runCatching { UUID.fromString(it) }.getOrNull() }
                     ?: return@delete call.respondError(HttpStatusCode.BadRequest, "invalid_deployment_id", "Invalid deployment ID")
-                val item = DeploymentApplicationService.deploymentHistory(project.id, call.request.queryParameters["environment"]?.trim()?.takeIf(String::isNotEmpty) ?: "production")
+                val environment = call.request.queryParameters["environment"]?.trim()?.takeIf(String::isNotEmpty) ?: "production"
+                var item = DeploymentApplicationService.deploymentHistory(project.id, environment)
                     .firstOrNull { it.id == id }
                     ?: return@delete call.respondError(HttpStatusCode.NotFound, "deployment_not_found", "Deployment not found for project")
+                if (item.status == DeploymentStatus.ACTIVE.value && docker.available) {
+                    val inventory = runCatching { docker.listContainers(all = true) }.getOrElse {
+                        return@delete call.respondError(HttpStatusCode.BadGateway, "docker_inspection_failed", "Docker runtime state could not be checked")
+                    }
+                    val container = item.runtimeContainerName?.let { name ->
+                        inventory.firstOrNull { it.name.removePrefix("/") == name }
+                    }
+                    if (container == null || !container.state.equals("running", ignoreCase = true)) {
+                        DeploymentApplicationService.markActiveRuntimeUnavailable(
+                            item.id,
+                            item.runtimeContainerName,
+                            if (container == null) "Active deployment container is missing from Docker" else "Active deployment container is ${container.state}"
+                        )
+                        item = DeploymentApplicationService.deploymentHistory(project.id, environment).firstOrNull { it.id == id }
+                            ?: return@delete call.respondError(HttpStatusCode.NotFound, "deployment_not_found", "Deployment not found for project")
+                    }
+                }
+                val terminalStatuses = setOf(
+                    DeploymentStatus.FAILED.value,
+                    DeploymentStatus.CANCELLED.value,
+                    DeploymentStatus.SUPERSEDED.value,
+                    DeploymentStatus.ROLLED_BACK.value
+                )
+                if (item.status in terminalStatuses && item.runtimeContainerName != null) {
+                    if (DeploymentApplicationService.deploymentHasReferences(id)) {
+                        return@delete call.respondError(HttpStatusCode.Conflict, "deployment_delete_unavailable", "Deployments referenced by another deployment cannot be deleted")
+                    }
+                    if (item.cutoverState == "repair_required" ||
+                        DeploymentApplicationService.runtimeUsedByAnotherActiveDeployment(id, item.runtimeContainerName)
+                    ) {
+                        return@delete call.respondError(HttpStatusCode.Conflict, "deployment_delete_unavailable", "This deployment runtime is still needed by an active or repair-required route")
+                    }
+                    if (!docker.available) {
+                        return@delete call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker must be available to verify or clean up this deployment runtime")
+                    }
+                    val inventory = runCatching { docker.listContainers(all = true) }.getOrElse {
+                        return@delete call.respondError(HttpStatusCode.BadGateway, "docker_inspection_failed", "Docker runtime state could not be checked")
+                    }
+                    val runtimeExists = inventory.any { it.name.removePrefix("/") == item.runtimeContainerName }
+                    if (runtimeExists) {
+                        runCatching { docker.deleteContainer(item.runtimeContainerName, force = true) }.getOrElse {
+                            return@delete call.respondError(HttpStatusCode.BadGateway, "deployment_runtime_cleanup_failed", "The terminal deployment container could not be removed")
+                        }
+                    }
+                    if (!DeploymentApplicationService.clearTerminalRuntimeForDeletion(id, item.runtimeContainerName)) {
+                        return@delete call.respondError(HttpStatusCode.Conflict, "deployment_delete_unavailable", "The deployment runtime changed while it was being cleaned up")
+                    }
+                }
                 when (DeploymentApplicationService.deleteDeployment(id)) {
                     DeploymentApplicationService.DeleteDeploymentResult.DELETED -> {
                         val actor = call.principal<io.ktor.server.auth.jwt.JWTPrincipal>()?.payload?.subject ?: "admin"
@@ -940,7 +1045,9 @@ fun Application.configureProjectSetupAdminRoutes() {
                     DeploymentApplicationService.DeleteDeploymentResult.NOT_TERMINAL ->
                         call.respondError(HttpStatusCode.Conflict, "deployment_delete_unavailable", "Only terminal deployments can be deleted")
                     DeploymentApplicationService.DeleteDeploymentResult.RUNTIME_ATTACHED ->
-                        call.respondError(HttpStatusCode.Conflict, "deployment_delete_unavailable", "Deployments with an attached runtime cannot be deleted")
+                        call.respondError(HttpStatusCode.Conflict, "deployment_delete_unavailable", "This deployment runtime is still attached or in use")
+                    DeploymentApplicationService.DeleteDeploymentResult.RUNTIME_IN_USE ->
+                        call.respondError(HttpStatusCode.Conflict, "deployment_delete_unavailable", "This deployment runtime is used by another active deployment")
                     DeploymentApplicationService.DeleteDeploymentResult.REFERENCED ->
                         call.respondError(HttpStatusCode.Conflict, "deployment_delete_unavailable", "Deployments referenced by another deployment cannot be deleted")
                     DeploymentApplicationService.DeleteDeploymentResult.NOT_FOUND ->

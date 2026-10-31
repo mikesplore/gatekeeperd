@@ -5,12 +5,17 @@ import com.gatekeeper.core.ports.PortProbe
 import com.gatekeeper.docker.DockerGateway
 import com.gatekeeper.feature.deployment.domain.repository.DeploymentJobRecord
 
-data class ReadinessResult(val containerPort: Int?)
+data class ReadinessResult(
+    val containerPort: Int?,
+    val restartLoopDetected: Boolean = false,
+    val restartCount: Int = 0
+)
 
 /** Checks a started deployment candidate without owning worker timing or retry policy. */
 class ReadinessChecker(
     private val ports: PortProbe,
-    private val http: HttpPortProbe
+    private val http: HttpPortProbe,
+    private val restartLoopDetector: CandidateRestartLoopDetector = CandidateRestartLoopDetector()
 ) {
     fun selectedProbe(job: DeploymentJobRecord, hasPublishedPort: Boolean): String =
         when (job.readinessType?.lowercase()) {
@@ -27,6 +32,11 @@ class ReadinessChecker(
         portMappings: Map<Int, Int>,
         job: DeploymentJobRecord
     ): ReadinessResult? {
+        val container = docker.getContainer(containerName)
+        val restartCount = container?.restartCount ?: 0
+        if (container != null && restartLoopDetector.observe(containerName, restartCount)) {
+            return ReadinessResult(null, restartLoopDetected = true, restartCount = restartCount)
+        }
         if (docker.containerHealth(containerName) != "running") return null
         val timeout = job.readinessProbeTimeoutMillis
         fun reachable(containerPort: Int): Boolean = portMappings[containerPort]

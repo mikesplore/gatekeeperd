@@ -56,7 +56,8 @@ class DeploymentWorker(
 ) {
     private val logger = LoggerFactory.getLogger("com.gatekeeper.deployment.DeploymentWorker")
     private val started = AtomicBoolean(false)
-    private val readinessChecker = ReadinessChecker(readinessPorts, readinessHttp)
+    private val restartLoopDetector = CandidateRestartLoopDetector()
+    private val readinessChecker = ReadinessChecker(readinessPorts, readinessHttp, restartLoopDetector)
 
     fun start(scope: CoroutineScope) {
         if (!started.compareAndSet(false, true)) return
@@ -365,6 +366,7 @@ class DeploymentWorker(
             update(job, log = "Image digest: ${digest ?: "unavailable"}", imageDigest = digest)
             if (job.network != "bridge" && job.createNetworkIfMissing) docker.createNetworkIfMissing(job.network)
             candidateName = deterministicCandidateName
+            restartLoopDetector.reset(candidateName)
             val imagePorts = docker.imageExposedTcpPorts(image)
             val managedSite =
                 if (job.environment == "production") siteRepository.findByServiceId(job.serviceId) else null
@@ -449,6 +451,11 @@ class DeploymentWorker(
             val selectedProbe = readinessChecker.selectedProbe(job, candidatePortMappings.isNotEmpty())
             update(job, step = "health_checking", log = "Waiting for candidate readiness using $selectedProbe probe")
             val readiness = awaitHealthy(docker, candidateName, candidatePortMappings, job)
+            if (readiness?.restartLoopDetected == true) {
+                throw CandidateRuntimeUnstableException(
+                    "Candidate container restarted ${readiness.restartCount} times within ${CandidateRestartLoopDetector.WINDOW_MILLIS / 1000} seconds"
+                )
+            }
             if (readiness == null) {
                 val failure = IllegalStateException(
                     "Candidate container did not pass automatic readiness checks for port(s) ${
@@ -534,6 +541,36 @@ class DeploymentWorker(
                 )
                 return
             }
+            if (candidateIsReady && error is CandidateRuntimeUnstableException) {
+                val runtimeName = DeploymentApplicationService.candidateContainerName(job.id)
+                val removed = runtimeName == null || removeCandidateContainer(runtimeName)
+                if (!removed) {
+                    DeploymentApplicationService.updateCutoverState(
+                        job.id,
+                        "repair_required",
+                        "Unstable candidate could not be removed after the previous route was restored"
+                    )
+                    update(
+                        job,
+                        step = "failed",
+                        log = "Candidate was unstable and could not be removed: ${error.message}",
+                        status = "failed",
+                        error = "Candidate was unstable and could not be removed: ${error.message}"
+                    )
+                    return
+                }
+                update(
+                    job,
+                    step = "failed",
+                    log = error.message ?: "Candidate runtime was unstable",
+                    status = "failed",
+                    error = error.message ?: "Candidate runtime was unstable"
+                )
+                DeploymentApplicationService.clearCandidateRuntimeAfterCutoverRecovery(job.id)
+                runtimeName?.let(restartLoopDetector::reset)
+                auditRepository.write(null, "deployment_failed", "deployment-worker", "job=${job.id} error=${error.message}")
+                return
+            }
             if (candidateIsReady) {
                 val requeued = deploymentQueue.requeueReadyCutover(
                     job.id,
@@ -595,6 +632,13 @@ class DeploymentWorker(
         }
     }
 
+    private fun removeCandidateContainer(containerName: String): Boolean = runCatching {
+        val exists = docker.listContainers(all = true).any { it.name.removePrefix("/") == containerName }
+        if (!exists) true
+        else docker.removeContainerIfPresent(containerName) ||
+            docker.listContainers(all = true).none { it.name.removePrefix("/") == containerName }
+    }.getOrDefault(false)
+
     private fun isHostPortConflict(error: Throwable): Boolean = generateSequence(error) { it.cause }
         .mapNotNull { it.message?.lowercase() }
         .any { message ->
@@ -630,6 +674,20 @@ class DeploymentWorker(
         val runtime = DeploymentApplicationService.candidateRuntime(job.id)
             ?: error("Canonical candidate runtime missing for deployment ${job.id}")
         val candidateRuntimeName = requireNotNull(runtime.name) { "Candidate container name is missing" }
+        val candidateInfo = docker.getContainer(candidateRuntimeName)
+        if (candidateInfo == null) {
+            throw CandidateRuntimeUnstableException("Candidate container is missing; deployment cannot remain ready")
+        }
+        if (!candidateInfo.state.equals("running", ignoreCase = true)) {
+            throw CandidateRuntimeUnstableException(
+                "Candidate container is ${candidateInfo.state}; deployment cannot remain ready"
+            )
+        }
+        if (restartLoopDetector.observe(candidateRuntimeName, candidateInfo.restartCount)) {
+            throw CandidateRuntimeUnstableException(
+                "Candidate container restarted at least ${CandidateRestartLoopDetector.RESTART_LIMIT} times within ${CandidateRestartLoopDetector.WINDOW_MILLIS / 1000} seconds"
+            )
+        }
         check(docker.containerHealth(candidateRuntimeName) == "running") { "Ready candidate runtime is no longer running" }
         var previousDeployment = DeploymentApplicationService.activeRuntime(job.serviceId, job.environment)
         val previousContainer = previousDeployment?.name
@@ -1063,3 +1121,5 @@ class DeploymentWorker(
     }
 
 }
+
+private class CandidateRuntimeUnstableException(message: String) : IllegalStateException(message)

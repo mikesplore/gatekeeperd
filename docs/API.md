@@ -367,7 +367,7 @@ Returns canonical deployment history for a project (optional `environment`, defa
 
 ### DELETE /api/admin/projects/{slug}/deployments/{id}
 
-Permanently deletes a deployment history record. Only terminal deployments (`failed`, `cancelled`, `superseded`, or `rolled-back`) with no attached runtime and no rollback/replacement references may be deleted. Active, in-progress, runtime-attached, and referenced deployments are rejected with `409 Conflict`. The associated execution and legacy job snapshots are removed; the desired configuration snapshot is retained for future deployments. Successful deletion returns `204 No Content` and writes a `deployment_deleted` audit entry.
+Permanently deletes a deployment history record. Only terminal deployments (`failed`, `cancelled`, `superseded`, or `rolled-back`) with no rollback/replacement references may be deleted. If a terminal record still points to a Docker container, the API checks that it is not used by another active or repair-required route, force-removes the container when present, and clears the persisted runtime pointer before deleting the record. Active, in-progress, referenced, active-runtime, and repair-required deployments are rejected with `409 Conflict`; Docker inspection or cleanup failures return an error without deleting the record. The associated execution and legacy job snapshots are removed; the desired configuration snapshot is retained for future deployments. Audit logs, payments, payment events, and notifications are retained. Successful deletion returns `204 No Content` and writes a `deployment_deleted` audit entry.
 
 ### POST /api/admin/projects/{projectId}/secret-sets/rotate-and-deploy
 
@@ -841,7 +841,7 @@ Managed site configs use `gk_<service UUID without hyphens>` as their stable ups
 
 The endpoint repairs the selected environment and requires the service's nginx site to still exist and be `DEPLOYMENT_MANAGED`. If the nginx site was deleted, recreate or adopt the site first; the endpoint cannot infer the deleted site's domain or TLS settings. The generated include filename is `<service UUID>.conf`, while the upstream block name is `gk_<service UUID without hyphens>`.
 
-Deployment history responses include `cutoverState`, `cutoverError`, `runtimeContainerName`, `runtimeHostPort`, and `runtimePorts`. These fields identify whether a failure reached route switching or rollback and which persisted runtime port Gatekeeperd used as the repair target.
+Deployment history responses include `cutoverState`, `cutoverError`, `runtimeContainerName`, `runtimeHostPort`, `runtimePorts`, `runtimePresent`, `runtimeState`, and `restartCount`. Docker-backed history reads reconcile an active record to `failed` when its container is missing or not running. Candidate deployments fail and are cleaned up when Docker reports at least three restarts within a 60-second window; cutover is also stopped if the candidate is no longer running. These fields identify whether a failure reached route switching or rollback, which persisted runtime port Gatekeeperd used as the repair target, and the observed runtime state.
 
 ## SSL Certificate Management Endpoints (JWT Required)
 

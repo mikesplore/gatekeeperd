@@ -15,7 +15,7 @@ class DeploymentStatusTest {
                 DeploymentStatus.FAILED, DeploymentStatus.CANCELLED
             ),
             DeploymentStatus.READY to setOf(DeploymentStatus.ACTIVE, DeploymentStatus.FAILED),
-            DeploymentStatus.ACTIVE to setOf(DeploymentStatus.SUPERSEDED, DeploymentStatus.ROLLED_BACK),
+            DeploymentStatus.ACTIVE to setOf(DeploymentStatus.SUPERSEDED, DeploymentStatus.ROLLED_BACK, DeploymentStatus.FAILED),
             DeploymentStatus.SUPERSEDED to setOf(DeploymentStatus.ACTIVE, DeploymentStatus.ROLLED_BACK),
             DeploymentStatus.FAILED to setOf(DeploymentStatus.QUEUED),
             DeploymentStatus.CANCELLED to setOf(DeploymentStatus.QUEUED),

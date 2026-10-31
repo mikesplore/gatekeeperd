@@ -30,7 +30,7 @@ enum class DeploymentStatus(val value: String) {
             STARTING to setOf(HEALTH_CHECKING, FAILED, CANCELLED),
             HEALTH_CHECKING to setOf(QUEUED, READY, ACTIVE, FAILED, CANCELLED),
             READY to setOf(ACTIVE, FAILED),
-            ACTIVE to setOf(SUPERSEDED, ROLLED_BACK),
+            ACTIVE to setOf(SUPERSEDED, ROLLED_BACK, FAILED),
             SUPERSEDED to setOf(ACTIVE, ROLLED_BACK),
             FAILED to setOf(QUEUED),
             CANCELLED to setOf(QUEUED),
