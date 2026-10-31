@@ -330,7 +330,7 @@ class PaymentUseCasesTest {
 
     private class FakePaymentEffects : PaymentEffects {
         var successCount = 0
-        override fun acceptSuccessfulPayment(payment: Payment?, projectId: UUID, amount: BigDecimal, currency: String?) = currency == null || payment?.currency == currency
+        override fun acceptSuccessfulPayment(payment: Payment?, projectId: UUID, serviceId: UUID?, amount: BigDecimal, currency: String?) = currency == null || payment?.currency == currency
         override fun paymentSucceeded(payment: Payment, amount: BigDecimal, currency: String?, paidAt: LocalDateTime?, actor: String) { successCount++ }
         override fun paymentFailed(payment: Payment) = Unit
         override fun paymentReversed(payment: Payment) = Unit

@@ -10,8 +10,6 @@ import com.gatekeeper.security.SecretValueCipher
 import com.gatekeeper.feature.payment.data.persistence.ProjectBalanceAdapter
 import com.gatekeeper.feature.project.domain.repository.ProjectRepository
 import com.gatekeeper.feature.audit.domain.repository.AuditRepository as AuditRepositoryPort
-import com.gatekeeper.feature.integrations.domain.repository.ProviderCredentialStore
-import com.gatekeeper.feature.integrations.domain.repository.RegistryCredentialStore
 import com.gatekeeper.feature.customer.domain.repository.CustomerRepository as CustomerStore
 import com.gatekeeper.feature.deployment.domain.repository.DeploymentJobRepository
 import com.gatekeeper.feature.deployment.domain.repository.ServiceDomainRepository
@@ -71,29 +69,6 @@ data class CreateProjectSetupRequest(
 data class ProjectSetupCreatedResponse(val projectId: String, val slug: String, val status: String = "created")
 
 @Serializable
-data class ProjectSetupCredentialsRequest(
-    val registry: String? = null,
-    val registryCredentialId: String? = null,
-    val username: String? = null,
-    val password: String? = null,
-    @Deprecated("Application environment values belong on the service environment endpoint")
-    val secretEnv: Map<String, String>? = null,
-    val serviceId: String? = null,
-    val environment: String = "production"
-)
-
-@Serializable
-data class ProjectSetupCredentialsResponse(
-    val registry: String,
-    val credentialConfigured: Boolean,
-    val credentialVersion: Int? = null,
-    val secretSetId: String? = null,
-    val secretSetVersion: Int? = null,
-    val deploymentId: String? = null,
-    val secretEnv: String = "write-only"
-)
-
-@Serializable
 data class ProjectSharedEnvironmentRequest(
     val environment: String = "production",
     val values: Map<String, String>
@@ -148,8 +123,7 @@ data class ProjectSetupConfigurationResponse(
     val env: Map<String, String>,
     val envKeys: List<String>,
     val secretSetId: String?,
-    val secretSetVersion: Int?,
-    val registryCredentialId: String? = null
+    val secretSetVersion: Int?
 )
 
 @Serializable
@@ -159,8 +133,6 @@ data class ProjectSetupStatusResponse(
     val name: String,
     val domain: String,
     val sourceRuntime: ProjectSetupConfigurationResponse? = null,
-    val credentialsConfigured: Boolean = false,
-    val credentialVersion: Int? = null,
     val gateway: ProjectSetupGatewayResponse? = null,
     val activeDeploymentId: String? = null,
     val activeDeploymentStatus: String? = null,
@@ -352,12 +324,6 @@ data class AdminDeploymentHistoryResponse(
 data class ProjectSecretRotationRequest(val secretEnv: Map<String, String>)
 
 @Serializable
-data class ProviderCredentialMetadataView(
-    val id: String, val provider: String, val type: String, val displayName: String, val scope: String,
-    val version: Int, val current: Boolean, val rotatedAt: String?, val rotatedBy: String?, val createdAt: String
-)
-
-@Serializable
 data class AdoptableContainerPort(val containerPort: Int, val hostPort: Int)
 
 @Serializable
@@ -378,8 +344,6 @@ data class AdoptContainerResponse(
 fun Application.configureProjectSetupAdminRoutes() {
     val projects = get<ProjectRepository>()
     val auditRepository = get<AuditRepositoryPort>()
-    val providerCredentials = get<ProviderCredentialStore>()
-    val registryCredentials = get<RegistryCredentialStore>()
     val docker = get<DockerGateway>()
     val deploymentJobs = get<DeploymentJobRepository>()
     val serviceDomains = get<ServiceDomainRepository>()
@@ -412,14 +376,6 @@ fun Application.configureProjectSetupAdminRoutes() {
                 call.respond(containers)
             }
 
-            get("/api/admin/project-setup/provider-credentials") {
-                val provider = call.request.queryParameters["provider"]?.trim()?.lowercase()
-                val type = call.request.queryParameters["type"]?.trim()?.lowercase()
-                call.respond(providerCredentials.listMetadata(provider, type).map {
-                    ProviderCredentialMetadataView(it.id.toString(), it.provider, it.credentialType, it.displayName, it.scope,
-                        it.version, it.current, it.rotatedAt?.toString(), it.rotatedBy, it.createdAt.toString())
-                })
-            }
             get("/api/admin/deployment-history") {
                 val limit = call.request.queryParameters["limit"]?.toIntOrNull()?.coerceIn(1, 100) ?: 50
                 val offset = call.request.queryParameters["offset"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0
@@ -519,7 +475,6 @@ fun Application.configureProjectSetupAdminRoutes() {
                     return@get call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
                 }
                 val config = deploymentJobs.configurationSummaryForService(projectId, serviceId)
-                val credential = config?.registryCredentialId?.let(providerCredentials::findMetadata)
                 val service = serviceRepository.findByProjectAndId(projectId, serviceId)
                 val active = DeploymentApplicationService.activeDeploymentSummaryForService(serviceId, "production")
                 val latest = DeploymentApplicationService.latestDeploymentStateForService(serviceId, "production")
@@ -528,7 +483,7 @@ fun Application.configureProjectSetupAdminRoutes() {
                 }
                 call.respond(ProjectSetupStatusResponse(
                     projectId.toString(), project.slug, project.name, project.domain,
-                    config?.toSetupResponse(), credential != null, credential?.version,
+                    config?.toSetupResponse(),
                     service?.domain?.let { ProjectSetupGatewayResponse(it, "domain_saved", serviceId.toString(), bindings.firstOrNull { binding -> binding.domain == it }?.containerPort, bindings) },
                     active?.id?.toString(), active?.status, latest?.first?.toString(), latest?.second, serviceId.toString()
                 ))
@@ -619,75 +574,14 @@ fun Application.configureProjectSetupAdminRoutes() {
                     return@put call.respondError(HttpStatusCode.BadRequest, "invalid_deployment_configuration", "GitHub repository, ref, registry, image, tag, environment, or optional container port is invalid")
                 }
                 if (body.secretEnv.isNotEmpty()) {
-                    return@put call.respondError(HttpStatusCode.BadRequest, "secrets_use_credentials_step", "Send application secrets through the credentials step")
-                }
-                val registryCredentialId = body.registryCredentialId?.takeIf(String::isNotBlank)?.let { raw ->
-                    val id = runCatching { UUID.fromString(raw) }.getOrNull()
-                        ?: return@put call.respondError(HttpStatusCode.BadRequest, "invalid_registry_credential", "Registry credential ID is invalid")
-                    val metadata = providerCredentials.findMetadata(id)
-                        ?: return@put call.respondError(HttpStatusCode.BadRequest, "invalid_registry_credential", "Registry credential was not found")
-                    if (metadata.provider != "docker" || metadata.credentialType != "registry" || metadata.scope != body.registry || !metadata.current) {
-                        return@put call.respondError(HttpStatusCode.BadRequest, "invalid_registry_credential", "Select a current credential for this registry")
-                    }
-                    id
+                    return@put call.respondError(HttpStatusCode.BadRequest, "secrets_use_environment_endpoint", "Save application secrets through the service environment settings")
                 }
                 val configurationId = runCatching {
-                    deploymentJobs.upsertProjectConfiguration(projectId, body.copy(repository = normalizedRepository, registryCredentialId = registryCredentialId?.toString(), projectId = projectId.toString(), triggerSource = "project_setup"))
+                    deploymentJobs.upsertProjectConfiguration(projectId, body.copy(repository = normalizedRepository, projectId = projectId.toString(), triggerSource = "project_setup"))
                 }.getOrElse { error ->
                     return@put call.respondError(HttpStatusCode.BadRequest, "invalid_deployment_configuration", error.message ?: "Configuration could not be saved")
                 }
                 call.respond(ProjectSetupSourceRuntimeResponse(configurationId.toString(), body.environment.trim()))
-            }
-
-            put("/api/admin/project-setup/projects/{projectId}/credentials") {
-                val projectId = call.setupProjectId() ?: return@put
-                if (projects.findActiveById(projectId) == null) {
-                    return@put call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
-                }
-                val body = runCatching { call.receive<ProjectSetupCredentialsRequest>() }.getOrNull()
-                    ?: return@put call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid credentials request")
-                val serviceId = body.serviceId?.let { raw -> runCatching { UUID.fromString(raw) }.getOrNull() }
-                    ?: if (body.serviceId == null) null else return@put call.respondError(HttpStatusCode.BadRequest, "invalid_service_id", "Service ID is invalid")
-                val environment = body.environment.trim().lowercase()
-                if (!environment.matches(Regex("^[a-z][a-z0-9_-]{0,31}$"))) {
-                    return@put call.respondError(HttpStatusCode.BadRequest, "invalid_environment", "Environment name is invalid")
-                }
-                val targetServiceId = serviceId ?: deploymentJobs.defaultServiceIdForProject(projectId)
-                val configId = deploymentJobs.configurationIdForService(projectId, targetServiceId, environment)
-                val config = configId?.let(deploymentJobs::configurationSummaryById)
-                    ?: return@put call.respondError(HttpStatusCode.Conflict, "source_runtime_required", "Save source/runtime configuration before credentials")
-                if (body.secretEnv != null) return@put call.respondError(HttpStatusCode.BadRequest, "environment_use_environment_endpoint", "Application environment values must use the service environment endpoint")
-                val registry = (body.registry ?: config.registry).trim().lowercase()
-                if (!registry.matches(Regex("^(docker\\.io|[A-Za-z0-9.-]+(:[0-9]{1,5})?)$"))) {
-                    return@put call.respondError(HttpStatusCode.BadRequest, "invalid_registry", "Registry is invalid")
-                }
-                val username = body.username?.trim().orEmpty()
-                val password = body.password.orEmpty()
-                if ((username.isBlank()) != password.isBlank()) {
-                    return@put call.respondError(HttpStatusCode.BadRequest, "invalid_registry_credentials", "Provide both username and password to save registry credentials")
-                }
-                if (username.isNotBlank() && !SecretValueCipher.isConfigured()) {
-                    return@put call.respondError(HttpStatusCode.ServiceUnavailable, "secrets_unconfigured", "Secret encryption is not configured")
-                }
-                val providerCredential = if (username.isNotBlank()) registryCredentials.save(registry, username, password) else null
-                if (registry != config.registry) {
-                    deploymentJobs.updateConfiguration(config.id, UpdateDeploymentConfigurationRequest(registry = registry))
-                }
-                val currentCredential = body.registryCredentialId?.takeIf(String::isNotBlank)?.let { raw ->
-                    val credentialId = runCatching { UUID.fromString(raw) }.getOrNull()
-                        ?: return@put call.respondError(HttpStatusCode.BadRequest, "invalid_registry_credential", "Registry credential ID is invalid")
-                    val credential = providerCredentials.findMetadata(credentialId)
-                        ?: return@put call.respondError(HttpStatusCode.BadRequest, "invalid_registry_credential", "Registry credential was not found")
-                    if (credential.provider != "docker" || credential.credentialType != "registry" || credential.scope != registry || !credential.current) {
-                        return@put call.respondError(HttpStatusCode.BadRequest, "invalid_registry_credential", "Select a current credential for this registry")
-                    }
-                    deploymentJobs.updateConfiguration(config.id, UpdateDeploymentConfigurationRequest(registryCredentialId = credentialId.toString()))
-                    credential
-                }
-                call.respond(ProjectSetupCredentialsResponse(
-                    registry, providerCredential != null || currentCredential != null,
-                    currentCredential?.version ?: providerCredential?.version
-                ))
             }
 
             put("/api/admin/projects/{projectId}/environment/shared") {
@@ -929,13 +823,27 @@ fun Application.configureProjectSetupAdminRoutes() {
                     val observed = item.runtimeContainerName?.let { name ->
                         observedContainers?.firstOrNull { it.name.removePrefix("/") == name }
                     }
+                    val terminal = item.status in setOf(DeploymentStatus.FAILED.value, DeploymentStatus.CANCELLED.value,
+                        DeploymentStatus.SUPERSEDED.value, DeploymentStatus.ROLLED_BACK.value)
+                    val referenced = DeploymentApplicationService.deploymentHasReferences(item.id)
+                    val runtimeCanBeCleaned = item.runtimeContainerName?.let { name ->
+                        observedContainers != null && !DeploymentApplicationService.runtimeUsedByAnotherActiveDeployment(item.id, name)
+                    } ?: true
                     ProjectDeploymentHistoryItem(
                         item.id.toString(), item.environment, item.sourceCommit, item.imageName, item.imageTag,
                         item.imageDigest, item.triggerSource, item.actor, item.status, item.createdAt.toString(),
                         item.activeAt?.toString(), item.healthCheckResult, item.failureReason,
                         item.credentialSetId?.toString(), item.credentialSetVersion,
                         item.secretSetId?.toString(), item.secretSetVersion, item.configurationId.toString(),
-                        buildList { if (item.canRollback) add("rollback"); if (item.canRedeploy) add("redeploy"); if (item.canCancel) add("cancel") },
+                        buildList {
+                            if (item.canRollback) add("rollback")
+                            if (item.canRedeploy) add("redeploy")
+                            if (item.canCancel) add("cancel")
+                            if (terminal && item.cutoverState != "repair_required" && runtimeCanBeCleaned) {
+                                add("delete")
+                                if (referenced) add("referenced")
+                            }
+                        },
                         item.cutoverState, item.cutoverError, item.runtimeContainerName, item.runtimeHostPort,
                         item.runtimePorts.mapKeys { it.key.toString() },
                         runtimePresent = if (observedContainers == null) null else observed != null,
@@ -1010,9 +918,6 @@ fun Application.configureProjectSetupAdminRoutes() {
                     DeploymentStatus.ROLLED_BACK.value
                 )
                 if (item.status in terminalStatuses && item.runtimeContainerName != null) {
-                    if (DeploymentApplicationService.deploymentHasReferences(id)) {
-                        return@delete call.respondError(HttpStatusCode.Conflict, "deployment_delete_unavailable", "Deployments referenced by another deployment cannot be deleted")
-                    }
                     if (item.cutoverState == "repair_required" ||
                         DeploymentApplicationService.runtimeUsedByAnotherActiveDeployment(id, item.runtimeContainerName)
                     ) {
@@ -1048,8 +953,6 @@ fun Application.configureProjectSetupAdminRoutes() {
                         call.respondError(HttpStatusCode.Conflict, "deployment_delete_unavailable", "This deployment runtime is still attached or in use")
                     DeploymentApplicationService.DeleteDeploymentResult.RUNTIME_IN_USE ->
                         call.respondError(HttpStatusCode.Conflict, "deployment_delete_unavailable", "This deployment runtime is used by another active deployment")
-                    DeploymentApplicationService.DeleteDeploymentResult.REFERENCED ->
-                        call.respondError(HttpStatusCode.Conflict, "deployment_delete_unavailable", "Deployments referenced by another deployment cannot be deleted")
                     DeploymentApplicationService.DeleteDeploymentResult.NOT_FOUND ->
                         call.respondError(HttpStatusCode.NotFound, "deployment_not_found", "Deployment not found for project")
                 }
@@ -1092,8 +995,7 @@ private fun validSetupDeployment(body: CreateDeploymentRequest, repository: Stri
 
 private fun DeploymentJobRepository.ConfigurationSummary.toSetupResponse() = ProjectSetupConfigurationResponse(
     id.toString(), repository, gitRef, registry, imageName, imageTag, autoDeploy, containerPort, hostPort, network, restartPolicy,
-    environment, env, envKeys, secretSetId?.toString(), secretSetVersion,
-    registryCredentialId?.toString()
+    environment, env, envKeys, secretSetId?.toString(), secretSetVersion
 )
 
 private fun projectOverviewFinancials(
