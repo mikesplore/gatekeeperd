@@ -11,7 +11,7 @@ interface DeploymentJobRepository {
     data class AutoDeployTarget(
         val projectId: UUID, val repository: String, val gitRef: String, val registry: String,
         val imageName: String, val imageTag: String, val environment: String,
-        val serviceId: UUID, val registryCredentialId: UUID?
+        val serviceId: UUID
     )
 
     data class ConfigurationSummary(
@@ -30,8 +30,7 @@ interface DeploymentJobRepository {
         val env: Map<String, String>,
         val envKeys: List<String>,
         val secretSetId: UUID?,
-        val secretSetVersion: Int?,
-        val registryCredentialId: UUID?
+        val secretSetVersion: Int?
     )
 
     data class EnvironmentDeploymentResult(val setId: UUID, val version: Int, val deploymentIds: List<UUID>)

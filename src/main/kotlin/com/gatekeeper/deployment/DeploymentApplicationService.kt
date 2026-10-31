@@ -39,14 +39,26 @@ object DeploymentApplicationService {
         ACTIVE,
         NOT_TERMINAL,
         RUNTIME_ATTACHED,
-        RUNTIME_IN_USE,
-        REFERENCED
+        RUNTIME_IN_USE
+    }
+
+    /** Runtime container names exclusively associated with this service across all environments. */
+    fun runtimeContainersForService(serviceId: UUID): List<String> = transaction {
+        val serviceNames = Deployments.selectAll().where { Deployments.serviceId eq serviceId }
+            .mapNotNull { it[Deployments.runtimeContainerName] }
+            .distinct()
+        if (serviceNames.isEmpty()) return@transaction emptyList()
+
+        val references = Deployments.selectAll().where { Deployments.runtimeContainerName inList serviceNames }
+            .map { it[Deployments.serviceId] to it[Deployments.runtimeContainerName] }
+        serviceNames.filter { name -> references.none { (ownerServiceId, referencedName) -> referencedName == name && ownerServiceId != serviceId } }
     }
 
     /**
-     * Permanently removes an unreferenced terminal deployment and its private
-     * execution/job snapshots. The API must clear a terminal runtime pointer
-     * only after confirming/removing its Docker container.
+     * Permanently removes a terminal deployment and its private execution/job
+     * snapshots. Other history links to this deployment are cleared first.
+     * The API must clear a terminal runtime pointer only after confirming or
+     * removing its Docker container.
      */
     fun deleteDeployment(id: UUID): DeleteDeploymentResult = transaction {
         val deployment = Deployments.selectAll().where { Deployments.id eq id }.singleOrNull()
@@ -65,13 +77,15 @@ object DeploymentApplicationService {
         if (runtimeName != null) {
             return@transaction DeleteDeploymentResult.RUNTIME_ATTACHED
         }
-        if (Deployments.selectAll().where {
-                (Deployments.replacesDeploymentId eq id) or (Deployments.rolledBackToDeploymentId eq id)
-            }.count() > 0) {
-            return@transaction DeleteDeploymentResult.REFERENCED
-        }
-
         val executionId = deployment[Deployments.executionId]
+        Deployments.update({ Deployments.replacesDeploymentId eq id }) {
+            it[replacesDeploymentId] = null
+            it[updatedAt] = LocalDateTime.now()
+        }
+        Deployments.update({ Deployments.rolledBackToDeploymentId eq id }) {
+            it[rolledBackToDeploymentId] = null
+            it[updatedAt] = LocalDateTime.now()
+        }
         Deployments.deleteWhere { Deployments.id eq id }
         com.gatekeeper.db.tables.DeploymentExecutions.deleteWhere {
             com.gatekeeper.db.tables.DeploymentExecutions.id eq executionId
