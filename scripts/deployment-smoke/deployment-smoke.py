@@ -176,36 +176,19 @@ def wait_for_deployment(
     )
 
 
-def active_deployment(api: GatekeeperApi, slug: str, service_id: str) -> dict[str, Any]:
-    query = urllib.parse.urlencode({"environment": "production", "serviceId": service_id})
-    path = f"/api/admin/projects/{urllib.parse.quote(slug, safe='')}/deployments/history?{query}"
+def active_deployment(api: GatekeeperApi, project_id: str, service_id: str) -> dict[str, Any]:
+    query = urllib.parse.urlencode({"serviceId": service_id})
+    path = f"/api/admin/project-setup/projects/{urllib.parse.quote(project_id, safe='')}?{query}"
     _, result = api.request("GET", path)
-    history = require_dict(result, "deployment history")
-    items = history.get("items")
-    if not isinstance(items, list):
-        raise SmokeFailure("Deployment history response has no items list")
-    active = [
-        item for item in items
-        if isinstance(item, dict) and str(item.get("status", "")).lower() == "active"
-    ]
-    if len(active) != 1:
-        summary = [
-            {
-                "id": item.get("id"),
-                "status": item.get("status"),
-                "failureReason": item.get("failureReason"),
-                "runtimePresent": item.get("runtimePresent"),
-                "runtimeState": item.get("runtimeState"),
-            }
-            for item in items if isinstance(item, dict)
-        ]
-        raise SmokeFailure(
-            f"Expected one active deployment in history, found {len(active)}. "
-            f"Deployment history: {json.dumps(summary, separators=(',', ':'))}"
-        )
-    deployment_id = active[0].get("id")
+    status = require_dict(result, "project setup status")
+    deployment_id = status.get("activeDeploymentId")
     if not deployment_id:
-        raise SmokeFailure("Active deployment history entry has no ID")
+        latest_status = status.get("latestDeploymentStatus") or "unknown"
+        latest_id = status.get("latestDeploymentId") or "none"
+        raise SmokeFailure(
+            "No active deployment is recorded in project setup status; "
+            f"latest deployment is {latest_id} ({latest_status})"
+        )
     return {"deploymentId": str(deployment_id)}
 
 
@@ -423,7 +406,7 @@ def main() -> int:
         configure_service(api, project_id, service_id, registry, image_name, image_tag, db_password)
         first_id = queue_deployment(api, project_id, service_id)
         first = wait_for_deployment(api, slug, service_id, first_id, {"active"}, args.timeout, "deployment 1")
-        active = active_deployment(api, slug, service_id)
+        active = active_deployment(api, project_id, service_id)
         if active.get("deploymentId") != first_id:
             raise SmokeFailure("First deployment became active, but the active pointer does not match it")
         print("PASS deployment 1 becomes active with POSTGRES_PASSWORD")
@@ -434,7 +417,7 @@ def main() -> int:
         print("Updating service environment: POSTGRES_PASSWORD is NOT SET for deployment 2")
         second_id = update_environment(api, project_id, service_id, {})
         second = wait_for_deployment(api, slug, service_id, second_id, {"failed"}, args.timeout, "deployment 2")
-        active = active_deployment(api, slug, service_id)
+        active = active_deployment(api, project_id, service_id)
         if active.get("deploymentId") != first_id:
             raise SmokeFailure("Failed deployment replaced or cleared the previous active deployment")
         if args.nginx:
@@ -448,7 +431,7 @@ def main() -> int:
         print("Updating service environment: restoring POSTGRES_PASSWORD for deployment 3 (actual value hidden)")
         third_id = update_environment(api, project_id, service_id, {"POSTGRES_PASSWORD": db_password})
         wait_for_deployment(api, slug, service_id, third_id, {"active"}, args.timeout, "deployment 3")
-        active = active_deployment(api, slug, service_id)
+        active = active_deployment(api, project_id, service_id)
         if active.get("deploymentId") != third_id:
             raise SmokeFailure("Third deployment became active, but the active pointer does not match it")
         print("PASS deployment 3 recovers after restoring POSTGRES_PASSWORD")
