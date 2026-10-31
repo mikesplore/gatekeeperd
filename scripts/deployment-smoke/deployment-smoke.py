@@ -175,10 +175,23 @@ def wait_for_deployment(
 
 
 def active_deployment(api: GatekeeperApi, project_id: str, service_id: str) -> dict[str, Any]:
-    query = urllib.parse.urlencode({"environment": "production"})
-    path = f"/api/admin/projects/{project_id}/services/{service_id}/active-deployment?{query}"
+    query = urllib.parse.urlencode({"environment": "production", "serviceId": service_id})
+    path = f"/api/admin/projects/{project_id}/deployments/history?{query}"
     _, result = api.request("GET", path)
-    return require_dict(result, "active deployment")
+    history = require_dict(result, "deployment history")
+    items = history.get("items")
+    if not isinstance(items, list):
+        raise SmokeFailure("Deployment history response has no items list")
+    active = [
+        item for item in items
+        if isinstance(item, dict) and str(item.get("status", "")).lower() == "active"
+    ]
+    if len(active) != 1:
+        raise SmokeFailure(f"Expected one active deployment in history, found {len(active)}")
+    deployment_id = active[0].get("id")
+    if not deployment_id:
+        raise SmokeFailure("Active deployment history entry has no ID")
+    return {"deploymentId": str(deployment_id)}
 
 
 def customer_for_smoke(api: GatekeeperApi) -> tuple[str, bool]:
