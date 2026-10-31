@@ -2,6 +2,7 @@ package com.gatekeeper.admin
 
 import com.gatekeeper.api.respondError
 import com.gatekeeper.deployment.DeploymentApplicationService
+import com.gatekeeper.docker.DockerGateway
 import com.gatekeeper.feature.project.domain.repository.ProjectAdjustmentRepository as ProjectAdjustmentStore
 import com.gatekeeper.feature.project.domain.repository.ProjectRepository
 import com.gatekeeper.feature.audit.domain.repository.AuditRepository as AuditRepositoryPort
@@ -56,6 +57,7 @@ data class ServiceDeletionResponse(
     val deleted: Boolean,
     val serviceId: String,
     val domainsReleased: List<String>,
+    val containersRemoved: List<String>,
     val retained: List<String>
 )
 
@@ -150,6 +152,7 @@ fun Application.configureServiceAdminRoutes() {
     val serviceRepository = get<ServiceRepository>()
     val siteRepository = get<SiteRepository>()
     val nginxSiteStorage = get<NginxSiteStorage>()
+    val docker = get<DockerGateway>()
     val validator = get<NginxValidationService>()
     routing {
         authenticate("auth-jwt") {
@@ -433,6 +436,15 @@ fun Application.configureServiceAdminRoutes() {
                     siteRepository.findByDomain(domain)?.takeIf { it.projectId == projectId }
                 }).distinctBy { it.id }
                 val releasedDomains = (boundDomains + sites.map { it.domain }).distinct()
+                val runtimeNames = DeploymentApplicationService.runtimeContainersForService(serviceId)
+                val dockerInventory = if (runtimeNames.isEmpty()) emptyList() else {
+                    if (!docker.available) {
+                        return@delete call.respondError(HttpStatusCode.ServiceUnavailable, "docker_unavailable", "Docker must be available to remove this service's deployment containers; the service was not deleted")
+                    }
+                    runCatching { docker.listContainers(all = true) }.getOrElse {
+                        return@delete call.respondError(HttpStatusCode.BadGateway, "docker_inspection_failed", "Docker containers could not be inspected; the service was not deleted")
+                    }
+                }
                 for (site in sites) {
                     if (!nginxSiteStorage.removeSiteArtifacts(site)) {
                         return@delete call.respondError(HttpStatusCode.BadGateway, "service_nginx_cleanup_failed", "Could not remove nginx configuration for ${site.domain}; the service was not deleted")
@@ -444,15 +456,38 @@ fun Application.configureServiceAdminRoutes() {
                 if (sites.isNotEmpty() && (!nginxSiteStorage.testNginxConfigDetailed().valid || !nginxSiteStorage.reloadNginx())) {
                     return@delete call.respondError(HttpStatusCode.BadGateway, "service_nginx_reload_failed", "Nginx rejected the service cleanup; the service record was retained")
                 }
+                val removedContainers = mutableListOf<String>()
+                if (runtimeNames.isNotEmpty()) {
+                    for (runtimeName in runtimeNames) {
+                        val container = dockerInventory.firstOrNull { it.name.removePrefix("/") == runtimeName } ?: continue
+                        if (container.state.equals("running", ignoreCase = true) ||
+                            container.state.equals("restarting", ignoreCase = true) ||
+                            container.state.equals("paused", ignoreCase = true)
+                        ) {
+                            runCatching { docker.stopContainer(container.id, timeoutSeconds = 10) }
+                        }
+                        val removal = runCatching { docker.deleteContainer(container.id, force = true) }
+                        if (removal.isFailure) {
+                            val stillPresent = runCatching {
+                                docker.listContainers(all = true).any { it.id == container.id || it.name.removePrefix("/") == runtimeName }
+                            }.getOrElse { true }
+                            if (stillPresent) {
+                                return@delete call.respondError(HttpStatusCode.BadGateway, "service_container_cleanup_failed", "Could not remove deployment container $runtimeName; the service was not deleted")
+                            }
+                        }
+                        removedContainers += runtimeName
+                    }
+                }
                 if (!serviceRepository.delete(projectId, serviceId)) {
                     return@delete call.respondError(HttpStatusCode.Conflict, "service_delete_conflict", "The service could not be deleted")
                 }
                 val actor = call.principal<JWTPrincipal>()?.payload?.subject ?: "unknown"
-                auditRepository.write(projectId, "service_deleted", actor, "service=${current.name}; sites=${sites.size}; domains=${releasedDomains.size}")
+                auditRepository.write(projectId, "service_deleted", actor, "service=${current.name}; sites=${sites.size}; domains=${releasedDomains.size}; containers=${removedContainers.size}")
                 call.respond(HttpStatusCode.OK, ServiceDeletionResponse(
                     deleted = true,
                     serviceId = serviceId.toString(),
                     domainsReleased = releasedDomains,
+                    containersRemoved = removedContainers,
                     retained = listOf("payments", "payment events", "audit logs", "notifications", "deployment/environment history")
                 ))
             }
