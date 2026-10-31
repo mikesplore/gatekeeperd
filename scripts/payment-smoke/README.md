@@ -34,3 +34,5 @@ python3 scripts/payment-smoke/payment-smoke.py
 ```
 
 Preflight prints every required variable as `SET` or `NOT SET` and never echoes the admin password or Paystack secret. The Scribed balance synchronization timeout defaults to two minutes; pass `--timeout 240` to increase it.
+
+API errors include Gatekeeperd's request ID when the server supplies one. If the script gets an unexpected `500`, use that ID to find the matching `Unhandled exception` stack trace in Gatekeeperd logs; the API response intentionally does not expose internal exception details.

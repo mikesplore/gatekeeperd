@@ -27,9 +27,11 @@ class SmokeFailure(RuntimeError):
 class ApiFailure(SmokeFailure):
     status: int
     detail: str
+    request_id: str | None = None
 
     def __str__(self) -> str:
-        return f"HTTP {self.status}: {self.detail}"
+        request = f" (request ID: {self.request_id})" if self.request_id else ""
+        return f"HTTP {self.status}: {self.detail}{request}"
 
 
 class GatekeeperApi:
@@ -63,7 +65,8 @@ class GatekeeperApi:
         except urllib.error.HTTPError as error:
             raw = error.read()
             parsed = self._decode(raw)
-            raise ApiFailure(error.code, self._error_text(parsed, raw)) from None
+            request_id = error.headers.get("X-Request-ID") if error.headers else None
+            raise ApiFailure(error.code, self._error_text(parsed, raw), request_id) from None
         except (urllib.error.URLError, TimeoutError) as error:
             raise SmokeFailure(f"Request failed for {method} {path}: {error}") from None
 
@@ -270,7 +273,8 @@ def signed_webhook(
             return response.status, api._decode(response.read())
     except urllib.error.HTTPError as error:
         raw = error.read()
-        raise ApiFailure(error.code, api._error_text(api._decode(raw), raw)) from None
+        request_id = error.headers.get("X-Request-ID") if error.headers else None
+        raise ApiFailure(error.code, api._error_text(api._decode(raw), raw), request_id) from None
     except (urllib.error.URLError, TimeoutError) as error:
         raise SmokeFailure(f"Request failed for signed webhook: {error}") from None
 
@@ -296,6 +300,7 @@ def initiate_paystack(
     amount: Decimal,
 ) -> dict[str, Any]:
     path = f"/api/admin/projects/{urllib.parse.quote(slug, safe='')}/services/{service_id}/payment/initialize"
+    print(f"Initializing Paystack test payment for KES {amount}")
     _, result = api.request("POST", path, {"email": CUSTOMER_EMAIL, "amount": float(amount)})
     response = require_dict(result, "Paystack initialization")
     if not str(response.get("payment_link", "")).startswith("https://"):
