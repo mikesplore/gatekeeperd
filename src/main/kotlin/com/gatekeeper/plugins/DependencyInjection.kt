@@ -355,7 +355,7 @@ private val applicationModule = module {
     single<PaymentDomainRepository> { ExposedPaymentRepository() }
     single { ProjectBalanceAdapter(get<PaymentDomainRepository>(), get<ProjectAdjustmentStore>(), get(),  get()) }
     single<PaymentEventDomainRepository> { ExposedPaymentEventRepository() }
-    single { PaymentProjectAdapter(get<ProjectStore>()) }
+    single { PaymentProjectAdapter(get<ProjectStore>(), get()) }
     single { PaymentServiceAdapter() }
     single<ServiceMembershipRepository> { ExposedServiceMembershipRepository(get()) }
     single { PaymentBalanceAdapter(get<PaymentDomainRepository>(), get(), get(), get(), get()) }

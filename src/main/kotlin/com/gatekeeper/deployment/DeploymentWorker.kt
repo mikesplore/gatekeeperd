@@ -787,12 +787,19 @@ class DeploymentWorker(
                 managedPreviousHostPort
             )
             if (!postDrain.candidateHealthy) {
-                if (!postDrain.previousRouteRestored) DeploymentApplicationService.updateCutoverState(
+                val rollbackSucceeded = rollbackRoute.invoke()
+                val persistedRouteRestored = if (convertsLegacySite) {
+                    rollbackSucceeded
+                } else {
+                    siteRepository.restoreDeploymentUpstreamForSite(managedSite) != null
+                }
+                val previousRouteRestored = (postDrain.previousRouteRestored || rollbackSucceeded) && persistedRouteRestored
+                if (!previousRouteRestored) DeploymentApplicationService.updateCutoverState(
                     job.id,
                     "repair_required",
                     "Post-drain probe failed and previous upstream restoration failed"
                 )
-                check(postDrain.previousRouteRestored) { "Post-drain probe failed and the previous route could not be restored; service requires repair" }
+                check(previousRouteRestored) { "Post-drain probe failed and the previous route could not be restored; service requires repair" }
                 error("Candidate failed its post-drain nginx probe; previous route was restored")
             }
         } else if (durableState.state in setOf("restoring", "runtime_restored", "restore_failed")) {

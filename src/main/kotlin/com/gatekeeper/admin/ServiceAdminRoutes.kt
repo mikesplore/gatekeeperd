@@ -16,6 +16,7 @@ import com.gatekeeper.feature.deployment.domain.repository.ActiveDeploymentInspe
 import com.gatekeeper.db.tables.AdjustmentType
 import com.gatekeeper.db.tables.AccessBlockReason
 import com.gatekeeper.feature.nginx.domain.service.NginxValidationService
+import com.gatekeeper.feature.nginx.domain.port.NginxSiteStorage
 import com.gatekeeper.feature.service.domain.repository.ServiceRecord
 import com.gatekeeper.feature.service.domain.repository.ServiceRepository
 import com.gatekeeper.feature.service.domain.repository.SiteRepository
@@ -49,6 +50,14 @@ data class ServiceAdminView(
 
 @Serializable
 data class CreateServiceRequest(val name: String, val serviceType: String = "frontend")
+
+@Serializable
+data class ServiceDeletionResponse(
+    val deleted: Boolean,
+    val serviceId: String,
+    val domainsReleased: List<String>,
+    val retained: List<String>
+)
 
 @Serializable
 data class CreateServiceAdjustmentRequest(val type: String, val amount: Double, val reason: String)
@@ -140,6 +149,7 @@ fun Application.configureServiceAdminRoutes() {
     val serviceDomains = get<ServiceDomainRepository>()
     val serviceRepository = get<ServiceRepository>()
     val siteRepository = get<SiteRepository>()
+    val nginxSiteStorage = get<NginxSiteStorage>()
     val validator = get<NginxValidationService>()
     routing {
         authenticate("auth-jwt") {
@@ -418,10 +428,33 @@ fun Application.configureServiceAdminRoutes() {
                 if (current.isDefault) {
                     return@delete call.respondError(HttpStatusCode.Conflict, "default_service_required", "The default service cannot be deleted")
                 }
-                if (!serviceRepository.delete(projectId, serviceId)) {
-                    return@delete call.respondError(HttpStatusCode.Conflict, "service_in_use", "Services with deployment, environment, or site history cannot be deleted")
+                val boundDomains = (serviceDomains.listByService(serviceId).map { it.domain } + listOfNotNull(current.domain)).distinct()
+                val sites = (siteRepository.findAllByServiceId(serviceId) + boundDomains.mapNotNull { domain ->
+                    siteRepository.findByDomain(domain)?.takeIf { it.projectId == projectId }
+                }).distinctBy { it.id }
+                val releasedDomains = (boundDomains + sites.map { it.domain }).distinct()
+                for (site in sites) {
+                    if (!nginxSiteStorage.removeSiteArtifacts(site)) {
+                        return@delete call.respondError(HttpStatusCode.BadGateway, "service_nginx_cleanup_failed", "Could not remove nginx configuration for ${site.domain}; the service was not deleted")
+                    }
                 }
-                call.respond(HttpStatusCode.NoContent)
+                if (!nginxSiteStorage.removeUpstreamInclude(serviceId)) {
+                    return@delete call.respondError(HttpStatusCode.BadGateway, "service_nginx_cleanup_failed", "Could not remove the service upstream configuration; the service was not deleted")
+                }
+                if (sites.isNotEmpty() && (!nginxSiteStorage.testNginxConfigDetailed().valid || !nginxSiteStorage.reloadNginx())) {
+                    return@delete call.respondError(HttpStatusCode.BadGateway, "service_nginx_reload_failed", "Nginx rejected the service cleanup; the service record was retained")
+                }
+                if (!serviceRepository.delete(projectId, serviceId)) {
+                    return@delete call.respondError(HttpStatusCode.Conflict, "service_delete_conflict", "The service could not be deleted")
+                }
+                val actor = call.principal<JWTPrincipal>()?.payload?.subject ?: "unknown"
+                auditRepository.write(projectId, "service_deleted", actor, "service=${current.name}; sites=${sites.size}; domains=${releasedDomains.size}")
+                call.respond(HttpStatusCode.OK, ServiceDeletionResponse(
+                    deleted = true,
+                    serviceId = serviceId.toString(),
+                    domainsReleased = releasedDomains,
+                    retained = listOf("payments", "payment events", "audit logs", "notifications", "deployment/environment history")
+                ))
             }
 
             get("/api/admin/projects/{projectId}/environment/shared") {

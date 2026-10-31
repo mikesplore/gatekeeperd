@@ -122,6 +122,40 @@ class PaymentUseCasesTest {
     }
 
     @Test
+    fun `payment initiation resolves project from service when project slug is omitted`() = runBlocking {
+        val projectId = UUID.randomUUID()
+        val serviceId = UUID.randomUUID()
+        val repository = FakePaymentRepository(null)
+        var received: InitiatePaymentCommand? = null
+        val gateway = object : PaymentGateway {
+            override val provider = "paystack"
+            override suspend fun initiate(command: InitiatePaymentCommand): Result<InitiatedPayment> {
+                received = command
+                return Result.success(InitiatedPayment("service-checkout", "https://checkout.example"))
+            }
+            override suspend fun verify(reference: String) = Result.failure<VerifiedPayment>(UnsupportedOperationException())
+        }
+        val useCase = InitiatePayment(
+            repository,
+            object : PaymentProjectPort {
+                override fun find(slug: String): PaymentProject? = null
+                override fun findForService(serviceId: UUID) = PaymentProject(projectId, "resolved-project", "KES", null)
+            },
+            object : PaymentBalancePort {
+                override suspend fun availableAmount(serviceRepository: ServiceRepository, projectId: UUID, requestedAmount: BigDecimal?) = BigDecimal("42.00")
+            },
+            mapOf("paystack" to gateway), unusedServiceRepository(), PaymentServicePort { _, _, _ -> true }
+        )
+
+        val result = useCase(InitiatePayment.Command("paystack", "", currency = "KES", serviceId = serviceId))
+
+        assertTrue(result.isSuccess)
+        assertEquals("resolved-project", result.getOrThrow().projectSlug)
+        assertEquals("resolved-project", received?.projectSlug)
+        assertEquals(serviceId, repository.payment?.serviceId)
+    }
+
+    @Test
     fun `mpesa initiation rejects fractional KES amounts before calling provider`() = kotlinx.coroutines.runBlocking {
         val projectId = UUID.randomUUID()
         val serviceId = UUID.randomUUID()

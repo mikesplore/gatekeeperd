@@ -14,7 +14,7 @@ import kotlinx.serialization.Serializable
 
 @Serializable
 data class MpesaPaymentRequest(
-    val projectSlug: String,
+    val projectSlug: String = "",
     val serviceId: String,
     val phoneNumber: String,
     val amount: String? = null
@@ -31,9 +31,9 @@ fun Application.configureMpesaRoutes() {
                 call.respondError(HttpStatusCode.BadRequest, "invalid_request", "A valid M-Pesa payment request body is required")
                 return@post
             }
-            val slug = InputValidators.normalizeSlug(request.projectSlug)
-            if (slug == null) {
-                call.respondError(HttpStatusCode.BadRequest, "invalid_project_slug", "A valid project slug is required")
+            val slug = request.projectSlug.takeIf(String::isNotBlank)?.let { InputValidators.normalizeSlug(it) }
+            if (request.projectSlug.isNotBlank() && slug == null) {
+                call.respondError(HttpStatusCode.BadRequest, "invalid_project_slug", "Project slug is invalid")
                 return@post
             }
             val phone = request.phoneNumber

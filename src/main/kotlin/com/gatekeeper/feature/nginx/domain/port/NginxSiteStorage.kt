@@ -19,6 +19,7 @@ interface NginxSiteStorage {
     fun restoreBackup(slug: String, backupName: String): Boolean
     fun writeUpstreamInclude(serviceId: java.util.UUID, content: String): File
     fun readUpstreamInclude(serviceId: java.util.UUID): String?
+    fun removeUpstreamInclude(serviceId: java.util.UUID): Boolean
     fun listManualConfigs(): List<File>
     fun readManualConfig(filename: String): String?
     fun disableManualConfig(filename: String): NginxManualConfigDisableResult

@@ -158,8 +158,8 @@ Reason-specific HTML block page for blocked clients. The site's domain resolves 
 
 **Response:** `402 Payment Required`, `Content-Type: text/html`
 
-### GET /api/gate/pay?project={slug}[&serviceId={uuid}][&amount={amount}]
-Public payment initiation. For a single-service project, this uses the existing project balance. For a multi-service project, `serviceId` is required and the balance is read from that service’s linked invoice; the default is its full available balance. A requested amount must be greater than zero and no more than the available balance after pending payments. The multi-service paywall lists each service with an outstanding invoice and provides separate Paystack and M-Pesa actions.
+### GET /api/gate/pay?serviceId={uuid}[&project={slug}][&amount={amount}]
+Public service-scoped payment initiation. `serviceId` is required; `project` is optional and, when omitted, Gatekeeperd resolves the owning project from the service. The balance is read from that service’s linked invoice; the default is its full available balance. A requested amount must be greater than zero and no more than the available balance after pending payments. The multi-service paywall lists each service with an outstanding invoice and provides separate Paystack and M-Pesa actions.
 
 **Response:** `302` redirect to Paystack, or `4xx/5xx` JSON error if Paystack is not configured.
 
@@ -311,7 +311,7 @@ List project services or create one with `{ "name": "frontend" }`. Names may con
 
 #### GET, PATCH, DELETE /api/admin/projects/{projectId}/services/{serviceId}
 
-Read, update, or delete a service. PATCH accepts `name`, `accessStatus` (`active`, `blocked`, or `manual_block`), and the compatibility `blockReason` text. Structured blocks accept `blockReasonCode` (`payment`, `manual_hold`, `abuse_tos`, `suspended_by_request`, or `other`) and optional `blockReasonNote`. Set `isDefault: true` to make this the project's default service; the previous default is cleared atomically. The current default cannot be unset directly. Responses include these reason fields and `isDefault`. Setting access to `active` clears the reason and note. The default service may be renamed but cannot be deleted; its identity and linked runtime data remain unchanged. Services with deployment, environment, or site history cannot be deleted.
+Read, update, or delete a service. PATCH accepts `name`, `accessStatus` (`active`, `blocked`, or `manual_block`), and the compatibility `blockReason` text. Structured blocks accept `blockReasonCode` (`payment`, `manual_hold`, `abuse_tos`, `suspended_by_request`, or `other`) and optional `blockReasonNote`. Set `isDefault: true` to make this the project's default service; the previous default is cleared atomically. The current default cannot be unset directly. Responses include these reason fields and `isDefault`. Setting access to `active` clears the reason and note. The default service may be renamed but cannot be deleted; its identity and linked runtime data remain unchanged. Deleting another service removes its Nginx site configurations, site records, domain bindings, and active service links, releasing its domains. Payment records/events, project audit logs, notifications, and deployment/environment history are retained; history rows are detached from the deleted service identity. The delete response lists the released domains and retained record categories.
 
 #### POST /api/admin/projects/{projectId}/services/{serviceId}/adjustments
 
@@ -1265,7 +1265,7 @@ Delete a Docker image from the local Docker host.
 
 ### M-Pesa
 
-`POST /api/mpesa/pay` accepts `{ "projectSlug": "<slug>", "serviceId": "<uuid>", "phoneNumber": "<msisdn>", "amount": "<optional whole KES amount>" }`, starts an M-Pesa STK Push, and returns `202` with a pending provider reference. `serviceId` is required and the balance is isolated to that service invoice. Kenyan mobile numbers may use `07XXXXXXXX`, `01XXXXXXXX`, `2547XXXXXXXX`, `2541XXXXXXXX`, or `+254...` format; Gatekeeperd normalizes them to `254...` before sending them to Daraja. `amount` defaults to the selected balance; partial requests must be whole KES amounts and cannot exceed the available balance after pending payments. `POST /api/mpesa/callback` receives the Daraja callback, records it for audit, and queries Daraja before changing payment state. M-Pesa payments are stored and reconciled through the same payment application and reconciliation service as Paystack.
+`POST /api/mpesa/pay` accepts `{ "serviceId": "<uuid>", "phoneNumber": "<msisdn>", "amount": "<optional whole KES amount>", "projectSlug": "<optional slug>" }`, starts an M-Pesa STK Push, and returns `202` with a pending provider reference. `serviceId` is required; when `projectSlug` is omitted, Gatekeeperd resolves the owning project from the service. The balance is isolated to that service invoice. Kenyan mobile numbers may use `07XXXXXXXX`, `01XXXXXXXX`, `2547XXXXXXXX`, `2541XXXXXXXX`, or `+254...` format; Gatekeeperd normalizes them to `254...` before sending them to Daraja. `amount` defaults to the selected balance; partial requests must be whole KES amounts and cannot exceed the available balance after pending payments. `POST /api/mpesa/callback` receives the Daraja callback, records it for audit, and queries Daraja before changing payment state. M-Pesa payments are stored and reconciled through the same payment application and reconciliation service as Paystack.
 
 Required configuration: `MPESA_CONSUMER_KEY`, `MPESA_CONSUMER_SECRET`, `MPESA_SHORT_CODE`, `MPESA_PASSKEY`, `MPESA_CALLBACK_URL`, and `MPESA_ENVIRONMENT` (`sandbox` or `production`).
 

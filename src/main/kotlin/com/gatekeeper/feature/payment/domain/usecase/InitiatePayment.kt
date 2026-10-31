@@ -18,10 +18,12 @@ class InitiatePayment(
     private val services: PaymentServicePort = PaymentServicePort {_, _, _ -> false }
 ) {
     suspend operator fun invoke(command: Command): Result<PaymentInitiation> = runCatching {
-        if (command.projectSlug.isBlank()) invalid("missing_payment_details", "project is required")
         val serviceId = command.serviceId ?: invalid("service_required", "Choose a service to pay for")
         DistributedLock.withSuspendLock("payment-initiation:$serviceId") {
-        val project = projects.find(command.projectSlug) ?: fail("project_not_found", "Project not found", FailureKind.NOT_FOUND)
+        val project = if (command.projectSlug.isBlank()) projects.findForService(serviceId)
+            else projects.find(command.projectSlug)
+            ?: fail("project_not_found", "Project not found", FailureKind.NOT_FOUND)
+        if (project == null) fail("project_not_found", "Project not found for this service", FailureKind.NOT_FOUND)
         if (!services.belongsToProject(serviceRepository, project.id, serviceId)) {
             fail("service_not_found", "Service not found for this project", FailureKind.NOT_FOUND)
         }
@@ -54,7 +56,7 @@ class InitiatePayment(
             fail(if (gateway.provider == "mpesa") "mpesa_unavailable" else "paystack_error", error.message ?: "Payment provider could not initiate payment", FailureKind.PROVIDER_UNAVAILABLE)
         }
         payments.create(project.id, gateway.provider, initiated.reference, amount, "pending", authorizationUrl = initiated.authorizationUrl, serviceId = serviceId)
-        PaymentInitiation(initiated.reference, initiated.authorizationUrl, amount)
+        PaymentInitiation(initiated.reference, initiated.authorizationUrl, amount, project.slug)
         }
     }
 
@@ -85,7 +87,7 @@ class InitiatePayment(
     ) : RuntimeException(message)
 }
 
-data class PaymentInitiation(val reference: String, val authorizationUrl: String?, val amount: BigDecimal)
+data class PaymentInitiation(val reference: String, val authorizationUrl: String?, val amount: BigDecimal, val projectSlug: String = "")
 
 data class PaymentProject(
     val id: UUID,
@@ -96,7 +98,10 @@ data class PaymentProject(
     val status: String? = null
 )
 
-interface PaymentProjectPort { fun find(slug: String): PaymentProject? }
+interface PaymentProjectPort {
+    fun find(slug: String): PaymentProject?
+    fun findForService(serviceId: UUID): PaymentProject? = null
+}
 fun interface PaymentServicePort { fun belongsToProject( serviceRepository: ServiceRepository, projectId: UUID, serviceId: UUID): Boolean }
 interface PaymentBalancePort {
     suspend fun availableAmount(serviceRepository: ServiceRepository, projectId: UUID, requestedAmount: BigDecimal?): BigDecimal

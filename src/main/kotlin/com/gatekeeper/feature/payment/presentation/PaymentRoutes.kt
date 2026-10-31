@@ -18,9 +18,8 @@ fun Application.configurePaymentRoutes() {
         get("/api/gate/pay") {
             val rawSlug = call.request.queryParameters["project"]
             val slug = rawSlug?.takeIf(String::isNotBlank)?.let { InputValidators.normalizeSlug(it) }
-            if (slug == null) {
-                val code = if (rawSlug.isNullOrBlank()) "missing_project_slug" else "invalid_project_slug"
-                return@get call.respondError(HttpStatusCode.BadRequest, code, "A valid project slug is required")
+            if (!rawSlug.isNullOrBlank() && slug == null) {
+                return@get call.respondError(HttpStatusCode.BadRequest, "invalid_project_slug", "Project slug is invalid")
             }
             val amountText = call.request.queryParameters["amount"]
             val amount = amountText?.toBigDecimalOrNull()
@@ -36,11 +35,11 @@ fun Application.configurePaymentRoutes() {
                 return@get call.respondError(HttpStatusCode.BadRequest, "service_required", "A service is required for payment")
             }
             call.application.get<InitiatePayment>()(
-                InitiatePayment.Command("paystack", slug, amount, currency = "", requireSuspendedProject = true, serviceId = serviceId)
+                InitiatePayment.Command("paystack", slug.orEmpty(), amount, currency = "", serviceId = serviceId)
             ).fold(
                 onSuccess = { initiated ->
                     call.respondRedirect(
-                        initiated.authorizationUrl ?: "/api/gate/payment/callback?project=$slug&reference=${initiated.reference}",
+                        initiated.authorizationUrl ?: "/api/gate/payment/callback?project=${initiated.projectSlug}&reference=${initiated.reference}",
                         permanent = false
                     )
                 },

@@ -16,10 +16,17 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
-class PaymentProjectAdapter(private val projects: ProjectRepository) : PaymentProjectPort {
+class PaymentProjectAdapter(
+    private val projects: ProjectRepository,
+    private val services: ServiceRepository
+) : PaymentProjectPort {
     override fun find(slug: String): PaymentProject? = projects.findBySlug(slug)?.let {
         PaymentProject(it.id, it.slug, it.currency, it.customerEmail, it.domain, it.status)
     }
+
+    override fun findForService(serviceId: UUID): PaymentProject? = services.findById(serviceId)
+        ?.let { projects.findById(it.projectId) }
+        ?.let { PaymentProject(it.id, it.slug, it.currency, it.customerEmail, it.domain, it.status) }
 }
 
 class PaymentServiceAdapter : PaymentServicePort {

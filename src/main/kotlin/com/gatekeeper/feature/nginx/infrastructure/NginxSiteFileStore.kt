@@ -105,6 +105,9 @@ class NginxSiteFileStore(
     override fun readUpstreamInclude(serviceId: java.util.UUID): String? =
         File(upstreamDir, "$serviceId.conf").takeIf { it.exists() }?.readText()
 
+    override fun removeUpstreamInclude(serviceId: java.util.UUID): Boolean =
+        runCatching { Files.deleteIfExists(File(upstreamDir, "$serviceId.conf").toPath()); true }.getOrDefault(false)
+
     override fun listManualConfigs(): List<File> =
         availableDir.listFiles { f -> f.isFile && !f.name.startsWith(".") }?.toList() ?: emptyList()
 

@@ -144,23 +144,35 @@ class ExposedServiceRepository(private val siteRepository: SiteRepository) : Ser
         return updated
     }
 
-    /** Only empty non-default services can be removed; referenced runtime history is preserved. */
-    override fun delete(projectId: UUID, id: UUID): Boolean = transaction {
-        val service = Services.selectAll().where {
-            (Services.projectId eq projectId) and (Services.id eq id)
-        }.singleOrNull() ?: return@transaction false
-        if (service[Services.isDefault]) return@transaction false
-        val inUse =
-            DeploymentConfigurations.selectAll().where { DeploymentConfigurations.serviceId eq id }.count() > 0L ||
-                    DeploymentExecutions.selectAll().where { DeploymentExecutions.serviceId eq id }.count() > 0L ||
-                    DeploymentJobs.selectAll().where { DeploymentJobs.serviceId eq id }.count() > 0L ||
-                    Deployments.selectAll().where { Deployments.serviceId eq id }.count() > 0L ||
-                    ProjectSecretSetVersions.selectAll().where { ProjectSecretSetVersions.serviceId eq id }
-                        .count() > 0L ||
-                    ProjectAdjustments.selectAll().where { ProjectAdjustments.serviceId eq id }.count() > 0L ||
-                    Sites.selectAll().where { Sites.serviceId eq id }.count() > 0L
-        if (inUse) return@transaction false
-        Services.deleteWhere { (Services.projectId eq projectId) and (Services.id eq id) } > 0
+    /** Remove active service state while detaching retained history from the deleted identity. */
+    override fun delete(projectId: UUID, id: UUID): Boolean {
+        val gateSlugs = siteRepository.findGateSlugsByServiceId(id)
+        val deleted = transaction {
+            val service = Services.selectAll().where {
+                (Services.projectId eq projectId) and (Services.id eq id)
+            }.singleOrNull() ?: return@transaction false
+            if (service[Services.isDefault]) return@transaction false
+            // Preserve operational and billing history, but detach its nullable service FK
+            // before removing the service record. Site and service-domain rows are live state.
+            DeploymentConfigurations.update({ DeploymentConfigurations.serviceId eq id }) { it[serviceId] = null }
+            DeploymentExecutions.update({ DeploymentExecutions.serviceId eq id }) { it[serviceId] = null }
+            DeploymentJobs.update({ DeploymentJobs.serviceId eq id }) { it[serviceId] = null }
+            Deployments.update({ Deployments.serviceId eq id }) { it[serviceId] = null }
+            ProjectSecretSetVersions.update({ ProjectSecretSetVersions.serviceId eq id }) { it[serviceId] = null }
+            ProjectAdjustments.update({ ProjectAdjustments.serviceId eq id }) { it[serviceId] = null }
+            Sites.deleteWhere { Sites.serviceId eq id }
+            service[Services.domain]?.let { domain ->
+                Sites.deleteWhere { (Sites.projectId eq projectId) and (Sites.domain eq domain) }
+            }
+            ServiceDomains.selectAll().where { ServiceDomains.serviceId eq id }.forEach { binding ->
+                Sites.deleteWhere {
+                    (Sites.projectId eq projectId) and (Sites.domain eq binding[ServiceDomains.domain])
+                }
+            }
+            Services.deleteWhere { (Services.projectId eq projectId) and (Services.id eq id) } > 0
+        }
+        if (deleted) gateSlugs.forEach(::invalidateGateCache)
+        return deleted
     }
 
     override fun findAccessById(id: UUID): AccessRecord? = transaction {
