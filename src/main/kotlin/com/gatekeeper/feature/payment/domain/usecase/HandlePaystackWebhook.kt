@@ -20,7 +20,7 @@ class HandlePaystackWebhook(
                 projectSlug = command.projectSlug, status = status,
                 verifiedVia = command.verifiedVia,
                 amount = if (status == "success") BigDecimal.valueOf(command.amountKobo).movePointLeft(2) else null,
-                currency = command.currency, actor = command.actor
+                currency = command.currency, paidAt = command.paidAt, actor = command.actor
             )
         )
     }
@@ -33,6 +33,7 @@ class HandlePaystackWebhook(
         val amountKobo: Long,
         val currency: String?,
         val rawPayload: String,
+        val paidAt: java.time.LocalDateTime? = null,
         val verifiedVia: String = "webhook",
         val actor: String = "system"
     )

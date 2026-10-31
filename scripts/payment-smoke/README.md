@@ -33,7 +33,7 @@ export GATEKEEPER_SMOKE_PAYSTACK_TEST_SECRET='sk_test_...'
 python3 scripts/payment-smoke/payment-smoke.py
 ```
 
-Preflight prints every required variable as `SET` or `NOT SET` and never echoes the admin password or Paystack secret. The Scribed balance synchronization timeout defaults to two minutes; pass `--timeout 240` to increase it. Invoice lookups retry temporary Gatekeeperd `502` responses with backoff, and balance polling slows down over time to avoid hitting Scribed's per-IP request limit.
+Preflight prints every required variable as `SET` or `NOT SET` and never echoes the admin password or Paystack secret. The Scribed balance synchronization timeout defaults to two minutes; pass `--timeout 240` to increase it. Invoice lookups retry temporary Gatekeeperd `502` responses with backoff, and balance polling slows down over time to avoid hitting Scribed's per-IP request limit. A passing run archives its smoke project through Gatekeeperd's soft-delete API; payments, invoices, receipts, and audit history remain retained. Failed runs preserve the project for inspection.
 
 If a run stops after the invoice and cash payment were created, resume it without creating another invoice:
 

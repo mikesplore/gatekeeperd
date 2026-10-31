@@ -14,6 +14,8 @@ import org.slf4j.LoggerFactory
 import com.gatekeeper.plugins.Metrics
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
+import java.time.LocalDateTime
+import java.time.OffsetDateTime
 import com.gatekeeper.feature.payment.domain.usecase.HandlePaystackWebhook
 import com.gatekeeper.feature.payment.domain.usecase.ProcessPaymentEvent
 
@@ -69,7 +71,13 @@ fun Application.configurePaystackWebhookRoutes() {
                     HandlePaystackWebhook.Command(
                         eventType = event.event, paymentStatus = data.status, reference = reference,
                         projectSlug = projectSlug, amountKobo = data.amount,
-                        currency = data.currency, rawPayload = rawBody
+                        currency = data.currency,
+                        paidAt = data.paidAt?.let { value ->
+                            runCatching { OffsetDateTime.parse(value).toLocalDateTime() }
+                                .recoverCatching { LocalDateTime.parse(value) }
+                                .getOrNull()
+                        },
+                        rawPayload = rawBody
                     )
                 )
                 when (outcome) {

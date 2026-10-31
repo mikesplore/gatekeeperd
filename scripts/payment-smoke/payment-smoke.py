@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import hashlib
 import hmac
 import json
@@ -293,17 +294,17 @@ def signed_webhook(
 
 
 def make_webhook(event: str, reference: str, amount: Decimal, slug: str, service_id: str) -> dict[str, Any]:
-    return {
-        "event": event,
-        "data": {
-            "reference": reference,
-            "amount": int(amount * 100),
-            "status": "success" if event == "charge.success" else "failed",
-            "currency": CURRENCY,
-            "metadata": {"project_slug": slug, "service_id": service_id},
-            "customer": {"email": CUSTOMER_EMAIL},
-        },
+    data = {
+        "reference": reference,
+        "amount": int(amount * 100),
+        "status": "success" if event == "charge.success" else "failed",
+        "currency": CURRENCY,
+        "metadata": {"project_slug": slug, "service_id": service_id},
+        "customer": {"email": CUSTOMER_EMAIL},
     }
+    if event == "charge.success":
+        data["paid_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+    return {"event": event, "data": data}
 
 
 def initiate_paystack(
@@ -358,6 +359,7 @@ def main() -> int:
     secret = settings["GATEKEEPER_SMOKE_PAYSTACK_TEST_SECRET"]
     run_id = secrets.token_hex(4)
     project: dict[str, str] | None = None
+    project_archived = False
 
     print(f"Target: {base_url} ({os.environ['GATEKEEPER_SMOKE_TARGET']})")
     print(f"Test invoice: {CURRENCY} {INVOICE_AMOUNT}; cash partial: {CURRENCY} {CASH_AMOUNT}")
@@ -484,6 +486,8 @@ def main() -> int:
         if success_reference not in by_reference:
             raise SmokeFailure("Successful Paystack payment is missing from service payment history")
         assert_status(by_reference[success_reference], "success")
+        if not by_reference[success_reference].get("paidAt"):
+            raise SmokeFailure("Successful Paystack payment is missing its paidAt timestamp")
         if failed_reference not in by_reference:
             raise SmokeFailure("Failed Paystack payment is missing from service payment history")
         assert_status(by_reference[failed_reference], "failed")
@@ -498,13 +502,15 @@ def main() -> int:
             raise SmokeFailure("Scribed invoice is missing the cash or successful Paystack payment")
         print("PASS service payment history retains cash, failed, and successful payment records")
         print("PASS Scribed invoice shows the complete paid amount and both successful payment references")
+        api.request("DELETE", f"/api/admin/projects/{urllib.parse.quote(slug, safe='')}")
+        project_archived = True
         print("PAYMENT SMOKE TEST PASSED")
         return 0
     finally:
         if project:
+            lifecycle = "ARCHIVED after successful verification" if project_archived else "PRESERVED after failure for inspection"
             print(
-                "PRESERVED payment smoke records for inspection; no cleanup is performed because "
-                "payments, invoices, receipts, and audit history are durable: "
+                f"{lifecycle}; payment, invoice, receipt, and audit history remain durable: "
                 f"project={project['slug']} projectId={project['project_id']} serviceId={project['service_id']}"
             )
 

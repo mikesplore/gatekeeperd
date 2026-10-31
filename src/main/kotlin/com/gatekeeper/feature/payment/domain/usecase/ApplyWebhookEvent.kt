@@ -32,8 +32,9 @@ class ApplyWebhookEvent(
         }
         if (current == null) return false
         if (command.status == "reversed") effects.paymentReversed(current)
-        payments.updateStatus(current.provider, current.providerReference, command.status, command.verifiedVia, command.paidAt, command.amount)
-        if (command.status == "success") effects.paymentSucceeded(current, amount, command.currency, command.paidAt, command.actor)
+        val paidAt = if (command.status == "success") command.paidAt ?: LocalDateTime.now() else command.paidAt
+        payments.updateStatus(current.provider, current.providerReference, command.status, command.verifiedVia, paidAt, command.amount)
+        if (command.status == "success") effects.paymentSucceeded(current, amount, command.currency, paidAt, command.actor)
         if (command.status == "failed" || command.status == "abandoned") effects.paymentFailed(current)
         return true
     }

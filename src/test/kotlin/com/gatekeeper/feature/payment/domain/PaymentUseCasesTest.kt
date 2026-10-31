@@ -53,6 +53,7 @@ class PaymentUseCasesTest {
         assertTrue(useCase(command()))
         assertFalse(useCase(command()))
         assertEquals("success", repository.payment?.status)
+        assertTrue(repository.payment?.paidAt != null)
         assertEquals(1, effects.successCount)
     }
 
