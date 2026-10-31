@@ -166,8 +166,10 @@ def wait_for_deployment(
                 last_report = now
             if last_status in expected:
                 return item
-            if last_status in {"cancelled", "rolled-back"} and last_status not in expected:
-                raise SmokeFailure(f"{label} ended unexpectedly in {last_status}")
+            if last_status in {"failed", "cancelled", "rolled-back", "deleted"}:
+                reason = item.get("failureReason") or item.get("message")
+                detail = f": {reason}" if reason else ""
+                raise SmokeFailure(f"{label} ended unexpectedly in {last_status}{detail}")
         time.sleep(2)
     raise SmokeFailure(
         f"Timed out after {timeout_seconds}s waiting for {label}; last status was {last_status}"
