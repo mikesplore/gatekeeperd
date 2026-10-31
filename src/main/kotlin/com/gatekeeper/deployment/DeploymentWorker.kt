@@ -58,6 +58,7 @@ class DeploymentWorker(
     private val started = AtomicBoolean(false)
     private val restartLoopDetector = CandidateRestartLoopDetector()
     private val readinessChecker = ReadinessChecker(readinessPorts, readinessHttp, restartLoopDetector)
+    private val candidateStabilityMillis = 10_000L
 
     fun start(scope: CoroutineScope) {
         if (!started.compareAndSet(false, true)) return
@@ -467,6 +468,12 @@ class DeploymentWorker(
                 candidateName = null
                 throw failure
             }
+            update(
+                job,
+                step = "health_checking",
+                log = "Initial readiness passed; verifying the candidate stays healthy for ${candidateStabilityMillis / 1000} seconds before cutover"
+            )
+            verifyCandidateStability(docker, candidateName, candidatePortMappings, job, readiness.restartCount)
             ensureNotCancelled(job.id, requireNotNull(job.claimToken))
             val resolvedContainerPort = readiness.containerPort ?: job.containerPort
             val candidateHostPort = resolvedContainerPort?.let(candidatePortMappings::get)
@@ -1107,6 +1114,36 @@ class DeploymentWorker(
             probe = { readinessChecker.check(docker, name, portMappings, job) },
             pause = { intervalMillis -> Thread.sleep(intervalMillis) }
         )
+    }
+
+    private fun verifyCandidateStability(
+        docker: DockerGateway,
+        name: String,
+        portMappings: Map<Int, Int>,
+        job: DeploymentJobRecord,
+        initialRestartCount: Int
+    ) {
+        val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(candidateStabilityMillis)
+        val intervalMillis = minOf(job.readinessIntervalSeconds.coerceAtLeast(1) * 1000L, 1_000L)
+        while (System.nanoTime() < deadline) {
+            ensureNotCancelled(job.id, requireNotNull(job.claimToken))
+            val readiness = readinessChecker.check(docker, name, portMappings, job)
+                ?: throw CandidateRuntimeUnstableException(
+                    "Candidate stopped passing readiness during its ${candidateStabilityMillis / 1000}-second pre-cutover stability check"
+                )
+            if (readiness.restartLoopDetected) {
+                throw CandidateRuntimeUnstableException(
+                    "Candidate container restarted ${readiness.restartCount} times within ${CandidateRestartLoopDetector.WINDOW_MILLIS / 1000} seconds"
+                )
+            }
+            if (readiness.restartCount != initialRestartCount) {
+                throw CandidateRuntimeUnstableException(
+                    "Candidate container restarted during its pre-cutover stability check (restart count ${initialRestartCount} -> ${readiness.restartCount})"
+                )
+            }
+            val remainingMillis = TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime())
+            if (remainingMillis > 0) Thread.sleep(minOf(intervalMillis, remainingMillis))
+        }
     }
 
     private fun String.publishedHostPort(containerPort: Int): Int? = split(',').firstNotNullOfOrNull { mapping ->
