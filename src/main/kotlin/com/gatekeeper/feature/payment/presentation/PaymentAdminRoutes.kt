@@ -26,6 +26,7 @@ import com.gatekeeper.feature.payment.domain.usecase.InitiatePayment
 import com.gatekeeper.feature.payment.domain.usecase.HandlePaystackWebhook
 import com.gatekeeper.feature.payment.domain.usecase.ReplayPaystackEvent
 import com.gatekeeper.feature.payment.domain.usecase.GetPaymentEventForReplay
+import com.gatekeeper.feature.project.domain.repository.ProjectRepository
 import com.gatekeeper.feature.payment.presentation.dto.PaystackWebhookPayload
 import org.koin.ktor.ext.get
 import kotlinx.serialization.Serializable
@@ -89,9 +90,11 @@ fun Application.configurePaymentAdminRoutes() {
                 )
             }
 
-            post("/api/admin/projects/{slug}/services/{serviceId}/payments/cash") {
-                val slug = call.parameters["slug"]
-                    ?: return@post call.respondError(HttpStatusCode.BadRequest, "invalid_project_slug", "Project slug is required")
+            post("/api/admin/projects/{projectId}/services/{serviceId}/payments/cash") {
+                val projectId = runCatching { UUID.fromString(call.parameters["projectId"]) }.getOrNull()
+                    ?: return@post call.respondError(HttpStatusCode.BadRequest, "invalid_project_id", "Project ID is invalid")
+                val project = call.application.get<ProjectRepository>().findById(projectId)
+                    ?: return@post call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
                 val serviceId = runCatching { UUID.fromString(call.parameters["serviceId"]) }.getOrNull()
                     ?: return@post call.respondError(HttpStatusCode.BadRequest, "invalid_service_id", "Service ID is invalid")
                 val request = call.receive<CaptureCashPaymentRequest>()
@@ -101,7 +104,7 @@ fun Application.configurePaymentAdminRoutes() {
                 val paidAt = request.paidAt?.let { runCatching { LocalDateTime.parse(it) }.getOrNull() }
                 val actor = call.principal<io.ktor.server.auth.jwt.JWTPrincipal>()?.payload?.subject ?: "unknown"
                 call.application.get<RecordCashPayment>()(
-                    RecordCashPayment.Command(slug, BigDecimal.valueOf(request.amount), request.currency, paidAt, request.receiptNumber, request.notes, actor, serviceId)
+                    RecordCashPayment.Command(project.slug, BigDecimal.valueOf(request.amount), request.currency, paidAt, request.receiptNumber, request.notes, actor, serviceId)
                 ).fold(
                     onSuccess = { payment -> call.respond(HttpStatusCode.Created, mapOf("provider" to payment.provider, "reference" to payment.providerReference, "status" to payment.status)) },
                     onFailure = { error ->
@@ -112,11 +115,14 @@ fun Application.configurePaymentAdminRoutes() {
                 )
             }
 
-            get("/api/admin/projects/{slug}/payments") {
-                val slug = call.parameters["slug"] ?: return@get call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing slug path parameter")
+            get("/api/admin/projects/{projectId}/payments") {
+                val projectId = runCatching { UUID.fromString(call.parameters["projectId"]) }.getOrNull()
+                    ?: return@get call.respondError(HttpStatusCode.BadRequest, "invalid_project_id", "Project ID is invalid")
+                val project = call.application.get<ProjectRepository>().findById(projectId)
+                    ?: return@get call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
                 val limit = (call.request.queryParameters["limit"]?.toIntOrNull() ?: 25).coerceIn(1, 500)
                 val offset = (call.request.queryParameters["offset"]?.toIntOrNull() ?: 0).coerceAtLeast(0)
-                call.application.get<ListProjectPayments>()(ListProjectPayments.Command(slug, limit, offset)).fold(
+                call.application.get<ListProjectPayments>()(ListProjectPayments.Command(project.slug, limit, offset)).fold(
                     onSuccess = { page ->
                         call.respond(ProjectPaymentsPageResponse(page.items.map { it.toResponse() }, page.total, limit, offset, offset + page.items.size < page.total))
                     },

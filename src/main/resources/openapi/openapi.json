@@ -5602,14 +5602,14 @@
         }
       }
     },
-    "/api/admin/projects/{slug}/payments": {
+    "/api/admin/projects/{projectId}/payments": {
       "get": {
         "tags": [
           "Projects"
         ],
-        "summary": "Get projects by slug payments",
+        "summary": "List payments for project",
         "description": "Implementation: `com/gatekeeper/feature/payment/presentation/PaymentAdminRoutes.kt:105`. This entry completes the route inventory; consult docs/API.md for operation-specific rules and payload details.",
-        "operationId": "GetApiAdminProjectsByslugPayments",
+        "operationId": "GetApiAdminProjectsByprojectIdPayments",
         "responses": {
           "200": {
             "description": "Successful response; payload shape depends on the operation."
@@ -5628,7 +5628,7 @@
         "x-code-location": "com/gatekeeper/feature/payment/presentation/PaymentAdminRoutes.kt:105",
         "parameters": [
           {
-            "name": "slug",
+            "name": "projectId",
             "in": "path",
             "required": true,
             "schema": {
@@ -5652,54 +5652,6 @@
             }
           }
         ]
-      }
-    },
-    "/api/admin/projects/{slug}/payments/cash": {
-      "post": {
-        "tags": [
-          "Projects"
-        ],
-        "summary": "Submit or create projects by slug payments cash",
-        "description": "Implementation: `com/gatekeeper/feature/payment/presentation/PaymentAdminRoutes.kt:84`. This entry completes the route inventory; consult docs/API.md for operation-specific rules and payload details.",
-        "operationId": "PostApiAdminProjectsByslugPaymentsCash",
-        "responses": {
-          "200": {
-            "description": "Successful response; payload shape depends on the operation."
-          },
-          "default": {
-            "description": "Operation-specific error response. The API uses the standard error object when applicable.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiError"
-                }
-              }
-            }
-          }
-        },
-        "x-code-location": "com/gatekeeper/feature/payment/presentation/PaymentAdminRoutes.kt:84",
-        "parameters": [
-          {
-            "name": "slug",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": false,
-          "description": "JSON request fields are operation-specific; see the referenced source and docs/API.md.",
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "additionalProperties": true
-              }
-            }
-          }
-        }
       }
     },
     "/api/admin/projects/{slug}/payments/{paymentId}/receipt": {

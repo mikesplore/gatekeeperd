@@ -6,6 +6,7 @@ import com.gatekeeper.feature.nginx.domain.port.CertificateProvisioner
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.request.receive
 import io.ktor.server.response.respond
+import io.ktor.server.auth.authenticate
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
@@ -14,6 +15,7 @@ fun Route.nginxCertificateAdminRoutes(
     nginxAdministrationService: NginxAdministrationService,
     certificateProvisioner: CertificateProvisioner
 ){
+    authenticate("auth-jwt") {
     get("/api/admin/nginx/certificate/list") {
         val certificateManagerIssue = certificateProvisioner.certificateManagerIssue()
         call.respond(
@@ -162,5 +164,6 @@ fun Route.nginxCertificateAdminRoutes(
                 "Unable to check certificate"
             )
         }
+    }
     }
 }

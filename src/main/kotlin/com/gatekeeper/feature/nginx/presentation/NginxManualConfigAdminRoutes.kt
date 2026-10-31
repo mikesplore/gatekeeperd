@@ -16,6 +16,7 @@ import io.ktor.http.*
 import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
+import io.ktor.server.auth.authenticate
 
 fun Route.nginxManualConfigRoutes(
     siteRepository: SiteRepository,
@@ -35,6 +36,7 @@ fun Route.nginxManualConfigRoutes(
     rollback: RollbackSiteConfigUseCase,
     renderModelFromSite: RenderModelFromSite
 ) {
+    authenticate("auth-jwt") {
     post("/api/admin/nginx/config/{slug}/custom-blocks") {
         val slug = call.parameters["slug"]
         if (slug.isNullOrBlank()) return@post call.respondError(
@@ -345,5 +347,6 @@ fun Route.nginxManualConfigRoutes(
                 message = "Nginx site removed and reloaded successfully"
             )
         )
+    }
     }
 }

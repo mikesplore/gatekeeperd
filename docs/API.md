@@ -554,8 +554,11 @@ Get the most recent audit log entries across all projects (JWT required).
 ### GET /api/admin/payments
 List all payments across projects with filters and pagination (JWT required).
 
-### POST /api/admin/projects/{slug}/payments/cash
-Record a cash payment received by an administrator (JWT required). Partial payments are accepted, provided they do not exceed the selected scope's remaining balance and use its currency. Successful capture contributes to the project balance when no `serviceId` is supplied, or to the selected service invoice when `serviceId` is supplied.
+### GET /api/admin/projects/{projectId}/payments
+List payments for a project UUID with pagination. Use the service-specific payments endpoint when a service scope is needed.
+
+### POST /api/admin/projects/{projectId}/services/{serviceId}/payments/cash
+Record a cash payment for a service by project and service UUID (JWT required). Partial payments are accepted, provided they do not exceed the service's remaining balance and use its currency.
 
 Request body:
 
@@ -565,8 +568,7 @@ Request body:
   "currency": "KES",
   "paidAt": "2026-09-20T10:30:00",
   "receiptNumber": "CASH-1001",
-  "notes": "Received in person",
-  "serviceId": "service-uuid"
+  "notes": "Received in person"
 }
 ```
 

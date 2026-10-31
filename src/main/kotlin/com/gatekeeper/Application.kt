@@ -1,6 +1,7 @@
 package com.gatekeeper
 
 import com.gatekeeper.admin.*
+import com.gatekeeper.feature.nginx.presentation.configureNginxRoutes
 import com.gatekeeper.api.InputValidators
 import com.gatekeeper.auth.configureAuthRoutes
 import com.gatekeeper.config.AppSettings
@@ -149,7 +150,7 @@ fun Application.module() {
     configureRedis()
     configureSecurity()
     routing {
-        configureNginxAdminRoutes()
+        configureNginxRoutes()
     }
     configureRouting()
     configureGateRoutes(serviceRepository)

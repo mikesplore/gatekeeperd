@@ -205,8 +205,8 @@ class CertbotCertificateProvisioner(
         if (!isCertificateInstalled(certificateDomain)) return null
         return ResolvedCertificate(
             certificateDomain = certificateDomain,
-            certificatePath = "$sslCertPath/$certificateDomain/fullchain.pem",
-            privateKeyPath = "$sslCertPath/$certificateDomain/privkey.pem"
+            certificatePath = File(sslCertPath, "$certificateDomain/fullchain.pem").toPath().toAbsolutePath().normalize().toString(),
+            privateKeyPath = File(sslCertPath, "$certificateDomain/privkey.pem").toPath().toAbsolutePath().normalize().toString()
         )
     }
 
