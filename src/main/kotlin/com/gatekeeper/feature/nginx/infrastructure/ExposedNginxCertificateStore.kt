@@ -2,6 +2,7 @@ package com.gatekeeper.feature.nginx.infrastructure
 
 import com.gatekeeper.feature.certificate.domain.repository.CertificateRepository
 import com.gatekeeper.feature.nginx.domain.port.NginxCertificateStore
+import com.gatekeeper.feature.nginx.model.nginxServiceLogger
 import com.gatekeeper.feature.service.domain.repository.SiteRepository
 import java.time.LocalDateTime
 import java.util.UUID
@@ -10,7 +11,9 @@ class ExposedNginxCertificateStore(
     private val certificateRepository: CertificateRepository,
     private val siteRepository: SiteRepository
 ) : NginxCertificateStore {
+
     override fun syncInventory(domain: String, expiresAt: LocalDateTime?, status: String) {
+        nginxServiceLogger.info("Syncing inventory for $domain")
         certificateRepository.syncInventory(domain, expiresAt, status)
     }
 

@@ -8,7 +8,6 @@ data class CreateDeploymentRequest(
     val repository: String? = null,
     val gitRef: String = "main",
     val registry: String = "docker.io",
-    val registryCredentialId: String? = null,
     val imageName: String,
     val imageTag: String = "latest",
     val hostPort: Int? = null,
@@ -38,8 +37,6 @@ data class UpdateDeploymentConfigurationRequest(
     val repository: String? = null,
     val gitRef: String? = null,
     val registry: String? = null,
-    /** Null preserves the existing provider credential; an empty string clears the selection. */
-    val registryCredentialId: String? = null,
     val imageName: String? = null,
     val imageTag: String? = null,
     val hostPort: Int? = null,
