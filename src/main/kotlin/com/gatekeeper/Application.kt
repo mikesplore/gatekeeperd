@@ -1,6 +1,9 @@
 package com.gatekeeper
 
-import com.gatekeeper.admin.*
+import com.gatekeeper.admin.project.*
+import com.gatekeeper.admin.service.*
+import com.gatekeeper.admin.operations.*
+import com.gatekeeper.admin.system.*
 import com.gatekeeper.feature.nginx.presentation.configureNginxRoutes
 import com.gatekeeper.api.InputValidators
 import com.gatekeeper.auth.configureAuthRoutes
@@ -20,7 +23,7 @@ import com.gatekeeper.feature.payment.data.provider.PaystackClient
 import com.gatekeeper.feature.payment.presentation.configureMpesaRoutes
 import com.gatekeeper.feature.payment.presentation.configurePaystackWebhookRoutes
 import com.gatekeeper.feature.payment.presentation.configurePaymentAdminRoutes
-import com.gatekeeper.admin.configureLogAdminRoutes
+import com.gatekeeper.admin.system.configureLogAdminRoutes
 import com.gatekeeper.feature.payment.presentation.configurePaymentRoutes
 import com.gatekeeper.feature.nginx.domain.service.NginxBackfillRunner
 import com.gatekeeper.plugins.*

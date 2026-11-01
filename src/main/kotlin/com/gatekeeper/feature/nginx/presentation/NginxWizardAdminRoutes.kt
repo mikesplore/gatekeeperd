@@ -1,6 +1,5 @@
 package com.gatekeeper.feature.nginx.presentation
 
-import com.gatekeeper.admin.respondNginxDomainConflicts
 import com.gatekeeper.api.respondError
 import com.gatekeeper.api.respondErrorWithData
 import com.gatekeeper.config.AppSettings

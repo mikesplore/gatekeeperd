@@ -106,7 +106,12 @@ src/main/kotlin/com/gatekeeper/
 ├── auth/
 │   └── AuthRoutes.kt           # POST /api/auth/login, GET /api/auth/me
 ├── admin/
-│   └── ProjectAdminRoutes.kt   # JWT CRUD, block/unblock, delete, payment init
+│   ├── project/                # Project, setup and deployment admin routes
+│   ├── service/                # Service administration and billing routes
+│   ├── operations/             # Dashboards, audit, nginx and notifications
+│   ├── system/                 # Docker, logs, integrations and registry routes
+│   ├── application/            # Admin workflows and route support services
+│   └── model/                  # Admin request/response DTOs and dependencies
 ├── paystack/
 │   ├── PaystackClient.kt       # Initialize + verify transactions
 │   ├── PaystackModels.kt       # Request/response DTOs

@@ -1,6 +1,6 @@
 package com.gatekeeper.plugins
 
-import com.gatekeeper.admin.configureDockerAdminRoutes
+import com.gatekeeper.admin.system.configureDockerAdminRoutes
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.Application
 import io.ktor.server.response.respond

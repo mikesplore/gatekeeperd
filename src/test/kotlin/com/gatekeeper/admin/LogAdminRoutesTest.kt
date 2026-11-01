@@ -1,5 +1,8 @@
 package com.gatekeeper.admin
 
+import com.gatekeeper.admin.application.JournalLogReader
+import com.gatekeeper.admin.model.AdminLogEntry
+
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlin.test.Test
