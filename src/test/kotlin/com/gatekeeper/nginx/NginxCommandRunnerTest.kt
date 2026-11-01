@@ -90,13 +90,16 @@ class NginxCommandRunnerTest {
     fun `nginx dump respects PROD sudo policy`() {
         val policy = NginxEnvironmentPolicy(
             environment = AppEnvironment.PROD,
-            nginxHostSudoEnabled = true,
-            nginxCertbotEnabled = true,
+            nginxHostSudoEnabled = false,
+            nginxCertbotEnabled = false,
             customCertDirectory = null
         )
         val runner = NginxCommandRunner(FakeProcessRunner(ProcessResult(0, "nginx -T output", "")), policy)
 
         assertEquals("nginx -T output", runner.dumpConfig())
+        assertEquals(listOf("sudo", "-n", "/usr/sbin/nginx", "-T"), policy.nginxDumpCommand())
+        assertEquals(listOf("sudo", "-n", "/usr/sbin/nginx", "-t"), policy.nginxTestCommand())
+        assertEquals(listOf("sudo", "-n", "/bin/systemctl", "reload", "nginx"), policy.nginxReloadCommand())
     }
 
     @Test
@@ -115,8 +118,8 @@ class NginxCommandRunnerTest {
     fun `certbot is enabled in PROD`() {
         val policy = NginxEnvironmentPolicy(
             environment = AppEnvironment.PROD,
-            nginxHostSudoEnabled = true,
-            nginxCertbotEnabled = true,
+            nginxHostSudoEnabled = false,
+            nginxCertbotEnabled = false,
             customCertDirectory = null
         )
         assertEquals(true, policy.certbotEnabled)

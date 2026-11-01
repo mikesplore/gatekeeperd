@@ -40,7 +40,7 @@ class NginxEnvironmentPolicy(
 
     fun nginxReloadCommand(): List<String> = if (isHostMutationAllowed) {
         if (isDev && developmentConfigPath != null) nginxCommand("-s", "reload")
-        else listOf("/bin/systemctl", "reload", "nginx")
+        else listOf("sudo", "-n", "/bin/systemctl", "reload", "nginx")
     } else {
         listOf("true")
     }
@@ -52,6 +52,7 @@ class NginxEnvironmentPolicy(
     }
 
     private fun nginxCommand(vararg arguments: String): List<String> = buildList {
+        if (!isDev) addAll(listOf("sudo", "-n"))
         add(nginxBinary)
         addAll(arguments)
         if (isDev && developmentConfigPath != null) {
