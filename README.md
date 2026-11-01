@@ -1,28 +1,115 @@
 # Gatekeeperd
 
-Payment gating engine for client projects hosted on your VPS. Gatekeeperd sits behind your reverse proxy (nginx or Traefik), decides whether traffic reaches a client app, and shows a self-service Paystack paywall when a project is suspended.
+Gatekeeperd puts payment-aware access control in front of client applications. Paying
+clients reach their apps; overdue clients see a payment page. A confirmed payment
+restores access without stopping or redeploying the app. Nginx or Traefik remains the
+public reverse proxy.
 
-**Active clients** → traffic passes through. **Overdue or blocked clients** → 402 paywall with Pay Now. **Payment received** → project unblocked automatically via Paystack webhook.
+The admin dashboard is in the separate `gatekeeperd-frontend` repository.
 
-Admin dashboard (`gatekeeperd-frontend`) manages projects, blocking, payments, and Docker containers via a JWT-protected API.
+## Deploy to a VPS
 
-## Documentation
+Production deployment uses the latest successful `build.yml` artifact from `main`.
+The VPS runs `deploy.sh`, which verifies the artifact, starts the inactive systemd
+slot, checks readiness, and changes the Nginx upstream only after the candidate passes.
+The previous slot is retained for rollback. The VPS needs GitHub CLI authentication
+with access to workflow artifacts.
 
-| Doc                                                        | Description                                           |
-|------------------------------------------------------------|-------------------------------------------------------|
-| [docs/README.md](docs/README.md)                           | Project index — architecture, source layout, env vars |
-| [docs/API.md](docs/API.md)                                 | REST API reference                                    |
-| [docs/deployment-pipeline.md](docs/deployment-pipeline.md) | Deployment lifecycle and runtime behavior             |
-| [docs/nginx-client-gating.md](docs/nginx-client-gating.md) | Gate client sites with nginx                          |
-| [docs/staging-deployment.md](docs/staging-deployment.md)   | Build, push, and deploy to VPS                        |
-| [docs/system-design.md](docs/backend-system-guide)         | Local development setup and debugging                 |
-| [.env.example](.env.example)                               | Required environment variables                        |
+### 1. Test the built JAR locally
 
-## Quick start
+Configure `.env` with database and Redis addresses reachable from your development
+machine, then build and start the same JAR locally:
 
 ```bash
-cp .env.example .env   # edit credentials, admin login, Paystack keys
-./gradlew run          # local dev (needs Postgres + Redis)
+./gradlew test buildFatJar
+./scripts/deploy-local.sh
 ```
 
-Production deploy: `./build.sh && ./push.sh` on dev machine, then `./deploy.sh` on the VPS. See [docs/staging-deployment.md](docs/staging-deployment.md).
+The local script uses `build/libs/gatekeeperd-all.jar`, listens on port `18081`, and
+waits for `/api/health/ready`. It shows readiness progress and keeps the app running
+for manual checks. Press Ctrl+C to stop it. The log is written to
+`build/deploy-local.log`.
+
+### 2. Confirm the production prerequisites
+
+Keep the application environment at `/etc/gatekeeperd/gatekeeperd.env` and deployment
+settings at `/etc/gatekeeperd/deploy.env`. The slot unit reads the application
+environment file; do not set a fixed `PORT` there because each slot has its own port.
+See [the staging deployment guide](docs/staging-deployment.md) for the full setup.
+
+For the first blue/green migration, Nginx must use the managed upstream file and the
+legacy `gatekeeperd.service` must be active on port `8080`. The deployment script
+refuses the first cutover if Nginx still points at `8080` but that service is stopped.
+Check this before deploying:
+
+```bash
+sudo systemctl status gatekeeperd.service --no-pager -l
+sudo cat /etc/nginx/conf.d/gatekeeperd-upstream.conf
+sudo nginx -t
+```
+
+If the upstream is still `127.0.0.1:8080`, restore the legacy service before the
+first migration:
+
+```bash
+sudo systemctl enable --now gatekeeperd.service
+sudo systemctl is-active gatekeeperd.service
+curl -i --max-time 5 http://127.0.0.1:8080/api/health/live
+```
+
+Do not stop the service currently targeted by Nginx. After the first successful
+blue/green deployment, Nginx targets port `18081` or `18082`, and the deployment
+script manages the inactive slot on subsequent releases.
+
+### 3. Deploy the successful build
+
+Wait for the `build` workflow for the intended `main` commit to pass. On the VPS:
+
+```bash
+cd ~/gatekeeperd
+git status --short
+git pull --ff-only origin main
+./deploy.sh --force
+```
+
+Review `git status --short` before pulling; preserve any local changes. `--force`
+allows an intentional retry of a previously failed or rolled-back commit. The script
+prints progress during artifact download, service readiness, stability checks, and
+Nginx worker draining.
+
+After deployment, verify the active upstream and service:
+
+```bash
+sudo cat /etc/nginx/conf.d/gatekeeperd-upstream.conf
+sudo systemctl status gatekeeperd-slot@blue.service gatekeeperd-slot@green.service --no-pager
+curl -i --max-time 5 https://YOUR_GATEKEEPERD_HOST/api/health/ready
+```
+
+If a candidate fails, the script leaves or restores the previous route. Inspect the
+candidate journal before retrying:
+
+```bash
+sudo journalctl -u gatekeeperd-slot@blue.service --since "15 minutes ago" --no-pager -n 100
+sudo journalctl -u gatekeeperd-slot@green.service --since "15 minutes ago" --no-pager -n 100
+```
+
+Never remove PostgreSQL data or the application environment as a response to a failed
+readiness check. Readiness requires PostgreSQL, Redis, and migrations to be healthy;
+the endpoint reports each dependency separately.
+
+## Other deployment and architecture docs
+
+- [Staging and VPS deployment](docs/staging-deployment.md)
+- [Backend architecture and environment variables](docs/README.md)
+- [API reference](docs/API.md)
+- [Nginx client gating](docs/nginx-client-gating.md)
+- [System design](docs/backend-system-guide.md)
+- [.env.example](.env.example)
+
+## Local development
+
+Copy `.env.example` to `.env`, configure PostgreSQL and Redis, then run:
+
+```bash
+./gradlew run
+```
