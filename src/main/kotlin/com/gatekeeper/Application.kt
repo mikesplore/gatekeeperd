@@ -43,7 +43,10 @@ import io.ktor.server.engine.*
 import io.ktor.server.netty.*
 import io.ktor.server.routing.routing
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.runBlocking
 import org.jetbrains.exposed.sql.insert
 import org.jetbrains.exposed.sql.selectAll
 import org.jetbrains.exposed.sql.transactions.transaction
@@ -128,6 +131,14 @@ private fun Array<String>.portArg(): Int? =
 
 fun Application.module() {
     configureDependencyInjection()
+    val appJob = SupervisorJob()
+    val appScope = CoroutineScope(appJob + Dispatchers.Default)
+    // Register before configureDatabase/configureRedis so background jobs stop
+    // before those plugins close their connection pools during ApplicationStopping.
+    monitor.subscribe(ApplicationStopping) {
+        runBlocking { appJob.cancelAndJoin() }
+    }
+
     val dockerService: DockerGateway = get<DockerGateway>()
     val inspectSiteConfigUseCase = get<InspectSiteConfigUseCase>()
     val serviceRepository = get<ServiceRepository>()
@@ -174,7 +185,6 @@ fun Application.module() {
 
     seedInitialAdmin(settings.application)
 
-    val appScope = CoroutineScope(SupervisorJob())
     autoBlockerJob.start(appScope, settings.scheduler)
     ReconciliationJob.start(appScope, get<ReconcilePayments>(), settings.scheduler)
     IntegrationOutboxJob.start(appScope, get(), get<PaymentDomainRepository>(), get<ProjectBalanceAdapter>(), get<ScribedIntegrationClient>())
