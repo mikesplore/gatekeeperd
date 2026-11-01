@@ -70,8 +70,8 @@ fun Route.registerProjectSetupRoutes(dependencies: ProjectSetupDependencies) {
     post("/api/admin/project-setup/projects") {
         val body = runCatching { call.receive<CreateProjectSetupRequest>() }.getOrNull()
             ?: return@post call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid project setup request")
-        if (body.name.isBlank() || body.type.lowercase() !in setOf("frontend", "backend")) {
-            return@post call.respondError(HttpStatusCode.BadRequest, "invalid_project", "Name and a valid project type are required")
+        if (body.name.isBlank()) {
+            return@post call.respondError(HttpStatusCode.BadRequest, "invalid_project", "Project name is required")
         }
         val domain = if (body.domain.isBlank()) "" else runCatching { nginxValidation.requireValidHostname(body.domain) }.getOrElse {
             return@post call.respondError(HttpStatusCode.BadRequest, "invalid_domain", it.message ?: "Domain is invalid")
@@ -93,7 +93,7 @@ fun Route.registerProjectSetupRoutes(dependencies: ProjectSetupDependencies) {
         }
         val project = projects.create(
             slug = slug, name = body.name.trim(), domain = domain,
-            type = body.type.lowercase(), billingName = null, billingEmail = null, billingAddress = null,
+            billingName = null, billingEmail = null, billingAddress = null,
             amountDue = body.amountDue?.let(BigDecimal::valueOf), currency = body.currency.uppercase(),
             dueDate = dueDate, gracePeriodDays = body.gracePeriodDays,
             deploymentMode = "client_hosted", serviceMode = "production", customerId = customerId

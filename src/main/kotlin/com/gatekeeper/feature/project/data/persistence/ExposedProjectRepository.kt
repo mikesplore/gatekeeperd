@@ -3,7 +3,6 @@ package com.gatekeeper.feature.project.data.persistence
 
 import com.gatekeeper.db.tables.AuditLog
 import com.gatekeeper.db.tables.ProjectStatus
-import com.gatekeeper.db.tables.ProjectType
 import com.gatekeeper.db.tables.AccessBlockReason
 import com.gatekeeper.db.tables.Projects
 import com.gatekeeper.db.tables.Services
@@ -80,7 +79,6 @@ class ExposedProjectRepository(
         slug: String,
         name: String,
         domain: String,
-        type: String,
         billingName: String?, billingEmail: String?, billingAddress: String?,
         amountDue: BigDecimal?,
         currency: String,
@@ -98,7 +96,6 @@ class ExposedProjectRepository(
                 it[Projects.slug] = slug
                 it[Projects.name] = name
                 it[Projects.domain] = domain
-                it[Projects.type] = ProjectType.valueOf(type.uppercase())
                 it[Projects.status] = ProjectStatus.ACTIVE
                 it[Projects.billingName] = billingName
                 it[Projects.billingEmail] = billingEmail
@@ -136,7 +133,6 @@ class ExposedProjectRepository(
         slug: String,
         name: String?,
         domain: String?,
-        type: String?,
         billingName: String?, billingEmail: String?, billingAddress: String?,
         amountDue: BigDecimal?,
         currency: String?,
@@ -155,7 +151,6 @@ class ExposedProjectRepository(
             Projects.update({ Projects.slug eq slug }) {
                 name?.let { v -> it[Projects.name] = v }
                 domain?.let { v -> it[Projects.domain] = v }
-                type?.let { v -> it[Projects.type] = ProjectType.valueOf(v.uppercase()) }
                 billingName?.let { v -> it[Projects.billingName] = v }
                 billingEmail?.let { v -> it[Projects.billingEmail] = v }
                 billingAddress?.let { v -> it[Projects.billingAddress] = v }
@@ -395,7 +390,6 @@ class ExposedProjectRepository(
         slug = this[Projects.slug],
         name = this[Projects.name],
         domain = this[Projects.domain],
-        type = this[Projects.type].value,
         status = this[Projects.status].value,
         blockReason = this[Projects.blockReason],
         deploymentMode = this[Projects.deploymentMode],

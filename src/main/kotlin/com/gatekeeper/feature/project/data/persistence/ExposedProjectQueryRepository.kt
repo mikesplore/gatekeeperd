@@ -37,6 +37,7 @@ class ExposedProjectQueryRepository(private val projects: ProjectRepository, pri
             siteDomain = site?.domain ?: project.domain,
             siteSlug = site?.projectSlug ?: project.slug,
             serviceName = service.name,
+            serviceType = service.serviceType,
             serviceAccessStatus = service.accessStatus,
             serviceBlockReason = service.blockReason,
             serviceBlockReasonCode = service.blockReasonCode,

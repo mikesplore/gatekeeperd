@@ -121,8 +121,8 @@ The HTTP liveness/readiness endpoints are described in [API.md](API.md#public-en
 ### 4.1 Customer, project, and service
 
 - A **customer** is a person or organization that owns projects and has contact/billing information.
-- A **project** is the durable billing and access boundary. It has a unique slug, display name, project type (`frontend` or `backend`), payment/access status, block reason, due date, grace period, currency and billing data, and lifecycle/deployment descriptors.
-- A **service** is a runtime within a project. It has stable identity, name, optional domain, default-service flag, and service-scoped access state. A project may contain multiple services. Older/single-service APIs select its default service where documented.
+- A **project** is the durable billing and access boundary. It has a unique slug, display name, payment/access status, block reason, due date, grace period, currency and billing data, and lifecycle/deployment descriptors.
+- A **service** is a typed runtime within a project. It has stable identity, name, service type, optional domain, default-service flag, and service-scoped access state. A project may contain multiple services. Older/single-service APIs select its default service where documented.
 - A **site** is a gateway/nginx configuration associated with a project and optionally a service. It records domain, upstream mode and port, TLS/certificate settings, whether payment gating is enabled, bypass paths, custom nginx locations, and reconciliation state.
 
 Project payment blocks apply to every service. Service access blocks affect only the matching service. Deployment health is not translated into a payment block.

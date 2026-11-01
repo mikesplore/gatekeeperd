@@ -12,7 +12,6 @@ import kotlinx.serialization.Serializable
 data class CreateProjectSetupRequest(
     val name: String,
     val domain: String = "",
-    val type: String = "frontend",
     val customerId: String? = null,
     val amountDue: Double? = null,
     val currency: String = "KES",
@@ -193,7 +192,6 @@ data class ProjectOverviewResponse(
     val projectId: String,
     val slug: String,
     val name: String,
-    val type: String,
     val accessLifecycle: ProjectOverviewAccessLifecycle,
     val desiredConfiguration: ProjectOverviewDesiredConfiguration,
     val currentDeployment: ProjectOverviewCurrentDeployment,

@@ -16,6 +16,7 @@ data class GateTarget(
     val siteDomain: String,
     val siteSlug: String,
     val serviceName: String,
+    val serviceType: String,
     val serviceAccessStatus: String,
     val serviceBlockReason: String?,
     val serviceBlockReasonCode: AccessBlockReason?,

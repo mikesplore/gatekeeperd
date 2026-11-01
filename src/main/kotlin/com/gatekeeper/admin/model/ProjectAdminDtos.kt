@@ -16,7 +16,6 @@ import kotlinx.serialization.Serializable
 data class UpdateProjectRequest(
     val name: String? = null,
     val domain: String? = null,
-    val type: String? = null,
     val billingName: String? = null,
     val billingEmail: String? = null,
     val billingAddress: String? = null,

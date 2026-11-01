@@ -256,7 +256,6 @@ List all projects with their status, client info, and due dates.
     "slug": "acme-corp",
     "name": "Acme Corp",
     "domain": "acme.com",
-    "type": "backend",
     "status": "active",
     "blockReason": null,
     "deploymentMode": "developer_hosted",
@@ -315,7 +314,7 @@ Create projects with the setup API. `POST /api/admin/projects` was removed. Proj
 
 #### POST /api/admin/project-setup/projects
 
-Create a project without a Docker container or domain. Requires `name` and `customerId`; accepts optional `domain`, `type`, `amountDue`, `currency`, `dueDate`, and `gracePeriodDays`. Omit `domain` until the gateway is configured. The server generates the project slug from the name. If that slug is already in use, including by an archived project, it appends a random suffix; callers do not choose or edit the slug.
+Create a project without a Docker container or domain. Requires `name` and `customerId`; accepts optional `domain`, `amountDue`, `currency`, `dueDate`, and `gracePeriodDays`. Service type is configured on each service. Omit `domain` until the gateway is configured. The server generates the project slug from the name. If that slug is already in use, including by an archived project, it appends a random suffix; callers do not choose or edit the slug.
 
 Returns `201 Created` with `{ "projectId": "<uuid>", "slug": "<slug>", "status": "created" }`.
 
@@ -347,7 +346,7 @@ Returns shared environment version metadata: latest version, IDs, version number
 
 #### GET, POST /api/admin/projects/{projectId}/services
 
-List project services or create one with `{ "name": "frontend" }`. Names may contain letters, digits, spaces, hyphens, underscores, and periods (1–63 characters); they must start and end with a letter or digit. Names are unique within a project; `default` is reserved case-insensitively. Responses include service access status and block reason.
+List project services or create one with `{ "name": "API", "serviceType": "backend" }`. Service types are `frontend`, `backend`, `worker`, `database`, `redis`, `cache`, and `custom`. Names may contain letters, digits, spaces, hyphens, underscores, and periods (1–63 characters); they must start and end with a letter or digit. Names are unique within a project; `default` is reserved case-insensitively. Responses include the service type, access status, and block reason.
 
 #### GET, PATCH, DELETE /api/admin/projects/{projectId}/services/{serviceId}
 
@@ -1412,7 +1411,7 @@ Common error codes:
 
 5. **CORS:** Set `CORS_ALLOWED_ORIGINS` in `.env` to a comma-separated list of frontend origins (include the scheme), e.g. `https://gatekeeperd.mikesplore.me`. The API must be rebuilt and redeployed after changing this.
 
-6. **Content types:** Frontend projects receive HTML paywalls. Backend/API projects receive JSON. Use the `type` field from the project to determine which format to expect.
+6. **Content types:** The resolved service's type controls the default blocked response: frontend services receive HTML paywalls, while backend/API services receive JSON. Requests accepting `text/html` receive the HTML paywall when available.
 ### POST /api/auth/logout
 Revokes the current JWT until its natural expiry. The endpoint requires the current admin token.
 

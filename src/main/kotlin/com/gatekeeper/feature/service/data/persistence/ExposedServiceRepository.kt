@@ -180,6 +180,7 @@ class ExposedServiceRepository(private val siteRepository: SiteRepository) : Ser
             AccessRecord(
                 it[Services.id],
                 it[Services.name],
+                it[Services.serviceType],
                 it[Services.accessStatus],
                 it[Services.blockReason],
                 it[Services.blockReasonCode],

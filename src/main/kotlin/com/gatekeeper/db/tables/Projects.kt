@@ -11,12 +11,6 @@ object Projects : Table("projects") {
     val slug = text("slug").uniqueIndex()
     val name = text("name")
     val domain = text("domain")
-    val type = customEnumeration(
-        "type",
-        "TEXT",
-        { value -> ProjectType.entries.first { it.value == (value as String) } },
-        { it.value }
-    )
     val status = customEnumeration(
         "status",
         "TEXT",
@@ -48,11 +42,6 @@ object Projects : Table("projects") {
     val updatedAt = datetime("updated_at").defaultExpression(CurrentDateTime)
 
     override val primaryKey = PrimaryKey(id)
-}
-
-enum class ProjectType(val value: String) {
-    FRONTEND("frontend"),
-    BACKEND("backend");
 }
 
 enum class ProjectStatus(val value: String) {

@@ -19,6 +19,7 @@ data class ServiceRecord(
 data class AccessRecord(
     val id: UUID,
     val name: String,
+    val serviceType: String,
     val accessStatus: String,
     val blockReason: String?,
     val blockReasonCode: AccessBlockReason?,

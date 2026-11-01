@@ -48,7 +48,7 @@ class GateService(
             reasonSource = source
         )
         return GateResult.Blocked(
-            type = project.type,
+            type = target.serviceType,
             paymentLink = latestPaymentLink(project.id),
             projectName = project.name,
             paywall = wall,

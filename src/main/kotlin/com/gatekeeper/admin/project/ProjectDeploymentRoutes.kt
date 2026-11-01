@@ -171,7 +171,7 @@ fun Route.registerProjectDeploymentRoutes(dependencies: ProjectSetupDependencies
         val upstream = resolver.resolve(serviceId, "production")
         val financials = ProjectSetupApplicationService.financials(project, call.application.get<ProjectBalanceAdapter>())
         call.respond(ProjectOverviewResponse(
-            project.id.toString(), project.slug, project.name, project.type,
+            project.id.toString(), project.slug, project.name,
             ProjectOverviewAccessLifecycle(project.status, project.blockReason, project.deploymentMode, project.serviceMode, project.lifecycleStatus),
             ProjectOverviewDesiredConfiguration(
                 config?.id?.toString(), config?.environment, config?.repository, config?.gitRef, config?.registry,

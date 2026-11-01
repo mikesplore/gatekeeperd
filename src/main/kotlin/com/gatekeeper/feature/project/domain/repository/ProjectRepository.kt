@@ -16,14 +16,14 @@ interface ProjectRepository {
     fun findAll(includeArchived: Boolean = false): List<ProjectRecord>
     fun findByCustomerId(customerId: UUID): List<ProjectRecord>
     fun create(
-        slug: String, name: String, domain: String, type: String,
+        slug: String, name: String, domain: String,
         billingName: String?, billingEmail: String?, billingAddress: String?, amountDue: BigDecimal?,
         currency: String, dueDate: LocalDate?, gracePeriodDays: Int,
         deploymentMode: String = "developer_hosted", serviceMode: String = "development",
         lifecycleStatus: String = "active", customerId: UUID? = null
     ): ProjectRecord
     fun update(
-        slug: String, name: String?, domain: String?, type: String?,
+        slug: String, name: String?, domain: String?,
         billingName: String? = null, billingEmail: String? = null, billingAddress: String? = null,
         amountDue: BigDecimal?, currency: String?, dueDate: LocalDate?, gracePeriodDays: Int?,
         clearAmountDue: Boolean = false, clearDueDate: Boolean = false,

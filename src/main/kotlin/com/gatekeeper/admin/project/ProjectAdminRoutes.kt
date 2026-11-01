@@ -150,11 +150,6 @@ fun Application.configureProjectAdminRoutes() {
                     return@patch
                 }
 
-                if (body.type != null && !InputValidators.isValidProjectType(body.type)) {
-                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "type must be 'frontend' or 'backend'")
-                    return@patch
-                }
-
                 val dueDate = InputValidators.parseDueDate(body.dueDate.value)
                 if (body.dueDate.value?.isNotBlank() == true && dueDate == null) {
                     call.respondError(HttpStatusCode.BadRequest, "invalid_request", "dueDate must be ISO format YYYY-MM-DD")
@@ -199,7 +194,6 @@ fun Application.configureProjectAdminRoutes() {
                     slug = slug,
                     name = body.name?.trim(),
                     domain = body.domain?.trim(),
-                    type = body.type?.lowercase(),
                     billingName = body.billingName?.trim(),
                     billingEmail = body.billingEmail?.trim(),
                     billingAddress = body.billingAddress?.trim(),

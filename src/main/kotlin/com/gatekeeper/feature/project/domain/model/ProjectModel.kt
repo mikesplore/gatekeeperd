@@ -11,7 +11,6 @@ data class ProjectRecord(
     val slug: String,
     val name: String,
     val domain: String,
-    val type: String,
     val status: String,
     val blockReason: String?,
     val deploymentMode: String,

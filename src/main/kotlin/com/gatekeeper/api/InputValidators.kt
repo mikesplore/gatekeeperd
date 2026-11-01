@@ -41,9 +41,6 @@ object InputValidators {
 
     fun isValidImageName(name: String): Boolean = IMAGE_NAME_REGEX.matches(name.trim())
 
-    fun isValidProjectType(type: String): Boolean =
-        type.lowercase() in listOf("frontend", "backend")
-
     fun isValidEmail(email: String): Boolean = EMAIL_REGEX.matches(email.trim())
 
     fun parseDueDate(raw: String?): LocalDate? {
