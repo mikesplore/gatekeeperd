@@ -42,16 +42,10 @@ fun Route.registerProjectDeploymentRoutes(dependencies: ProjectSetupDependencies
     val docker = dependencies.docker
     val deploymentJobs = dependencies.deploymentJobs
     val serviceDomains = dependencies.serviceDomains
-    val portProbe = dependencies.portProbe
     val serviceRepository = dependencies.serviceRepository
     val siteRepository = dependencies.siteRepository
-    val projectRepository = dependencies.projectRepository
-    val nginxValidation = dependencies.nginxValidation
     val resolver = dependencies.resolver
-    val inspector = dependencies.inspector
-    val switchDeploymentUpstream = dependencies.switchDeploymentUpstream
-    val converter = dependencies.converter
-    val nginxSiteStorage = dependencies.nginxSiteStorage
+
     get("/api/admin/deployment-history") {
         val limit = call.request.queryParameters["limit"]?.toIntOrNull()?.coerceIn(1, 100) ?: 50
         val offset = call.request.queryParameters["offset"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0

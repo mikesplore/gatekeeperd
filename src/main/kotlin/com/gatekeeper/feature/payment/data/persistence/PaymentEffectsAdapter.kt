@@ -6,6 +6,7 @@ import com.gatekeeper.feature.payment.domain.usecase.PaymentEffects
 import com.gatekeeper.feature.audit.domain.repository.AuditRepository
 import com.gatekeeper.feature.integrations.domain.repository.IntegrationOutboxRepository
 import com.gatekeeper.feature.service.domain.repository.ServiceRepository
+import com.gatekeeper.feature.service.application.ServiceInvoiceApplicationService
 import com.gatekeeper.integrations.ScribedIntegrationClient
 import java.math.BigDecimal
 import java.time.LocalDate
@@ -21,18 +22,17 @@ class PaymentEffectsAdapter(
     private val outbox: IntegrationOutboxRepository,
     private val scribed: ScribedIntegrationClient,
     private val projects: ProjectRepository,
-    private val serviceRepository: ServiceRepository
+    private val serviceRepository: ServiceRepository,
+    private val serviceInvoices: ServiceInvoiceApplicationService
 ) : PaymentEffects {
     override fun acceptSuccessfulPayment(payment: Payment?, projectId: java.util.UUID, serviceId: java.util.UUID?, amount: BigDecimal, currency: String?): Boolean {
         val project = projects.findById(projectId) ?: return false
         if (!currency.isNullOrBlank() && !project.currency.equals(currency, ignoreCase = true)) return false
         val paymentServiceId = payment?.serviceId ?: serviceId ?: return false
-        val invoice = runBlocking { scribed.serviceInvoiceStatus(paymentServiceId.toString()) }
-        if (invoice.status?.value !in 200..299) return false
-        val invoiceData = invoice.body?.get("invoice")?.jsonObject ?: return false
-        val serviceCurrency = invoiceData["currency"]?.jsonPrimitive?.contentOrNull
+        val invoice = serviceInvoices.find(paymentServiceId) ?: return false
+        val serviceCurrency = invoice.currency
         if (!currency.isNullOrBlank() && !serviceCurrency.isNullOrBlank() && !currency.equals(serviceCurrency, ignoreCase = true)) return false
-        val outstanding = invoiceData["balance"]?.jsonPrimitive?.contentOrNull?.toBigDecimalOrNull() ?: return false
+        val outstanding = serviceInvoices.balance(paymentServiceId) ?: return false
         return outstanding > BigDecimal.ZERO && amount <= outstanding &&
             (payment?.status != "pending" || amount.compareTo(payment.amount) == 0)
     }
@@ -40,9 +40,8 @@ class PaymentEffectsAdapter(
     override fun paymentSucceeded(payment: Payment, amount: BigDecimal, currency: String?, paidAt: LocalDateTime?, actor: String) {
         val project = projects.findById(payment.projectId) ?: return
         if (payment.serviceId != null) {
-            val invoice = runBlocking { scribed.serviceInvoiceStatus(payment.serviceId.toString()) }
-            val balance = invoice.body?.get("invoice")?.jsonObject?.get("balance")?.jsonPrimitive?.contentOrNull?.toBigDecimalOrNull()
-            if (balance != null && amount >= balance) serviceRepository.clearAutoBlockForPayment(payment.serviceId)
+            val balance = serviceInvoices.balance(payment.serviceId)
+            if (balance != null && balance <= BigDecimal.ZERO) serviceRepository.clearAutoBlockForPayment(payment.serviceId)
             auditRepository.write(project.id, "payment_received", actor, "Service payment ref=${payment.reference} service=${payment.serviceId} amount=$amount")
             val timestamp = paidAt ?: LocalDateTime.now()
             scribed.notifyPayment(project, payment.provider, payment.reference, amount.toPlainString(), currency ?: project.currency, timestamp.toString(), outbox, payment.serviceId)

@@ -45,9 +45,7 @@ fun Route.registerProjectSetupRoutes(dependencies: ProjectSetupDependencies) {
     val portProbe = dependencies.portProbe
     val serviceRepository = dependencies.serviceRepository
     val siteRepository = dependencies.siteRepository
-    val projectRepository = dependencies.projectRepository
     val nginxValidation = dependencies.nginxValidation
-    val resolver = dependencies.resolver
     val inspector = dependencies.inspector
     val switchDeploymentUpstream = dependencies.switchDeploymentUpstream
     val converter = dependencies.converter
@@ -166,7 +164,7 @@ fun Route.registerProjectSetupRoutes(dependencies: ProjectSetupDependencies) {
         val site = siteRepository.findByServiceId(adopted.serviceId)
         val siteSlug = site?.projectSlug ?: project.slug
         val previous = DeploymentApplicationService.activeRuntime(adopted.serviceId, "production")
-        val previousConfig = if (site != null) runCatching { inspector.inspectSite(siteSlug)?.content }.getOrNull() else null
+        val previousConfig = if (site != null) runCatching { inspector.inspectSite(siteSlug).content }.getOrNull() else null
         val routed = site == null || runCatching {
             if (site.upstreamKind == "DEPLOYMENT_MANAGED") {
                 switchDeploymentUpstream.switchDeploymentUpstream(adopted.serviceId, siteSlug, "127.0.0.1", request.containerPort, hostPort)
@@ -205,8 +203,6 @@ fun Route.registerProjectSetupRoutes(dependencies: ProjectSetupDependencies) {
 
     put("/api/admin/project-setup/projects/{projectId}/source-runtime") {
         val projectId = call.setupProjectId() ?: return@put
-        val project = projects.findActiveById(projectId)
-            ?: return@put call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
         val body = runCatching { call.receive<CreateDeploymentRequest>() }.getOrNull()
             ?: return@put call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid source/runtime configuration")
         val normalizedRepository = body.repository?.trim()?.takeIf { it.isNotEmpty() }
@@ -300,8 +296,6 @@ fun Route.registerProjectSetupRoutes(dependencies: ProjectSetupDependencies) {
 
     delete("/api/admin/project-setup/projects/{projectId}/domain-gateway") {
         val projectId = call.setupProjectId() ?: return@delete
-        val project = projects.findActiveById(projectId)
-            ?: return@delete call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
         val body = runCatching { call.receive<ProjectSetupGatewayRequest>() }.getOrNull()
             ?: return@delete call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid domain/gateway configuration")
         val domain = runCatching { nginxValidation.requireValidHostname(body.domain) }.getOrElse {
@@ -310,8 +304,6 @@ fun Route.registerProjectSetupRoutes(dependencies: ProjectSetupDependencies) {
         val serviceId = body.serviceId?.let { raw -> runCatching { UUID.fromString(raw) }.getOrNull() }
             ?: if (body.serviceId == null) deploymentJobs.defaultServiceIdForProject(projectId)
             else return@delete call.respondError(HttpStatusCode.BadRequest, "invalid_service_id", "Service ID is invalid")
-        val service = serviceRepository.findByProjectAndId(projectId, serviceId)
-            ?: return@delete call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
         val removed = serviceDomains.remove(serviceId, domain)
         if (!removed) {
             return@delete call.respondError(HttpStatusCode.NotFound, "domain_not_bound", "Domain is not bound to this service")

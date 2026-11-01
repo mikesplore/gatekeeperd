@@ -28,7 +28,7 @@ val RbacAuthorizationPlugin = createRouteScopedPlugin("RbacAuthorization") {
             throw HttpApiException(HttpStatusCode.ServiceUnavailable, "authorization_unavailable", "Authorization is temporarily unavailable")
         }
         if (!authorization) {
-            throw HttpApiException(HttpStatusCode.Forbidden, "insufficient_permissions", "You do not have permission to perform this action")
+            throw HttpApiException(HttpStatusCode.Forbidden, "insufficient_permissions", "Action not permitted")
         }
     }
 }

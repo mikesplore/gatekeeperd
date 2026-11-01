@@ -4,22 +4,20 @@ import com.gatekeeper.config.AppSettings
 import org.slf4j.LoggerFactory
 import java.time.LocalDate
 import java.math.BigDecimal
-import io.ktor.http.HttpStatusCode
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.*
-import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 import com.gatekeeper.integrations.ScribedIntegrationClient
 import com.gatekeeper.feature.integrations.domain.repository.IntegrationOutboxRepository
 import com.gatekeeper.feature.project.domain.repository.ProjectRepository
 import com.gatekeeper.feature.service.domain.repository.ServiceRepository
+import com.gatekeeper.feature.service.application.ServiceInvoiceApplicationService
 
 class AutoBlockerJob(
     private val projectRepository: ProjectRepository,
     private val serviceRepository: ServiceRepository,
     private val outboxRepository: IntegrationOutboxRepository,
-    private val scribedClient: ScribedIntegrationClient
+    private val scribedClient: ScribedIntegrationClient,
+    private val serviceInvoices: ServiceInvoiceApplicationService
 ) {
     private val logger = LoggerFactory.getLogger("com.gatekeeper.scheduler.AutoBlockerJob")
 
@@ -44,21 +42,9 @@ class AutoBlockerJob(
                     serviceRepository.listAll().forEach { service ->
                         if (service.accessStatus != "active") return@forEach
                         val project = activeProjects[service.projectId] ?: return@forEach
-                        val lookup = scribedClient.serviceInvoiceStatus(service.id.toString())
-                        if (lookup.status == HttpStatusCode.NotFound) return@forEach
-                        if (lookup.status == null) {
-                            logger.debug("Service invoice lookup unavailable: service={}, error={}", service.id, lookup.error)
-                            return@forEach
-                        }
-                        if (lookup.status.value !in 200..299) {
-                            logger.warn("Could not check service invoice: service={}, status={}, error={}", service.id, lookup.status, lookup.error)
-                            return@forEach
-                        }
-                        val invoice = lookup.body?.get("invoice")?.jsonObject ?: return@forEach
-                        val dueDate = invoice["due_date"]?.jsonPrimitive?.contentOrNull
-                            ?.let { runCatching { LocalDate.parse(it) }.getOrNull() } ?: return@forEach
-                        val balance = invoice["balance"]?.jsonPrimitive?.contentOrNull
-                            ?.toBigDecimalOrNull() ?: BigDecimal.ZERO
+                        val invoice = serviceInvoices.find(service.id) ?: return@forEach
+                        val dueDate = invoice.dueDate ?: return@forEach
+                        val balance = serviceInvoices.balance(service.id) ?: BigDecimal.ZERO
 
                         if (balance <= BigDecimal.ZERO || !dueDate.plusDays(project.gracePeriodDays.toLong()).isBefore(asOf)) return@forEach
                         if (serviceRepository.autoBlockForPayment(project.id, service.id)) {

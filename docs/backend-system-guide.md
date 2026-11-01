@@ -259,7 +259,7 @@ Admin payment APIs expose listing, revenue/dashboard data, project payment histo
 
 The customer API returns safe project billing/access state, payment history, receipts and portal/payment links. It supports receipt retrieval and support request persistence. Portal/payment-success links redirect to the configured `GATEKEEPER_FRONTEND_URL`; Gatekeeperd does not send email itself unless the corresponding notification integration is configured.
 
-Scribed is a separate invoice and document/notification service. Gatekeeperd uses it for invoice lookup, service invoice balances, suspension notifications, payment notices/receipt workflows, and related integration calls. When checking service invoice state, a genuine not-found response is treated as “no service invoice”; transport errors and other non-success responses are logged and do not fabricate an amount due.
+Gatekeeperd owns service invoice balances, adjustments, payment acceptance, and access decisions in PostgreSQL. A lazy one-time import copies pre-existing Scribed service invoices, including their paid totals and due dates, when a service is first accessed. Scribed remains the document and notification integration for invoice PDFs, receipts, payment notices, and suspension notices; its availability does not determine whether a new invoice or verified payment can be recorded.
 
 Outbound events that must survive a Gatekeeperd restart are written to `integration_outbox` with a unique idempotency key. The outbox worker leases/claims pending or retryable events, delivers them, marks successes delivered, and schedules retry on failure. This avoids making a successful local payment/status transaction depend on an immediate Scribed request.
 
@@ -373,7 +373,7 @@ Optional `DOCKER_ALLOWED_REGISTRIES` and `DOCKER_ALLOWED_VOLUME_ROOTS` restrict 
 
 | Worker | Initial delay / interval | Responsibility | Failure approach |
 |---|---|---|---|
-| Auto blocker | Starts after about 10 seconds; default every 60 minutes. | Blocks project invoices past due plus project grace period; checks Scribed service invoice balances and auto-blocks overdue services. Sends Scribed notices. | Logs failures; run loop uses exponential backoff capped by configured interval. |
+| Auto blocker | Starts after about 10 seconds; default every 60 minutes. | Blocks project invoices past due plus project grace period; checks Gatekeeper service invoice balances and auto-blocks overdue services. Sends Scribed notices. | Logs failures; run loop uses exponential backoff capped by configured interval. |
 | Payment reconciliation | Starts after about 1 minute; default every 15 minutes. | Rechecks provider transactions that have remained pending past `RECONCILIATION_STALE_MINUTES` (default 30). | Durable payment events and retryable later runs. |
 | Integration outbox | Starts immediately; 60-second interval. | Claims Scribed notification/integration events, delivers, marks delivered or retryable failure. | Durable status, attempt count, backoff/lease in PostgreSQL. |
 | Deployment worker | Starts on application startup; polls about once per second. | Claims and processes queued deployments, recovers interrupted cutovers on startup, checks stale running jobs about once per minute. | Persisted job state, claim token, advisory locks and recovery snapshots. |

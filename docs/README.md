@@ -237,7 +237,7 @@ Copy [.env.example](../.env.example) to `.env`. Required vars have no safe defau
 | `SCRIBED_CALLBACK_URL` | Integrations | Scribed base URL for suspension callbacks |
 | `SCRIBED_INTEGRATION_SECRET` | Integrations | Shared `X-Gatekeeper-Secret` value |
 
-Gatekeeperd persists Scribed suspension and payment notifications in the PostgreSQL integration outbox before delivery. A background worker retries undelivered events with exponential backoff and marks them delivered only after Scribed responds successfully.
+Gatekeeperd owns service invoice balances and verified payment state in PostgreSQL. Existing Scribed service invoices are imported on first use; Scribed remains responsible for invoice and receipt documents plus notifications. Gatekeeperd persists payment and suspension notices in the PostgreSQL integration outbox before delivery. A background worker retries undelivered events with exponential backoff and marks them delivered only after Scribed responds successfully.
 | `SUPPORT_CONTACT_EMAIL` | No | Shown on paywall pages |
 | `CORS_ALLOWED_ORIGINS` | No | Comma-separated admin dashboard origins |
 | `DOCKER_SOCKET` | No | Default `unix:///var/run/docker.sock` |

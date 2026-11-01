@@ -90,5 +90,6 @@ data class ServiceAdminDependencies(
     val siteRepository: SiteRepository,
     val nginxSiteStorage: NginxSiteStorage,
     val docker: DockerGateway,
-    val validator: NginxValidationService
+    val validator: NginxValidationService,
+    val serviceInvoices: com.gatekeeper.feature.service.application.ServiceInvoiceApplicationService
 )

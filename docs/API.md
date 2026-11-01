@@ -355,11 +355,11 @@ Read, update, or delete a service. PATCH accepts `name`, `accessStatus` (`active
 
 #### POST /api/admin/projects/{projectId}/services/{serviceId}/adjustments
 
-Add a service-scoped charge or discount with `{ "type": "ADDITIONAL_CHARGE", "amount": 500.00, "reason": "Added reporting feature" }`. The service must already have a Scribed service invoice; otherwise the API returns `409 service_invoice_required`. The adjustment is stored against that service and synchronized to its invoice, leaving sibling service and project-level balances unchanged. The operation writes a `service_adjustment` audit entry.
+Add a service-scoped charge or discount with `{ "type": "ADDITIONAL_CHARGE", "amount": 500.00, "reason": "Added reporting feature" }`. The service must already have a Gatekeeper service invoice; otherwise the API returns `409 service_invoice_required`. The adjustment is stored against that service and synchronized to Scribed on a best-effort basis, leaving sibling service and project-level balances unchanged. The operation writes a `service_adjustment` audit entry.
 
 #### POST /api/admin/projects/{projectId}/services/{serviceId}/invoice
 
-Create a Scribed invoice for a service that does not already have one. Accepts `{ "description": "Hosting and maintenance", "amount": 2500.00 }`; the amount is entered for that service and does not use the project amount. The project billing contact and currency are applied, while invoice identity is linked to both the project and service. Returns `409 service_invoice_already_exists` if the service already has an invoice.
+Create a Gatekeeper invoice for a service that does not already have one. Accepts `{ "description": "Hosting and maintenance", "amount": 2500.00 }`; the amount is entered for that service and does not use the project amount. The project currency and due date are applied, and invoice identity is linked to both the project and service. Scribed document creation is best effort. Returns `409 service_invoice_already_exists` if the service already has an invoice.
 
 #### GET, PUT /api/admin/projects/{projectId}/services/{serviceId}/environment?environment={name}
 
@@ -531,7 +531,7 @@ If pending provider transactions are the only thing reserving the requested bala
 ```
 
 **Notes:**
-- Uses the project's `amount_due` and `client_email` from the database if not overridden. When `serviceId` is provided, the amount is reserved against that service's Scribed invoice and the payment is attributed to that service.
+- Uses the project's `amount_due` and `client_email` from the database if not overridden. When `serviceId` is provided, the amount is reserved against that service's Gatekeeper invoice and the payment is attributed to that service. Scribed receives the payment for document and notification workflows.
 - Creates a pending `payments` row with the Paystack reference.
 - The client pays via the returned link. After successful payment, Paystack sends a webhook to `/api/paystack/webhook`, which activates the project.
 
@@ -615,7 +615,7 @@ Request body:
 The response contains the generated cash reference and `status: "success"`. Reusing the same receipt number is rejected rather than creating a duplicate payment.
 
 ### GET /api/admin/projects/{projectId}/services/{serviceId}/invoice
-Return the Scribed invoice and payment summary for a service. Admin payment capture screens use this endpoint to select a service and constrain the amount to its available balance. It returns `404 invoice_unavailable` when the service has no invoice yet.
+Return the Gatekeeper invoice and payment summary for a service. Admin payment capture screens use this endpoint to select a service and constrain the amount to its available balance. Existing Scribed invoices are imported on first lookup. It returns `404 invoice_unavailable` when the service has no invoice.
 
 **Query parameters (all optional):**
 - `status` — filter by `gateway_status` (`pending`, `success`, `failed`, `abandoned`, `reversed`)
