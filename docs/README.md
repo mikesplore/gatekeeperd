@@ -20,7 +20,7 @@ Database startup now records migrations in Flyway's `flyway_schema_history`. Fre
 
 Admin login attempts are rate-limited through Redis by email and client IP: five attempts per 15-minute window. If Redis is unavailable, login remains available and the outage is logged.
 
-Admin JWTs include a unique ID, are restricted to the `admin` role, and can be revoked through `POST /api/auth/logout` until their normal expiry.
+Admin API JWTs include a unique ID and a role key, and can be revoked through `POST /api/auth/logout` until their normal expiry. Authorization is enforced against the user's current database role and permission grants on every admin request, so role edits, suspensions, and revocations take effect immediately. The built-in `admin` role is an immutable superuser. Administrators can manage custom roles and their catalogued permissions through `/api/admin/rbac`; `operator` and `viewer` are seeded as editable starting roles.
 Authenticated admins can change passwords through `POST /api/auth/password`. Password-reset email delivery is deployment-specific and remains outside the backend until an email provider is selected.
 
 Health endpoints are separated into liveness (`/api/health/live`) and readiness (`/api/health/ready`). Readiness requires both PostgreSQL and Redis to be reachable.
@@ -105,6 +105,11 @@ src/main/kotlin/com/gatekeeper/
 │   └── PaywallTemplates.kt     # HTML paywall
 ├── auth/
 │   └── AuthRoutes.kt           # POST /api/auth/login, GET /api/auth/me
+├── rbac/
+│   ├── domain/                 # Permission catalog, roles, repository port
+│   ├── application/            # Role use cases and fail-closed route policy
+│   ├── data/                   # Live Exposed-backed permission checks
+│   └── presentation/           # Role API and route authorization plugin
 ├── admin/
 │   ├── project/                # Project, setup and deployment admin routes
 │   ├── service/                # Service administration and billing routes

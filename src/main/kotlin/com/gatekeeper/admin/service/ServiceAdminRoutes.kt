@@ -24,7 +24,8 @@ import org.koin.ktor.ext.get
 fun Application.configureServiceAdminRoutes() {
     val dependencies = ServiceAdminDependencies(get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get())
     routing {
-        authenticate("auth-admin") {
+        authenticate("auth-jwt") {
+            install(com.gatekeeper.rbac.presentation.RbacAuthorizationPlugin)
             registerServiceManagementRoutes(dependencies)
             registerServiceBillingRoutes(dependencies)
             registerServiceRuntimeRoutes(dependencies)

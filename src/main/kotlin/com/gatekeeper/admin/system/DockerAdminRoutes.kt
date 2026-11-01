@@ -16,7 +16,8 @@ import org.koin.ktor.ext.get
 fun Application.configureDockerAdminRoutes() {
     val docker = get<DockerAdminApplicationService>()
     routing {
-        authenticate("auth-admin") {
+        authenticate("auth-jwt") {
+            install(com.gatekeeper.rbac.presentation.RbacAuthorizationPlugin)
             get("/api/admin/containers") {
                 val query = call.request.queryParameters
                 val offset = query["offset"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0

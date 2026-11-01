@@ -199,7 +199,51 @@ Creates a persisted support request. Body:
 
 ## Admin Endpoints (JWT Required)
 
-All endpoints below require `Authorization: Bearer <token>` header.
+All endpoints below require `Authorization: Bearer <token>` header and the permission required for that operation. Permissions are evaluated against the user's current active role on each request. Unknown `/api/admin/*` routes are denied by default. The built-in `admin` role is an immutable superuser; other roles receive only their explicitly assigned permissions.
+
+### Role-based access control
+
+Roles are assigned to admin accounts through the user-management endpoints. The built-in `operator` and `viewer` roles are editable starting points. Custom role keys must start with a lowercase letter and contain 2–64 lowercase letters, digits, hyphens, or underscores. The administrator role cannot be modified or deleted, and a role assigned to a user cannot be deleted. To remove access from a role, deactivate it; its users are denied protected requests immediately.
+
+#### GET /api/admin/rbac/permissions
+List the permission catalog. Requires `roles.read`.
+
+#### GET /api/admin/rbac/roles
+List roles and their permission grants. Requires `roles.read`.
+
+#### POST /api/admin/rbac/roles
+Create a role. Requires `roles.manage`.
+
+```json
+{
+  "key": "billing_operator",
+  "displayName": "Billing Operator",
+  "description": "Can review and record payments.",
+  "permissions": ["payments.read", "payments.manage"]
+}
+```
+
+#### GET /api/admin/rbac/roles/{key}
+Get one role. Requires `roles.read`.
+
+#### PUT /api/admin/rbac/roles/{key}
+Replace the role's display name, description, active state, and full permission set. Requires `roles.manage`.
+
+```json
+{
+  "displayName": "Billing Operator",
+  "description": "Can review payments.",
+  "active": true,
+  "permissions": ["payments.read"]
+}
+```
+
+#### DELETE /api/admin/rbac/roles/{key}
+Delete an unassigned custom role. Requires `roles.manage`.
+
+Permission codes follow `<resource>.<action>`; available resources are `roles`, `users`, `projects`, `customers`, `services`, `deployments`, `payments`, `nginx`, `docker`, `integrations`, `logs`, `audit`, `notifications`, `operations`, and `system`. The administrator may assign only permissions they already hold unless they are the built-in superuser. User creation and role changes enforce the same rule to prevent privilege escalation.
+
+Some combined operations require multiple permissions. For example, project setup deployments require both `projects.manage` and `deployments.manage`; configuring a domain gateway requires project and nginx permissions.
 
 ### GET /api/admin/projects
 List all projects with their status, client info, and due dates.

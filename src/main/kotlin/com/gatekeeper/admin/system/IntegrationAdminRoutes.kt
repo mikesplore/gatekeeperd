@@ -18,7 +18,8 @@ fun Application.configureIntegrationAdminRoutes() {
         get<PaymentRepository>(), get<ProjectBalanceAdapter>()
     )
     routing {
-        authenticate("auth-admin") {
+        authenticate("auth-jwt") {
+            install(com.gatekeeper.rbac.presentation.RbacAuthorizationPlugin)
             get("/api/admin/integrations/outbox") { call.respond(service.pendingEvents()) }
             post("/api/admin/integrations/outbox/{id}/replay") {
                 call.respond(service.replay(call.parameters["id"]))

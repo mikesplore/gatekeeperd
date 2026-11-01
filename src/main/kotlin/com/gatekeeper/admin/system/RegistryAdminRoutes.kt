@@ -18,7 +18,8 @@ fun Application.configureRegistryAdminRoutes() {
         get<AuditRepository>(), get<ProviderCredentialStore>(), get<RegistryCredentialStore>()
     )
     routing {
-        authenticate("auth-admin") {
+        authenticate("auth-jwt") {
+            install(com.gatekeeper.rbac.presentation.RbacAuthorizationPlugin)
             get("/api/admin/provider-credentials") {
                 call.respond(service.listProviderCredentials(
                     call.request.queryParameters["provider"]?.trim()?.lowercase(),

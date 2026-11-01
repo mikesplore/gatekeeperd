@@ -4,6 +4,7 @@ import com.gatekeeper.admin.project.*
 import com.gatekeeper.admin.service.*
 import com.gatekeeper.admin.operations.*
 import com.gatekeeper.admin.system.*
+import com.gatekeeper.rbac.presentation.configureRbacAdminRoutes
 import com.gatekeeper.feature.nginx.presentation.configureNginxRoutes
 import com.gatekeeper.api.InputValidators
 import com.gatekeeper.auth.configureAuthRoutes
@@ -171,6 +172,7 @@ fun Application.module() {
     configurePaymentRoutes()
     configureCustomerRoutes()
     configureAuthRoutes()
+    configureRbacAdminRoutes()
     configureProjectAdminRoutes()
     configureProjectSetupAdminRoutes()
     configureServiceAdminRoutes()

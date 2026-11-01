@@ -71,7 +71,8 @@ fun Application.configureProjectAdminRoutes() {
     val nginx = get<NginxSiteStorage>()
     val removeSiteConfig = get<RemoveSiteConfigUseCase>()
     routing {
-        authenticate("auth-admin") {
+        authenticate("auth-jwt") {
+            install(com.gatekeeper.rbac.presentation.RbacAuthorizationPlugin)
             get("/api/admin/projects") {
                 val search = call.request.queryParameters["search"]?.trim()?.lowercase()
                 val status = call.request.queryParameters["status"]

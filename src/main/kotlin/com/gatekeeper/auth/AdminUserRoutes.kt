@@ -11,6 +11,8 @@ import com.gatekeeper.plugins.RedisService
 import com.gatekeeper.security.RecoveryCodeHasher
 import com.gatekeeper.security.SecretValueCipher
 import com.gatekeeper.security.Totp
+import com.gatekeeper.rbac.application.RbacApplicationService
+import com.gatekeeper.rbac.presentation.RbacAuthorizationPlugin
 import io.ktor.http.*
 import io.ktor.server.application.*
 import io.ktor.server.auth.*
@@ -35,14 +37,14 @@ import com.gatekeeper.feature.audit.domain.repository.AuditRepository as AuditRe
 
 private val adminUserRoutesLogger = LoggerFactory.getLogger("com.gatekeeper.auth.AdminUserRoutes")
 
-fun Route.adminUserRoutes(authUsers: AuthUserRepository, auditRepository: AuditRepositoryPort) {
-    authenticate("auth-jwt", optional = true) {
+fun Route.adminUserRoutes(
+    authUsers: AuthUserRepository,
+    auditRepository: AuditRepositoryPort,
+    rbac: RbacApplicationService
+) {
+    authenticate("auth-jwt") {
+        install(RbacAuthorizationPlugin)
         get("/api/admin/users") {
-            val principal = call.principal<JWTPrincipal>()
-            if (principal?.payload?.getClaim("role")?.asString() != "admin") {
-                call.respondError(HttpStatusCode.Forbidden, "forbidden", "Only administrators can manage users")
-                return@get
-            }
             val offset = call.request.queryParameters["offset"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0
             val limit = call.request.queryParameters["limit"]?.toIntOrNull()?.coerceIn(1, 500) ?: 100
             val q = call.request.queryParameters["q"]?.trim()
@@ -54,29 +56,25 @@ fun Route.adminUserRoutes(authUsers: AuthUserRepository, auditRepository: AuditR
         }
 
         post("/api/admin/users") {
-            val principal = call.principal<JWTPrincipal>()
-            if (principal?.payload?.getClaim("role")?.asString() != "admin") {
-                call.respondError(HttpStatusCode.Forbidden, "forbidden", "Only administrators can manage users")
-                return@post
-            }
+            val actor = call.principal<JWTPrincipal>()?.payload?.subject.orEmpty()
             val body = runCatching { call.receive<CreateAdminUserRequest>() }.getOrNull()
             val email = body?.email?.trim()?.lowercase()
             val role = body?.role?.trim()?.lowercase()
-            if (body == null || email.isNullOrBlank() || !InputValidators.isValidEmail(email) || body.password.length < 8 || role !in setOf(
-                    "admin",
-                    "operator",
-                    "viewer"
-                )
-            ) {
+            if (body == null || email.isNullOrBlank() || !InputValidators.isValidEmail(email) ||
+                body.password.length < 8 || role.isNullOrBlank() || !rbac.roleExists(role)) {
                 call.respondError(
                     HttpStatusCode.BadRequest,
                     "invalid_request",
-                    "A valid email, password of at least 8 characters, and role (admin, operator, or viewer) are required"
+                    "A valid email, password of at least 8 characters, and an existing role are required"
                 )
                 return@post
             }
             val newEmail = requireNotNull(email)
             val newRole = requireNotNull(role)
+            if (!rbac.mayAssignRole(actor, newRole)) {
+                call.respondError(HttpStatusCode.Forbidden, "role_assignment_denied", "You cannot assign this role")
+                return@post
+            }
             val created = runCatching {
                 authUsers.createAdmin(newEmail, BCrypt.hashpw(body.password, BCrypt.gensalt(12)), newRole)
             }.getOrElse {
@@ -99,7 +97,7 @@ fun Route.adminUserRoutes(authUsers: AuthUserRepository, auditRepository: AuditR
             auditRepository.write(
                 null,
                 "Admin User Created",
-                principal.payload.subject,
+                actor,
                 "email=$newEmail role=$newRole two_factor_enabled=false"
             )
             call.respond(
@@ -109,14 +107,7 @@ fun Route.adminUserRoutes(authUsers: AuthUserRepository, auditRepository: AuditR
         }
 
         patch("/api/admin/users/{id}") {
-            val principal = call.principal<JWTPrincipal>()
-            if (principal?.payload?.getClaim("role")?.asString() != "admin") {
-                call.respondError(
-                    HttpStatusCode.Forbidden,
-                    "forbidden",
-                    "Only administrators can manage users"
-                ); return@patch
-            }
+            val actor = call.principal<JWTPrincipal>()?.payload?.subject?.lowercase()?.trim().orEmpty()
             val id = call.parameters["id"]?.let { runCatching { UUID.fromString(it) }.getOrNull() }
             val body = runCatching { call.receive<UpdateAdminUserRequest>() }.getOrNull()
             if (id == null || body == null || (body.email == null && body.role == null && body.active == null)) {
@@ -128,25 +119,28 @@ fun Route.adminUserRoutes(authUsers: AuthUserRepository, auditRepository: AuditR
             }
             val email = body.email?.trim()?.lowercase()
             val role = body.role?.trim()?.lowercase()
-            if ((email != null && !InputValidators.isValidEmail(email)) || (role != null && role !in setOf(
-                    "admin",
-                    "operator",
-                    "viewer"
-                ))
-            ) {
+            if ((email != null && !InputValidators.isValidEmail(email)) || (role != null && !rbac.roleExists(role))) {
                 call.respondError(
                     HttpStatusCode.BadRequest,
                     "invalid_request",
                     "Email or role is invalid"
                 ); return@patch
             }
-            val actor = principal.payload.subject.lowercase().trim()
-            if (body.active == false && authUsers.findById(id)?.email == actor) {
+            val target = authUsers.findById(id)
+            if (body.active == false && target?.email == actor) {
                 call.respondError(
                     HttpStatusCode.Conflict,
                     "cannot_suspend_self",
                     "You cannot suspend your own account"
                 ); return@patch
+            }
+            if (role != null && target?.role != role && !rbac.mayAssignRole(actor, role)) {
+                call.respondError(HttpStatusCode.Forbidden, "role_assignment_denied", "You cannot assign this role")
+                return@patch
+            }
+            if (role != null && target?.role == "admin" && role != "admin" && authUsers.countAdmins() <= 1) {
+                call.respondError(HttpStatusCode.Conflict, "last_admin", "The last administrator cannot be demoted")
+                return@patch
             }
             val updated = try {
                 authUsers.updateAdmin(id, email, role, body.active)
@@ -174,19 +168,11 @@ fun Route.adminUserRoutes(authUsers: AuthUserRepository, auditRepository: AuditR
         }
 
         delete("/api/admin/users/{id}") {
-            val principal = call.principal<JWTPrincipal>()
-            if (principal?.payload?.getClaim("role")?.asString() != "admin") {
-                call.respondError(
-                    HttpStatusCode.Forbidden,
-                    "forbidden",
-                    "Only administrators can manage users"
-                ); return@delete
-            }
+            val actor = call.principal<JWTPrincipal>()?.payload?.subject?.lowercase()?.trim().orEmpty()
             val id = call.parameters["id"]?.let { runCatching { UUID.fromString(it) }.getOrNull() }
             if (id == null) {
                 call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid user ID"); return@delete
             }
-            val actor = principal.payload.subject.lowercase().trim()
             val target = authUsers.findById(id)
             if (target == null) {
                 call.respondError(HttpStatusCode.NotFound, "user_not_found", "User not found"); return@delete

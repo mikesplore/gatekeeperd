@@ -39,7 +39,8 @@ import kotlinx.serialization.json.Json
 
 fun Application.configurePaymentAdminRoutes() {
     routing {
-        authenticate("auth-admin") {
+        authenticate("auth-jwt") {
+            install(com.gatekeeper.rbac.presentation.RbacAuthorizationPlugin)
             get("/api/admin/payments") {
                 val status = call.request.queryParameters["status"]
                 val projectSlug = call.request.queryParameters["project_slug"]

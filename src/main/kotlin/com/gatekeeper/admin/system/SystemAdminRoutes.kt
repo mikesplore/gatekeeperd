@@ -12,7 +12,8 @@ import org.koin.ktor.ext.get
 
 fun Application.configureSystemAdminRoutes() {
     routing {
-        authenticate("auth-admin") {
+        authenticate("auth-jwt") {
+            install(com.gatekeeper.rbac.presentation.RbacAuthorizationPlugin)
             post("/api/admin/system/prune") {
                 val dryRun = call.request.queryParameters["dryRun"]?.toBooleanStrictOrNull() ?: false
                 val prefix = call.request.queryParameters["imagePrefix"]?.takeIf { it.isNotBlank() }

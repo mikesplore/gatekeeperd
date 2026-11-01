@@ -36,7 +36,8 @@ fun Route.nginxManualConfigRoutes(
     rollback: RollbackSiteConfigUseCase,
     renderModelFromSite: RenderModelFromSite
 ) {
-    authenticate("auth-admin") {
+    authenticate("auth-jwt") {
+            install(com.gatekeeper.rbac.presentation.RbacAuthorizationPlugin)
     post("/api/admin/nginx/config/{slug}/custom-blocks") {
         val slug = call.parameters["slug"]
         if (slug.isNullOrBlank()) return@post call.respondError(

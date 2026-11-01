@@ -70,7 +70,8 @@ fun Route.nginxSiteAdminRoutes(
         auditRepository = auditRepository
     )
 
-    authenticate("auth-admin") {
+    authenticate("auth-jwt") {
+            install(com.gatekeeper.rbac.presentation.RbacAuthorizationPlugin)
         post("/api/admin/nginx/enable") {
             enableHandler.enable(call)
         }

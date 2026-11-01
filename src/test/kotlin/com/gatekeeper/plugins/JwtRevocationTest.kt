@@ -34,17 +34,16 @@ class JwtRevocationTest {
     }
 
     @Test
-    fun `supported non-admin roles authenticate but cannot access admin provider`() {
-        listOf("operator", "viewer").forEach { role ->
+    fun `built-in and custom role claims authenticate before live authorization`() {
+        listOf("operator", "viewer", "finance_lead").forEach { role ->
             val roleToken = token(role = role)
             assertEquals(HttpStatusCode.OK, protectedRequest(roleToken) { null }.first)
-            assertEquals(HttpStatusCode.Unauthorized, protectedRequest(roleToken, "auth-admin") { null }.first)
         }
     }
 
     @Test
-    fun `unsupported role is rejected by shared provider`() {
-        assertEquals(HttpStatusCode.Unauthorized, protectedRequest(token(role = "support")) { null }.first)
+    fun `missing role is rejected by shared provider`() {
+        assertEquals(HttpStatusCode.Unauthorized, protectedRequest(token(role = "")) { null }.first)
     }
 
     @Test
@@ -97,14 +96,12 @@ class JwtRevocationTest {
 
     private fun protectedRequest(
         token: String = token(),
-        providerName: String = "auth-jwt",
         lookup: (String) -> String?
-    ): Pair<HttpStatusCode, String> = protectedRequests(token, providerName = providerName, lookup = lookup).single()
+    ): Pair<HttpStatusCode, String> = protectedRequests(token, lookup = lookup).single()
 
     private fun protectedRequests(
         token: String,
         requestCount: Int = 1,
-        providerName: String = "auth-jwt",
         lookup: (String) -> String?
     ): List<Pair<HttpStatusCode, String>> {
         val responses = mutableListOf<Pair<HttpStatusCode, String>>()
@@ -115,7 +112,7 @@ class JwtRevocationTest {
                     configureAdminJwt(Algorithm.HMAC256(secret), audience, issuer, lookup)
                 }
                 routing {
-                    authenticate(providerName) {
+                    authenticate("auth-jwt") {
                         get("/admin/test") { call.respondText("ok") }
                     }
                 }

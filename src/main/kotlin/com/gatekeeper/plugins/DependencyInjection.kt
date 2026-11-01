@@ -3,6 +3,9 @@ package com.gatekeeper.plugins
 import com.gatekeeper.customer.CustomerApplicationService
 import com.gatekeeper.auth.AuthUserRepository
 import com.gatekeeper.auth.ExposedAuthUserRepository
+import com.gatekeeper.rbac.domain.RbacRepository
+import com.gatekeeper.rbac.data.ExposedRbacRepository
+import com.gatekeeper.rbac.application.RbacApplicationService
 import com.gatekeeper.feature.customer.domain.repository.CustomerRepository as CustomerStore
 import com.gatekeeper.feature.customer.data.persistence.ExposedCustomerRepository
 import com.gatekeeper.gate.GateApplicationService
@@ -170,6 +173,8 @@ import io.ktor.server.application.install
 
 private val applicationModule = module {
     single<AuthUserRepository> { ExposedAuthUserRepository() }
+    single<RbacRepository> { ExposedRbacRepository() }
+    single { RbacApplicationService(get()) }
     single { AppSettings.fromEnv() }
     single<AppSettings.NginxSettings> { get<AppSettings>().nginx }
     single<AppSettings.SchedulerSettings> { get<AppSettings>().scheduler }

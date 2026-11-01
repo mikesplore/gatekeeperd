@@ -11,6 +11,7 @@ import com.gatekeeper.plugins.RedisService
 import com.gatekeeper.security.RecoveryCodeHasher
 import com.gatekeeper.security.SecretValueCipher
 import com.gatekeeper.security.Totp
+import com.gatekeeper.rbac.application.RbacApplicationService
 import io.ktor.http.*
 import io.ktor.server.application.*
 import io.ktor.server.auth.*
@@ -37,6 +38,7 @@ private val logger = LoggerFactory.getLogger("com.gatekeeper.auth.AuthRoutes")
 fun Application.configureAuthRoutes() {
     val authUsers = get<AuthUserRepository>()
     val auditRepository = get<AuditRepositoryPort>()
+    val rbac = get<RbacApplicationService>()
     val settings = get<AppSettings>()
     val resendClient = get<ResendClient>()
     routing {
@@ -430,5 +432,5 @@ fun Application.configureAuthRoutes() {
 
         }
     }
-    routing { adminUserRoutes(authUsers, auditRepository) }
+    routing { adminUserRoutes(authUsers, auditRepository, rbac) }
 }

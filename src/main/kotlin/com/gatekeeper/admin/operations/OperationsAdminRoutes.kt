@@ -37,7 +37,8 @@ fun Application.configureOperationsAdminRoutes() {
         get(), get<AppSettings>().nginx, get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get()
     )
     routing {
-        authenticate("auth-admin") {
+        authenticate("auth-jwt") {
+            install(com.gatekeeper.rbac.presentation.RbacAuthorizationPlugin)
             registerTelemetryRoutes(dependencies)
             registerNginxOperationsRoutes(dependencies)
             registerCustomerDashboardRoutes(dependencies)

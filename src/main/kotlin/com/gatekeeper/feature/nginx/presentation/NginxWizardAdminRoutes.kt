@@ -40,7 +40,8 @@ fun Route.nginxWizardAdminRoutes(
     artifactsUseCase: ListConfigArtifactsUseCase,
     planNginxEnableRequest: PlanNginxEnableRequest
 ){
-    authenticate("auth-admin") {
+    authenticate("auth-jwt") {
+            install(com.gatekeeper.rbac.presentation.RbacAuthorizationPlugin)
         get("/api/admin/nginx/wizard/context/{slug}") {
             val slug = call.parameters["slug"]
             if (slug == null) {

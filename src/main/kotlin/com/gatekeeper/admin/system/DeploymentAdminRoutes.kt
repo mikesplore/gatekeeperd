@@ -20,7 +20,8 @@ fun Application.configureDeploymentAdminRoutes(
     deploymentUpstreamResolver: DeploymentUpstreamResolver
 ) {
     routing {
-        authenticate("auth-admin") {
+        authenticate("auth-jwt") {
+            install(com.gatekeeper.rbac.presentation.RbacAuthorizationPlugin)
             get("/api/admin/deployments/reconciliation") {
                 call.respond(DeploymentReconciliationService.production(projectRepository,siteRepository, dockerGateway, deploymentUpstreamResolver, inspectSiteConfigUseCase))
             }
