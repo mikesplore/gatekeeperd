@@ -269,14 +269,6 @@ as_root setfacl -m "d:u:${SERVICE_USER}:rwx" /etc/nginx/sites-available /etc/ngi
 as_root setfacl -m "u:${SERVICE_USER}:rwx" "${APP_UPSTREAM_DIR}"
 as_root setfacl -m "d:u:${SERVICE_USER}:rwx" "${APP_UPSTREAM_DIR}"
 
-cat >"${WORK_DIR}/gatekeeperd-nginx.sudoers" <<EOF
-# Managed by Gatekeeperd prepare-vps.sh. Allows only config inspection/test and reload.
-${SERVICE_USER} ALL=(root) NOPASSWD: ${APP_NGINX_BINARY} -T, ${APP_NGINX_BINARY} -t, ${SYSTEMCTL_BINARY} reload nginx, /bin/systemctl reload nginx, /usr/bin/systemctl reload nginx
-EOF
-as_root visudo -cf "${WORK_DIR}/gatekeeperd-nginx.sudoers"
-write_root_file "${WORK_DIR}/gatekeeperd-nginx.sudoers" /etc/sudoers.d/gatekeeperd-nginx 0440
-as_root visudo -c
-
 if [[ "${RESET_RUNTIME}" == true ]]; then
   log "Removing Gatekeeperd runtime, service/deploy settings, managed Nginx files, and related sudo rules; preserving only ${ENV_FILE} and external database/Redis data..."
   as_root systemctl disable --now gatekeeperd-auto-deploy.timer >/dev/null 2>&1 || true
@@ -338,6 +330,14 @@ fi
 as_root install -d -o root -g root -m 0755 "${APP_UPSTREAM_DIR}"
 as_root setfacl -m "u:${SERVICE_USER}:rwx" "${APP_UPSTREAM_DIR}"
 as_root setfacl -m "d:u:${SERVICE_USER}:rwx" "${APP_UPSTREAM_DIR}"
+
+cat >"${WORK_DIR}/gatekeeperd-nginx.sudoers" <<EOF
+# Managed by Gatekeeperd prepare-vps.sh. Allows only config inspection/test and reload.
+${SERVICE_USER} ALL=(root) NOPASSWD: ${APP_NGINX_BINARY} -T, ${APP_NGINX_BINARY} -t, ${SYSTEMCTL_BINARY} reload nginx, /bin/systemctl reload nginx, /usr/bin/systemctl reload nginx
+EOF
+as_root visudo -cf "${WORK_DIR}/gatekeeperd-nginx.sudoers"
+write_root_file "${WORK_DIR}/gatekeeperd-nginx.sudoers" /etc/sudoers.d/gatekeeperd-nginx 0440
+as_root visudo -c
 
 if [[ -e "${NGINX_SITE_FILE}" ]]; then
   as_root install -d -o root -g root -m 0700 "${BACKUP_DIR}/etc/nginx/sites-available"
