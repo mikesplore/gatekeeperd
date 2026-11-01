@@ -97,6 +97,85 @@ Never remove PostgreSQL data or the application environment as a response to a f
 readiness check. Readiness requires PostgreSQL, Redis, and migrations to be healthy;
 the endpoint reports each dependency separately.
 
+### Fresh application install after a failed migration
+
+This reset replaces Gatekeeperd application releases and slot state while preserving
+the PostgreSQL/Redis data, Nginx configuration/certificates, and these settings:
+
+- `/etc/gatekeeperd/gatekeeperd.env`
+- `/etc/gatekeeperd/deploy.env`
+- `/etc/systemd/system/gatekeeperd.service`
+
+Do not run this if you intend to erase customer or payment data. Run on the VPS from
+the Gatekeeperd checkout, after the intended `main` build has succeeded. First confirm
+that the legacy unit uses `/opt/gatekeeperd/gatekeeperd-all.jar` and the preserved
+application environment file:
+
+```bash
+sudo systemctl cat gatekeeperd.service
+sudo cat /etc/nginx/conf.d/gatekeeperd-upstream.conf
+```
+
+Then download and verify the successful CI JAR. This temporary copy lets the legacy
+service serve port `8080`, which the first blue/green migration requires:
+
+```bash
+set -euo pipefail
+RUN_ID="$(gh run list --repo mikesplore/gatekeeperd --workflow build.yml --branch main --status success --limit 1 --json databaseId --jq '.[0].databaseId // empty')"
+test -n "${RUN_ID}"
+ARTIFACT_DIR="$(mktemp -d)"
+gh run download "${RUN_ID}" --repo mikesplore/gatekeeperd --name gatekeeperd-all-jar --dir "${ARTIFACT_DIR}"
+printf '%s  %s\n' "$(cat "${ARTIFACT_DIR}/gatekeeperd-all.jar.sha256")" "${ARTIFACT_DIR}/gatekeeperd-all.jar" | sha256sum --check
+```
+
+Stop Gatekeeperd units and remove only release/slot/runtime state. Keep the app
+environment, service unit, database, Redis, Nginx files, and certificates:
+
+```bash
+sudo systemctl disable --now gatekeeperd-auto-deploy.timer 2>/dev/null || true
+sudo systemctl disable --now gatekeeperd-slot@blue.service gatekeeperd-slot@green.service 2>/dev/null || true
+sudo systemctl stop gatekeeperd.service
+sudo rm -rf /opt/gatekeeperd/releases /opt/gatekeeperd/slots
+sudo rm -f /opt/gatekeeperd/current /opt/gatekeeperd/current.new \
+  /opt/gatekeeperd/source-commit.txt /opt/gatekeeperd/auto-deploy.hold \
+  /opt/gatekeeperd/latest-successful-build.txt /opt/gatekeeperd/auto-deploy-failed-commit.txt \
+  /opt/gatekeeperd/gatekeeperd-all.jar
+sudo rm -f /etc/systemd/system/gatekeeperd-slot@.service \
+  /etc/gatekeeperd/slots/blue.env /etc/gatekeeperd/slots/green.env
+sudo rm -f /opt/gatekeeperd/deploy.sh /opt/gatekeeperd/gatekeeperd-slot@.service.in \
+  /opt/gatekeeperd/gatekeeperd-auto-deploy /usr/local/sbin/gatekeeperd-certbot \
+  /etc/systemd/system/gatekeeperd-auto-deploy.service \
+  /etc/systemd/system/gatekeeperd-auto-deploy.timer /etc/gatekeeperd/auto-deploy.env
+sudo systemctl daemon-reload
+sudo install -d -o root -g root -m 0755 /opt/gatekeeperd
+sudo install -o root -g root -m 0755 "${ARTIFACT_DIR}/gatekeeperd-all.jar" /opt/gatekeeperd/gatekeeperd-all.jar
+```
+
+Start and verify the legacy service before asking `deploy.sh` to migrate it:
+
+```bash
+sudo systemctl enable --now gatekeeperd.service
+sudo systemctl status gatekeeperd.service --no-pager -l
+curl -i --max-time 5 http://127.0.0.1:8080/api/health/live
+```
+
+Confirm Nginx still points at the legacy port and its configuration is valid, then
+deploy the same successful CI build:
+
+```bash
+sudo nginx -t
+./deploy.sh --force
+```
+
+If `gatekeeperd.service` does not start or Nginx points somewhere other than `8080`,
+stop here and inspect the service journal and upstream config. Do not delete the
+database, Redis data, environment files, or Nginx configuration to work around that
+precondition. Remove the temporary artifact directory when the deployment succeeds:
+
+```bash
+rm -rf -- "${ARTIFACT_DIR}"
+```
+
 ## Other deployment and architecture docs
 
 - [Staging and VPS deployment](docs/staging-deployment.md)
