@@ -72,6 +72,8 @@ class RbacApplicationService(private val repository: RbacRepository) {
 
     fun isSuperAdmin(email: String): Boolean = repository.isSuperAdmin(email)
 
+    fun permissionsForUser(email: String): Set<String> = repository.permissionsForUser(email)
+
     private fun normalizeDraft(draft: RoleDraft): RoleDraft {
         val key = draft.key.trim().lowercase()
         if (!key.matches(ROLE_KEY)) {

@@ -70,7 +70,8 @@ data class UserProfileResponse(
     val displayName: String? = null,
     val avatarUrl: String? = null,
     val totpEnabled: Boolean = false,
-    val createdAt: String
+    val createdAt: String,
+    val permissions: Set<String> = emptySet()
 )
 
 @Serializable

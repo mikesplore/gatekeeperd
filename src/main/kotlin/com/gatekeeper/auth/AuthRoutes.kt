@@ -418,7 +418,8 @@ fun Application.configureAuthRoutes() {
                         displayName = user.displayName,
                         avatarUrl = AuthSupport.gravatarUrl(user.email),
                         totpEnabled = user.totpEnabled,
-                        createdAt = user.createdAt.toString()
+                        createdAt = user.createdAt.toString(),
+                        permissions = rbac.permissionsForUser(user.email)
                     )
                 )
             }
