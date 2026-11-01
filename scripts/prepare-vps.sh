@@ -39,16 +39,14 @@ as_service_user() {
 
 usage() {
   cat <<'EOF'
-Usage: prepare-vps.sh --domain HOSTNAME [options]
+Usage: prepare-vps.sh [--domain HOSTNAME] [options]
 
 Prepares an Ubuntu/Debian host, starts a bootstrap instance on port 8080,
 checks database/Redis readiness, and runs the latest successful CI deployment.
 
-Required:
-  --domain HOSTNAME       Public Gatekeeperd API hostname
-
 Options:
-  --email ADDRESS         Let's Encrypt contact (required unless --no-tls)
+  --domain HOSTNAME       Public API hostname (default: from GATEKEEPER_PUBLIC_URL)
+  --email ADDRESS         Let's Encrypt contact (default: support/admin email in env file)
   --env-file PATH         Existing app env file (default /etc/gatekeeperd/gatekeeperd.env)
   --service-user USER     Existing Linux service account (default current user)
   --run-id ID             Successful workflow run to deploy (default latest success on main)
@@ -77,12 +75,10 @@ while (($#)); do
   esac
 done
 
-[[ "${DOMAIN}" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]] || die "Pass a valid hostname with --domain."
 [[ "${ENV_FILE}" =~ ^/[A-Za-z0-9_./-]+$ ]] || die "The env file path must be absolute and contain no spaces."
 [[ "${DEPLOY_ENV_FILE}" =~ ^/[A-Za-z0-9_./-]+$ ]] || die "The deploy env file path must be absolute and contain no spaces."
 [[ "${NGINX_SITE_FILE}" =~ ^/[A-Za-z0-9_./-]+$ ]] || die "The Nginx site path must be absolute and contain no spaces."
 [[ "${SERVICE_USER}" =~ ^[A-Za-z_][A-Za-z0-9_.-]*$ ]] || die "Invalid service username."
-[[ "${ENABLE_TLS}" != true || "${EMAIL}" =~ ^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$ ]] || die "Pass a valid Let's Encrypt email with --email."
 [[ "${RUN_ID}" == "" || "${RUN_ID}" =~ ^[0-9]+$ ]] || die "Workflow run ID must be numeric."
 [[ "${SOAK_SECONDS}" =~ ^[0-9]+$ ]] && (( SOAK_SECONDS > 0 )) || die "DEPLOY_SOAK_SECONDS must be a positive integer."
 
@@ -91,23 +87,6 @@ done
 source /etc/os-release
 [[ "${ID:-}" == ubuntu || "${ID:-}" == debian ]] || die "This provisioner supports Ubuntu and Debian hosts."
 [[ -f "${ENV_FILE}" ]] || die "App env file not found: ${ENV_FILE}. Create it with database, Redis, JWT, and payment settings first."
-id "${SERVICE_USER}" >/dev/null 2>&1 || die "Service account does not exist: ${SERVICE_USER}."
-command -v sudo >/dev/null 2>&1 || (( EUID == 0 )) || die "Run as root or install/configure sudo for this account."
-if ! command -v curl >/dev/null 2>&1 || ! command -v gh >/dev/null 2>&1 || ! command -v setfacl >/dev/null 2>&1; then
-  log "Installing curl, GitHub CLI, and host permission prerequisites..."
-  as_root apt-get update -qq
-  as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y curl gh acl
-fi
-command -v gh >/dev/null 2>&1 || die "GitHub CLI could not be installed from the configured Debian/Ubuntu repositories. Install gh, then rerun."
-gh auth status --hostname github.com >/dev/null 2>&1 || die "GitHub CLI is not authenticated. Run 'gh auth login' with Actions artifact read access, then rerun."
-if as_root systemctl is-active --quiet gatekeeperd.service && [[ "${RESET_RUNTIME}" != true ]]; then
-  die "gatekeeperd.service is already active. This is a first-install/reset tool; use deploy.sh for an upgrade, or pass --reset-runtime to replace the app runtime."
-fi
-as_service_user test -r "${ENV_FILE}" 2>/dev/null || die "The service account ${SERVICE_USER} cannot read ${ENV_FILE}. Fix its ownership/permissions before provisioning."
-
-for key in DB_URL DB_USER DB_PASSWORD REDIS_HOST JWT_SECRET GATEKEEPER_PUBLIC_URL GATEKEEPERD_ENVIRONMENT GATEKEEPERD_SELF_DOMAIN GATEKEEPERD_NGINX_HOST_SUDO GATEKEEPERD_NGINX_CERTBOT_ENABLED NGINX_DEPLOYMENT_UPSTREAMS_ENABLED; do
-  grep -Eq "^[[:space:]]*${key}=.+$" "${ENV_FILE}" || die "Required setting ${key} is missing from ${ENV_FILE}."
-done
 
 env_value() {
   python3 - "$1" "${ENV_FILE}" <<'PY'
@@ -125,27 +104,86 @@ print(value)
 PY
 }
 
-PUBLIC_URL="$(env_value GATEKEEPER_PUBLIC_URL)"
+if [[ -z "${DOMAIN}" ]]; then
+  DOMAIN="$(python3 - "$(env_value GATEKEEPER_PUBLIC_URL)" <<'PY'
+import sys
+from urllib.parse import urlsplit
+print(urlsplit(sys.argv[1]).hostname or "")
+PY
+  )"
+fi
+if [[ -z "${EMAIL}" ]]; then EMAIL="$(env_value SUPPORT_CONTACT_EMAIL)"; fi
+if [[ -z "${EMAIL}" ]]; then EMAIL="$(env_value ADMIN_EMAIL)"; fi
+[[ "${DOMAIN}" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]] || die "Set GATEKEEPER_PUBLIC_URL in ${ENV_FILE} or pass --domain HOSTNAME."
+[[ "${ENABLE_TLS}" != true || "${EMAIL}" =~ ^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$ ]] || die "Add SUPPORT_CONTACT_EMAIL or ADMIN_EMAIL to ${ENV_FILE}, or pass --email ADDRESS."
+
+id "${SERVICE_USER}" >/dev/null 2>&1 || die "Service account does not exist: ${SERVICE_USER}."
+command -v sudo >/dev/null 2>&1 || (( EUID == 0 )) || die "Run as root or install/configure sudo for this account."
+if ! command -v curl >/dev/null 2>&1 || ! command -v gh >/dev/null 2>&1 || ! command -v setfacl >/dev/null 2>&1; then
+  log "Installing curl, GitHub CLI, and host permission prerequisites..."
+  as_root apt-get update -qq
+  as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y curl gh acl
+fi
+command -v gh >/dev/null 2>&1 || die "GitHub CLI could not be installed from the configured Debian/Ubuntu repositories. Install gh, then rerun."
+gh auth status --hostname github.com >/dev/null 2>&1 || die "GitHub CLI is not authenticated. Run 'gh auth login' with Actions artifact read access, then rerun."
+if as_root systemctl is-active --quiet gatekeeperd.service && [[ "${RESET_RUNTIME}" != true ]]; then
+  die "gatekeeperd.service is already active. This is a first-install/reset tool; use deploy.sh for an upgrade, or pass --reset-runtime to replace the app runtime."
+fi
+for key in DB_URL DB_USER DB_PASSWORD REDIS_HOST JWT_SECRET; do
+  grep -Eq "^[[:space:]]*${key}=.+$" "${ENV_FILE}" || die "Required setting ${key} is missing from ${ENV_FILE}."
+done
+
 APP_UPSTREAM_DIR="$(env_value NGINX_UPSTREAM_INCLUDE_DIR)"
 APP_UPSTREAM_DIR="${APP_UPSTREAM_DIR:-/etc/nginx/conf.d/gatekeeperd-upstreams}"
 [[ "${APP_UPSTREAM_DIR}" =~ ^/[A-Za-z0-9_./-]+$ ]] || die "NGINX_UPSTREAM_INCLUDE_DIR must be an absolute path without spaces or shell metacharacters."
-APP_ENVIRONMENT="$(env_value GATEKEEPERD_ENVIRONMENT)"
-SELF_DOMAINS="$(env_value GATEKEEPERD_SELF_DOMAIN)"
-HOST_NGINX="$(env_value GATEKEEPERD_NGINX_HOST_SUDO)"
-APP_CERTBOT="$(env_value GATEKEEPERD_NGINX_CERTBOT_ENABLED)"
-APP_UPSTREAMS="$(env_value NGINX_DEPLOYMENT_UPSTREAMS_ENABLED)"
 if [[ "${ENABLE_TLS}" == true ]]; then
   EXPECTED_URL="https://${DOMAIN}"
 else
   EXPECTED_URL="http://${DOMAIN}"
 fi
-[[ "${PUBLIC_URL%/}" == "${EXPECTED_URL}" ]] || die "Set GATEKEEPER_PUBLIC_URL=${EXPECTED_URL} in ${ENV_FILE} before provisioning."
-[[ "${APP_ENVIRONMENT}" == PROD ]] || die "Set GATEKEEPERD_ENVIRONMENT=PROD in ${ENV_FILE}; DEV settings are unsafe for the VPS runtime."
-SELF_DOMAINS_NORMALIZED="$(tr '[:upper:]' '[:lower:]' <<<"${SELF_DOMAINS}" | tr -d '[:space:]')"
-[[ ",${SELF_DOMAINS_NORMALIZED}," == *",${DOMAIN,,},"* ]] || die "Add ${DOMAIN} to GATEKEEPERD_SELF_DOMAIN in ${ENV_FILE}."
-[[ "${HOST_NGINX,,}" == true ]] || die "Set GATEKEEPERD_NGINX_HOST_SUDO=true in ${ENV_FILE} so the app uses host Nginx operations."
-[[ "${APP_CERTBOT,,}" == true ]] || die "Set GATEKEEPERD_NGINX_CERTBOT_ENABLED=true in ${ENV_FILE} for certificate management."
-[[ "${APP_UPSTREAMS,,}" == true ]] || die "Set NGINX_DEPLOYMENT_UPSTREAMS_ENABLED=true in ${ENV_FILE}."
+
+# The operator supplies infrastructure credentials; deployment-specific app
+# settings are derived from the chosen hostname and managed here.
+as_root python3 - "${ENV_FILE}" "${EXPECTED_URL}" "${DOMAIN}" <<'PY'
+import os, stat, sys, tempfile
+path, public_url, domain = sys.argv[1:]
+updates = {
+    "GATEKEEPER_PUBLIC_URL": public_url,
+    "GATEKEEPERD_ENVIRONMENT": "PROD",
+    "GATEKEEPERD_SELF_DOMAIN": domain,
+    "GATEKEEPERD_NGINX_HOST_SUDO": "true",
+    "GATEKEEPERD_NGINX_CERTBOT_ENABLED": "true",
+    "NGINX_DEPLOYMENT_UPSTREAMS_ENABLED": "true",
+}
+metadata = os.stat(path)
+with open(path, encoding="utf-8") as source:
+    lines = source.readlines()
+output, written = [], set()
+for line in lines:
+    key = line.split("=", 1)[0].strip() if "=" in line and not line.lstrip().startswith("#") else ""
+    if key not in updates:
+        output.append(line)
+    elif key not in written:
+        output.append(f"{key}={updates[key]}\n")
+        written.add(key)
+for key, value in updates.items():
+    if key not in written:
+        output.append(f"{key}={value}\n")
+fd, temporary = tempfile.mkstemp(prefix=".gatekeeperd-env-", dir=os.path.dirname(path))
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as target:
+        target.writelines(output)
+    os.chmod(temporary, stat.S_IMODE(metadata.st_mode))
+    os.chown(temporary, metadata.st_uid, metadata.st_gid)
+    os.replace(temporary, path)
+except BaseException:
+    try: os.unlink(temporary)
+    except FileNotFoundError: pass
+    raise
+PY
+log "Configured production URL and Nginx settings in ${ENV_FILE}."
+as_root setfacl -m "u:${SERVICE_USER}:r" "${ENV_FILE}"
+as_service_user test -r "${ENV_FILE}" 2>/dev/null || die "The service account ${SERVICE_USER} cannot read ${ENV_FILE} after configuration."
 
 if command -v systemctl >/dev/null 2>&1 && as_root systemctl is-active --quiet nginx; then
   ACTIVE_PORT="$(as_root grep -Eo 'server[[:space:]]+127\.0\.0\.1:[0-9]+' "${NGINX_UPSTREAM_FILE}" 2>/dev/null | head -n1 | grep -Eo '[0-9]+$' || true)"

@@ -24,19 +24,13 @@ DB_PASSWORD=DATABASE_PASSWORD
 REDIS_HOST=REDIS_HOST
 REDIS_PORT=6379
 JWT_SECRET=REPLACE_WITH_A_LONG_RANDOM_SECRET
-GATEKEEPER_PUBLIC_URL=https://api.example.com
-GATEKEEPERD_ENVIRONMENT=PROD
-GATEKEEPERD_SELF_DOMAIN=api.example.com
-GATEKEEPERD_NGINX_HOST_SUDO=true
-GATEKEEPERD_NGINX_CERTBOT_ENABLED=true
-NGINX_DEPLOYMENT_UPSTREAMS_ENABLED=true
 ADMIN_EMAIL=admin@example.com
 ADMIN_PASSWORD=REPLACE_WITH_A_STRONG_PASSWORD
 ```
 
-Add the Paystack and Scribed settings required by your installation. Keep this file
-readable by the service account and never commit it. PostgreSQL and Redis may be on
-this VPS or managed elsewhere; point the environment file at the chosen instances.
+Add the Paystack and Scribed settings required by your installation. The setup script
+sets the public URL and production Nginx settings from the hostname. Keep this file
+secret and never commit it. PostgreSQL and Redis may be on this VPS or managed elsewhere.
 
 Authenticate `gh` on the VPS with permission to read Actions artifacts, then run:
 
@@ -44,8 +38,11 @@ Authenticate `gh` on the VPS with permission to read Actions artifacts, then run
 gh auth login
 curl -fsSLo prepare-vps.sh https://raw.githubusercontent.com/mikesplore/gatekeeperd/main/scripts/prepare-vps.sh
 chmod +x prepare-vps.sh
-./prepare-vps.sh --domain api.example.com --email ops@example.com
+./prepare-vps.sh --domain api.example.com --reset-runtime
 ```
+
+The script uses `SUPPORT_CONTACT_EMAIL` or `ADMIN_EMAIL` for the TLS contact. If the
+public URL is already in the env file, `--domain` can be omitted.
 
 For an existing installation that must be cleared and rebuilt, add
 `--reset-runtime`. It removes the old Gatekeeperd runtime, systemd units, deploy
