@@ -413,7 +413,7 @@ activate_release() {
   candidate_slot="$(other_slot "${active_slot}")"
   candidate_port="$(slot_port "${candidate_slot}")"
   if [[ "$(sudo readlink "${SLOT_DIR}/${active_slot}/current" 2>/dev/null | xargs basename 2>/dev/null || true)" == "${id}" ]]; then
-    ln -sfn "releases/${id}" "${CURRENT_LINK}.new"
+    sudo ln -sfn "releases/${id}" "${CURRENT_LINK}.new"
     sudo mv -Tf "${CURRENT_LINK}.new" "${CURRENT_LINK}"
     commit="$(release_commit "${id}")"
     if [[ -n "${commit}" ]]; then printf '%s\n' "${commit}" | sudo tee "${TARGET_DIR}/source-commit.txt" >/dev/null
