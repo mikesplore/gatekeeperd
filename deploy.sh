@@ -55,9 +55,35 @@ ROLLBACK_TARGET=""
 TMP_DIR=""
 SUDOERS_TMP=""
 
-log() { echo "==> $*"; }
+log() { printf '[%s] ==> %s\n' "$(date '+%H:%M:%S')" "$*"; }
 warn() { echo "Warning: $*" >&2; }
 die() { echo "Error: $*" >&2; exit 1; }
+
+# Run a potentially slow command without leaving the operator guessing. The
+# command's own output remains attached to the terminal; this adds elapsed-time
+# updates while it runs.
+run_with_progress() {
+  local label="$1" status_file pid elapsed rc
+  shift
+  status_file="$(mktemp)"
+  (
+    set +e
+    "$@"
+    rc=$?
+    printf '%s\n' "${rc}" >"${status_file}"
+    exit "${rc}"
+  ) &
+  pid=$!
+  elapsed=0
+  while [[ ! -f "${status_file}" ]]; do
+    sleep 10
+    elapsed=$((elapsed + 10))
+    [[ -f "${status_file}" ]] || log "${label} is still running (${elapsed}s elapsed)..."
+  done
+  if wait "${pid}"; then rc=0; else rc=$?; fi
+  rm -f "${status_file}"
+  return "${rc}"
+}
 
 cleanup() {
   [[ -n "${SUDOERS_TMP}" ]] && rm -f "${SUDOERS_TMP}"
@@ -172,14 +198,20 @@ nginx_has_draining_workers() {
 }
 
 wait_for_nginx_drain() {
-  local end=$((SECONDS + NGINX_DRAIN_TIMEOUT_SECONDS))
+  local start="$SECONDS" end=$((SECONDS + NGINX_DRAIN_TIMEOUT_SECONDS)) last_report="$SECONDS"
+  log "Waiting for old Nginx workers to drain (timeout: ${NGINX_DRAIN_TIMEOUT_SECONDS}s)..."
   while nginx_has_draining_workers; do
     if (( SECONDS >= end )); then
       warn "Nginx still has old workers after ${NGINX_DRAIN_TIMEOUT_SECONDS}s; keeping the retired Gatekeeperd slot running and delaying this deployment."
       return 1
     fi
+    if (( SECONDS - last_report >= 10 )); then
+      log "Old Nginx workers are still draining ($((SECONDS - start))s elapsed; ${NGINX_DRAIN_TIMEOUT_SECONDS}s timeout)..."
+      last_report="$SECONDS"
+    fi
     sleep 2
   done
+  log "Old Nginx workers have drained."
 }
 
 retire_slot_after_cutover() {
@@ -249,17 +281,24 @@ install_slot_unit() {
 }
 
 verify_slot_service() {
-  local slot="$1" port pid restarts end ok=false service
+  local slot="$1" port pid restarts end ok=false service start="$SECONDS" last_report="$SECONDS"
   port="$(slot_port "${slot}")"
   service="$(slot_service "${slot}")"
+  log "Waiting for ${service} readiness on port ${port}..."
   for _ in $(seq 1 60); do
     if sudo systemctl is-active --quiet "${service}" && probe "http://127.0.0.1:${port}${READY_PATH}"; then ok=true; break; fi
+    if (( SECONDS - last_report >= 10 )); then
+      log "${service} is not ready yet ($((SECONDS - start))s elapsed; timeout: 120s)..."
+      last_report="$SECONDS"
+    fi
     sleep 2
   done
   [[ "${ok}" == true ]] || { echo "Error: ${service} did not become ready on port ${port}." >&2; return 1; }
+  log "${service} is ready; starting ${SOAK_SECONDS}s stability check..."
   pid="$(sudo systemctl show -p MainPID --value "${service}")"
   restarts="$(sudo systemctl show -p NRestarts --value "${service}")"
   end=$((SECONDS + SOAK_SECONDS))
+  last_report="$SECONDS"
   while (( SECONDS < end )); do
     sleep 2
     if ! sudo systemctl is-active --quiet "${service}" || ! probe "http://127.0.0.1:${port}${READY_PATH}"; then
@@ -271,20 +310,38 @@ verify_slot_service() {
       echo "Error: ${service} restarted during its pre-cutover soak." >&2
       return 1
     fi
+    if (( SECONDS - last_report >= 10 )); then
+      log "${service} remains healthy ($((SECONDS - start))s elapsed)..."
+      last_report="$SECONDS"
+    fi
   done
+  log "${service} passed its stability check."
 }
 
 verify_gateway() {
-  local end=$((SECONDS + SOAK_SECONDS))
+  local start="$SECONDS" end last_report="$SECONDS"
+  log "Checking the public Gatekeeperd route at ${GATEWAY_URL}${READY_PATH}..."
   for _ in $(seq 1 30); do
     gateway_probe && break
+    if (( SECONDS - last_report >= 10 )); then
+      log "Public route is not ready yet ($((SECONDS - start))s elapsed; timeout: 60s)..."
+      last_report="$SECONDS"
+    fi
     sleep 2
   done
   gateway_probe || { echo "Error: the public Gatekeeperd Nginx route is not ready at ${GATEWAY_URL}${READY_PATH}." >&2; return 1; }
+  log "Public route is healthy; starting ${SOAK_SECONDS}s post-cutover check..."
+  end=$((SECONDS + SOAK_SECONDS))
+  last_report="$SECONDS"
   while (( SECONDS < end )); do
     sleep 2
     gateway_probe || { echo "Error: the Gatekeeperd Nginx route became unhealthy during post-cutover verification." >&2; return 1; }
+    if (( SECONDS - last_report >= 10 )); then
+      log "Public route remains healthy ($((SECONDS - start))s elapsed)..."
+      last_report="$SECONDS"
+    fi
   done
+  log "Public route passed post-cutover verification."
 }
 
 verify_service() {
@@ -592,7 +649,8 @@ do_deploy() {
 
   TMP_DIR="$(mktemp -d)"
   log "Downloading artifact from workflow run ${RUN_ID} (commit ${COMMIT_SHA})..."
-  gh run download "${RUN_ID}" --repo "${REPO}" --name "${ARTIFACT_NAME}" --dir "${TMP_DIR}"
+  run_with_progress "GitHub artifact download" gh run download "${RUN_ID}" --repo "${REPO}" --name "${ARTIFACT_NAME}" --dir "${TMP_DIR}"
+  log "Artifact download complete; verifying files and checksums..."
 
   local jar="${TMP_DIR}/gatekeeperd-all.jar" helper="${TMP_DIR}/gatekeeperd-certbot" tools="${TMP_DIR}/gatekeeperd-deploy-tools.tar.gz" f
   for f in "${jar}" "${jar}.sha256" "${helper}" "${TMP_DIR}/gatekeeperd-certbot.sha256" "${tools}" "${tools}.sha256"; do
@@ -636,7 +694,7 @@ do_deploy() {
 
   if [[ -n "${PRE_HOOK}" ]]; then
     log "Running pre-deploy hook..."
-    bash -c "${PRE_HOOK}" || die "Pre-deploy hook failed; nothing was changed."
+    run_with_progress "Pre-deploy hook" bash -c "${PRE_HOOK}" || die "Pre-deploy hook failed; nothing was changed."
   fi
 
   previous="$(current_id)"
