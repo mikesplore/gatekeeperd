@@ -29,6 +29,7 @@ class ConvertSiteToDeploymentManagedUseCase(
     private val inspectSite: InspectSiteConfigUseCase,
     private val siteRepository: SiteRepository,
     private val certificateProvisioner: CertificateProvisioner,
+    private val verifyLocalRoute: Boolean = true,
     private val localProbeRunner: (String, Boolean) -> Boolean = { domain, tls ->
         cutoverProbe.throughLocalNginx(
             domain,
@@ -82,12 +83,19 @@ class ConvertSiteToDeploymentManagedUseCase(
                         renderer.generateNginxConfig(model)
                     )
                 ) { "Unable to activate stable upstream site config" }
-                check(
-                    localProbeRunner(
-                        site.domain,
-                        site.tlsMode != TlsMode.HTTP_ONLY
+                if (verifyLocalRoute) {
+                    check(
+                        localProbeRunner(
+                            site.domain,
+                            site.tlsMode != TlsMode.HTTP_ONLY
+                        )
+                    ) { "Stable upstream probe failed after nginx reload" }
+                } else {
+                    nginxServiceLogger.info(
+                        "Skipping live-route probe while converting site {} in development mode",
+                        site.id
                     )
-                ) { "Stable upstream probe failed after nginx reload" }
+                }
                 check(
                     siteRepository.setUpstreamKind(
                         site.id,

@@ -352,6 +352,7 @@ private val applicationModule = module {
             inspectSite = get(),
             siteRepository = get(),
             certificateProvisioner = get(),
+            verifyLocalRoute = !get<NginxEnvironmentPolicy>().isDev,
             nginxTestRunner = { get<NginxCommandRunner>().test() }
         )
     }
