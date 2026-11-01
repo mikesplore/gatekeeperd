@@ -136,6 +136,10 @@ done
 APP_UPSTREAM_DIR="$(env_value NGINX_UPSTREAM_INCLUDE_DIR)"
 APP_UPSTREAM_DIR="${APP_UPSTREAM_DIR:-/etc/nginx/conf.d/gatekeeperd-upstreams}"
 [[ "${APP_UPSTREAM_DIR}" =~ ^/[A-Za-z0-9_./-]+$ ]] || die "NGINX_UPSTREAM_INCLUDE_DIR must be an absolute path without spaces or shell metacharacters."
+APP_NGINX_BINARY="$(env_value NGINX_BINARY)"
+APP_NGINX_BINARY="${APP_NGINX_BINARY:-/usr/sbin/nginx}"
+[[ "${APP_NGINX_BINARY}" =~ ^/[A-Za-z0-9_./-]+$ ]] || die "NGINX_BINARY must be an absolute executable path."
+SYSTEMCTL_BINARY="$(command -v systemctl)"
 if [[ "${ENABLE_TLS}" == true ]]; then
   EXPECTED_URL="https://${DOMAIN}"
 else
@@ -264,6 +268,14 @@ as_root setfacl -m "u:${SERVICE_USER}:rwx" /etc/nginx/sites-available /etc/nginx
 as_root setfacl -m "d:u:${SERVICE_USER}:rwx" /etc/nginx/sites-available /etc/nginx/sites-enabled
 as_root setfacl -m "u:${SERVICE_USER}:rwx" "${APP_UPSTREAM_DIR}"
 as_root setfacl -m "d:u:${SERVICE_USER}:rwx" "${APP_UPSTREAM_DIR}"
+
+cat >"${WORK_DIR}/gatekeeperd-nginx.sudoers" <<EOF
+# Managed by Gatekeeperd prepare-vps.sh. Allows only config inspection/test and reload.
+${SERVICE_USER} ALL=(root) NOPASSWD: ${APP_NGINX_BINARY} -T, ${APP_NGINX_BINARY} -t, ${SYSTEMCTL_BINARY} reload nginx, /bin/systemctl reload nginx, /usr/bin/systemctl reload nginx
+EOF
+as_root visudo -cf "${WORK_DIR}/gatekeeperd-nginx.sudoers"
+write_root_file "${WORK_DIR}/gatekeeperd-nginx.sudoers" /etc/sudoers.d/gatekeeperd-nginx 0440
+as_root visudo -c
 
 if [[ "${RESET_RUNTIME}" == true ]]; then
   log "Removing Gatekeeperd runtime, service/deploy settings, managed Nginx files, and related sudo rules; preserving only ${ENV_FILE} and external database/Redis data..."
