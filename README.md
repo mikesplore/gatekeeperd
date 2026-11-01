@@ -63,19 +63,21 @@ script manages the inactive slot on subsequent releases.
 
 ### 3. Deploy the successful build
 
-Wait for the `build` workflow for the intended `main` commit to pass. On the VPS:
+Wait for the `build` workflow for the intended `main` commit to pass. The VPS does not
+need a source checkout. Authenticate GitHub CLI with permission to read workflow
+artifacts, then download only the deployment script:
 
 ```bash
-cd ~/gatekeeperd
-git status --short
-git pull --ff-only origin main
+gh auth status --hostname github.com
+curl -fsSLo deploy.sh https://raw.githubusercontent.com/mikesplore/gatekeeperd/main/deploy.sh
+chmod +x deploy.sh
 ./deploy.sh --force
 ```
 
-Review `git status --short` before pulling; preserve any local changes. `--force`
-allows an intentional retry of a previously failed or rolled-back commit. The script
-prints progress during artifact download, service readiness, stability checks, and
-Nginx worker draining.
+`deploy.sh` downloads and verifies the latest successful CI artifact. `--force` allows
+an intentional retry of a previously failed or rolled-back commit. The script prints
+progress during artifact download, service readiness, stability checks, and Nginx
+worker draining. No repository checkout or source-code pull is needed on the VPS.
 
 After deployment, verify the active upstream and service:
 
@@ -106,10 +108,11 @@ the PostgreSQL/Redis data, Nginx configuration/certificates, and these settings:
 - `/etc/gatekeeperd/deploy.env`
 - `/etc/systemd/system/gatekeeperd.service`
 
-Do not run this if you intend to erase customer or payment data. Run on the VPS from
-the Gatekeeperd checkout, after the intended `main` build has succeeded. First confirm
-that the legacy unit uses `/opt/gatekeeperd/gatekeeperd-all.jar` and the preserved
-application environment file:
+Do not run this if you intend to erase customer or payment data. Run on the VPS after
+the intended `main` build has succeeded, with GitHub CLI authenticated. The only
+Gatekeeperd files fetched from GitHub are the deployment script and CI artifact. First
+confirm that the legacy unit uses `/opt/gatekeeperd/gatekeeperd-all.jar` and the
+preserved application environment file:
 
 ```bash
 sudo systemctl cat gatekeeperd.service
@@ -160,9 +163,12 @@ curl -i --max-time 5 http://127.0.0.1:8080/api/health/live
 ```
 
 Confirm Nginx still points at the legacy port and its configuration is valid, then
-deploy the same successful CI build:
+download the deployment script if it is not already present and deploy the same
+successful CI build:
 
 ```bash
+curl -fsSLo deploy.sh https://raw.githubusercontent.com/mikesplore/gatekeeperd/main/deploy.sh
+chmod +x deploy.sh
 sudo nginx -t
 ./deploy.sh --force
 ```

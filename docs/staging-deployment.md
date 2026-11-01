@@ -75,12 +75,13 @@ deployment continues to use the CI artifact and blue/green cutover.
 
 ## Deploy the systemd service from a CI artifact
 
-The repository's `deploy.sh` downloads the JAR from the latest successful `build.yml`
-workflow run on `main`. On the VPS, authenticate GitHub CLI with permission to read
-workflow artifacts, then copy the script and run it:
+`deploy.sh` downloads the JAR from the latest successful `build.yml` workflow run on
+`main`. The VPS does not need a source checkout. Authenticate GitHub CLI with
+permission to read workflow artifacts, download the deployment script, and run it:
 
 ```bash
 gh auth login
+curl -fsSLo deploy.sh https://raw.githubusercontent.com/mikesplore/gatekeeperd/main/deploy.sh
 chmod +x deploy.sh
 ./deploy.sh
 ```
@@ -185,7 +186,8 @@ the requested domain/email and supports only certificate install, renewal, and r
 
 After deployment, the Certificates page shows whether Certbot management is ready and
 the server-side setup issue if it is not. If a server was deployed before the helper was
-included in CI artifacts, copy the latest `deploy.sh` to the VPS and run it again.
+included in CI artifacts, download the latest `deploy.sh` using the command above and
+run it again.
 The Gatekeeperd reverse proxy must allow a 10-minute `proxy_read_timeout` for certificate
 renewal requests; update the existing site config and reload nginx after changing it.
 
@@ -200,9 +202,10 @@ renewal requests; update the existing site config and reload nginx after changin
 
 ### Install jar on VPS
 
-Run the repository's `deploy.sh` on the VPS. It selects a specific successful workflow
+Run the downloaded `deploy.sh` on the VPS. It selects a specific successful workflow
 run, reports its source commit, validates the downloaded checksums, and promotes the
-release through blue/green systemd slots behind the stable Nginx upstream.
+release through blue/green systemd slots behind the stable Nginx upstream. A source
+checkout is not needed on the server.
 
 ### Automatic deployment from successful builds
 
