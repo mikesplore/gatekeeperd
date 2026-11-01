@@ -44,6 +44,7 @@ LEGACY_PORT="${DEPLOY_LEGACY_PORT:-8080}"
 BLUE_PORT="${DEPLOY_BLUE_PORT:-18081}"
 GREEN_PORT="${DEPLOY_GREEN_PORT:-18082}"
 READY_PATH="${DEPLOY_READY_PATH:-/api/health/ready}"
+LIVE_PATH="${DEPLOY_LIVE_PATH:-/api/health/live}"
 GATEWAY_URL="${DEPLOY_GATEWAY_URL:-}"
 DEPLOY_TOOLS_DIR=""
 
@@ -120,9 +121,9 @@ active_port() {
     | head -n1 | grep -Eo '[0-9]+$'
 }
 
-gateway_probe() {
+gateway_probe_at() {
   [[ -n "${GATEWAY_URL}" ]] || return 1
-  local origin="${GATEWAY_URL%/}" authority host_port port
+  local path="$1" origin="${GATEWAY_URL%/}" authority host_port port
   [[ "${origin}" =~ ^https?://[A-Za-z0-9.-]+(:[0-9]+)?$ ]] || return 1
   authority="${origin#*://}"
   if [[ "${authority}" == *:* ]]; then
@@ -134,8 +135,10 @@ gateway_probe() {
   fi
   port="${host_port##*:}"
   curl --fail --silent --show-error --max-time 4 \
-    --resolve "${host_port}:127.0.0.1" "${origin}${READY_PATH}" >/dev/null 2>&1
+    --resolve "${host_port}:127.0.0.1" "${origin}${path}" >/dev/null 2>&1
 }
+
+gateway_probe() { gateway_probe_at "${READY_PATH}"; }
 
 write_upstream() {
   local port="$1" prior="" had_file=false tmp
@@ -289,7 +292,9 @@ verify_service() {
   port="$(active_port)"
   slot="$(slot_for_port "${port}")" || { echo "Error: Nginx upstream has an unknown Gatekeeperd port: ${port:-unset}." >&2; return 1; }
   if [[ "${slot}" == legacy ]]; then
-    sudo systemctl is-active --quiet "${SERVICE_NAME}" && probe "http://127.0.0.1:${port}${READY_PATH}" && gateway_probe
+    sudo systemctl is-active --quiet "${SERVICE_NAME}" \
+      && probe "http://127.0.0.1:${port}${LIVE_PATH}" \
+      && gateway_probe_at "${LIVE_PATH}"
     return $?
   fi
   sudo systemctl is-active --quiet "$(slot_service "${slot}")" \
@@ -310,14 +315,14 @@ bootstrap_legacy_service() {
   [[ "$(slot_for_port "$(active_port)")" == legacy ]] || return 0
   sudo systemctl is-active --quiet "${SERVICE_NAME}" \
     || die "Nginx still routes to ${LEGACY_PORT}, but ${SERVICE_NAME} is not active; refusing to cut over."
-  log "Starting a blue/green copy of the current release before changing Nginx traffic..."
+  log "Starting release ${id} in a blue/green slot before changing Nginx traffic..."
   stage_slot_release "${slot}" "${id}"
   sudo systemctl enable --now "$(slot_service "${slot}")"
   verify_slot_service "${slot}" || { sudo systemctl disable --now "$(slot_service "${slot}")" >/dev/null 2>&1 || true; return 1; }
   port="$(slot_port "${slot}")"
   if ! write_upstream "${port}" || ! verify_gateway; then
     warn "The blue/green bootstrap route did not pass verification; returning Nginx to the still-running legacy service."
-    if ! write_upstream "${LEGACY_PORT}" || ! gateway_probe; then
+    if ! write_upstream "${LEGACY_PORT}" || ! gateway_probe_at "${LIVE_PATH}"; then
       echo "CRITICAL: Could not restore or verify the legacy Gatekeeperd route. Both processes are being left running for recovery." >&2
       return 1
     fi
@@ -344,7 +349,7 @@ activate_release() {
   if sudo test -f "${dir}/gatekeeperd-certbot"; then
     sudo install -o root -g root -m 0755 "${dir}/gatekeeperd-certbot" /usr/local/sbin/gatekeeperd-certbot
   fi
-  bootstrap_legacy_service "$(current_id)" || return 1
+  bootstrap_legacy_service "${id}" || return 1
   active_port_value="$(active_port)"
   active_slot="$(slot_for_port "${active_port_value}")" || { echo "Error: Nginx routes to unknown backend port ${active_port_value:-unset}." >&2; return 1; }
   [[ "${active_slot}" != legacy ]] || { echo "Error: blue/green bootstrap did not move traffic off the legacy listener." >&2; return 1; }

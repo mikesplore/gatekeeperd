@@ -119,7 +119,7 @@ file. Keep the current `gatekeeperd.service` running while preparing these setti
    ./deploy.sh --force
    ```
 
-   This starts a second copy of the current release, checks it directly, switches Nginx
+   This starts the incoming release in a second slot, checks it directly, switches Nginx
    to it, and verifies the public readiness URL before stopping the legacy service. The
    legacy process stays available until Nginx's old workers drain. If any check fails,
    the request route remains on the old process. After this setup, automatic deployments
