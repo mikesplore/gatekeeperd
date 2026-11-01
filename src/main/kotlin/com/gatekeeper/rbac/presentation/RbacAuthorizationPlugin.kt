@@ -6,6 +6,7 @@ import com.gatekeeper.rbac.application.RbacPermissionPolicy
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.application.createRouteScopedPlugin
+import io.ktor.server.auth.AuthenticationChecked
 import io.ktor.server.auth.principal
 import io.ktor.server.auth.jwt.JWTPrincipal
 import io.ktor.server.request.httpMethod
@@ -13,7 +14,7 @@ import io.ktor.server.request.path
 import org.koin.ktor.ext.get
 
 val RbacAuthorizationPlugin = createRouteScopedPlugin("RbacAuthorization") {
-    onCall { call: ApplicationCall ->
+    on(AuthenticationChecked) { call: ApplicationCall ->
         val principal = call.principal<JWTPrincipal>()
             ?: throw HttpApiException(HttpStatusCode.Unauthorized, "unauthorized", "Authentication required")
         val subject = principal.payload.subject?.trim()?.lowercase()?.takeIf(String::isNotEmpty)

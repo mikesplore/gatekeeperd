@@ -8,7 +8,27 @@ import com.gatekeeper.rbac.domain.RbacCatalog
 import com.gatekeeper.rbac.domain.RbacRepository
 import com.gatekeeper.rbac.domain.RoleDraft
 import com.gatekeeper.api.HttpApiException
+import com.gatekeeper.api.respondError
 import io.ktor.http.HttpMethod
+import io.ktor.client.request.bearerAuth
+import io.ktor.client.request.get
+import io.ktor.client.request.post
+import io.ktor.http.HttpStatusCode
+import io.ktor.server.application.install
+import io.ktor.server.auth.Authentication
+import io.ktor.server.auth.authenticate
+import io.ktor.server.auth.jwt.JWTPrincipal
+import io.ktor.server.auth.jwt.jwt
+import io.ktor.server.plugins.statuspages.StatusPages
+import io.ktor.server.plugins.statuspages.exception
+import io.ktor.server.response.respondText
+import io.ktor.server.routing.get
+import io.ktor.server.routing.post
+import io.ktor.server.routing.routing
+import io.ktor.server.testing.testApplication
+import com.auth0.jwt.JWT
+import com.auth0.jwt.algorithms.Algorithm
+import com.gatekeeper.plugins.configureSerialization
 import java.time.LocalDateTime
 import java.util.UUID
 import java.io.File
@@ -18,8 +38,41 @@ import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
+import org.koin.dsl.module
+import org.koin.ktor.plugin.Koin
 
 class RbacAuthorizationTest {
+    @Test
+    fun `route authorization runs after JWT authentication`() = testApplication {
+        val service = RbacApplicationService(FakeRbacRepository())
+        val signingKey = "rbac-test-signing-key-with-enough-entropy"
+        application {
+            configureSerialization()
+            install(Koin) { modules(module { single<RbacApplicationService> { service } }) }
+            install(Authentication) {
+                jwt("auth-jwt") {
+                    verifier(JWT.require(Algorithm.HMAC256(signingKey)).build())
+                    validate { credential -> JWTPrincipal(credential.payload) }
+                }
+            }
+            install(StatusPages) {
+                exception<HttpApiException> { call, error -> call.respondError(error.status, error.code, error.message) }
+            }
+            routing {
+                authenticate("auth-jwt") {
+                    install(com.gatekeeper.rbac.presentation.RbacAuthorizationPlugin)
+                    get("/api/admin/projects") { call.respondText("read") }
+                    post("/api/admin/projects") { call.respondText("write") }
+                }
+            }
+        }
+        val token = JWT.create().withSubject("viewer@example.test").withIssuer("test")
+            .withAudience("test").withClaim("role", "viewer").sign(Algorithm.HMAC256(signingKey))
+
+        assertEquals(HttpStatusCode.OK, client.get("/api/admin/projects") { bearerAuth(token) }.status)
+        assertEquals(HttpStatusCode.Forbidden, client.post("/api/admin/projects") { bearerAuth(token) }.status)
+    }
+
     @Test
     fun `admin route policy maps representative read write and multi-capability operations`() {
         assertEquals(setOf("projects.read"), RbacPermissionPolicy.permissions(HttpMethod.Get, "/api/admin/projects"))
