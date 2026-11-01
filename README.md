@@ -38,9 +38,10 @@ environment file; do not set a fixed `PORT` there because each slot has its own 
 See [the staging deployment guide](docs/staging-deployment.md) for the full setup.
 
 For the first blue/green migration, Nginx must use the managed upstream file and the
-legacy `gatekeeperd.service` must be active on port `8080`. The deployment script
-refuses the first cutover if Nginx still points at `8080` but that service is stopped.
-Check this before deploying:
+bootstrap `gatekeeperd.service` must be active on port `8080`. This is true for both
+an upgrade and a brand-new VPS: on a new server, create the bootstrap service using the
+first downloaded JAR. The deployment script refuses the first cutover if Nginx still
+points at `8080` but that service is stopped. Check this before deploying:
 
 ```bash
 sudo systemctl status gatekeeperd.service --no-pager -l
@@ -49,13 +50,48 @@ sudo nginx -t
 ```
 
 If the upstream is still `127.0.0.1:8080`, restore the legacy service before the
-first migration:
+first migration. On an existing installation this starts its existing unit. On a
+brand-new server, install the first JAR at `/opt/gatekeeperd/gatekeeperd-all.jar` and
+create a bootstrap unit instead:
 
 ```bash
+RUN_ID="$(gh run list --repo mikesplore/gatekeeperd --workflow build.yml --branch main --status success --limit 1 --json databaseId --jq '.[0].databaseId // empty')"
+test -n "$RUN_ID"
+ARTIFACT_DIR="$(mktemp -d)"
+gh run download "$RUN_ID" --repo mikesplore/gatekeeperd --name gatekeeperd-all-jar --dir "$ARTIFACT_DIR"
+printf '%s  %s\n' "$(cat "$ARTIFACT_DIR/gatekeeperd-all.jar.sha256")" "$ARTIFACT_DIR/gatekeeperd-all.jar" | sha256sum --check
+sudo install -d -o root -g root -m 0755 /opt/gatekeeperd
+sudo install -o root -g root -m 0755 "$ARTIFACT_DIR/gatekeeperd-all.jar" /opt/gatekeeperd/gatekeeperd-all.jar
+sudo tee /etc/systemd/system/gatekeeperd.service >/dev/null <<'EOF'
+[Unit]
+Description=Gatekeeperd bootstrap service
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/gatekeeperd
+EnvironmentFile=/etc/gatekeeperd/gatekeeperd.env
+ExecStart=/usr/bin/java -jar /opt/gatekeeperd/gatekeeperd-all.jar -port=8080
+Restart=on-failure
+RestartSec=5
+SuccessExitStatus=143
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
+EOF
+sudo systemctl daemon-reload
 sudo systemctl enable --now gatekeeperd.service
 sudo systemctl is-active gatekeeperd.service
 curl -i --max-time 5 http://127.0.0.1:8080/api/health/live
 ```
+
+Replace `User=ubuntu` with the account that owns the app environment and has the
+required Docker/nginx access. The deployment script copies that account and group
+configuration to the blue/green slot unit. Once the first slot passes readiness and
+Nginx cuts over, the bootstrap service is stopped; future deploys use blue/green slots.
 
 Do not stop the service currently targeted by Nginx. After the first successful
 blue/green deployment, Nginx targets port `18081` or `18082`, and the deployment
@@ -102,11 +138,10 @@ the endpoint reports each dependency separately.
 ### Fresh application install after a failed migration
 
 This reset replaces Gatekeeperd application releases and slot state while preserving
-the PostgreSQL/Redis data, Nginx configuration/certificates, and these settings:
+the PostgreSQL/Redis data, Nginx configuration/certificates, and the environment files:
 
 - `/etc/gatekeeperd/gatekeeperd.env`
 - `/etc/gatekeeperd/deploy.env`
-- `/etc/systemd/system/gatekeeperd.service`
 
 Do not run this if you intend to erase customer or payment data. Run on the VPS after
 the intended `main` build has succeeded, with GitHub CLI authenticated. The only
@@ -133,8 +168,8 @@ printf '%s  %s\n' "$(cat "${ARTIFACT_DIR}/gatekeeperd-all.jar.sha256")" "${ARTIF
 
 If a deployment is still running, interrupt it with Ctrl+C and wait for the shell
 prompt. Stop Gatekeeperd services, then clear the runtime directory and generated
-slot/auto-deploy files. This preserves the legacy service unit and environment files
-so the fresh JAR can bootstrap on port `8080`:
+slot/auto-deploy files. The existing service unit is removed and recreated as a
+temporary bootstrap unit for the fresh JAR on port `8080`:
 
 ```bash
 sudo systemctl disable --now gatekeeperd-auto-deploy.timer 2>/dev/null || true
@@ -142,6 +177,7 @@ sudo systemctl disable --now gatekeeperd-slot@blue.service gatekeeperd-slot@gree
 sudo systemctl stop gatekeeperd.service 2>/dev/null || true
 sudo find /opt/gatekeeperd -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
 sudo rm -f /etc/systemd/system/gatekeeperd-slot@.service \
+  /etc/systemd/system/gatekeeperd.service \
   /etc/gatekeeperd/slots/blue.env /etc/gatekeeperd/slots/green.env
 sudo rm -f /opt/gatekeeperd/deploy.sh /opt/gatekeeperd/gatekeeperd-slot@.service.in \
   /opt/gatekeeperd/gatekeeperd-auto-deploy /usr/local/sbin/gatekeeperd-certbot \
@@ -150,6 +186,27 @@ sudo rm -f /opt/gatekeeperd/deploy.sh /opt/gatekeeperd/gatekeeperd-slot@.service
 sudo systemctl daemon-reload
 sudo install -d -o root -g root -m 0755 /opt/gatekeeperd
 sudo install -o root -g root -m 0755 "${ARTIFACT_DIR}/gatekeeperd-all.jar" /opt/gatekeeperd/gatekeeperd-all.jar
+sudo tee /etc/systemd/system/gatekeeperd.service >/dev/null <<'EOF'
+[Unit]
+Description=Gatekeeperd bootstrap service
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/gatekeeperd
+EnvironmentFile=/etc/gatekeeperd/gatekeeperd.env
+ExecStart=/usr/bin/java -jar /opt/gatekeeperd/gatekeeperd-all.jar -port=8080
+Restart=on-failure
+RestartSec=5
+SuccessExitStatus=143
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
+EOF
+sudo systemctl daemon-reload
 ```
 
 Start and verify the legacy service before asking `deploy.sh` to migrate it:
