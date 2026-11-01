@@ -80,11 +80,3 @@ fun Application.configurePaymentRoutes() {
         }
     }
 }
-
-private fun projectRedirectUrl(domain: String): String {
-    val trimmed = domain.trim()
-    return when {
-        trimmed.startsWith("http://", ignoreCase = true) || trimmed.startsWith("https://", ignoreCase = true) -> trimmed
-        else -> "https://$trimmed"
-    }
-}

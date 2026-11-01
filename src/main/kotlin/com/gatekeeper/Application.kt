@@ -164,7 +164,7 @@ fun Application.module() {
         configureNginxRoutes()
     }
     configureRouting()
-    configureGateRoutes(serviceRepository)
+    configureGateRoutes()
     configurePaymentRoutes()
     configureCustomerRoutes()
     configureAuthRoutes()

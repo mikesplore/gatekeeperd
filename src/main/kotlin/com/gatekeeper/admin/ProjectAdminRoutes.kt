@@ -43,7 +43,6 @@ import io.ktor.server.auth.jwt.JWTPrincipal
 import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
-import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.decodeFromJsonElement
@@ -54,68 +53,20 @@ import kotlinx.coroutines.launch
 import java.util.UUID
 import java.math.BigDecimal
 
-private val logger = LoggerFactory.getLogger("com.gatekeeper.admin.ProjectAdminRoutes")
-private val json = Json { ignoreUnknownKeys = true; coerceInputValues = true }
-private val deploymentModes = setOf("developer_hosted", "client_hosted", "external_hosted")
-private val serviceModes = setOf("development", "testing", "production")
-private val lifecycleStatuses = setOf("active", "transferred", "archived", "cancelled")
 
-@Serializable
-data class UpdateProjectRequest(
-    val name: String? = null,
-    val domain: String? = null,
-    val type: String? = null,
-    val billingName: String? = null,
-    val billingEmail: String? = null,
-    val billingAddress: String? = null,
-    val amountDue: Double? = null,
-    val currency: String? = null,
-    val dueDate: String? = null,
-    val gracePeriodDays: Int? = null,
-    val deploymentMode: String? = null,
-    val serviceMode: String? = null,
-    val lifecycleStatus: String? = null,
-    val customerId: String? = null
-)
 
-@Serializable
-data class CreateProjectAdjustmentRequest(
-    val type: String,
-    val amount: Double,
-    val reason: String
-)
 
-@Serializable
-data class ProjectAdjustmentResponse(
-    val id: String,
-    val projectId: String,
-    val type: String,
-    val amount: Double,
-    val reason: String,
-    val actor: String,
-    val createdAt: String,
-    val oldBalance: Double,
-    val newBalance: Double
-)
 
-@Serializable
-data class StatusChangeRequest(
-    val reason: String,
-    val blockReasonCode: String? = null,
-    val blockReasonNote: String? = null
-)
 
-@Serializable
-data class TransferProjectRequest(
-    val deploymentMode: String = "client_hosted",
-    val serviceMode: String = "production"
-)
+
+
+
+
+
 
 fun Application.configureProjectAdminRoutes() {
     val projects = get<ProjectRepository>()
     val auditRepository = get<AuditRepositoryPort>()
-    val dockerService = get<DockerGateway>()
-    val dockerSettings = get<AppSettings>().docker
     val scribed = get<ScribedIntegrationClient>()
     val nginx = get<NginxSiteStorage>()
     val removeSiteConfig = get<RemoveSiteConfigUseCase>()
@@ -192,9 +143,9 @@ fun Application.configureProjectAdminRoutes() {
 
                 val parsed = try {
                     val payload = call.receive<JsonObject>()
-                    json.decodeFromJsonElement<UpdateProjectRequest>(payload) to payload.keys
+                    projectAdminJson.decodeFromJsonElement<UpdateProjectRequest>(payload) to payload.keys
                 } catch (e: Exception) {
-                    logger.warn("Failed to parse update project request", e)
+                    projectAdminLogger.warn("Failed to parse update project request", e)
                     call.respondError(HttpStatusCode.BadRequest, "invalid_request", "The request body could not be parsed")
                     return@patch
                 }
@@ -222,9 +173,9 @@ fun Application.configureProjectAdminRoutes() {
                     return@patch
                 }
 
-                if ((body.deploymentMode != null && body.deploymentMode !in deploymentModes) ||
-                    (body.serviceMode != null && body.serviceMode !in serviceModes) ||
-                    (body.lifecycleStatus != null && body.lifecycleStatus !in lifecycleStatuses)
+                if ((body.deploymentMode != null && body.deploymentMode !in ProjectAdminRules.deploymentModes) ||
+                    (body.serviceMode != null && body.serviceMode !in ProjectAdminRules.serviceModes) ||
+                    (body.lifecycleStatus != null && body.lifecycleStatus !in ProjectAdminRules.lifecycleStatuses)
                 ) {
                     call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid deployment, service, or lifecycle mode")
                     return@patch
@@ -275,7 +226,7 @@ fun Application.configureProjectAdminRoutes() {
                 } else project
 
                 projects.invalidateCache(slug)
-                logger.info("Project updated: $slug")
+                projectAdminLogger.info("Project updated: $slug")
                 val responseProject = assignedProject ?: project
                 call.respond(responseProject.toResponse(call.application.get<ProjectBalanceAdapter>().financials(responseProject)))
             }
@@ -342,7 +293,7 @@ fun Application.configureProjectAdminRoutes() {
                     call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid transfer request")
                     return@post
                 }
-                if (body.deploymentMode !in deploymentModes || body.serviceMode !in serviceModes) {
+                if (body.deploymentMode !in ProjectAdminRules.deploymentModes || body.serviceMode !in ProjectAdminRules.serviceModes) {
                     call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid deployment or service mode")
                     return@post
                 }
@@ -390,18 +341,18 @@ fun Application.configureProjectAdminRoutes() {
                 runCatching {
                     val removed = removeSiteConfig.removeProject(slug)
                     if (!removed) {
-                        logger.warn("Project archived but nginx cleanup failed for slug=$slug (removeProject returned false)")
+                        projectAdminLogger.warn("Project archived but nginx cleanup failed for slug=$slug (removeProject returned false)")
                         return@runCatching
                     }
                     val reloaded = nginx.reloadNginx()
                     if (!reloaded) {
-                        logger.warn("Project archived but nginx cleanup reload failed for slug=$slug")
+                        projectAdminLogger.warn("Project archived but nginx cleanup reload failed for slug=$slug")
                     }
                 }.onFailure { e ->
-                    logger.warn("Project archived but nginx cleanup errored for slug=$slug: ${e.message}")
+                    projectAdminLogger.warn("Project archived but nginx cleanup errored for slug=$slug: ${e.message}")
                 }
 
-                logger.info("Project archived: $slug by $actor")
+                projectAdminLogger.info("Project archived: $slug by $actor")
                 call.respond(HttpStatusCode.NoContent)
             }
 
@@ -453,7 +404,7 @@ fun Application.configureProjectAdminRoutes() {
                 projects.invalidateCache(slug)
                 scribed.notifySuspension(project.copy(status = "manual_block", blockReason = "manual"), "manual_block: $reason", call.application.get())
 
-                logger.info("Project blocked: $slug by $actor")
+                projectAdminLogger.info("Project blocked: $slug by $actor")
                 call.respond(StatusChangeResponse(status = "blocked", slug = slug))
             }
 
@@ -488,7 +439,7 @@ fun Application.configureProjectAdminRoutes() {
                 projects.updateStatus(project.id, "active", actor, reason)
                 projects.invalidateCache(slug)
 
-                logger.info("Project unblocked: $slug by $actor")
+                projectAdminLogger.info("Project unblocked: $slug by $actor")
                 call.respond(StatusChangeResponse(status = "active", slug = slug))
             }
 
@@ -520,243 +471,7 @@ fun Application.configureProjectAdminRoutes() {
                 call.respond(auditLog)
             }
 
-            // Docker container creation
-            post("/api/admin/containers/create") {
-                val body = try {
-                    call.receive<CreateContainerRequest>()
-                } catch (e: Exception) {
-                    logger.warn("Failed to parse create container request", e)
-                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "The request body could not be parsed")
-                    return@post
-                }
 
-                try {
-                    val inspect = object : DockerWizardInspect {
-                        override fun imageExists(imageRef: String) = dockerService.imageExists(imageRef)
-                        override fun containerExists(name: String) = dockerService.getContainer(name) != null
-                        override fun listNetworkNames() = dockerService.listNetworks().map { it.name }.toSet()
-                        override fun hostPortsInUse() = dockerService.hostPortsInUse()
-                    }
-                    when (val planResult = computeContainerCreatePlan(
-                        request = body,
-                        internalNetwork = dockerSettings.internalNetwork,
-                        docker = inspect
-                    )) {
-                        is ContainerCreatePlanResult.Err -> {
-                            if (planResult.data != null) {
-                                call.respondErrorWithData(planResult.status, planResult.code, planResult.message, planResult.data)
-                            } else {
-                                call.respondError(planResult.status, planResult.code, planResult.message)
-                            }
-                            return@post
-                        }
-
-                        is ContainerCreatePlanResult.Ok -> {
-                            val plan = planResult.plan
-                            val operation = ContainerCreationTracker.create(plan.normalizedRequest.name)
-                            application.launch(Dispatchers.IO) {
-                                try {
-                                    if (plan.willPullImage) {
-                                        ContainerCreationTracker.update(operation.id, "pulling")
-                                        val useCliPull = plan.normalizedRequest.pullViaCli || dockerSettings.pullViaCli
-                                        if (useCliPull) {
-                                            dockerService.pullImageViaCli(plan.normalizedRequest.image, dockerSettings.socket)
-                                        } else {
-                                            dockerService.pullImage(plan.parsedImage.repository, plan.parsedImage.tag)
-                                        }
-                                    }
-                                    if (plan.willCreateInternalNetworkIfMissing) {
-                                        dockerService.createNetworkIfMissing(dockerSettings.internalNetwork)
-                                    }
-                                    ContainerCreationTracker.update(operation.id, "creating")
-                                    val container = dockerService.createContainer(plan.normalizedRequest)
-                                    ContainerCreationTracker.update(operation.id, "succeeded")
-                                    logger.info("Container created via API: ${container.name}")
-                                } catch (e: Exception) {
-                                    ContainerCreationTracker.update(operation.id, "failed", e.message ?: "Container creation failed")
-                                    logger.error("Failed to create container in background: ${body.name}", e)
-                                }
-                            }
-                            call.respond(HttpStatusCode.Accepted, mapOf("id" to operation.id, "status" to "queued", "name" to plan.normalizedRequest.name))
-                        }
-                    }
-                    
-                } catch (e: Exception) {
-                    logger.error("Failed to create container: ${body.name}", e)
-                    call.respondError(
-                        HttpStatusCode.InternalServerError,
-                        "docker_error",
-                        e.message ?: "Failed to create container"
-                    )
-                    }
-            }
-
-            get("/api/admin/containers/creation/{id}") {
-                val id = call.parameters["id"]?.let { runCatching { UUID.fromString(it) }.getOrNull() }
-                val job = id?.let { ContainerCreationTracker.find(it.toString()) }
-                if (job == null) call.respondError(HttpStatusCode.NotFound, "container_creation_not_found", "Container creation operation not found")
-                else call.respond(job)
-            }
-
-            // Wizard helpers: validate early stages before attempting full container creation.
-            get("/api/admin/containers/wizard/context") {
-                val networks = dockerService.listNetworks().map { it.name }.sorted()
-                val internal = dockerSettings.internalNetwork
-                call.respond(
-                    ContainerWizardContextResponse(
-                        internalNetwork = internal,
-                        internalNetworkExists = internal in networks,
-                        networks = networks
-                    )
-                )
-            }
-
-            post("/api/admin/containers/wizard/validate") {
-                val body = try {
-                    call.receive<CreateContainerRequest>()
-                } catch (_: Exception) {
-                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid request body")
-                    return@post
-                }
-
-                val inspect = object : DockerWizardInspect {
-                        override fun imageExists(imageRef: String) = dockerService.imageExists(imageRef)
-                        override fun containerExists(name: String) = dockerService.getContainer(name) != null
-                        override fun listNetworkNames() = dockerService.listNetworks().map { it.name }.toSet()
-                        override fun hostPortsInUse() = dockerService.hostPortsInUse()
-                    }
-                when (val planResult = computeContainerCreatePlan(
-                        request = body,
-                        internalNetwork = dockerSettings.internalNetwork,
-                        docker = inspect
-                )) {
-                        is ContainerCreatePlanResult.Err -> {
-                            if (planResult.data != null) {
-                                call.respondErrorWithData(planResult.status, planResult.code, planResult.message, planResult.data)
-                            } else {
-                                call.respondError(planResult.status, planResult.code, planResult.message)
-                            }
-                        }
-
-                        is ContainerCreatePlanResult.Ok -> {
-                            val plan = planResult.plan
-                            call.respond(
-                                ContainerWizardValidateResponse(
-                                    success = true,
-                                    message = "Validated successfully (no changes applied)",
-                                    normalizedRequest = plan.normalizedRequest,
-                                    imageExists = plan.imageExists,
-                                    willPullImage = plan.willPullImage,
-                                    networkExists = plan.networkExists,
-                                    willCreateInternalNetworkIfMissing = plan.willCreateInternalNetworkIfMissing,
-                                    warnings = plan.warnings
-                                )
-                            )
-                        }
-                }
-            }
-
-            post("/api/admin/images/status") {
-                val body = try {
-                    call.receive<ImageStatusRequest>()
-                } catch (_: Exception) {
-                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid request body")
-                    return@post
-                }
-
-                val parsed = parseImageRef(body.image)
-                if (parsed == null) {
-                    call.respondError(
-                        HttpStatusCode.BadRequest,
-                        "invalid_request",
-                        "A valid image reference is required (e.g. 'nginx:latest' or 'nginx')"
-                    )
-                    return@post
-                }
-
-                val normalized = parsed.normalized
-                call.respond(ImageStatusResponse(image = normalized, exists = dockerService.imageExists(normalized)))
-            }
-
-            post("/api/admin/containers/wizard/ports/check") {
-                val body = try {
-                    call.receive<PortsAvailabilityRequest>()
-                } catch (_: Exception) {
-                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid request body")
-                    return@post
-                }
-
-                val ports = body.hostPorts.mapNotNull { it.takeIf { p -> p in 1..65535 } }.toSet()
-                if (ports.size != body.hostPorts.size) {
-                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "hostPorts must be between 1 and 65535")
-                    return@post
-                }
-
-                val inUse = dockerService.hostPortsInUse()
-                val conflicts = ports.intersect(inUse).sorted()
-                call.respond(
-                    PortsAvailabilityResponse(
-                        ok = conflicts.isEmpty(),
-                        conflicts = conflicts
-                    )
-                )
-            }
-
-            // Docker image deletion
-            post("/api/admin/images/delete") {
-                val body = try {
-                    call.receive<DeleteImageRequest>()
-                } catch (e: Exception) {
-                    logger.warn("Failed to parse delete image request", e)
-                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "The request body could not be parsed")
-                    return@post
-                }
-
-                if (body.image.isBlank()) {
-                    call.respondError(HttpStatusCode.BadRequest, "invalid_request", "image is required")
-                    return@post
-                }
-
-                try {
-                    dockerService.deleteImage(body.image, body.tag, body.force)
-                    
-                    logger.info("Image deleted via API: ${body.image}:${body.tag}")
-                    call.respond(DeleteImageResponse(
-                        status = "deleted",
-                        image = "${body.image}:${body.tag}"
-                    ))
-                } catch (e: Exception) {
-                    logger.error("Failed to delete image: ${body.image}:${body.tag}", e)
-                    call.respondError(
-                        HttpStatusCode.InternalServerError,
-                        "docker_error",
-                        e.message ?: "Failed to delete image"
-                    )
-                }
-            }
-
-            // Docker container deletion
-            post("/api/admin/containers/{name}/delete") {
-                val name = call.parameters["name"]
-                if (name == null) {
-                    call.respondError(HttpStatusCode.BadRequest, "missing_name", "Missing container name path parameter")
-                    return@post
-                }
-
-                try {
-                    dockerService.deleteContainer(name)
-                    
-                    logger.info("Container deleted via API: $name")
-                    call.respond(mapOf("status" to "deleted", "container" to name))
-                } catch (e: Exception) {
-                    logger.error("Failed to delete container: $name", e)
-                    call.respondError(
-                        HttpStatusCode.InternalServerError,
-                        "docker_error",
-                        e.message ?: "Failed to delete container"
-                    )
-                }
-            }
         }
     }
 }

@@ -16,15 +16,6 @@ import kotlinx.serialization.Serializable
 import java.util.UUID
 import org.koin.ktor.ext.get
 
-@Serializable private data class RegistryCredentialRequest(val username: String, val password: String, val displayName: String? = null)
-@Serializable private data class RegistryMetadataResponse(val registry: String, val username: String, val configured: Boolean)
-@Serializable private data class RegistryCredentialResponse(
-    val registry: String,
-    val username: String,
-    val configured: Boolean,
-    val credentialId: String,
-    val version: Int
-)
 fun Application.configureRegistryAdminRoutes() {
     val auditRepository = get<AuditRepositoryPort>()
     val providerCredentials = get<ProviderCredentialStore>()
@@ -71,28 +62,3 @@ fun Application.configureRegistryAdminRoutes() {
         }
     } }
 }
-
-@Serializable
-private data class ProviderCredentialMetadataResponse(
-    val id: String,
-    val provider: String,
-    val type: String,
-    val displayName: String,
-    val scope: String,
-    val version: Int,
-    val current: Boolean,
-    val rotatedAt: String?,
-    val rotatedBy: String?,
-    val supersededAt: String?,
-    val supersededById: String?,
-    val createdAt: String,
-    val createdBy: String?,
-    val updatedAt: String,
-    val updatedBy: String?
-)
-
-private fun ProviderCredentialMetadata.toMetadataResponse() = ProviderCredentialMetadataResponse(
-    id.toString(), provider, credentialType, displayName, scope, version, current,
-    rotatedAt?.toString(), rotatedBy, supersededAt?.toString(), supersededById?.toString(),
-    createdAt.toString(), createdBy, updatedAt.toString(), updatedBy
-)

@@ -10,18 +10,8 @@ import io.ktor.server.application.*
 import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
-import kotlinx.serialization.Serializable
 
-@Serializable
-data class MpesaPaymentRequest(
-    val projectSlug: String = "",
-    val serviceId: String,
-    val phoneNumber: String,
-    val amount: String? = null
-)
 
-@Serializable
-data class MpesaCallbackAck(val ResultCode: Int = 0, val ResultDesc: String = "Accepted")
 
 fun Application.configureMpesaRoutes() {
     val handleMpesaCallback = get<HandleMpesaCallback>()

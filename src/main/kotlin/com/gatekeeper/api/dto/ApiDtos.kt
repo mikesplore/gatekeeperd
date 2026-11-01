@@ -2,7 +2,6 @@ package com.gatekeeper.api.dto
 
 import com.gatekeeper.feature.audit.domain.repository.AuditRepository
 import com.gatekeeper.feature.payment.domain.model.Payment
-import com.gatekeeper.feature.project.domain.repository.ProjectRepository
 import com.gatekeeper.feature.project.domain.repository.ProjectAdjustmentRepository
 import com.gatekeeper.feature.payment.domain.model.ProjectFinancials
 import com.gatekeeper.feature.project.domain.model.ProjectRecord

@@ -1314,9 +1314,12 @@ All error responses return JSON with a consistent shape:
 {
   "error": "error_code",
   "message": "Human-readable description",
-  "timestamp": "2026-07-28T12:00:00"
+  "timestamp": "2026-07-28T12:00:00",
+  "data": { "details": "Additional structured context when provided" }
 }
 ```
+
+The `data` field is omitted when an error has no additional structured context. Expected application errors and unhandled exceptions are translated through the global Ktor `StatusPages` handler into this envelope. Payment-required gate responses and protocol-specific provider acknowledgments retain their documented response formats.
 
 Payment-required responses for blocked backend projects extend this format:
 

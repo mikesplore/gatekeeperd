@@ -49,7 +49,7 @@ fun Application.configurePaystackWebhookRoutes() {
                 return@post
             }
 
-            if (!verifySignature(rawBody, signature, paystackSecret)) {
+            if (!com.gatekeeper.feature.payment.data.provider.PaystackWebhookSignatureVerifier.verify(rawBody, signature, paystackSecret)) {
                 logger.warn("Webhook signature verification failed")
                 call.respondError(HttpStatusCode.Unauthorized, "invalid_signature", "Webhook signature verification failed")
                 return@post
@@ -104,29 +104,4 @@ fun Application.configurePaystackWebhookRoutes() {
             }
         }
     }
-}
-
-private fun verifySignature(rawBody: String, signature: String, secretKey: String): Boolean {
-    return try {
-        val mac = Mac.getInstance("HmacSHA512")
-        mac.init(SecretKeySpec(secretKey.toByteArray(), "HmacSHA512"))
-        val expected = bytesToHex(mac.doFinal(rawBody.toByteArray()))
-        constantTimeEquals(expected, signature)
-    } catch (e: Exception) {
-        logger.error("Signature verification error", e)
-        false
-    }
-}
-
-private fun constantTimeEquals(a: String, b: String): Boolean {
-    if (a.length != b.length) return false
-    var result = 0
-    for (i in a.indices) {
-        result = result or (a[i].code xor b[i].code)
-    }
-    return result == 0
-}
-
-private fun bytesToHex(bytes: ByteArray): String {
-    return bytes.joinToString("") { "%02x".format(it) }
 }

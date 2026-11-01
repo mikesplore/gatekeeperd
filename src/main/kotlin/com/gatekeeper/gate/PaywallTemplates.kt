@@ -8,17 +8,8 @@ import com.gatekeeper.db.tables.AccessBlockReason
 import java.math.BigDecimal
 import java.time.format.DateTimeFormatter
 import java.time.LocalDate
-import java.util.UUID
 
 object PaywallTemplates {
-
-    data class ServiceInvoiceDue(
-        val serviceId: UUID,
-        val serviceName: String,
-        val amountDue: BigDecimal,
-        val currency: String,
-        val dueDate: LocalDate?
-    )
 
     private val dateFormatter = DateTimeFormatter.ofPattern("MMMM d, yyyy")
 

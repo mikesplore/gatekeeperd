@@ -1,6 +1,8 @@
 package com.gatekeeper.plugins
 
 import com.gatekeeper.customer.CustomerApplicationService
+import com.gatekeeper.auth.AuthUserRepository
+import com.gatekeeper.auth.ExposedAuthUserRepository
 import com.gatekeeper.feature.customer.domain.repository.CustomerRepository as CustomerStore
 import com.gatekeeper.feature.customer.data.persistence.ExposedCustomerRepository
 import com.gatekeeper.gate.GateApplicationService
@@ -9,6 +11,7 @@ import com.gatekeeper.config.AppSettings
 import com.gatekeeper.docker.DockerGateway
 import com.gatekeeper.docker.DockerGatewayFactory
 import com.gatekeeper.docker.DockerCleanupService
+import com.gatekeeper.docker.DockerAdminApplicationService
 import com.gatekeeper.core.ports.FileStore
 import com.gatekeeper.core.ports.PortProbe
 import com.gatekeeper.core.ports.HttpPortProbe
@@ -68,6 +71,7 @@ import com.gatekeeper.feature.payment.domain.usecase.PaymentProviderReadiness
 import com.gatekeeper.feature.payment.data.provider.PaystackGateway
 import com.gatekeeper.feature.payment.data.provider.PaystackClient
 import com.gatekeeper.feature.payment.data.provider.MpesaGateway
+import com.gatekeeper.feature.payment.presentation.PaymentAdminApplicationService
 import com.gatekeeper.feature.audit.domain.repository.AuditRepository
 import com.gatekeeper.feature.audit.data.persistence.ExposedAuditRepository
 import com.gatekeeper.feature.notification.domain.repository.NotificationRepository
@@ -148,6 +152,8 @@ import com.gatekeeper.feature.nginx.presentation.PlanNginxEnableRequest
 import com.gatekeeper.integrations.GitHubAppClient
 import com.gatekeeper.integrations.ResendClient
 import com.gatekeeper.integrations.ScribedIntegrationClient
+import com.gatekeeper.integrations.GitHubWebhookApplicationService
+import com.gatekeeper.integrations.GitHubAdminApplicationService
 import com.gatekeeper.feature.nginx.infrastructure.DeploymentUpstreamResolver
 import com.gatekeeper.feature.nginx.infrastructure.NginxSiteReconciliationService
 import com.gatekeeper.feature.nginx.infrastructure.ExposedNginxCertificateStore
@@ -163,11 +169,16 @@ import io.ktor.server.application.Application
 import io.ktor.server.application.install
 
 private val applicationModule = module {
+    single<AuthUserRepository> { ExposedAuthUserRepository() }
     single { AppSettings.fromEnv() }
     single<AppSettings.NginxSettings> { get<AppSettings>().nginx }
     single<AppSettings.SchedulerSettings> { get<AppSettings>().scheduler }
     single<ProcessRunner> { ProcessRunnerImpl() }
     single<DockerGateway> { DockerGatewayFactory.create(get<AppSettings>().docker, get<ProcessRunner>()) }
+    single { DockerAdminApplicationService(get<DockerGateway>(), get<AppSettings>().docker) }
+    single { HealthApplicationService() }
+    single { GitHubWebhookApplicationService(get<AppSettings>(), get<GitHubCredentialStore>(), get<GitHubWebhookStore>(), get<DeploymentJobRepository>(), get<AuditRepository>()) }
+    single { GitHubAdminApplicationService(get<AppSettings>(), get<GitHubCredentialStore>(), get<GitHubInstallationStore>(), get<GitHubAppClient>(), get<AuditRepository>()) }
     single { DockerCleanupService(get<DockerGateway>(), get<AuditRepository>()) }
     single { DeploymentTriggerService(get<ProcessRunner>()) }
     single<PortProbe> { TcpPortProbe() }
@@ -215,7 +226,8 @@ private val applicationModule = module {
     single<ProjectQueryRepository> { ExposedProjectQueryRepository(get<ProjectStore>(), get(), get()) }
     single<SupportRequestRepository> { ExposedSupportRequestRepository() }
     single { CustomerApplicationService(get<ProjectQueryRepository>(), get(), get(), get<SupportRequestRepository>()) }
-    single { GateApplicationService(get<ProjectQueryRepository>(), get<GateService>()) }
+    single { PaymentAdminApplicationService(get<RecordCashPayment>()) }
+    single { GateApplicationService(get<ProjectQueryRepository>(), get<GateService>(), get<ServiceRepository>(), get<ScribedIntegrationClient>()) }
     single<NginxCertificateStore> { ExposedNginxCertificateStore(get(), get()) }
     single { NginxAdministrationService(get(), get<AppSettings>().nginx.sslCertPath, get(), get(), get(), get(), get(), get(), get()) }
     single { NginxValidationService() }

@@ -3,25 +3,29 @@ package com.gatekeeper.api
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.response.respond
+import kotlinx.serialization.EncodeDefault
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 
 @Serializable
+@OptIn(ExperimentalSerializationApi::class)
 data class ErrorResponse(
     val error: String,
     val message: String,
-    val timestamp: String
+    val timestamp: String,
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    val data: JsonElement? = null
 )
 
-@Serializable
-data class ErrorResponseWithData(
-    val error: String,
-    val message: String,
-    val timestamp: String,
-    val data: JsonElement
-)
+/** An expected HTTP failure that StatusPages converts to the API error envelope. */
+class HttpApiException(
+    val status: HttpStatusCode,
+    val code: String,
+    override val message: String
+) : RuntimeException(message)
 
 @Serializable
 data class PaymentRequiredResponse(
@@ -91,13 +95,5 @@ suspend fun ApplicationCall.respondErrorWithData(
     message: String,
     data: JsonElement
 ) {
-    respond(
-        status,
-        ErrorResponseWithData(
-            error = error,
-            message = message,
-            timestamp = currentErrorTimestamp(),
-            data = data
-        )
-    )
+    respond(status, ErrorResponse(error, message, currentErrorTimestamp(), data))
 }

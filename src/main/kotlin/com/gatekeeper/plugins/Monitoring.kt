@@ -1,9 +1,12 @@
 package com.gatekeeper.plugins
 
 import com.gatekeeper.api.respondError
+import com.gatekeeper.api.HttpApiException
 import io.ktor.http.*
 import io.ktor.server.application.*
 import io.ktor.server.plugins.calllogging.*
+import io.ktor.server.plugins.BadRequestException
+import io.ktor.server.plugins.ContentTransformationException
 import io.ktor.server.plugins.statuspages.*
 import io.ktor.server.request.*
 import kotlinx.serialization.SerializationException
@@ -56,6 +59,23 @@ fun Application.configureMonitoring() {
                 "serialization_error",
                 "Failed to encode or decode JSON for this request"
             )
+        }
+        exception<BadRequestException> { call, ex ->
+            call.respondError(
+                HttpStatusCode.BadRequest,
+                "invalid_request",
+                ex.message ?: "The request could not be parsed"
+            )
+        }
+        exception<ContentTransformationException> { call, ex ->
+            call.respondError(
+                HttpStatusCode.BadRequest,
+                "invalid_request",
+                ex.message ?: "The request body could not be parsed"
+            )
+        }
+        exception<HttpApiException> { call, ex ->
+            call.respondError(ex.status, ex.code, ex.message)
         }
         exception<NotFoundException> { call, ex ->
             call.respondError(HttpStatusCode.NotFound, "not_found", ex.message)

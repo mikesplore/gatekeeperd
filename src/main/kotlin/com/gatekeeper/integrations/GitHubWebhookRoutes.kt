@@ -1,108 +1,25 @@
 package com.gatekeeper.integrations
 
-import com.gatekeeper.config.AppSettings
-import com.gatekeeper.api.respondError
-import com.gatekeeper.feature.deployment.domain.repository.DeploymentJobRepository
-import com.gatekeeper.feature.audit.domain.repository.AuditRepository as AuditRepositoryPort
-import com.gatekeeper.feature.integrations.domain.repository.GitHubCredentialStore
-import com.gatekeeper.feature.integrations.domain.repository.GitHubWebhookStore
-import com.gatekeeper.deployment.CreateDeploymentRequest
-import io.ktor.http.*
-import io.ktor.server.application.*
-import io.ktor.server.request.*
-import io.ktor.server.response.*
-import io.ktor.server.routing.*
-import java.security.MessageDigest
-import javax.crypto.Mac
-import javax.crypto.spec.SecretKeySpec
-import java.util.Base64
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.serialization.Serializable
+import io.ktor.http.HttpStatusCode
+import io.ktor.server.application.Application
+import io.ktor.server.request.header
+import io.ktor.server.request.receiveText
+import io.ktor.server.response.respond
+import io.ktor.server.routing.post
+import io.ktor.server.routing.routing
 import org.koin.ktor.ext.get
 
-@Serializable
-private data class GitHubWebhookResponse(val status: String, val event: String, val deploymentsQueued: Int)
-
 fun Application.configureGitHubWebhookRoutes() {
-    val auditRepository = get<AuditRepositoryPort>()
-    val credentialStore = get<GitHubCredentialStore>()
-    val webhookStore = get<GitHubWebhookStore>()
-    val deploymentJobs = get<DeploymentJobRepository>()
-    val fallbackWebhookSecret = get<AppSettings>().github.webhookSecret
+    val webhookService = get<GitHubWebhookApplicationService>()
     routing {
         post("/api/integrations/github/webhook") {
-            val secret = runCatching { credentialStore.webhookSecret() }.getOrNull()
-                ?: fallbackWebhookSecret
-            if (secret.isBlank()) {
-                call.respondError(HttpStatusCode.ServiceUnavailable, "github_webhook_unconfigured", "GitHub webhook secret is not configured")
-                return@post
-            }
-            val body = call.receiveText()
-            val signature = call.request.headers["X-Hub-Signature-256"] ?: ""
-            val expected = "sha256=" + hmac(body, secret)
-            if (!MessageDigest.isEqual(expected.toByteArray(), signature.toByteArray())) {
-                call.respondError(HttpStatusCode.Unauthorized, "invalid_github_signature", "Invalid GitHub webhook signature")
-                return@post
-            }
-            val event = call.request.headers["X-GitHub-Event"] ?: "unknown"
-            val delivery = call.request.headers["X-GitHub-Delivery"]
-            if (delivery.isNullOrBlank()) {
-                call.respondError(HttpStatusCode.BadRequest, "missing_github_delivery", "X-GitHub-Delivery is required")
-                return@post
-            }
-            val repository = runCatching { Json.parseToJsonElement(body).jsonObject["repository"]?.jsonObject?.get("full_name")?.jsonPrimitive?.content }.getOrNull()
-            if (!webhookStore.claim(delivery, event, repository)) {
-                call.respond(HttpStatusCode.Accepted, GitHubWebhookResponse("duplicate", event, 0))
-                return@post
-            }
-            val queued = if (event == "push") queuePushDeployments(body, deploymentJobs) else 0
-            webhookStore.setQueuedCount(delivery, queued)
-            auditRepository.write(null, "github_webhook_received", "github:$delivery", "event=$event repository=${repository ?: "unknown"} queued=$queued")
-            call.respond(HttpStatusCode.Accepted, GitHubWebhookResponse("received", event, queued))
+            val response = webhookService.handle(
+                body = call.receiveText(),
+                signature = call.request.headers["X-Hub-Signature-256"].orEmpty(),
+                event = call.request.headers["X-GitHub-Event"] ?: "unknown",
+                delivery = call.request.headers["X-GitHub-Delivery"]
+            )
+            call.respond(HttpStatusCode.Accepted, response)
         }
     }
-}
-
-private fun queuePushDeployments(body: String, deploymentJobs: DeploymentJobRepository): Int {
-    val root = Json.parseToJsonElement(body).jsonObject
-    val repository = root["repository"]?.jsonObject?.get("full_name")?.jsonPrimitive?.content ?: return 0
-    val ref = root["ref"]?.jsonPrimitive?.content?.let { rawRef ->
-        when {
-            rawRef.startsWith("refs/heads/") -> rawRef.removePrefix("refs/heads/")
-            rawRef.startsWith("refs/tags/") -> rawRef.removePrefix("refs/tags/")
-            else -> rawRef
-        }
-    } ?: return 0
-    return deploymentJobs.findAutoDeployTargets(repository, ref).count { target ->
-        val saved = deploymentJobs.latestForService(target.projectId, target.serviceId, target.environment)
-        val request = if (saved != null) {
-            CreateDeploymentRequest(
-                repository = target.repository, gitRef = target.gitRef, registry = target.registry,
-                imageName = target.imageName, imageTag = target.imageTag,
-                hostPort = saved.hostPort, containerPort = saved.containerPort, network = saved.network,
-                restartPolicy = saved.restartPolicy, projectId = target.projectId.toString(),
-                serviceId = target.serviceId.toString(), triggerSource = "github_push",
-                env = saved.env, secretEnv = saved.secretEnv, volumes = saved.volumes,
-                createNetworkIfMissing = saved.createNetworkIfMissing, environment = target.environment,
-                autoDeploy = true
-            )
-        } else {
-            CreateDeploymentRequest(
-                repository = target.repository, gitRef = target.gitRef, registry = target.registry,
-                imageName = target.imageName, imageTag = target.imageTag, projectId = target.projectId.toString(),
-                serviceId = target.serviceId.toString(), triggerSource = "github_push",
-                environment = target.environment, autoDeploy = true
-            )
-        }
-        deploymentJobs.create(request)
-        true
-    }
-}
-
-private fun hmac(value: String, secret: String): String {
-    val mac = Mac.getInstance("HmacSHA256")
-    mac.init(SecretKeySpec(secret.toByteArray(), "HmacSHA256"))
-    return mac.doFinal(value.toByteArray()).joinToString("") { "%02x".format(it) }
 }

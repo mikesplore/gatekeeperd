@@ -30,50 +30,12 @@ import com.gatekeeper.feature.payment.domain.usecase.GetPaymentEventForReplay
 import com.gatekeeper.feature.project.domain.repository.ProjectRepository
 import com.gatekeeper.feature.payment.presentation.dto.PaystackWebhookPayload
 import org.koin.ktor.ext.get
-import kotlinx.serialization.Serializable
-import kotlinx.serialization.Contextual
 import kotlinx.serialization.json.Json
 
-@Serializable
-data class CaptureCashPaymentRequest(
-    val amount: Double,
-    val currency: String? = null,
-    val paidAt: String? = null,
-    val receiptNumber: String? = null,
-    val notes: String? = null,
-)
 
-@Serializable
-data class InitializePaymentRequest(val email: String, val amount: Double? = null)
 
-@Serializable
-data class InitializePaymentResponse(val payment_link: String)
 
-@Serializable
-data class ProjectPaymentsPageResponse(val payments: List<PaymentResponse>, val total: Long, val limit: Int, val offset: Int, val hasMore: Boolean)
 
-@Serializable
-data class ReconcilePaymentResponse(val id: String, val reconciled: Boolean, val gatewayStatus: String?)
-
-private suspend fun ApplicationCall.captureCashPayment(serviceId: UUID) {
-    val request = receive<CaptureCashPaymentRequest>()
-    if (request.amount <= 0.0 || !request.amount.isFinite()) {
-        respondError(HttpStatusCode.BadRequest, "invalid_payment_amount", "Payment amount must be greater than zero")
-        return
-    }
-    val paidAt = request.paidAt?.let { runCatching { LocalDateTime.parse(it) }.getOrNull() }
-    val actor = principal<io.ktor.server.auth.jwt.JWTPrincipal>()?.payload?.subject ?: "unknown"
-    application.get<RecordCashPayment>()(
-        RecordCashPayment.Command(serviceId, BigDecimal.valueOf(request.amount), request.currency, paidAt, request.receiptNumber, request.notes, actor)
-    ).fold(
-        onSuccess = { payment -> respond(HttpStatusCode.Created, mapOf("provider" to payment.provider, "reference" to payment.providerReference, "status" to payment.status)) },
-        onFailure = { error ->
-            val code = if (error.message == "Service not found") "service_not_found" else "payment_capture_rejected"
-            val status = if (error.message == "Service not found") HttpStatusCode.NotFound else HttpStatusCode.BadRequest
-            respondError(status, code, error.message ?: "Cash payment was rejected")
-        }
-    )
-}
 
 fun Application.configurePaymentAdminRoutes() {
     routing {
@@ -264,18 +226,3 @@ fun Application.configurePaymentAdminRoutes() {
         }
     }
 }
-
-private fun PaymentWithProject.toAdminResponse() = PaymentAdminResponse(
-    id = payment.id.toString(),
-    projectId = payment.projectId.toString(),
-    projectName = projectName,
-    projectSlug = projectSlug,
-    provider = payment.provider.lowercase(),
-    providerReference = payment.providerReference,
-    paystackReference = payment.providerReference,
-    amount = payment.amount.toDouble(),
-    gatewayStatus = payment.status,
-    verifiedVia = payment.verifiedVia,
-    paidAt = payment.paidAt?.toString(),
-    createdAt = payment.createdAt?.toString().orEmpty()
-)

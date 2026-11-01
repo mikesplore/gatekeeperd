@@ -10,28 +10,10 @@ import io.ktor.server.application.*
 import io.ktor.server.auth.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
-import kotlinx.serialization.Serializable
 import org.koin.ktor.ext.get
 import java.util.*
 
-@Serializable
-private data class OutboxEventResponse(
-    val id: String,
-    val eventType: String,
-    val idempotencyKey: String,
-    val payload: String,
-    val attempts: Int,
-    val status: String,
-    val lastError: String?
-)
 
-@Serializable
-private data class OutboxReplayResponse(
-    val replayed: Boolean,
-    val id: String,
-    val status: String,
-    val error: String? = null
-)
 
 fun Application.configureIntegrationAdminRoutes() {
     val outbox = get<IntegrationOutboxRepository>()
