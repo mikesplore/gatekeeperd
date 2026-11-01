@@ -131,18 +131,16 @@ gh run download "${RUN_ID}" --repo mikesplore/gatekeeperd --name gatekeeperd-all
 printf '%s  %s\n' "$(cat "${ARTIFACT_DIR}/gatekeeperd-all.jar.sha256")" "${ARTIFACT_DIR}/gatekeeperd-all.jar" | sha256sum --check
 ```
 
-Stop Gatekeeperd units and remove only release/slot/runtime state. Keep the app
-environment, service unit, database, Redis, Nginx files, and certificates:
+If a deployment is still running, interrupt it with Ctrl+C and wait for the shell
+prompt. Stop Gatekeeperd services, then clear the runtime directory and generated
+slot/auto-deploy files. This preserves the legacy service unit and environment files
+so the fresh JAR can bootstrap on port `8080`:
 
 ```bash
 sudo systemctl disable --now gatekeeperd-auto-deploy.timer 2>/dev/null || true
 sudo systemctl disable --now gatekeeperd-slot@blue.service gatekeeperd-slot@green.service 2>/dev/null || true
-sudo systemctl stop gatekeeperd.service
-sudo rm -rf /opt/gatekeeperd/releases /opt/gatekeeperd/slots
-sudo rm -f /opt/gatekeeperd/current /opt/gatekeeperd/current.new \
-  /opt/gatekeeperd/source-commit.txt /opt/gatekeeperd/auto-deploy.hold \
-  /opt/gatekeeperd/latest-successful-build.txt /opt/gatekeeperd/auto-deploy-failed-commit.txt \
-  /opt/gatekeeperd/gatekeeperd-all.jar
+sudo systemctl stop gatekeeperd.service 2>/dev/null || true
+sudo find /opt/gatekeeperd -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
 sudo rm -f /etc/systemd/system/gatekeeperd-slot@.service \
   /etc/gatekeeperd/slots/blue.env /etc/gatekeeperd/slots/green.env
 sudo rm -f /opt/gatekeeperd/deploy.sh /opt/gatekeeperd/gatekeeperd-slot@.service.in \
