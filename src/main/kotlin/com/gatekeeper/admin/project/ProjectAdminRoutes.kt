@@ -46,9 +46,6 @@ import io.ktor.server.auth.jwt.JWTPrincipal
 import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.decodeFromJsonElement
 import org.slf4j.LoggerFactory
 import org.koin.ktor.ext.get
 import kotlinx.coroutines.Dispatchers
@@ -144,33 +141,30 @@ fun Application.configureProjectAdminRoutes() {
                     return@patch
                 }
 
-                val parsed = try {
-                    val payload = call.receive<JsonObject>()
-                    projectAdminJson.decodeFromJsonElement<UpdateProjectRequest>(payload) to payload.keys
+                val body = try {
+                    call.receive<UpdateProjectRequest>()
                 } catch (e: Exception) {
                     projectAdminLogger.warn("Failed to parse update project request", e)
                     call.respondError(HttpStatusCode.BadRequest, "invalid_request", "The request body could not be parsed")
                     return@patch
                 }
 
-                val (body, presentFields) = parsed
-
                 if (body.type != null && !InputValidators.isValidProjectType(body.type)) {
                     call.respondError(HttpStatusCode.BadRequest, "invalid_request", "type must be 'frontend' or 'backend'")
                     return@patch
                 }
 
-                val dueDate = InputValidators.parseDueDate(body.dueDate)
-                if (body.dueDate?.isNotBlank() == true && dueDate == null) {
+                val dueDate = InputValidators.parseDueDate(body.dueDate.value)
+                if (body.dueDate.value?.isNotBlank() == true && dueDate == null) {
                     call.respondError(HttpStatusCode.BadRequest, "invalid_request", "dueDate must be ISO format YYYY-MM-DD")
                     return@patch
                 }
-                val amountDue = body.amountDue?.let { BigDecimal.valueOf(it) }
+                val amountDue = body.amountDue.value?.let { BigDecimal.valueOf(it) }
 
-                val customerId = if ("customerId" in presentFields) body.customerId?.let {
+                val customerId = body.customerId.value?.let {
                     runCatching { UUID.fromString(it) }.getOrNull()
                         ?: return@patch call.respondError(HttpStatusCode.BadRequest, "invalid_customer", "customerId must be a valid UUID")
-                } else null
+                }
                 if (customerId != null && call.application.get<CustomerStore>().findById(customerId) == null) {
                     call.respondError(HttpStatusCode.NotFound, "customer_not_found", "Customer not found")
                     return@patch
@@ -212,8 +206,8 @@ fun Application.configureProjectAdminRoutes() {
                     currency = body.currency,
                     dueDate = dueDate,
                     gracePeriodDays = body.gracePeriodDays,
-                    clearAmountDue = "amountDue" in presentFields && body.amountDue == null,
-                    clearDueDate = "dueDate" in presentFields && body.dueDate == null,
+                    clearAmountDue = body.amountDue.isSpecified && body.amountDue.value == null,
+                    clearDueDate = body.dueDate.isSpecified && body.dueDate.value == null,
                     deploymentMode = body.deploymentMode,
                     serviceMode = body.serviceMode,
                     lifecycleStatus = body.lifecycleStatus
@@ -224,7 +218,7 @@ fun Application.configureProjectAdminRoutes() {
                     return@patch
                 }
 
-                val assignedProject = if ("customerId" in presentFields) {
+                val assignedProject = if (body.customerId.isSpecified) {
                     projects.assignCustomer(project.id, customerId)
                 } else project
 

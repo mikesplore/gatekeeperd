@@ -140,6 +140,9 @@ data class DashboardCustomerCreateRequest(
 )
 
 @Serializable
+data class DashboardProjectCustomerUpdateRequest(val customerId: String)
+
+@Serializable
 data class DashboardConfirmationRequest(val confirm: Boolean = false)
 
 data class CustomerOwnedProject(

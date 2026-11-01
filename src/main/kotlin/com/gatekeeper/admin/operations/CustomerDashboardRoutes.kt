@@ -99,22 +99,22 @@ fun Route.registerCustomerDashboardRoutes(dependencies: OperationsAdminDependenc
                 "Invalid project ID"
             ); return@patch
         }
-        val body = runCatching { call.receive<Map<String, String?>>() }.getOrElse {
+        val body = runCatching { call.receive<DashboardProjectCustomerUpdateRequest>() }.getOrElse {
             call.respondError(
                 HttpStatusCode.BadRequest,
                 "invalid_request",
                 "Invalid project body"
             ); return@patch
         }
-        val customerId = body["customerId"]?.let { runCatching { UUID.fromString(it) }.getOrNull() }
-        if (body.containsKey("customerId") && customerId == null) {
+        val customerId = runCatching { UUID.fromString(body.customerId) }.getOrNull()
+        if (customerId == null) {
             call.respondError(
                 HttpStatusCode.BadRequest,
                 "invalid_customer_id",
                 "Invalid customer ID"
             ); return@patch
         }
-        if (customerId != null && call.application.get<CustomerStore>().findById(customerId) == null) {
+        if (call.application.get<CustomerStore>().findById(customerId) == null) {
             call.respondError(HttpStatusCode.NotFound, "customer_not_found", "Customer not found"); return@patch
         }
         val project = projects.assignCustomer(id, customerId) ?: run {

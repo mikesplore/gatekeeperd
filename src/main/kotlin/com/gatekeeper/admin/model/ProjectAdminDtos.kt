@@ -20,14 +20,14 @@ data class UpdateProjectRequest(
     val billingName: String? = null,
     val billingEmail: String? = null,
     val billingAddress: String? = null,
-    val amountDue: Double? = null,
+    val amountDue: PatchDoubleField = PatchDoubleField(),
     val currency: String? = null,
-    val dueDate: String? = null,
+    val dueDate: PatchStringField = PatchStringField(),
     val gracePeriodDays: Int? = null,
     val deploymentMode: String? = null,
     val serviceMode: String? = null,
     val lifecycleStatus: String? = null,
-    val customerId: String? = null
+    val customerId: PatchStringField = PatchStringField()
 )
 
 @Serializable
