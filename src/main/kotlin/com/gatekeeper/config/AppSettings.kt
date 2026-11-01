@@ -126,7 +126,7 @@ class AppSettings private constructor(
     val docker: DockerSettings by lazy {
         DockerSettings(
             optional("DOCKER_SOCKET", "unix:///var/run/docker.sock"),
-            optional("GATEKEEPER_INTERNAL_NETWORK", "gatekeeper-internal"),
+            optional("GATEKEEPER_INTERNAL_NETWORK", "gk-internal"),
             boolean("DOCKER_PULL_VIA_CLI", false),
             csv("DOCKER_ALLOWED_REGISTRIES", lowercase = true),
             csv("DOCKER_ALLOWED_VOLUME_ROOTS")

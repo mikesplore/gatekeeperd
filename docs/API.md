@@ -1043,7 +1043,7 @@ Create and start a new Docker container with custom configuration.
   "runtimeOptions": {
     "command": ["redis-server", "--appendonly", "yes", "--requirepass", "replace-with-secret"]
   },
-  "network": "gatekeeper-internal",
+  "network": "gk-internal",
   "volumes": [
     {
       "hostPath": "/data/app",
@@ -1092,9 +1092,9 @@ Wizard helper: fetch Docker container-creation context in one request (networks 
 **Response:**
 ```json
 {
-  "internalNetwork": "gatekeeper-internal",
+  "internalNetwork": "gk-internal",
   "internalNetworkExists": true,
-  "networks": ["bridge", "gatekeeper-internal"]
+  "networks": ["bridge", "gk-internal"]
 }
 ```
 
@@ -1244,7 +1244,7 @@ List Docker networks.
 [
   {
     "id": "abc123",
-    "name": "gatekeeper-internal",
+    "name": "gk-internal",
     "driver": "bridge",
     "scope": "local"
   }

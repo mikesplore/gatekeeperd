@@ -245,7 +245,7 @@ Gatekeeperd owns service invoice balances and verified payment state in PostgreS
 | `DEPLOYMENT_DRAIN_DELAY_SECONDS` | No | Delay before retiring the previous runtime after a successful nginx cutover probe; default `5`, range `0-300`. |
 | `NGINX_DEPLOYMENT_UPSTREAMS_ENABLED` | No | Run the strict nginx include directory/configuration bootstrap; defaults to `false` in DEV and `true` in PROD. |
 | `NGINX_UPSTREAM_INCLUDE_DIR` | No | Writable per-service upstream include directory; defaults under `./nginx` in DEV and `/etc/nginx/conf.d/gatekeeperd-upstreams` in PROD. Nginx must include `<directory>/*.conf` inside `http {}`. |
-| `GATEKEEPER_INTERNAL_NETWORK` | No | Default `gatekeeper-internal` |
+| `GATEKEEPER_INTERNAL_NETWORK` | No | Default `gk-internal` |
 | `GATEKEEPERD_ENVIRONMENT` | No | `DEV` or `PROD`; default `DEV`. Switches nginx and certificate paths and host-operation policy. DEV disables host commands and Certbot by default; when `GATEKEEPERD_NGINX_HOST_SUDO=false`, it uses local `nginx/` paths even if system-path overrides are present. PROD uses system nginx and `/etc/letsencrypt` paths; the service account must have the host permissions required by the installation. |
 | `GATEKEEPERD_NGINX_HOST_SUDO` | No | DEV-only opt-in to invoke local nginx/systemctl directly, without sudo. Defaults to `false`; the name is retained for compatibility. |
 | `GATEKEEPERD_NGINX_CERTBOT_ENABLED` | No | DEV-only opt-in to certificate helper operations. Defaults to `false`; requires the restricted Certbot helper and its sudoers rule. |

@@ -21,7 +21,7 @@ private class FakeDocker(
 
 class ContainerWizardTest {
 
-    private val internalNetwork = "gatekeeper-internal"
+    private val internalNetwork = "gk-internal"
 
     @Test
     fun `container create request accepts a Redis startup command`() {

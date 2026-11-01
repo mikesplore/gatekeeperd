@@ -24,12 +24,30 @@ import com.gatekeeper.config.AppSettings
 import com.gatekeeper.core.ports.ProcessRunner
 import com.gatekeeper.infrastructure.ProcessRunnerImpl
 import java.io.File
+import java.security.MessageDigest
 import java.util.stream.Collectors
 import com.github.dockerjava.api.async.ResultCallback
 
 private val logger = LoggerFactory.getLogger("com.gatekeeper.docker.DockerService")
 
 data class CreatedContainer(val id: String, val info: ContainerInfo)
+
+internal fun generatedImageVolumeName(containerName: String, containerPath: String): String {
+    fun token(raw: String, fallback: String, limit: Int): String = raw.lowercase()
+        .replace(Regex("[^a-z0-9_.-]+"), "-")
+        .trim('-', '.', '_')
+        .take(limit)
+        .trimEnd('-', '.', '_')
+        .ifBlank { fallback }
+
+    val container = token(containerName, "container", 36)
+    val mount = token(containerPath.substringAfterLast('/'), "data", 8)
+    val digest = MessageDigest.getInstance("SHA-256")
+        .digest("$containerName:$containerPath".toByteArray(Charsets.UTF_8))
+        .take(4)
+        .joinToString("") { "%02x".format(it) }
+    return "gk-$container-$mount-$digest".take(63)
+}
 
 /** Cleans up only after create returned an identity for the resource this operation owns. */
 internal fun <Handle, Result> createContainerWithCleanup(
@@ -422,7 +440,7 @@ class DockerService(
         check(inspected.networkSettings?.networks?.keys.orEmpty() == expectedNetworks) {
             "A container with the previous runtime name has different network attachments"
         }
-        request.volumes.forEach { expected ->
+        effectiveVolumeMounts(request).forEach { expected ->
             check(inspected.mounts.orEmpty().any { mount ->
                 mount.destination?.path == expected.containerPath &&
                     (if (expected.volumeName != null) mount.getName() == expected.volumeName else mount.source == expected.hostPath) &&
@@ -567,6 +585,29 @@ class DockerService(
 
     override fun deleteVolume(name: String) { client.removeVolumeCmd(name).exec() }
 
+    private fun effectiveVolumeMounts(request: CreateContainerRequest): List<VolumeMount> {
+        val configuredPaths = request.volumes.mapTo(mutableSetOf()) { it.containerPath }
+        val declaredPaths = client.inspectImageCmd(request.image).exec().config?.volumes.orEmpty().keys
+        val missingPaths = declaredPaths.filter { it !in configuredPaths }.sorted()
+        if (missingPaths.isEmpty()) return request.volumes
+
+        val existingVolumes = client.listVolumesCmd().exec().volumes.orEmpty().mapNotNull { it.name }.toSet()
+        val generated = missingPaths.map { path ->
+            val name = generatedImageVolumeName(request.name, path)
+            if (name !in existingVolumes) {
+                client.createVolumeCmd().withName(name).withDriver("local").withLabels(
+                    mapOf(
+                        "com.gatekeeperd/managed" to "true",
+                        "com.gatekeeperd/container" to request.name.take(63),
+                        "com.gatekeeperd/container-path" to path.take(255)
+                    )
+                ).exec()
+            }
+            VolumeMount(hostPath = name, containerPath = path, volumeName = name)
+        }
+        return request.volumes + generated
+    }
+
     override fun containerHealth(containerNameOrId: String): String {
         return try {
             val inspect: InspectContainerResponse = client.inspectContainerCmd(containerNameOrId).exec()
@@ -626,8 +667,9 @@ class DockerService(
             hostConfig.withPortBindings(portBindings)
         }
 
-        if (request.volumes.isNotEmpty()) {
-            val binds = request.volumes.map {
+        val effectiveVolumes = effectiveVolumeMounts(request)
+        if (effectiveVolumes.isNotEmpty()) {
+            val binds = effectiveVolumes.map {
                 if (it.volumeName != null) {
                     Bind(it.volumeName, Volume(it.containerPath), if (it.readOnly) AccessMode.ro else AccessMode.rw)
                 } else {

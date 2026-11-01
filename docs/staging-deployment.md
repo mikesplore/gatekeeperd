@@ -21,7 +21,7 @@ services:
       - postgres
       - redis
     networks:
-      - gatekeeper-internal
+      - gk-internal
 
   postgres:
     image: postgres:16
@@ -32,15 +32,15 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
     networks:
-      - gatekeeper-internal
+      - gk-internal
 
   redis:
     image: redis:7-alpine
     networks:
-      - gatekeeper-internal
+      - gk-internal
 
 networks:
-  gatekeeper-internal:
+  gk-internal:
     external: false
 
 volumes:
@@ -276,7 +276,7 @@ PAYSTACK_PUBLIC_KEY=pk_live_xxx
 
 # Docker
 DOCKER_SOCKET=unix:///var/run/docker.sock
-GATEKEEPER_INTERNAL_NETWORK=gatekeeper-internal
+GATEKEEPER_INTERNAL_NETWORK=gk-internal
 
 # Required: hostname(s) serving Gatekeeperd itself through nginx.
 # Add aliases as comma-separated bare hostnames; these vhosts are excluded from

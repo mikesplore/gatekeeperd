@@ -4,8 +4,19 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertSame
+import kotlin.test.assertTrue
 
 class DockerServiceCreationCleanupTest {
+    @Test
+    fun `image declared volume names are short readable and stable per container and path`() {
+        val first = generatedImageVolumeName("redis-1234abcd", "/data")
+
+        assertEquals(first, generatedImageVolumeName("redis-1234abcd", "/data"))
+        assertTrue(first.length <= 63)
+        assertTrue(first.startsWith("gk-redis-1234abcd-data-"))
+        assertTrue(first != generatedImageVolumeName("redis-1234abcd", "/cache"))
+    }
+
     @Test
     fun `failure before create does not touch any container`() {
         val boundary = FakeDockerBoundary().apply { containers["unrelated-id"] = "api-prod" }
