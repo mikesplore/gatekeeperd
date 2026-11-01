@@ -1,68 +1,25 @@
 package com.gatekeeper.admin
 
-import com.gatekeeper.api.respondError
 import com.gatekeeper.feature.integrations.domain.repository.IntegrationOutboxRepository
 import com.gatekeeper.feature.payment.data.persistence.ProjectBalanceAdapter
 import com.gatekeeper.feature.payment.domain.repository.PaymentRepository
 import com.gatekeeper.integrations.ScribedIntegrationClient
-import io.ktor.http.*
 import io.ktor.server.application.*
-import io.ktor.server.auth.*
-import io.ktor.server.response.*
+import io.ktor.server.auth.authenticate
+import io.ktor.server.response.respond
 import io.ktor.server.routing.*
 import org.koin.ktor.ext.get
-import java.util.*
-
-
 
 fun Application.configureIntegrationAdminRoutes() {
-    val outbox = get<IntegrationOutboxRepository>()
-    val scribed = get<ScribedIntegrationClient>()
+    val service = IntegrationAdminApplicationService(
+        get<IntegrationOutboxRepository>(), get<ScribedIntegrationClient>(),
+        get<PaymentRepository>(), get<ProjectBalanceAdapter>()
+    )
     routing {
         authenticate("auth-jwt") {
-            get("/api/admin/integrations/outbox") {
-                val events = outbox.pending().map { event ->
-                    OutboxEventResponse(
-                        event.id.toString(),
-                        event.eventType,
-                        event.idempotencyKey,
-                        event.payload,
-                        event.attempts,
-                        event.status,
-                        event.lastError
-                    )
-                }
-                call.respond(events)
-            }
+            get("/api/admin/integrations/outbox") { call.respond(service.pendingEvents()) }
             post("/api/admin/integrations/outbox/{id}/replay") {
-                val id = runCatching { UUID.fromString(call.parameters["id"]) }.getOrNull()
-                if (id == null) {
-                    call.respondError(HttpStatusCode.BadRequest, "invalid_id", "Invalid outbox event id"); return@post
-                }
-                val event = outbox.replayAndClaim(id)
-                if (event == null) {
-                    call.respondError(
-                        HttpStatusCode.NotFound,
-                        "outbox_event_not_found",
-                        "Undelivered outbox event not found"
-                    ); return@post
-                }
-                val result = scribed.deliverWithResult(
-                    event,
-                    call.application.get<PaymentRepository>(),
-                    call.application.get<ProjectBalanceAdapter>(),
-                    outbox
-                )
-                if (result.delivered) outbox.markDelivered(id)
-                else outbox.markFailed(id, result.error ?: "Integration delivery failed", event.attempts)
-                call.respond(
-                    OutboxReplayResponse(
-                        result.delivered,
-                        id.toString(),
-                        if (result.delivered) "delivered" else "queued_for_retry",
-                        result.error
-                    )
-                )
+                call.respond(service.replay(call.parameters["id"]))
             }
         }
     }
