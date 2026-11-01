@@ -52,6 +52,27 @@ Deploy with:
 docker-compose up -d
 ```
 
+## Test the built JAR locally before production deployment
+
+Run the tests and build the JAR locally, then start that exact JAR with the local
+smoke-deployment script:
+
+```bash
+./gradlew test buildFatJar
+./scripts/deploy-local.sh
+```
+
+The local script does not build or download anything. It uses
+`build/libs/gatekeeperd-all.jar`, loads `.env` when present, overrides `PORT` to
+`18081`, and waits for `/api/health/ready`. It prints readiness responses while
+waiting and keeps the app running for manual API checks; press Ctrl+C to stop it.
+For host execution, configure `.env` with database and Redis addresses reachable
+from the host (for example, `localhost` instead of Docker Compose service names).
+The startup log is written to `build/deploy-local.log`.
+
+This local check is separate from the production deployment script below. Production
+deployment continues to use the CI artifact and blue/green cutover.
+
 ## Deploy the systemd service from a CI artifact
 
 The repository's `deploy.sh` downloads the JAR from the latest successful `build.yml`
