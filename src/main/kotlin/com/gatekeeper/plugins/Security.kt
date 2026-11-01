@@ -26,9 +26,11 @@ private val revocationUnavailableKey = AttributeKey<Boolean>("jwt-revocation-una
 
 object JwtConfig {
     private val logger = LoggerFactory.getLogger("com.gatekeeper.plugins.JwtConfig")
+    private val supportedRoles = setOf("admin", "operator", "viewer")
     fun algorithm(settings: AppSettings.AuthSettings): Algorithm = Algorithm.HMAC256(settings.jwtSecret)
 
     fun createToken(settings: AppSettings.AuthSettings, email: String, role: String = "admin"): String {
+        require(role in supportedRoles) { "Unsupported JWT role" }
         val now = Date()
         return JWT.create()
             .withSubject(email)
@@ -63,7 +65,19 @@ internal fun io.ktor.server.auth.AuthenticationConfig.configureAdminJwt(
     issuer: String,
     revocationLookup: (String) -> String?
 ) {
-    jwt("auth-jwt") {
+    configureRoleJwt("auth-jwt", setOf("admin", "operator", "viewer"), algorithm, audience, issuer, revocationLookup)
+    configureRoleJwt("auth-admin", setOf("admin"), algorithm, audience, issuer, revocationLookup)
+}
+
+private fun io.ktor.server.auth.AuthenticationConfig.configureRoleJwt(
+    providerName: String,
+    acceptedRoles: Set<String>,
+    algorithm: Algorithm,
+    audience: String,
+    issuer: String,
+    revocationLookup: (String) -> String?
+) {
+    jwt(providerName) {
         realm = "gatekeeperd"
         verifier(
             JWT
@@ -74,7 +88,7 @@ internal fun io.ktor.server.auth.AuthenticationConfig.configureAdminJwt(
         )
         validate { credential ->
             val role = credential.payload.getClaim("role").asString()
-            if (!credential.payload.audience.contains(audience) || role != "admin") return@validate null
+            if (!credential.payload.audience.contains(audience) || role !in acceptedRoles) return@validate null
 
             when (JwtConfig.revocationStatus(credential.payload.id, revocationLookup)) {
                 JwtRevocationStatus.CONFIRMED_NOT_REVOKED -> JWTPrincipal(credential.payload)

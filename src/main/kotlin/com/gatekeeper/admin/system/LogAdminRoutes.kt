@@ -22,7 +22,7 @@ private val logAdminLogger = LoggerFactory.getLogger("com.gatekeeper.admin.LogAd
 fun Application.configureLogAdminRoutes() {
     val processRunner = get<ProcessRunner>()
     routing {
-        authenticate("auth-jwt") {
+        authenticate("auth-admin") {
             get("/api/admin/logs") {
                 val query = call.request.queryParameters
                 val rawLimit = query["limit"]?.toIntOrNull()

@@ -15,7 +15,7 @@ fun Route.nginxCertificateAdminRoutes(
     nginxAdministrationService: NginxAdministrationService,
     certificateProvisioner: CertificateProvisioner
 ){
-    authenticate("auth-jwt") {
+    authenticate("auth-admin") {
     get("/api/admin/nginx/certificate/list") {
         val certificateManagerIssue = certificateProvisioner.certificateManagerIssue()
         call.respond(

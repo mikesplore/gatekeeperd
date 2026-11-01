@@ -1,8 +1,6 @@
 package com.gatekeeper.admin.system
 
 
-import com.gatekeeper.admin.model.*
-import com.gatekeeper.admin.application.*
 import com.gatekeeper.api.HttpApiException
 import com.gatekeeper.docker.CreateNetworkRequest
 import com.gatekeeper.docker.DockerAdminApplicationService
@@ -18,7 +16,7 @@ import org.koin.ktor.ext.get
 fun Application.configureDockerAdminRoutes() {
     val docker = get<DockerAdminApplicationService>()
     routing {
-        authenticate("auth-jwt") {
+        authenticate("auth-admin") {
             get("/api/admin/containers") {
                 val query = call.request.queryParameters
                 val offset = query["offset"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0

@@ -40,7 +40,7 @@ fun Route.nginxWizardAdminRoutes(
     artifactsUseCase: ListConfigArtifactsUseCase,
     planNginxEnableRequest: PlanNginxEnableRequest
 ){
-    authenticate("auth-jwt") {
+    authenticate("auth-admin") {
         get("/api/admin/nginx/wizard/context/{slug}") {
             val slug = call.parameters["slug"]
             if (slug == null) {

@@ -24,7 +24,7 @@ import org.koin.ktor.ext.get
 fun Application.configureServiceAdminRoutes() {
     val dependencies = ServiceAdminDependencies(get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get())
     routing {
-        authenticate("auth-jwt") {
+        authenticate("auth-admin") {
             registerServiceManagementRoutes(dependencies)
             registerServiceBillingRoutes(dependencies)
             registerServiceRuntimeRoutes(dependencies)

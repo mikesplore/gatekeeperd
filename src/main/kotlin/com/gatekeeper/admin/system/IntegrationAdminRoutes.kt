@@ -1,7 +1,6 @@
 package com.gatekeeper.admin.system
 
 
-import com.gatekeeper.admin.model.*
 import com.gatekeeper.admin.application.*
 import com.gatekeeper.feature.integrations.domain.repository.IntegrationOutboxRepository
 import com.gatekeeper.feature.payment.data.persistence.ProjectBalanceAdapter
@@ -19,7 +18,7 @@ fun Application.configureIntegrationAdminRoutes() {
         get<PaymentRepository>(), get<ProjectBalanceAdapter>()
     )
     routing {
-        authenticate("auth-jwt") {
+        authenticate("auth-admin") {
             get("/api/admin/integrations/outbox") { call.respond(service.pendingEvents()) }
             post("/api/admin/integrations/outbox/{id}/replay") {
                 call.respond(service.replay(call.parameters["id"]))

@@ -70,7 +70,7 @@ fun Route.nginxSiteAdminRoutes(
         auditRepository = auditRepository
     )
 
-    authenticate("auth-jwt") {
+    authenticate("auth-admin") {
         post("/api/admin/nginx/enable") {
             enableHandler.enable(call)
         }

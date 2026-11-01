@@ -18,7 +18,7 @@ fun Application.configureRegistryAdminRoutes() {
         get<AuditRepository>(), get<ProviderCredentialStore>(), get<RegistryCredentialStore>()
     )
     routing {
-        authenticate("auth-jwt") {
+        authenticate("auth-admin") {
             get("/api/admin/provider-credentials") {
                 call.respond(service.listProviderCredentials(
                     call.request.queryParameters["provider"]?.trim()?.lowercase(),

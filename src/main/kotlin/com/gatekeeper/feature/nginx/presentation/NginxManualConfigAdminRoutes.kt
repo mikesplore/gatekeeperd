@@ -36,7 +36,7 @@ fun Route.nginxManualConfigRoutes(
     rollback: RollbackSiteConfigUseCase,
     renderModelFromSite: RenderModelFromSite
 ) {
-    authenticate("auth-jwt") {
+    authenticate("auth-admin") {
     post("/api/admin/nginx/config/{slug}/custom-blocks") {
         val slug = call.parameters["slug"]
         if (slug.isNullOrBlank()) return@post call.respondError(

@@ -39,7 +39,7 @@ import kotlinx.serialization.json.Json
 
 fun Application.configurePaymentAdminRoutes() {
     routing {
-        authenticate("auth-jwt") {
+        authenticate("auth-admin") {
             get("/api/admin/payments") {
                 val status = call.request.queryParameters["status"]
                 val projectSlug = call.request.queryParameters["project_slug"]

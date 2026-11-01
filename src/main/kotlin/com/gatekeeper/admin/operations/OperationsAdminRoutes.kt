@@ -37,7 +37,7 @@ fun Application.configureOperationsAdminRoutes() {
         get(), get<AppSettings>().nginx, get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get()
     )
     routing {
-        authenticate("auth-jwt") {
+        authenticate("auth-admin") {
             registerTelemetryRoutes(dependencies)
             registerNginxOperationsRoutes(dependencies)
             registerCustomerDashboardRoutes(dependencies)

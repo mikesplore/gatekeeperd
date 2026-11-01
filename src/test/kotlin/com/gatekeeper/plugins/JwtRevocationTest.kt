@@ -34,6 +34,20 @@ class JwtRevocationTest {
     }
 
     @Test
+    fun `supported non-admin roles authenticate but cannot access admin provider`() {
+        listOf("operator", "viewer").forEach { role ->
+            val roleToken = token(role = role)
+            assertEquals(HttpStatusCode.OK, protectedRequest(roleToken) { null }.first)
+            assertEquals(HttpStatusCode.Unauthorized, protectedRequest(roleToken, "auth-admin") { null }.first)
+        }
+    }
+
+    @Test
+    fun `unsupported role is rejected by shared provider`() {
+        assertEquals(HttpStatusCode.Unauthorized, protectedRequest(token(role = "support")) { null }.first)
+    }
+
+    @Test
     fun `revoked token is rejected while Redis is available`() {
         val response = protectedRequest(lookup = { "1" })
         assertEquals(HttpStatusCode.Unauthorized, response.first)
@@ -83,12 +97,14 @@ class JwtRevocationTest {
 
     private fun protectedRequest(
         token: String = token(),
+        providerName: String = "auth-jwt",
         lookup: (String) -> String?
-    ): Pair<HttpStatusCode, String> = protectedRequests(token, lookup = lookup).single()
+    ): Pair<HttpStatusCode, String> = protectedRequests(token, providerName = providerName, lookup = lookup).single()
 
     private fun protectedRequests(
         token: String,
         requestCount: Int = 1,
+        providerName: String = "auth-jwt",
         lookup: (String) -> String?
     ): List<Pair<HttpStatusCode, String>> {
         val responses = mutableListOf<Pair<HttpStatusCode, String>>()
@@ -99,7 +115,7 @@ class JwtRevocationTest {
                     configureAdminJwt(Algorithm.HMAC256(secret), audience, issuer, lookup)
                 }
                 routing {
-                    authenticate("auth-jwt") {
+                    authenticate(providerName) {
                         get("/admin/test") { call.respondText("ok") }
                     }
                 }
@@ -123,12 +139,12 @@ class JwtRevocationTest {
         assertFalse(response.second.contains("password detail"))
     }
 
-    private fun token(jti: String = "test-jti"): String = JWT.create()
+    private fun token(jti: String = "test-jti", role: String = "admin"): String = JWT.create()
         .withSubject("admin@example.test")
         .withIssuer(issuer)
         .withAudience(audience)
         .withJWTId(jti)
-        .withClaim("role", "admin")
+        .withClaim("role", role)
         .withIssuedAt(Date())
         .withExpiresAt(Date(System.currentTimeMillis() + 60_000))
         .sign(Algorithm.HMAC256(secret))

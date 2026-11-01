@@ -71,7 +71,7 @@ fun Application.configureProjectAdminRoutes() {
     val nginx = get<NginxSiteStorage>()
     val removeSiteConfig = get<RemoveSiteConfigUseCase>()
     routing {
-        authenticate("auth-jwt") {
+        authenticate("auth-admin") {
             get("/api/admin/projects") {
                 val search = call.request.queryParameters["search"]?.trim()?.lowercase()
                 val status = call.request.queryParameters["status"]

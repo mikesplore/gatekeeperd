@@ -23,12 +23,10 @@ import io.ktor.server.auth.authenticate
 import io.ktor.server.routing.routing
 import org.koin.ktor.ext.get
 
-
-
 fun Application.configureProjectSetupAdminRoutes() {
     val dependencies = ProjectSetupDependencies(get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get())
     routing {
-        authenticate("auth-jwt") {
+        authenticate("auth-admin") {
             registerProjectSetupRoutes(dependencies)
             registerProjectDeploymentRoutes(dependencies)
         }

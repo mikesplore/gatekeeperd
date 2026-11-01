@@ -1,8 +1,6 @@
 package com.gatekeeper.admin.system
 
 
-import com.gatekeeper.admin.model.*
-import com.gatekeeper.admin.application.*
 import com.gatekeeper.deployment.DeploymentReconciliationService
 import com.gatekeeper.docker.DockerGateway
 import com.gatekeeper.feature.nginx.application.InspectSiteConfigUseCase
@@ -22,7 +20,7 @@ fun Application.configureDeploymentAdminRoutes(
     deploymentUpstreamResolver: DeploymentUpstreamResolver
 ) {
     routing {
-        authenticate("auth-jwt") {
+        authenticate("auth-admin") {
             get("/api/admin/deployments/reconciliation") {
                 call.respond(DeploymentReconciliationService.production(projectRepository,siteRepository, dockerGateway, deploymentUpstreamResolver, inspectSiteConfigUseCase))
             }

@@ -25,7 +25,7 @@ fun Route.nginxUpstreamRoutes(
     repairDeploymentUpstreamUseCase: RepairDeploymentUpstreamUseCase,
     convertSiteToDeploymentManagedUseCase: ConvertSiteToDeploymentManagedUseCase
 ) {
-    authenticate("auth-jwt") {
+    authenticate("auth-admin") {
         get("/api/admin/nginx/upstream-migration") {
             val report = siteRepository.findAll().map { site ->
                 val serviceId = site.serviceId

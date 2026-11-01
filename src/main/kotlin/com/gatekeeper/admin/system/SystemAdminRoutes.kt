@@ -1,8 +1,5 @@
 package com.gatekeeper.admin.system
 
-
-import com.gatekeeper.admin.model.*
-import com.gatekeeper.admin.application.*
 import com.gatekeeper.api.respondError
 import com.gatekeeper.docker.DockerCleanupService
 import com.gatekeeper.deployment.DeploymentTriggerService
@@ -15,7 +12,7 @@ import org.koin.ktor.ext.get
 
 fun Application.configureSystemAdminRoutes() {
     routing {
-        authenticate("auth-jwt") {
+        authenticate("auth-admin") {
             post("/api/admin/system/prune") {
                 val dryRun = call.request.queryParameters["dryRun"]?.toBooleanStrictOrNull() ?: false
                 val prefix = call.request.queryParameters["imagePrefix"]?.takeIf { it.isNotBlank() }

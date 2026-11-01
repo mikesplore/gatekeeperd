@@ -168,7 +168,7 @@ JSON serialization uses kotlinx.serialization. Most API errors use the common `{
 | `/api/admin/integrations*`, GitHub                  | Admin JWT; GitHub callbacks separately verified          | Scribed outbox, GitHub App setup/webhook activity.                                         | `admin/system/IntegrationAdminRoutes.kt`, `integrations/*`                            |
 | `/api/admin/registries*`, provider credentials      | Admin JWT                                                | Registry and provider configuration.                                                       | `admin/system/RegistryAdminRoutes.kt`                                                 |
 
-`/api/admin/*` authentication is installed as a JWT provider. Some additional role checks exist within user management routes, but the shared JWT provider currently accepts only the `admin` role; see [known gaps](#22-implementation-caveats-and-known-gaps).
+Admin API groups use the `auth-admin` provider. Self-service authentication uses `auth-jwt`, which accepts the supported `admin`, `operator`, and `viewer` roles. Non-admin roles can authenticate but are not granted admin API access; a fine-grained permission matrix is not implemented.
 
 ## 6. Authentication and authorization
 
@@ -176,7 +176,7 @@ JSON serialization uses kotlinx.serialization. Most API errors use the common `{
 
 Passwords are stored as BCrypt hashes. Login applies rate limits keyed by email and client address using Redis. A correct login either issues a short-lived 2FA challenge or creates an HMAC256 JWT plus opaque refresh token. Refresh-token hashes are keys in Redis; Redis storage is required for login, refresh, and revocation, so those flows fail closed when Redis cannot be reached.
 
-JWTs include subject email, issuer, audience, `role`, a unique JWT ID (`jti`), issued-at, and a 24-hour expiry. The `auth-jwt` validation checks signature, issuer/audience, role, and the Redis revocation list. If Redis cannot be queried for revocation, authentication returns a service-unavailable error rather than accepting a token without the check.
+JWTs include subject email, issuer, audience, `role`, a unique JWT ID (`jti`), issued-at, and a 24-hour expiry. Both providers check signature, issuer/audience, and the Redis revocation list; `auth-jwt` accepts the supported roles, while `auth-admin` accepts only `admin`. If Redis cannot be queried for revocation, authentication returns a service-unavailable error rather than accepting a token without the check.
 
 ### 6.2 Two-factor authentication
 
@@ -188,9 +188,9 @@ Password reset tokens are random and only their hashes are persisted. Tokens hav
 
 ### 6.4 Authorization boundary
 
-Public gate, payment initiation, callback, health and customer-safe endpoints do not require admin JWTs. Management APIs require `auth-jwt`.
+Public gate, payment initiation, callback, health and customer-safe endpoints do not require admin JWTs. Admin management APIs require `auth-admin`; account self-service uses `auth-jwt`.
 
-There is a current mismatch: user-management APIs allow creation of `admin`, `operator`, and `viewer` records, but the shared JWT validator rejects any JWT whose role is not `admin`. Login itself can issue a token using the stored non-admin role, but calls to protected endpoints then fail authentication. Non-admin dashboard access therefore is not currently functional. Do not treat these role choices as implemented least-privilege roles yet.
+`operator` and `viewer` accounts can now authenticate with their issued tokens, but they have no admin management permissions. Admin route groups remain admin-only until a role/permission matrix and corresponding frontend behavior are defined.
 
 ## 7. Payment gating and access decisions
 
@@ -469,7 +469,7 @@ Configuration values are read once into `AppConfig` at startup. Most changes req
 | Startup fails mentioning nginx include directory or `nginx -T` | Nginx deployment-upstream bootstrap | Directory ownership/writability; `nginx -T`; confirm exact `*.conf` include is inside `http {}`; check NOPASSWD sudo command access. For local non-nginx development set `NGINX_DEPLOYMENT_UPSTREAMS_ENABLED=false`. |
 | Health live works but readiness is 503 | PostgreSQL, Redis, or migrations | `/api/health/ready`; verify Redis from Gatekeeperd's own network namespace and credentials/TLS topology; inspect DB/migration state. |
 | Login responds 503 | Redis-backed auth storage | Redis DNS/route/port from Gatekeeperd process/container, pool logs, and required refresh-token storage. A successful startup ping does not prove every later auth operation succeeds. |
-| Login seems to work then dashboard returns 401 | JWT role/expiry/revocation | Confirm token role is `admin`; Redis revocation lookup must work. Current operator/viewer issue is documented below. |
+| Login succeeds but an admin route returns 401 | JWT role/expiry/revocation | Admin management routes require the `admin` role; Redis revocation lookup must work. |
 | Gate is stale after admin/payment action | Redis gate cache | Verify invalidation logs and key `project:status:{slug}`; normal cache TTL is 60 seconds. |
 | Candidate healthy but site still serves previous version | Deployment cutover/gateway | Inspect deployment status and cutover state; stable upstream include and checksum; nginx error log; `nginx -t`; local probe and host mutation lock; reconciliation report. |
 | Candidate keeps changing public port | Not expected for managed deployments | Inspect persisted deployment port map, `deployment_port_allocations`, actual Docker mapping, and whether the site is deployment-managed or adopted/explicit. Managed routes use persisted pool ports; adoption preserves existing mappings. |
@@ -483,7 +483,7 @@ For application-only logs use dashboard Logs or `journalctl -u gatekeeperd`. For
 
 These observations are based on repository code, not an inspection of a production database or VPS:
 
-1. **Non-admin user roles do not work for dashboard authentication.** User management accepts `operator` and `viewer`, but the shared `auth-jwt` validator rejects every role other than `admin`. Login can issue their token, then protected APIs reject it. A role/permission matrix and frontend route behavior are not implemented for those roles.
+1. **Non-admin roles have no admin management permissions.** `operator` and `viewer` tokens pass shared authentication, but admin route groups require `admin`. A role/permission matrix and frontend route behavior are not implemented for non-admin roles.
 2. **Route layering is mixed.** Koin-based use cases exist for gate, customer and payment workflows, while several older admin APIs call repositories directly. Changes should follow local conventions but avoid assuming a universal domain boundary.
 3. **Nginx and Docker are host-side dependencies.** Unit tests use fakes/temp dirs for most logic, but real sudoers, nginx include placement, systemd behavior, Docker networking, DNS, Certbot validation and file ownership still need server-side verification.
 4. **Gate `FAIL_MODE` applies only when both the Redis cache path and PostgreSQL lookup fail.** A missing project is deliberately denied; Redis-only failure falls back to PostgreSQL.

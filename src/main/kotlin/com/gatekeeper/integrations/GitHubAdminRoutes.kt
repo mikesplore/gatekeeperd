@@ -14,7 +14,7 @@ import org.koin.ktor.ext.get
 fun Application.configureGitHubAdminRoutes() {
     val github = get<GitHubAdminApplicationService>()
     routing {
-        authenticate("auth-jwt") {
+        authenticate("auth-admin") {
             put("/api/admin/github/credentials/{type}") {
                 val body = runCatching { call.receive<GitHubCredentialRequest>() }.getOrNull()
                     ?: throw com.gatekeeper.api.HttpApiException(io.ktor.http.HttpStatusCode.BadRequest, "invalid_request", "Invalid credential request")
