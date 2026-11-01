@@ -5,6 +5,7 @@ import com.gatekeeper.plugins.configureApiDocumentation
 import com.gatekeeper.plugins.configureSerialization
 import com.gatekeeper.plugins.HealthDependencyStatus
 import com.gatekeeper.plugins.HealthReadinessResponse
+import com.gatekeeper.plugins.respondReadiness
 import io.ktor.server.application.install
 import io.ktor.server.auth.Authentication
 import io.ktor.server.auth.authenticate
@@ -102,8 +103,7 @@ class ServerTest {
             configureSerialization()
             routing {
                 get("/api/health/ready") {
-                    call.respond(
-                        HttpStatusCode.ServiceUnavailable,
+                    call.respondReadiness(
                         HealthReadinessResponse(
                             status = "not_ready",
                             dependencies = HealthDependencyStatus(database = true, redis = false, migrations = true)
