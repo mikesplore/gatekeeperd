@@ -198,7 +198,7 @@ def run() -> None:
         limited_user = GatekeeperApi(config["GATEKEEPER_SMOKE_BASE_URL"])
         login(limited_user, user_email, user_password)
         expect_status(limited_user, "GET", "/api/admin/projects", 200)
-        expect_status(limited_user, "POST", "/api/admin/projects", 403, {})
+        expect_status(limited_user, "POST", "/api/admin/projects/bulk/block", 403, {})
         expect_status(limited_user, "GET", "/api/admin/rbac/roles", 403)
         expect_status(
             admin,
