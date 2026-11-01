@@ -57,7 +57,8 @@ data class DashboardSiteResponse(
     val upstreamHost: String? = null, val upstreamMode: String? = null,
     val upstreamExplicitPort: Int? = null, val runtimeHealth: String? = null,
     val resolvedUpstreamHost: String? = null, val resolvedUpstreamPort: Int? = null,
-    val tlsMode: String? = null, val gateEnabled: Boolean? = null, val serviceId: String? = null
+    val tlsMode: String? = null, val gateEnabled: Boolean? = null, val serviceId: String? = null,
+    val upstreamKind: String? = null
 )
 
 @Serializable

@@ -98,7 +98,7 @@ object OperationsDashboardService {
             } else null,
             if (site.upstreamMode == com.gatekeeper.db.tables.UpstreamMode.EXPLICIT_PORT) configuredHost else resolved?.host,
             if (site.upstreamMode == com.gatekeeper.db.tables.UpstreamMode.EXPLICIT_PORT) configuredPort else resolved?.port,
-            site.tlsMode.value, site.gateEnabled, site.serviceId?.toString()
+            site.tlsMode.value, site.gateEnabled, site.serviceId?.toString(), site.upstreamKind
         )
     }
 
