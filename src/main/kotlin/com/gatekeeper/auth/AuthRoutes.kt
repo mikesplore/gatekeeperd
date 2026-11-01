@@ -432,5 +432,8 @@ fun Application.configureAuthRoutes() {
 
         }
     }
-    routing { adminUserRoutes(authUsers, auditRepository, rbac) }
+    routing {
+        publicAuthRoutes(authUsers, settings, resendClient)
+        adminUserRoutes(authUsers, auditRepository, rbac)
+    }
 }
