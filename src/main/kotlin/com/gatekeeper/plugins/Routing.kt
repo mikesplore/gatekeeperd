@@ -12,6 +12,7 @@ import com.gatekeeper.docker.NetworkPage
 import com.gatekeeper.docker.VolumePage
 import com.gatekeeper.deployment.DeploymentVersionService
 import com.gatekeeper.api.InputValidators
+import kotlinx.serialization.Serializable
 import io.ktor.http.*
 import io.ktor.server.application.*
 import io.ktor.server.auth.*
@@ -19,6 +20,19 @@ import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import org.koin.ktor.ext.get
+
+@Serializable
+data class HealthReadinessResponse(
+    val status: String,
+    val dependencies: HealthDependencyStatus
+)
+
+@Serializable
+data class HealthDependencyStatus(
+    val database: Boolean,
+    val redis: Boolean,
+    val migrations: Boolean
+)
 
 private suspend fun ApplicationCall.requireContainerName(): String? {
     val name = parameters["name"]
@@ -62,9 +76,9 @@ fun Application.configureRouting() {
             val ready = database && redis && migrations
             call.respond(
                 if (ready) HttpStatusCode.OK else HttpStatusCode.ServiceUnavailable,
-                mapOf(
-                    "status" to if (ready) "ready" else "not_ready",
-                    "dependencies" to mapOf("database" to database, "redis" to redis, "migrations" to migrations)
+                HealthReadinessResponse(
+                    status = if (ready) "ready" else "not_ready",
+                    dependencies = HealthDependencyStatus(database, redis, migrations)
                 )
             )
         }
@@ -74,8 +88,13 @@ fun Application.configureRouting() {
             val redis = RedisService.isHealthy()
             val migrations = DatabaseFactory.migrationsHealthy()
             val ready = database && redis && migrations
-            call.respond(if (ready) HttpStatusCode.OK else HttpStatusCode.ServiceUnavailable,
-                mapOf("status" to if (ready) "ready" else "not_ready", "dependencies" to mapOf("database" to database, "redis" to redis, "migrations" to migrations)))
+            call.respond(
+                if (ready) HttpStatusCode.OK else HttpStatusCode.ServiceUnavailable,
+                HealthReadinessResponse(
+                    status = if (ready) "ready" else "not_ready",
+                    dependencies = HealthDependencyStatus(database, redis, migrations)
+                )
+            )
         }
 
         // Admin routes (JWT-protected)

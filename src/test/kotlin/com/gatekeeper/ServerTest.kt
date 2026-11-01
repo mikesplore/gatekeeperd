@@ -3,6 +3,8 @@ package com.gatekeeper
 import com.gatekeeper.feature.payment.presentation.configurePaymentRoutes
 import com.gatekeeper.plugins.configureApiDocumentation
 import com.gatekeeper.plugins.configureSerialization
+import com.gatekeeper.plugins.HealthDependencyStatus
+import com.gatekeeper.plugins.HealthReadinessResponse
 import io.ktor.server.application.install
 import io.ktor.server.auth.Authentication
 import io.ktor.server.auth.authenticate
@@ -92,6 +94,29 @@ class ServerTest {
         }
         val response = client.get("/api/health")
         assertEquals(HttpStatusCode.OK, response.status)
+    }
+
+    @Test
+    fun `readiness response serializes dependency health`() = testApplication {
+        application {
+            configureSerialization()
+            routing {
+                get("/api/health/ready") {
+                    call.respond(
+                        HttpStatusCode.ServiceUnavailable,
+                        HealthReadinessResponse(
+                            status = "not_ready",
+                            dependencies = HealthDependencyStatus(database = true, redis = false, migrations = true)
+                        )
+                    )
+                }
+            }
+        }
+
+        val response = client.get("/api/health/ready")
+        assertEquals(HttpStatusCode.ServiceUnavailable, response.status)
+        assertTrue(response.bodyAsText().contains("\"dependencies\""))
+        assertTrue(response.bodyAsText().contains("\"redis\":false"))
     }
 
     @Test
