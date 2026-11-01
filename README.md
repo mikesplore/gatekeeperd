@@ -47,12 +47,16 @@ chmod +x prepare-vps.sh
 ./prepare-vps.sh --domain api.example.com --email ops@example.com
 ```
 
-For an existing failed installation, add `--reset-runtime`. This clears only
-Gatekeeperd application releases and generated service/slot state. It refuses to
-reset while Nginx routes to an active blue/green slot. It does not erase databases,
-Redis, Nginx configuration/certificates, or either environment file. Use `--help` for
-options. For normal upgrades after setup, download and run `deploy.sh`; do not run the
-preparation script as an upgrade tool.
+For an existing installation that must be cleared and rebuilt, add
+`--reset-runtime`. It removes the old Gatekeeperd runtime, systemd units, deploy
+settings, managed Nginx site/upstream files, the dedicated Gatekeeperd TLS
+certificate, and other files under `/etc/gatekeeperd`, preserving only
+`/etc/gatekeeperd/gatekeeperd.env`. Shared TLS certificates and PostgreSQL/Redis data
+are preserved. The script then recreates the service and Nginx setup. This causes
+downtime during the reset and requires DNS to point at the VPS for a dedicated TLS
+certificate to be issued again.
+Use `--help` for options. For normal upgrades after setup, download and run
+`deploy.sh`; do not run the preparation script as an upgrade tool.
 
 If setup stops at readiness, the script prints the health response and the command to
 inspect the bootstrap journal. Resolve the reported database, Redis, migration, or

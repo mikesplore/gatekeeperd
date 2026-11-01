@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Provision a Gatekeeperd VPS and perform its first blue/green deployment.
-# Preserves the application env file, deploy settings, PostgreSQL/Redis data,
-# Nginx global configuration, and TLS certificates.
+# --reset-runtime removes Gatekeeperd-owned runtime/configuration while preserving
+# only the application env file and external PostgreSQL/Redis data.
 set -euo pipefail
 
 REPOSITORY="mikesplore/gatekeeperd"
@@ -53,7 +53,7 @@ Options:
   --service-user USER     Existing Linux service account (default current user)
   --run-id ID             Successful workflow run to deploy (default latest success on main)
   --nginx-site PATH       Managed Nginx site file (default /etc/nginx/sites-available/gatekeeperd)
-  --reset-runtime         Clear Gatekeeperd releases/slots before preparing
+  --reset-runtime         Remove Gatekeeperd runtime, service, deploy, and Nginx files before preparing
   --no-tls                Configure HTTP only; use only for temporary testing
   -h, --help              Show this help
 
@@ -150,9 +150,7 @@ SELF_DOMAINS_NORMALIZED="$(tr '[:upper:]' '[:lower:]' <<<"${SELF_DOMAINS}" | tr 
 if command -v systemctl >/dev/null 2>&1 && as_root systemctl is-active --quiet nginx; then
   ACTIVE_PORT="$(as_root grep -Eo 'server[[:space:]]+127\.0\.0\.1:[0-9]+' "${NGINX_UPSTREAM_FILE}" 2>/dev/null | head -n1 | grep -Eo '[0-9]+$' || true)"
   if [[ "${ACTIVE_PORT}" == 18081 || "${ACTIVE_PORT}" == 18082 ]]; then
-    if [[ "${RESET_RUNTIME}" == true ]]; then
-      die "Nginx currently routes to slot ${ACTIVE_PORT}; refusing to reset an active deployment. Switch traffic to a bootstrap service first."
-    else
+    if [[ "${RESET_RUNTIME}" != true ]]; then
       die "Nginx already routes to blue/green slot ${ACTIVE_PORT}. Use deploy.sh for upgrades; this script is only for first install or runtime reset."
     fi
   fi
@@ -230,17 +228,66 @@ as_root setfacl -m "u:${SERVICE_USER}:rwx" "${APP_UPSTREAM_DIR}"
 as_root setfacl -m "d:u:${SERVICE_USER}:rwx" "${APP_UPSTREAM_DIR}"
 
 if [[ "${RESET_RUNTIME}" == true ]]; then
-  log "Clearing Gatekeeperd runtime and generated slot state (database, Redis, Nginx and env files are preserved)..."
+  log "Removing Gatekeeperd runtime, service/deploy settings, managed Nginx files, and related sudo rules; preserving only ${ENV_FILE} and external database/Redis data..."
   as_root systemctl disable --now gatekeeperd-auto-deploy.timer >/dev/null 2>&1 || true
   as_root systemctl disable --now gatekeeperd-slot@blue.service gatekeeperd-slot@green.service >/dev/null 2>&1 || true
-  as_root systemctl stop gatekeeperd.service >/dev/null 2>&1 || true
+  as_root systemctl disable --now gatekeeperd.service >/dev/null 2>&1 || true
   as_root find "${TARGET_DIR}" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+  as_root find /etc/systemd/system -maxdepth 1 -name 'gatekeeperd*' -type f -delete
+  as_root find /etc/systemd/system -maxdepth 1 -name 'gatekeeperd*' -type l -delete
   as_root rm -f /etc/systemd/system/gatekeeperd.service /etc/systemd/system/gatekeeperd-slot@.service \
     /etc/systemd/system/gatekeeperd-auto-deploy.service /etc/systemd/system/gatekeeperd-auto-deploy.timer \
-    /etc/gatekeeperd/slots/blue.env /etc/gatekeeperd/slots/green.env \
-    /etc/gatekeeperd/auto-deploy.env /usr/local/sbin/gatekeeperd-certbot /etc/sudoers.d/gatekeeperd-certbot
+    /usr/local/sbin/gatekeeperd-certbot /etc/sudoers.d/gatekeeperd-certbot \
+    "${NGINX_SITE_FILE}" "${NGINX_SITE_LINK}" "${NGINX_UPSTREAM_FILE}" "${NGINX_UPSTREAM_INCLUDE_FILE}"
+  as_root rm -f /etc/sudoers.d/gatekeeperd*
+  for site in /etc/nginx/sites-available/* /etc/nginx/sites-enabled/*; do
+    [[ -e "${site}" ]] || continue
+    if as_root grep -Fq "${DOMAIN}" "${site}" && as_root grep -Eq 'server_name[[:space:]]' "${site}"; then
+      site_target="$(as_root readlink -f "${site}" 2>/dev/null || true)"
+      as_root rm -f -- "${site}"
+      if [[ "${site_target}" == /etc/nginx/sites-available/* ]]; then
+        as_root rm -f -- "${site_target}"
+      fi
+    fi
+  done
+  as_root find /etc/nginx/conf.d -maxdepth 1 -name 'gatekeeperd*.conf' -type f -delete
+  as_root find /etc/nginx/sites-available /etc/nginx/sites-enabled -maxdepth 1 -name 'gatekeeperd*' -delete
+  as_root rm -rf -- "${APP_UPSTREAM_DIR}"
+  as_root find /var/backups -maxdepth 1 -type d -name 'gatekeeperd-*' -exec rm -rf -- {} + 2>/dev/null || true
+  if as_root test -d /etc/gatekeeperd; then
+    as_root find /etc/gatekeeperd -mindepth 1 -maxdepth 1 ! -samefile "${ENV_FILE}" -exec rm -rf -- {} +
+  fi
+  as_root install -d -o root -g root -m 0755 /etc/gatekeeperd/slots
+  if command -v certbot >/dev/null 2>&1 && as_root test -d /etc/letsencrypt/renewal; then
+    cert_names="$(as_root python3 - "${DOMAIN}" /etc/letsencrypt/renewal <<'PY'
+import configparser, glob, os, sys
+domain, directory = sys.argv[1:]
+for path in glob.glob(os.path.join(directory, "*.conf")):
+    parser = configparser.ConfigParser()
+    try:
+        parser.read(path)
+        raw_domains = parser.get("renewalparams", "domains", fallback="")
+        domains = [item.strip().lower() for item in raw_domains.split(",")]
+        if domains == [domain.lower()]:
+            print(os.path.basename(path)[:-5])
+    except (configparser.Error, OSError):
+        continue
+PY
+    )"
+    while IFS= read -r cert_name; do
+      [[ -n "${cert_name}" ]] || continue
+      log "Removing Gatekeeperd TLS certificate ${cert_name}..."
+      as_root certbot delete --non-interactive --cert-name "${cert_name}"
+    done <<<"${cert_names}"
+  fi
   as_root systemctl daemon-reload
 fi
+
+# Reset removes the old app-owned include directory and its ACLs. Recreate it
+# after cleanup so the fresh service can manage client-site upstreams.
+as_root install -d -o root -g root -m 0755 "${APP_UPSTREAM_DIR}"
+as_root setfacl -m "u:${SERVICE_USER}:rwx" "${APP_UPSTREAM_DIR}"
+as_root setfacl -m "d:u:${SERVICE_USER}:rwx" "${APP_UPSTREAM_DIR}"
 
 if [[ -e "${NGINX_SITE_FILE}" ]]; then
   as_root install -d -o root -g root -m 0700 "${BACKUP_DIR}/etc/nginx/sites-available"
