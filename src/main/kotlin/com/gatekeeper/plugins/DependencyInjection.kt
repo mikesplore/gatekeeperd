@@ -309,7 +309,7 @@ private val applicationModule = module {
     }
     single { RemoveSiteConfigUseCase(domainRules = get()) }
     single { DisableProjectUseCase(domainRules = get()) }
-    single { DisableManualConfigUseCase(get(), get(), get(), get(), get(), { get<NginxCommandRunner>().reload() }) }
+    single { DisableManualConfigUseCase(get(), get(), get(), get(), { get<NginxCommandRunner>().reload() }) }
     single { InspectManualConfigUseCase(domainRules = get(), nginxConflictAnalyzer = get()) }
     single { DeleteManualConfigUseCase(get(), get(), get()) }
     single {

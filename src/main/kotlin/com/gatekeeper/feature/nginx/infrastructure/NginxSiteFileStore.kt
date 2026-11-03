@@ -115,7 +115,6 @@ class NginxSiteFileStore(
         File(availableDir, filename).takeIf { it.exists() }?.readText()
 
     override fun disableManualConfig(filename: String): NginxManualConfigDisableResult {
-        disableSite(filename)
         return disableManConfig.value.execute(filename = filename)
     }
 
