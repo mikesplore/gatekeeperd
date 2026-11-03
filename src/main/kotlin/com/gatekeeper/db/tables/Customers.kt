@@ -6,7 +6,8 @@ import org.jetbrains.exposed.sql.javatime.datetime
 
 object Customers : Table("customers") {
     val id = uuid("id").autoGenerate()
-    val name = text("name")
+    val firstName = text("first_name")
+    val lastName = text("last_name")
     val contactEmail = text("contact_email").nullable()
     val contactPhone = text("contact_phone").nullable()
     val billingStatus = text("billing_status").default("unknown")

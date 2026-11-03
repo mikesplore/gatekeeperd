@@ -19,7 +19,8 @@ class ExposedCustomerRepository : CustomerRepository {
     override fun findPage(query: String?, limit: Int, offset: Int): Pair<List<CustomerRepository.Record>, Int> = transaction {
         val normalized = query?.trim()?.lowercase()?.takeIf { it.isNotBlank() }
         val rows = if (normalized == null) Customers.selectAll() else Customers.selectAll().where {
-            (Customers.name.lowerCase() like "%$normalized%") or
+            (Customers.firstName.lowerCase() like "%$normalized%") or
+                (Customers.lastName.lowerCase() like "%$normalized%") or
                 (Customers.contactEmail.lowerCase() like "%$normalized%") or
                 (Customers.contactPhone.lowerCase() like "%$normalized%")
         }
@@ -38,11 +39,12 @@ class ExposedCustomerRepository : CustomerRepository {
         }.singleOrNull() != null
     }
 
-    override fun create(name: String, contactEmail: String?, contactPhone: String?, billingStatus: String): CustomerRepository.Record = transaction {
+    override fun create(firstName: String, lastName: String, contactEmail: String?, contactPhone: String?, billingStatus: String): CustomerRepository.Record = transaction {
         val id = UUID.randomUUID()
         Customers.insert {
             it[Customers.id] = id
-            it[Customers.name] = name
+            it[Customers.firstName] = firstName
+            it[Customers.lastName] = lastName
             it[Customers.contactEmail] = contactEmail
             it[Customers.contactPhone] = contactPhone
             it[Customers.billingStatus] = billingStatus
@@ -51,7 +53,7 @@ class ExposedCustomerRepository : CustomerRepository {
     }
 
     private fun ResultRow.toRecord() = CustomerRepository.Record(
-        this[Customers.id], this[Customers.name], this[Customers.contactEmail], this[Customers.contactPhone],
+        this[Customers.id], this[Customers.firstName], this[Customers.lastName], this[Customers.contactEmail], this[Customers.contactPhone],
         this[Customers.billingStatus], this[Customers.createdAt], this[Customers.updatedAt]
     )
 }

@@ -96,7 +96,7 @@ data class NginxManualConfigActionResponse(
 
 @Serializable
 data class DashboardCustomerResponse(
-    val id: String, val name: String, val contactEmail: String? = null, val contactPhone: String? = null,
+    val id: String, val firstName: String, val lastName: String, val contactEmail: String? = null, val contactPhone: String? = null,
     val billingStatus: String, val projectCount: Int, val siteCount: Int = projectCount,
     val health: Map<String, Int> = emptyMap(),
     val totalBilled: Double = 0.0, val totalPaid: Double = 0.0, val balance: Double = 0.0,
@@ -136,7 +136,7 @@ data class DashboardSiteUpdateRequest(
 
 @Serializable
 data class DashboardCustomerCreateRequest(
-    val name: String, val contactEmail: String? = null, val contactPhone: String? = null,
+    val firstName: String, val lastName: String, val contactEmail: String? = null, val contactPhone: String? = null,
     val billingStatus: String = "unknown"
 )
 

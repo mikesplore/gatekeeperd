@@ -301,7 +301,7 @@ class ExposedProjectRepository(
                     OverdueProject(
                         slug = row[Projects.slug],
                         name = row[Projects.name],
-                        customerName = row[Projects.customerId]?.let { id -> Customers.selectAll().where { Customers.id eq id }.singleOrNull()?.get(Customers.name) },
+                        customerName = row[Projects.customerId]?.let { id -> Customers.selectAll().where { Customers.id eq id }.singleOrNull()?.let { "${it[Customers.firstName]} ${it[Customers.lastName]}".trim() } },
                         customerEmail = row[Projects.customerId]?.let { id -> Customers.selectAll().where { Customers.id eq id }.singleOrNull()?.get(Customers.contactEmail) },
                         customerPhone = row[Projects.customerId]?.let { id -> Customers.selectAll().where { Customers.id eq id }.singleOrNull()?.get(Customers.contactPhone) },
                         billingName = row[Projects.billingName], billingEmail = row[Projects.billingEmail], billingAddress = row[Projects.billingAddress],
@@ -395,7 +395,7 @@ class ExposedProjectRepository(
         deploymentMode = this[Projects.deploymentMode],
         serviceMode = this[Projects.serviceMode],
         lifecycleStatus = this[Projects.lifecycleStatus],
-        customerName = this[Projects.customerId]?.let { id -> Customers.selectAll().where { Customers.id eq id }.singleOrNull()?.get(Customers.name) },
+        customerName = this[Projects.customerId]?.let { id -> Customers.selectAll().where { Customers.id eq id }.singleOrNull()?.let { "${it[Customers.firstName]} ${it[Customers.lastName]}".trim() } },
         customerEmail = this[Projects.customerId]?.let { id -> Customers.selectAll().where { Customers.id eq id }.singleOrNull()?.get(Customers.contactEmail) },
         customerPhone = this[Projects.customerId]?.let { id -> Customers.selectAll().where { Customers.id eq id }.singleOrNull()?.get(Customers.contactPhone) },
         billingName = this[Projects.billingName], billingEmail = this[Projects.billingEmail], billingAddress = this[Projects.billingAddress],

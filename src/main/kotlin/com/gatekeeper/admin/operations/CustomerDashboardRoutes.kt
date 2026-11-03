@@ -37,11 +37,11 @@ fun Route.registerCustomerDashboardRoutes(dependencies: OperationsAdminDependenc
                 "Invalid customer body"
             ); return@post
         }
-        if (body.name.isBlank()) {
+        if (body.firstName.isBlank() || body.lastName.isBlank()) {
             call.respondError(
                 HttpStatusCode.BadRequest,
                 "invalid_customer",
-                "Customer name is required"
+                "Customer first and last names are required"
             ); return@post
         }
         val email = body.contactEmail?.trim()?.takeIf { it.isNotBlank() }?.lowercase()
@@ -62,7 +62,8 @@ fun Route.registerCustomerDashboardRoutes(dependencies: OperationsAdminDependenc
         }
         val customer = try {
             customers.create(
-                body.name.trim(),
+                body.firstName.trim(),
+                body.lastName.trim(),
                 email,
                 body.contactPhone?.trim()?.takeIf { it.isNotBlank() },
                 body.billingStatus
@@ -82,7 +83,8 @@ fun Route.registerCustomerDashboardRoutes(dependencies: OperationsAdminDependenc
             HttpStatusCode.Created,
             DashboardCustomerResponse(
                 customer.id.toString(),
-                customer.name,
+                customer.firstName,
+                customer.lastName,
                 customer.contactEmail,
                 customer.contactPhone,
                 customer.billingStatus,
@@ -142,7 +144,8 @@ fun Route.registerCustomerDashboardRoutes(dependencies: OperationsAdminDependenc
             val balance = financials.sumOf { it.balance }
             DashboardCustomerResponse(
                 customer.id.toString(),
-                customer.name,
+                customer.firstName,
+                customer.lastName,
                 customer.contactEmail,
                 customer.contactPhone,
                 OperationsDashboardService.derivedBillingStatus(financials),
@@ -196,7 +199,8 @@ fun Route.registerCustomerDashboardRoutes(dependencies: OperationsAdminDependenc
         call.respond(
             DashboardCustomerResponse(
                 customer.id.toString(),
-                customer.name,
+                customer.firstName,
+                customer.lastName,
                 customer.contactEmail,
                 customer.contactPhone,
                 OperationsDashboardService.derivedBillingStatus(financials),

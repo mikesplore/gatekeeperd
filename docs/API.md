@@ -1468,7 +1468,7 @@ Dashboard write operations are also available to authenticated administrators:
 - Dashboard site responses include `upstreamKind`; upstream repair is available only for `DEPLOYMENT_MANAGED` sites.
 - `DELETE /api/admin/dashboard/dead-configs/{filename}` requires `{"confirm":true}`, moves the orphaned file to a timestamped backup, removes its enabled link, and reloads nginx. If reload fails, the file and link are restored.
 - Unmarked configs use the separate `/api/admin/nginx/manual-configs/{filename}` review, `/disable` and `DELETE` flow above; they are never removed through the orphan cleanup endpoint.
-- `POST /api/admin/dashboard/customers` creates a customer. A nonblank contact email is unique case-insensitively; attempts to reuse it return `409 customer_exists`.
+- `POST /api/admin/dashboard/customers` creates a customer using required `firstName` and `lastName` fields, plus optional `contactEmail` and `contactPhone`. Customer list/detail responses expose `firstName`, `lastName`, `contactEmail`, and `contactPhone`. A nonblank contact email is unique case-insensitively; attempts to reuse it return `409 customer_exists`.
 - Admin user create/update operations enforce case-insensitive email uniqueness and return `409 user_exists` when the email belongs to another user.
 - `PATCH /api/admin/dashboard/projects/{id}` assigns or clears `customerId`.
 
