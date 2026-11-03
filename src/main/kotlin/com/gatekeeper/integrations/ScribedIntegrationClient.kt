@@ -30,7 +30,8 @@ import io.ktor.client.statement.bodyAsText
 
 @Serializable data class ScribedSuspensionPayload(val project_id: String, val project_slug: String, val status: String, val reason: String, val occurred_at: String)
 @Serializable data class ScribedPaymentPayload(val project_id: String, val project_slug: String, val provider: String, val provider_reference: String, val amount: String, val currency: String, val paid_at: String, val status: String = "success", val service_id: String? = null, val gatekeeper_payment_id: String? = null)
-@Serializable data class ScribedServicePaymentSyncPayload(val project_id: String, val service_id: String, val currency: String, val payments: List<ScribedPaymentPayload>)
+@Serializable data class ScribedServicePaymentPayload(val gatekeeper_payment_id: String, val provider: String, val provider_reference: String, val amount: String, val currency: String, val paid_at: String)
+@Serializable data class ScribedServicePaymentSyncPayload(val project_id: String, val service_id: String, val currency: String, val payments: List<ScribedServicePaymentPayload>)
 @Serializable data class ScribedLedgerAdjustment(val id: String, val type: String, val amount: String, val reason: String, val actor: String)
 @Serializable data class ScribedServiceLedgerPayload(val service_id: String, val adjustments: List<ScribedLedgerAdjustment>)
 @Serializable data class ScribedLedgerPayload(val project_id: String, val project_slug: String, val ledger_version: String, val base_amount: String, val additional_charges: String, val discounts: String, val successful_payments: String, val outstanding_balance: String, val currency: String, val adjustments: List<ScribedLedgerAdjustment>)
@@ -371,11 +372,10 @@ class ScribedIntegrationClient(
         val paymentSync = ScribedServicePaymentSyncPayload(
             project.id.toString(), serviceId.toString(), project.currency,
             successfulPayments.map { successfulPayment ->
-                ScribedPaymentPayload(
-                    project.id.toString(), project.slug, successfulPayment.provider,
+                ScribedServicePaymentPayload(
+                    successfulPayment.id.toString(), successfulPayment.provider,
                     successfulPayment.providerReference, successfulPayment.amount.toPlainString(), project.currency,
-                    (successfulPayment.paidAt ?: successfulPayment.createdAt ?: java.time.LocalDateTime.MIN).toString(),
-                    service_id = serviceId.toString(), gatekeeper_payment_id = successfulPayment.id.toString()
+                    (successfulPayment.paidAt ?: successfulPayment.createdAt ?: java.time.LocalDateTime.MIN).toString()
                 )
             }
         )
