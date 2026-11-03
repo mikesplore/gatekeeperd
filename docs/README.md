@@ -1,298 +1,32 @@
-# Gatekeeperd — Project Index
+# Gatekeeperd documentation
 
-## Overview
+Gatekeeperd is a Kotlin/Ktor service that applies project and service access rules, records billing and payments, and can manage Docker deployments and nginx routes. The React administration dashboard and Scribed document service are maintained in separate repositories.
 
-Gatekeeperd is a **Ktor-based payment gating engine** for client projects on a VPS. It does not replace your reverse proxy — nginx or Traefik stays in front. Gatekeeperd answers one question per request: **should this traffic reach the client app?**
+## Start here
 
-- **Active / paying** → `200 OK`, proxy forwards to the client container or process
-- **Blocked / overdue** → `402 Payment Required` with HTML paywall (browser) or JSON (API clients)
-- **Payment via Paystack** → webhook activates the project; Redis cache invalidated instantly
+| Need | Guide |
+| --- | --- |
+| Understand the current system, data flows, workers, and operations | [Backend system guide](backend-system-guide.md) |
+| Call an endpoint or check its request and response shape | [API reference](API.md) |
+| Configure or run the application locally | [`.env.example`](../.env.example) and [root README](../README.md) |
+| Install or upgrade Gatekeeperd on a VPS | [VPS deployment guide](staging-deployment.md) |
+| Put a client application behind nginx payment gating | [Nginx client gating](nginx-client-gating.md) |
+| Put the Gatekeeperd API behind nginx and TLS | [Nginx reverse proxy](nginx-reverse-proxy.md) |
+| Understand application deployment and cutover behavior | [Backend system guide, deployment system](backend-system-guide.md#11-deployment-system) |
 
-Project access status is separate from `blockReason`, which records why access is blocked (for example `manual`, `overdue`, or `payment_reversed`). Projects also track `deploymentMode`, `serviceMode`, and `lifecycleStatus` independently so a project can move from developer-hosted development to client-hosted production without losing payment or audit history.
+## Product model
 
-### Current project and service model
+A **customer** owns one or more **projects**. A project can contain multiple **services**. Billing and access can apply at project level or to an individual service; a project-wide block overrides service access. Each service has its own runtime configuration, environment versions, deployment history, and optional domain/site.
 
-A project is the durable customer-ownership and project-level access boundary; billing records may be linked to the project or to an individual service. A project can contain multiple named services. Each service has its own desired runtime configuration, environment and deployment history, active deployment, and optional domain/site. Service access can be managed independently while a project-level access block still applies across the project. The deployment and gateway flows select a service explicitly; APIs that omit `serviceId` use the project's `default` service where documented. See [API.md](API.md) for the current contract.
+Nginx or Traefik remains the public reverse proxy. Gatekeeperd answers whether traffic may reach the application. Paystack and M-Pesa handle payments; PostgreSQL stores the billing/access state; Redis caches gate decisions; Scribed handles invoice and receipt documents and configured notifications.
 
-PostgreSQL stores projects, payments, audit log, and admin users. Redis caches gate status (60s TTL). Paystack handles checkout and payment confirmation.
+## Configuration reference
 
-Database startup now records migrations in Flyway's `flyway_schema_history`. Fresh databases are created from the single current-state migration `V1___current_schema.sql`. Fresh databases use `DB_MIGRATION_BASELINE_VERSION=0`; existing databases must use their current schema version so the current-state migration is not replayed. Future schema changes should be added as versioned migrations.
+Keep [.env.example](../.env.example) as the environment-variable template. It documents the database, Redis, authentication, payment providers, Scribed/email integrations, Docker, GitHub, nginx, deployment, and gate settings. The backend system guide summarizes configuration groups and describes runtime behavior. Avoid copying full environment tables into other guides.
 
-Admin login attempts are rate-limited through Redis by email and client IP: five attempts per 15-minute window. If Redis is unavailable, login remains available and the outage is logged.
+## Documentation ownership
 
-Admin API JWTs include a unique ID and a role key, and can be revoked through `POST /api/auth/logout` until their normal expiry. Authorization is enforced against the user's current database role and permission grants on every admin request, so role edits, suspensions, and revocations take effect immediately. The built-in `admin` role is an immutable superuser. Administrators can manage custom roles and their catalogued permissions through `/api/admin/rbac`; `operator` and `viewer` are seeded as editable starting roles.
-Authenticated admins can change passwords through `POST /api/auth/password`. Password-reset email delivery is deployment-specific and remains outside the backend until an email provider is selected.
-
-Health endpoints are separated into liveness (`/api/health/live`) and readiness (`/api/health/ready`). Readiness requires both PostgreSQL and Redis to be reachable.
-`GET /api/version` publicly compares the running commit with the latest successful build recorded by the VPS auto-deploy checker; it reads local marker files and does not query GitHub per request.
-
-Docker operations can be restricted with `DOCKER_ALLOWED_REGISTRIES` and `DOCKER_ALLOWED_VOLUME_ROOTS`. When configured, images and host bind mounts outside these allowlists are rejected.
-
-Every request receives an `X-Request-ID` response header. A valid incoming `X-Request-ID` is preserved; otherwise the service generates one. The ID is included in application logs for troubleshooting.
-
----
-
-## Architecture
-
-### With nginx (current production pattern)
-
-```
-Internet
-    │
-    ▼
-nginx (client domain, e.g. acw.example.com)
-    │
-    ├─ location / → auth_request /gatekeeper-auth-acw
-    │     └─ GET /api/gate/auth?project={slug}             (403 = deny)
-    │                          Gatekeeperd
-    │
-    ├─ on deny → @gatekeeper_paywall_acw → /api/gate/paywall?project={slug}
-    │                                               (402 HTML paywall)
-    │
-    ├─ /api/gate/* proxied to Gatekeeperd                 (Pay Now, callback bypass auth_request)
-    │
-    └─ on allow → client app (e.g. localhost:9921)
-```
-
-See [nginx-client-gating.md](nginx-client-gating.md) for a full site config.
-
-### With Traefik (alternative)
-
-Traefik ForwardAuth calls `/api/gate/check?project={slug}` — returns `200` or `402` with paywall body directly.
-
----
-
-## Client payment flow
-
-1. Client visits site → nginx blocks → paywall page (project name, amount due, due date)
-2. **Pay Now** → `GET /api/gate/pay?project={slug}` → redirect to Paystack checkout
-3. After payment → browser redirects to the project domain from `/api/gate/payment/callback`
-4. Paystack webhook → `POST /api/paystack/webhook` → project set to `active` and `due_date` cleared
-5. With `due_date = null`, the auto-blocker stops tracking the project until an admin sets a new due date
-6. If the payment is later reversed, Gatekeeper re-blocks the project and restores `due_date` to that reversal day
-
-No admin action required to generate payment links for blocked clients.
-
----
-
-## Source layout
-
-### Application layering
-
-New request flows should keep Ktor route handlers focused on HTTP parsing, response codes, and serialization. Put use-case coordination in an application service, depend on repository interfaces, and bind those interfaces to persistence implementations in `plugins/DependencyInjection.kt` using Koin. Exposed/database access belongs in repository implementations. The gate and customer public routes use this pattern as the initial migration; remaining route groups are being migrated incrementally.
-
-```
-src/main/kotlin/com/gatekeeper/
-├── Application.kt              # Entry point, plugin wiring, initial admin seed
-├── config/
-│   └── AppConfig.kt            # .env / environment → typed config
-├── api/
-│   ├── ErrorResponse.kt        # Uniform error + payment-required JSON
-│   ├── InputValidators.kt      # Slug, email, container name, date validation
-│   └── dto/ApiDtos.kt          # Serializable admin API response types
-├── plugins/
-│   ├── Serialization.kt        # kotlinx.serialization JSON
-│   ├── Monitoring.kt           # CallLogging + StatusPages
-│   ├── Security.kt             # CORS, JWT auth
-│   ├── Database.kt             # HikariCP + Exposed schema
-│   ├── Redis.kt                # Jedis pool
-│   └── Routing.kt              # Health + JWT Docker admin routes
-├── gate/
-│   ├── GateService.kt          # Redis → Postgres → FAIL_MODE logic
-│   ├── GateResult.kt           # Active / Blocked / Unknown
-│   ├── GateRoutes.kt           # /api/gate/* public gating + payment routes
-│   ├── PaywallInfo.kt          # Paywall display model
-│   └── PaywallTemplates.kt     # HTML paywall
-├── auth/
-│   └── AuthRoutes.kt           # POST /api/auth/login, GET /api/auth/me
-├── rbac/
-│   ├── domain/                 # Permission catalog, roles, repository port
-│   ├── application/            # Role use cases and fail-closed route policy
-│   ├── data/                   # Live Exposed-backed permission checks
-│   └── presentation/           # Role API and route authorization plugin
-├── admin/
-│   ├── project/                # Project, setup and deployment admin routes
-│   ├── service/                # Service administration and billing routes
-│   ├── operations/             # Dashboards, audit, nginx and notifications
-│   ├── system/                 # Docker, logs, integrations and registry routes
-│   ├── application/            # Admin workflows and route support services
-│   └── model/                  # Admin request/response DTOs and dependencies
-├── paystack/
-│   ├── PaystackClient.kt       # Initialize + verify transactions
-│   ├── PaystackModels.kt       # Request/response DTOs
-│   ├── PaystackWebhookRoutes.kt
-│   └── ProjectPaymentService.kt
-├── docker/
-│   ├── DockerService.kt
-│   ├── DockerModels.kt
-│   └── PullImageRequest.kt
-├── scheduler/
-│   └── AutoBlockerJob.kt         # Auto-block past due_date + grace period
-└── db/
-    ├── tables/                 # projects, payments, audit_log, users
-    └── repositories/
-```
-
----
-
-## API surface
-
-| Prefix | Auth | Purpose |
-|--------|------|---------|
-| `/api/health` | None | Liveness check |
-| `/api/version` | None | Compare running version with latest successful build |
-| `/api/auth/login` | None | Admin JWT login |
-| `/api/auth/me` | JWT | Admin profile |
-| `/api/gate/auth` | None | nginx auth_request subrequest (200/403) |
-| `/api/gate/check` | None | Traefik ForwardAuth / JSON gate check (200/402) |
-| `/api/gate/paywall` | None | HTML paywall page |
-| `/api/gate/pay` | None | Start Paystack checkout (suspended projects only) |
-| `/api/gate/payment/callback` | None | Post-payment redirect |
-| `/api/paystack/webhook` | HMAC signature | Payment confirmation → unblock |
-| `/api/admin/*` | JWT | Projects, Docker, audit, payments |
-
-Full reference: [API.md](API.md)
-
----
-
-## Frontend wizard flows (recommended)
-
-The admin dashboard uses a wizard-like flow for Docker container creation and nginx enablement so that later steps are not attempted when earlier prerequisites fail. Container creation offers generic, PostgreSQL, and Redis presets. The database presets create persistent named volumes, generate PostgreSQL credentials, and default to the configured internal Docker network. Redis password authentication is optional. Host port mappings are optional; containers sharing that network should connect by container name and service port. Host processes use `127.0.0.1:<published-host-port>` when a host port is explicitly configured.
-
-### Docker container creation wizard
-
-1. **Network dropdown**: `GET /api/admin/containers/wizard/context` (or `GET /api/admin/networks`)
-2. **Image check**: `POST /api/admin/images/status` (if missing → `POST /api/admin/images/pull`)
-3. **Ports step**: `POST /api/admin/containers/wizard/ports/check`
-4. **Validate + normalize**: `POST /api/admin/containers/wizard/validate` (no changes applied)
-5. **Create container**: `POST /api/admin/containers/create` (includes restart policy, env vars, volume mounts)
-
-For private Docker Hub images, set `pullViaCli=true` (or `DOCKER_PULL_VIA_CLI=true`) so pulls use `docker pull` and can reuse the host's Docker auth.
-
-### Project creation and setup
-
-The project setup flow creates a durable project using only its name and required customer association. Source/runtime, credentials, domain/gateway, and deployment are optional follow-up tasks available from the project overview. Container-first project creation has been removed; Docker container creation remains available as a runtime setup operation.
-
-1. **Create project without Docker**: `POST /api/admin/project-setup/projects` (slug is generated from the name, with a random suffix added on collision)
-2. **Save source/runtime configuration**: `PUT /api/admin/project-setup/projects/{projectId}/source-runtime`
-3. **Save registry and project secret versions**: `PUT /api/admin/project-setup/projects/{projectId}/credentials`
-4. **Save desired domain/gateway state**: `PUT /api/admin/project-setup/projects/{projectId}/domain-gateway`
-5. **Deploy explicitly**: `POST /api/admin/project-setup/projects/{projectId}/deploy`
-
-The dashboard can resume setup using `GET /api/admin/project-setup/projects/{projectId}`. Secret values are write-only. Saving a gateway draft does not create or enable an Nginx site. Deployments activate independently unless an enabled managed Nginx site already exists; create or enable a new site separately after deployment, when its TLS certificate is ready.
-
-### Nginx enable wizard
-
-1. **Context + options**: `GET /api/admin/nginx/wizard/context/{slug}` (cert list + inferred port hints)
-2. **Validate + preview**: `POST /api/admin/nginx/wizard/validate` with service ID, domain, and binding ID (returns config preview; no changes applied)
-3. **Apply**: `POST /api/admin/nginx/enable` with the same structured target
-
----
-
-## Gate check data flow
-
-```
-GET /api/gate/check?project={slug}
-         │
-         ▼
-  Redis cache hit?  ──Yes──► active → 200, blocked → 402
-         │ No
-         ▼
-  Postgres by slug  ──Found──► cache in Redis (60s), return status
-         │ Not found
-         ▼
-  Redis + Postgres both down?  ──► FAIL_MODE (open → 200, closed → 402)
-```
-
-**Redis key:** `project:status:{slug}` → effective `"active"` | `"blocked"` access for that project or site slug, TTL 60s. Project access changes invalidate project and site slugs; service access changes invalidate that service's site slug.
-
----
-
-## Environment variables
-
-Copy [.env.example](../.env.example) to `.env`. Required vars have no safe defaults.
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `DB_URL` | Yes | Postgres JDBC URL |
-| `DB_USER` | Yes | Postgres user |
-| `DB_PASSWORD` | Yes | Postgres password |
-| `REDIS_HOST` | Yes | Redis host |
-| `REDIS_PORT` | No | Default `6379` |
-| `JWT_SECRET` | Yes | HMAC256 signing secret |
-| `JWT_ISSUER` | No | Default `gatekeeperd` |
-| `JWT_AUDIENCE` | No | Default `gatekeeperd-admin` |
-| `ADMIN_EMAIL` | First boot | Initial admin email (only when users table is empty) |
-| `ADMIN_PASSWORD` | First boot | Initial admin password (min 8 chars) |
-| `PAYSTACK_SECRET_KEY` | Payments | Paystack secret key |
-| `PAYSTACK_PUBLIC_KEY` | Payments | Paystack public key |
-| `MPESA_CONSUMER_KEY` | Payments | Daraja consumer key |
-| `MPESA_CONSUMER_SECRET` | Payments | Daraja consumer secret |
-| `MPESA_SHORT_CODE` | Payments | Paybill/till short code (`MPESA_SHORTCODE` is also accepted) |
-| `MPESA_PASSKEY` | Payments | Daraja passkey |
-| `MPESA_ENVIRONMENT` | Payments | `sandbox` or `production` |
-| `MPESA_CALLBACK_URL` | Payments | Public `/api/mpesa/callback` URL |
-| `GATEKEEPER_PUBLIC_URL` | Payments | Public HTTPS base URL, e.g. `https://gateapi.example.com` |
-| `GATEKEEPERD_SELF_DOMAIN` | Yes | Comma-separated bare hostname(s) for Gatekeeperd's own nginx vhost(s); protected from client-site reconciliation and cleanup |
-| `SCRIBED_CALLBACK_URL` | Integrations | Scribed base URL for suspension callbacks |
-| `SCRIBED_INTEGRATION_SECRET` | Integrations | Shared `X-Gatekeeper-Secret` value |
-
-Gatekeeperd owns service invoice balances and verified payment state in PostgreSQL. Existing Scribed service invoices are imported on first use; Scribed remains responsible for invoice and receipt documents plus notifications. Gatekeeperd persists payment and suspension notices in the PostgreSQL integration outbox before delivery. A background worker retries undelivered events with exponential backoff and marks them delivered only after Scribed responds successfully.
-| `SUPPORT_CONTACT_EMAIL` | No | Shown on paywall pages |
-| `CORS_ALLOWED_ORIGINS` | No | Comma-separated admin dashboard origins |
-| `DOCKER_SOCKET` | No | Default `unix:///var/run/docker.sock` |
-| `DEPLOYMENT_HOST_PORT_RANGE` | No | Stable host-port pool for managed blue/green deployments; default `32000-40000`. Reserve the range for Gatekeeperd on the Docker host. |
-| `DEPLOYMENT_DRAIN_DELAY_SECONDS` | No | Delay before retiring the previous runtime after a successful nginx cutover probe; default `5`, range `0-300`. |
-| `NGINX_DEPLOYMENT_UPSTREAMS_ENABLED` | No | Run the strict nginx include directory/configuration bootstrap; defaults to `false` in DEV and `true` in PROD. |
-| `NGINX_UPSTREAM_INCLUDE_DIR` | No | Writable per-service upstream include directory; defaults under `./nginx` in DEV and `/etc/nginx/conf.d/gatekeeperd-upstreams` in PROD. Nginx must include `<directory>/*.conf` inside `http {}`. |
-| `GATEKEEPER_INTERNAL_NETWORK` | No | Default `gk-internal` |
-| `GATEKEEPERD_ENVIRONMENT` | No | `DEV` or `PROD`; default `DEV`. Switches nginx and certificate paths and host-operation policy. DEV disables host commands and Certbot by default; when `GATEKEEPERD_NGINX_HOST_SUDO=false`, it uses local `nginx/` paths even if system-path overrides are present. PROD uses system nginx and `/etc/letsencrypt` paths; the service account must have the host permissions required by the installation. |
-| `GATEKEEPERD_NGINX_HOST_SUDO` | No | DEV-only opt-in to invoke local nginx/systemctl directly, without sudo. Defaults to `false`; the name is retained for compatibility. |
-| `GATEKEEPERD_NGINX_CERTBOT_ENABLED` | No | DEV-only opt-in to certificate helper operations. Defaults to `false`; requires the restricted Certbot helper and its sudoers rule. |
-| `NGINX_BINARY` | No | Nginx executable; defaults to `/usr/sbin/nginx`. Can be overridden for local development. |
-| `NGINX_CONFIG_PATH` | No | DEV-only nginx config file; defaults to `nginx/nginx.conf` and is used for local validation and reload commands. |
-| `NGINX_CUSTOM_CERT_DIR` | No | DEV-only. Filesystem path (e.g. `/etc/letsencrypt/custom`) where certbot helper output is written instead of `NGINX_SSL_CERT_PATH` when present. |
-| `DEFAULT_GRACE_PERIOD_DAYS` | No | Default `3` |
-| `FAIL_MODE` | No | `open` or `closed` |
-| `AUTOBLOCKER_INTERVAL_MINUTES` | No | Auto-block scan interval; default `60` |
-
-**Paystack dashboard (not env vars):**
-- Webhook: `{GATEKEEPER_PUBLIC_URL}/api/paystack/webhook`
-- Browser callback is set per transaction by the app: `{GATEKEEPER_PUBLIC_URL}/api/gate/payment/callback?project={slug}`
-
----
-
-## Deployment
-
-| Step | Where | Command |
-|------|-------|---------|
-| Build image | Dev machine | `./build.sh` |
-| Push to registry | Dev machine | `./push.sh` |
-| Deploy | VPS | `./deploy.sh` (pull + start postgres, redis, gatekeeperd) |
-| Fresh DB | VPS | `./deploy.sh --fresh` |
-
-Gatekeeperd API is typically exposed at a subdomain (e.g. `gateapi.example.com`) via nginx — see [nginx-reverse-proxy.md](nginx-reverse-proxy.md). Client sites get gating via [nginx-client-gating.md](nginx-client-gating.md).
-
-Details: [staging-deployment.md](staging-deployment.md)
-
----
-
-## Related repos
-
-| Repo | Role |
-|------|------|
-| **gatekeeperd** (this) | Backend API + gating engine |
-| **gatekeeperd-frontend** | React admin dashboard (Vercel) |
-
----
-
-## Docs index
-
-| File | Contents |
-|------|----------|
-| [backend-system-guide.md](backend-system-guide.md) | Detailed backend architecture, request/data flows, workers, deployment/gateway behavior, configuration, and operational diagnosis |
-| [API.md](API.md) | REST endpoints, request/response shapes |
-| [nginx-client-gating.md](nginx-client-gating.md) | Gate client apps behind nginx |
-| [nginx-reverse-proxy.md](nginx-reverse-proxy.md) | Expose gatekeeperd API behind nginx + SSL |
-| [staging-deployment.md](staging-deployment.md) | VPS deploy workflow |
-| [deployment-pipeline.md](deployment-pipeline.md) | Deployment lifecycle and runtime behavior |
+- [API reference](API.md) is the source for endpoint contracts.
+- [Backend system guide](backend-system-guide.md) explains current implementation and operational behavior.
+- The nginx and VPS guides contain task-specific procedures and configuration examples.
+- Source code and migrations are authoritative when implementation changes. Update the relevant guide when behavior changes; do not keep separate phase plans or static architecture reviews as current documentation.

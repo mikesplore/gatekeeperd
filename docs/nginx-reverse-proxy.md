@@ -5,7 +5,7 @@ If you want to expose gatekeeperd behind nginx with SSL, use this configuration.
 ## Prerequisites
 - nginx installed on your VPS
 - SSL certificate for your domain (e.g., via Let's Encrypt)
-- gatekeeperd container running on port 8080
+- Gatekeeperd running as a host service behind the stable `gatekeeperd_backend` nginx upstream. See the [VPS deployment guide](staging-deployment.md) for blue/green systemd setup.
 
 ## Gatekeeperd environment policy
 

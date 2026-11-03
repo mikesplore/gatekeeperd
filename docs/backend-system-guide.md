@@ -168,7 +168,7 @@ JSON serialization uses kotlinx.serialization. Most API errors use the common `{
 | `/api/admin/integrations*`, GitHub                  | Admin JWT; GitHub callbacks separately verified          | Scribed outbox, GitHub App setup/webhook activity.                                         | `admin/system/IntegrationAdminRoutes.kt`, `integrations/*`                            |
 | `/api/admin/registries*`, provider credentials      | Admin JWT                                                | Registry and provider configuration.                                                       | `admin/system/RegistryAdminRoutes.kt`                                                 |
 
-Admin API groups use the `auth-admin` provider. Self-service authentication uses `auth-jwt`, which accepts the supported `admin`, `operator`, and `viewer` roles. Non-admin roles can authenticate but are not granted admin API access; a fine-grained permission matrix is not implemented.
+Admin API groups use the `auth-jwt` provider and a route permission policy. Permissions are checked against the user's current role grants on each request. The built-in `admin` role is the immutable superuser; `operator` and `viewer` are editable starting roles.
 
 ## 6. Authentication and authorization
 
@@ -176,7 +176,7 @@ Admin API groups use the `auth-admin` provider. Self-service authentication uses
 
 Passwords are stored as BCrypt hashes. Login applies rate limits keyed by email and client address using Redis. A correct login either issues a short-lived 2FA challenge or creates an HMAC256 JWT plus opaque refresh token. Refresh-token hashes are keys in Redis; Redis storage is required for login, refresh, and revocation, so those flows fail closed when Redis cannot be reached.
 
-JWTs include subject email, issuer, audience, `role`, a unique JWT ID (`jti`), issued-at, and a 24-hour expiry. Both providers check signature, issuer/audience, and the Redis revocation list; `auth-jwt` accepts the supported roles, while `auth-admin` accepts only `admin`. If Redis cannot be queried for revocation, authentication returns a service-unavailable error rather than accepting a token without the check.
+JWTs include subject email, issuer, audience, role, a unique JWT ID (`jti`), issued-at, and a 24-hour expiry. The `auth-jwt` provider checks the signature, issuer/audience, and Redis revocation list. If Redis cannot be queried for revocation, authentication returns a service-unavailable error rather than accepting a token without the check.
 
 ### 6.2 Two-factor authentication
 
@@ -188,9 +188,9 @@ Password reset tokens are random and only their hashes are persisted. Tokens hav
 
 ### 6.4 Authorization boundary
 
-Public gate, payment initiation, callback, health and customer-safe endpoints do not require admin JWTs. Admin management APIs require `auth-admin`; account self-service uses `auth-jwt`.
+Public gate, payment initiation, callback, health and customer-safe endpoints do not require admin JWTs. Admin management APIs and account self-service use `auth-jwt`.
 
-`operator` and `viewer` accounts can now authenticate with their issued tokens, but they have no admin management permissions. Admin route groups remain admin-only until a role/permission matrix and corresponding frontend behavior are defined.
+Admin routes are protected by the current role's permission grants, evaluated for each request. The built-in `admin` role is the immutable superuser; other roles receive only their configured permissions. The dashboard hides actions the current user cannot perform, while the API remains the enforcement boundary.
 
 ## 7. Payment gating and access decisions
 
@@ -289,6 +289,8 @@ An admin deployment request queues durable work. The desired configuration is re
 ### 11.2 Worker lifecycle
 
 `DeploymentWorker` runs as a coroutine and claims one queued job at a time. It uses a claim token to prevent another worker attempt from concurrently mutating that same job, and a PostgreSQL advisory lock keyed by service/environment to serialize deployments for that runtime. It recovers interrupted cutovers on startup and periodically repairs stale running jobs.
+
+For repository deployments, GitHub push deliveries are deduplicated by `X-GitHub-Delivery`. Project repository/ref/image mappings and the project's `autoDeploy` setting control whether a push queues a deployment. This application webhook flow is separate from the VPS timer that upgrades Gatekeeperd itself. Registry credentials are centrally managed and encrypted; a deployment request supplies a registry host but never a registry password. Stale running jobs are returned to the queue on worker startup after `DEPLOYMENT_STALE_MINUTES`.
 
 For a repository deployment, the worker clones the configured ref (using a GitHub App installation token when available, falling back to anonymous clone for public repositories), captures the resolved commit, builds and pushes the image, then pulls an immutable image identity on the host. For a prebuilt image, it pulls the requested image directly. It handles registry credentials, networks, cancellation, progress logs and candidate cleanup.
 
@@ -483,12 +485,11 @@ For application-only logs use dashboard Logs or `journalctl -u gatekeeperd`. For
 
 These observations are based on repository code, not an inspection of a production database or VPS:
 
-1. **Non-admin roles have no admin management permissions.** `operator` and `viewer` tokens pass shared authentication, but admin route groups require `admin`. A role/permission matrix and frontend route behavior are not implemented for non-admin roles.
-2. **Route layering is mixed.** Koin-based use cases exist for gate, customer and payment workflows, while several older admin APIs call repositories directly. Changes should follow local conventions but avoid assuming a universal domain boundary.
-3. **Nginx and Docker are host-side dependencies.** Unit tests use fakes/temp dirs for most logic, but real sudoers, nginx include placement, systemd behavior, Docker networking, DNS, Certbot validation and file ownership still need server-side verification.
-4. **Gate `FAIL_MODE` applies only when both the Redis cache path and PostgreSQL lookup fail.** A missing project is deliberately denied; Redis-only failure falls back to PostgreSQL.
-5. **The public version endpoint reports the timer's latest known successful build, not an instantaneous query to GitHub.** If the timer cannot run or GitHub is unavailable, the result becomes stale/unknown rather than being a guaranteed live CI query.
-6. **External Scribed and payment-provider outcomes depend on their own availability and configuration.** Outbox/reconciliation reduce transient coupling, but cannot guarantee a third-party service eventually accepts an event.
+1. **Route layering is mixed.** Koin-based use cases exist for gate, customer and payment workflows, while several older admin APIs call repositories directly. Changes should follow local conventions but avoid assuming a universal domain boundary.
+2. **Nginx and Docker are host-side dependencies.** Unit tests use fakes/temp dirs for most logic, but real sudoers, nginx include placement, systemd behavior, Docker networking, DNS, Certbot validation and file ownership still need server-side verification.
+3. **Gate `FAIL_MODE` applies only when both the Redis cache path and PostgreSQL lookup fail.** A missing project is deliberately denied; Redis-only failure falls back to PostgreSQL.
+4. **The public version endpoint reports the timer's latest known successful build, not an instantaneous query to GitHub.** If the timer cannot run or GitHub is unavailable, the result becomes stale/unknown rather than being a guaranteed live CI query.
+5. **External Scribed and payment-provider outcomes depend on their own availability and configuration.** Outbox/reconciliation reduce transient coupling, but cannot guarantee a third-party service eventually accepts an event.
 
 This guide is a source-based architecture explanation. Production-specific database contents, host service unit overrides, DNS, nginx state and credentials must be verified on the deployed host; they cannot be inferred from this checkout.
 
@@ -561,6 +562,5 @@ Migration SQL is authoritative for exact constraints and data transformations. B
 - [API contract](API.md)
 - [Client nginx gating](nginx-client-gating.md)
 - [Nginx reverse proxy for Gatekeeperd](nginx-reverse-proxy.md)
-- [Deployment pipeline details](deployment-pipeline.md)
 - [VPS staging and deployment](staging-deployment.md)
 - [Project index and environment variables](README.md)

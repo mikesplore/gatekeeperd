@@ -1,56 +1,15 @@
-# Staging Deployment Guide
+# VPS Deployment and Operations
 
-## Prerequisites on VPS
-- Docker and Docker Compose installed
-- Docker Hub credentials configured (`docker login`)
-- `.env` file with staging configuration
+This guide covers local artifact smoke checks and the supported CI-artifact deployment to a systemd-managed VPS. Gatekeeperd runs as a host service behind nginx. Client workloads may run in Docker.
 
-## Option 1: Using docker-compose
+## Prerequisites
 
-Create or update `docker-compose.yml` on your VPS:
+- PostgreSQL and Redis reachable from the Gatekeeperd host.
+- A Linux VPS with systemd, nginx, and the host permissions required by the deployment and nginx integration.
+- GitHub CLI authenticated on the VPS with permission to read successful Actions artifacts.
+- Application settings in `/etc/gatekeeperd/gatekeeperd.env`; use [`.env.example`](../.env.example) as the template.
 
-```yaml
-version: "3.9"
-services:
-  gatekeeperd:
-    image: mikesplore/gatekeeperd:1.0.0-SNAPSHOT
-    env_file: .env
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-    depends_on:
-      - postgres
-      - redis
-    networks:
-      - gk-internal
-
-  postgres:
-    image: postgres:16
-    environment:
-      POSTGRES_DB: gatekeeper
-      POSTGRES_USER: gatekeeper
-      POSTGRES_PASSWORD: changeme
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    networks:
-      - gk-internal
-
-  redis:
-    image: redis:7-alpine
-    networks:
-      - gk-internal
-
-networks:
-  gk-internal:
-    external: false
-
-volumes:
-  pgdata:
-```
-
-Deploy with:
-```bash
-docker-compose up -d
-```
+For a first installation, follow [the root README setup](../README.md#first-vps-install). Use `deploy.sh` for normal upgrades after setup.
 
 ## Test the built JAR locally before production deployment
 
@@ -67,7 +26,7 @@ The local script does not build or download anything. It uses
 `18081`, and waits for `/api/health/ready`. It prints readiness responses while
 waiting and keeps the app running for manual API checks; press Ctrl+C to stop it.
 For host execution, configure `.env` with database and Redis addresses reachable
-from the host (for example, `localhost` instead of Docker Compose service names).
+from the host (for example, `localhost` rather than a container-network hostname when dependencies run in Docker).
 The startup log is written to `build/deploy-local.log`.
 
 This local check is separate from the production deployment script below. Production
@@ -241,65 +200,20 @@ The checker deploys the most recent successful `main` build. It does not deploy 
 request builds or tags. A commit whose deployment failed is not retried automatically;
 deploy a newer successful commit or run `deploy.sh` manually to retry it.
 
-To stop all services:
+## Verify deployment
+
+Check the public readiness endpoint:
+
 ```bash
-docker stop gatekeeperd redis postgres
+curl -fsS https://gateapi.example.com/api/health/ready
 ```
 
-To remove all services:
+Inspect the deployment checker and application journal when a rollout or readiness check fails:
+
 ```bash
-docker rm gatekeeperd redis postgres
+sudo systemctl status gatekeeperd-auto-deploy.timer
+sudo journalctl -u gatekeeperd-auto-deploy.service -n 50 --no-pager
+sudo journalctl -u gatekeeperd -n 100 --no-pager
 ```
 
-## Important Environment Variables
-
-Make sure your `.env` file on the VPS has the correct values:
-
-```env
-# Database
-DB_URL=jdbc:postgresql://postgres:5432/gatekeeper
-DB_USER=your_db_user
-DB_PASSWORD=your_secure_password
-
-# Redis
-REDIS_HOST=redis
-REDIS_PORT=6379
-
-# JWT (use a strong random string in production)
-JWT_SECRET=your-long-random-secret-key-here
-JWT_ISSUER=gatekeeperd
-JWT_AUDIENCE=gatekeeperd-admin
-
-# Paystack (use live keys for staging if needed)
-PAYSTACK_SECRET_KEY=sk_live_xxx
-PAYSTACK_PUBLIC_KEY=pk_live_xxx
-
-# Docker
-DOCKER_SOCKET=unix:///var/run/docker.sock
-GATEKEEPER_INTERNAL_NETWORK=gk-internal
-
-# Required: hostname(s) serving Gatekeeperd itself through nginx.
-# Add aliases as comma-separated bare hostnames; these vhosts are excluded from
-# Gatekeeperd's site discovery, reconciliation, edits, and cleanup.
-GATEKEEPERD_SELF_DOMAIN=gateapi.example.com
-
-# Configuration
-DEFAULT_GRACE_PERIOD_DAYS=3
-FAIL_MODE=open
-```
-
-## Verify Deployment
-
-Check if the container is running:
-```bash
-docker ps
-```
-
-View logs:
-```bash
-docker logs gatekeeperd
-```
-
-Test the API:
-```bash
-curl http://your-server-ip:8080/health
+The full environment template is [`.env.example`](../.env.example). The [backend system guide](backend-system-guide.md#21-failure-behavior-and-operational-diagnosis) lists first checks for common database, Redis, nginx, payment, and Scribed failures.

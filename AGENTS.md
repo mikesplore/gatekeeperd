@@ -98,12 +98,13 @@ Use a concise imperative commit message that describes the completed change.
 
 ## Documentation and deployment references
 
-- `docs/README.md` is the project architecture/index and environment-variable reference.
+- `docs/README.md` is the documentation index and product-model overview. `.env.example` is the environment-variable template; `docs/backend-system-guide.md` summarizes configuration groups and runtime behavior.
 - `docs/API.md` is the REST API contract.
+- `docs/backend-system-guide.md` is the current implementation and operations guide.
 - `docs/nginx-client-gating.md` documents client-site gating and the nginx `auth_request` setup.
 - `docs/nginx-reverse-proxy.md` documents exposing Gatekeeperd itself behind nginx/SSL.
-- `docs/staging-deployment.md` documents VPS/container deployment.
-- `docs/README.md` and `docs/API.md` describe the current project/service model and supported API. Treat source and these docs as authoritative; do not rely on removed historical phase plans.
+- `docs/staging-deployment.md` documents host installation and VPS upgrades.
+- Treat source, migrations, `docs/API.md`, and `docs/backend-system-guide.md` as authoritative. Keep overview and operational guides linked to those sources instead of duplicating endpoint or environment-variable inventories.
 
 ## Change guidance
 

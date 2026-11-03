@@ -74,8 +74,9 @@ and then `./scripts/deploy-local.sh`. It listens on port `18081`, waits for
 
 ## Documentation
 
+- [Documentation index and product model](docs/README.md)
+- [Backend system guide](docs/backend-system-guide.md)
 - [Staging and VPS deployment](docs/staging-deployment.md)
-- [Backend architecture and environment variables](docs/README.md)
 - [API reference](docs/API.md)
 - [Nginx client gating](docs/nginx-client-gating.md)
 - [Nginx reverse proxy](docs/nginx-reverse-proxy.md)
