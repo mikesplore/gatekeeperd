@@ -141,6 +141,11 @@ data class DashboardCustomerCreateRequest(
 )
 
 @Serializable
+data class DashboardCustomerUpdateRequest(
+    val firstName: String, val lastName: String, val contactEmail: String? = null, val contactPhone: String? = null
+)
+
+@Serializable
 data class DashboardProjectCustomerUpdateRequest(val customerId: String)
 
 @Serializable

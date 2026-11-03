@@ -883,6 +883,58 @@
             }
           }
         ]
+      },
+      "put": {
+        "tags": [
+          "Operations"
+        ],
+        "responses": {
+          "200": {
+            "description": "Customer operation completed."
+          },
+          "default": {
+            "description": "Operation-specific error response."
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "Update a dashboard customer",
+        "description": "Updates the customer's first name, last name, email, and phone.",
+        "operationId": "UpdateApiAdminDashboardCustomer"
+      },
+      "delete": {
+        "tags": [
+          "Operations"
+        ],
+        "responses": {
+          "200": {
+            "description": "Customer operation completed."
+          },
+          "default": {
+            "description": "Operation-specific error response."
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "Delete a dashboard customer",
+        "description": "Deletes a customer when no projects are assigned.",
+        "operationId": "DeleteApiAdminDashboardCustomer"
       }
     },
     "/api/admin/dashboard/customers/{id}/transactions": {
@@ -7622,12 +7674,26 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["projectSlug", "serviceId", "phoneNumber"],
+                "required": [
+                  "projectSlug",
+                  "serviceId",
+                  "phoneNumber"
+                ],
                 "properties": {
-                  "projectSlug": { "type": "string" },
-                  "serviceId": { "type": "string", "format": "uuid" },
-                  "phoneNumber": { "type": "string" },
-                  "amount": { "type": "string", "description": "Optional whole-KES amount; defaults to the outstanding balance." }
+                  "projectSlug": {
+                    "type": "string"
+                  },
+                  "serviceId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "phoneNumber": {
+                    "type": "string"
+                  },
+                  "amount": {
+                    "type": "string",
+                    "description": "Optional whole-KES amount; defaults to the outstanding balance."
+                  }
                 }
               }
             }

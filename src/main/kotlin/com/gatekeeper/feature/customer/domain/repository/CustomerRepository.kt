@@ -13,4 +13,6 @@ interface CustomerRepository {
     fun findById(id: UUID): Record?
     fun existsByContactEmail(email: String): Boolean
     fun create(firstName: String, lastName: String, contactEmail: String?, contactPhone: String?, billingStatus: String = "unknown"): Record
+    fun update(id: UUID, firstName: String, lastName: String, contactEmail: String?, contactPhone: String?): Record?
+    fun delete(id: UUID): Boolean
 }

@@ -93,6 +93,52 @@ fun Route.registerCustomerDashboardRoutes(dependencies: OperationsAdminDependenc
         )
     }
 
+    put("/api/admin/dashboard/customers/{id}") {
+        val id = runCatching { UUID.fromString(call.parameters["id"]) }.getOrNull() ?: run {
+            call.respondError(HttpStatusCode.BadRequest, "invalid_customer_id", "Invalid customer ID"); return@put
+        }
+        val body = runCatching { call.receive<DashboardCustomerUpdateRequest>() }.getOrElse {
+            call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Invalid customer body"); return@put
+        }
+        if (body.firstName.isBlank() || body.lastName.isBlank()) {
+            call.respondError(HttpStatusCode.BadRequest, "invalid_customer", "Customer first and last names are required"); return@put
+        }
+        val email = body.contactEmail?.trim()?.takeIf { it.isNotBlank() }?.lowercase()
+        if (email != null && !com.gatekeeper.api.InputValidators.isValidEmail(email)) {
+            call.respondError(HttpStatusCode.BadRequest, "invalid_customer_email", "Enter a valid customer email address"); return@put
+        }
+        val customers = call.application.get<CustomerStore>()
+        val current = customers.findById(id) ?: run {
+            call.respondError(HttpStatusCode.NotFound, "customer_not_found", "Customer not found"); return@put
+        }
+        if (email != null && !email.equals(current.contactEmail, ignoreCase = true) && customers.existsByContactEmail(email)) {
+            call.respondError(HttpStatusCode.Conflict, "customer_exists", "A customer with that email already exists"); return@put
+        }
+        val customer = customers.update(id, body.firstName.trim(), body.lastName.trim(), email, body.contactPhone?.trim()?.takeIf { it.isNotBlank() }) ?: run {
+            call.respondError(HttpStatusCode.NotFound, "customer_not_found", "Customer not found"); return@put
+        }
+        call.respond(DashboardCustomerResponse(customer.id.toString(), customer.firstName, customer.lastName, customer.contactEmail, customer.contactPhone, customer.billingStatus, projects.findByCustomerId(id).size))
+    }
+
+    delete("/api/admin/dashboard/customers/{id}") {
+        val id = runCatching { UUID.fromString(call.parameters["id"]) }.getOrNull() ?: run {
+            call.respondError(HttpStatusCode.BadRequest, "invalid_customer_id", "Invalid customer ID"); return@delete
+        }
+        val customers = call.application.get<CustomerStore>()
+        if (customers.findById(id) == null) {
+            call.respondError(HttpStatusCode.NotFound, "customer_not_found", "Customer not found"); return@delete
+        }
+        if (projects.findByCustomerId(id).isNotEmpty()) {
+            call.respondError(HttpStatusCode.Conflict, "customer_has_projects", "Reassign this customer's projects before deleting the customer"); return@delete
+        }
+        try {
+            customers.delete(id)
+        } catch (_: Exception) {
+            call.respondError(HttpStatusCode.Conflict, "customer_has_projects", "Reassign this customer's projects before deleting the customer"); return@delete
+        }
+        call.respond(mapOf("deleted" to true, "id" to id.toString()))
+    }
+
     patch("/api/admin/dashboard/projects/{id}") {
         val id = runCatching { UUID.fromString(call.parameters["id"]) }.getOrNull() ?: run {
             call.respondError(

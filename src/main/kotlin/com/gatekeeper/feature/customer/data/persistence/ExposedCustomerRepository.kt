@@ -4,12 +4,16 @@ import com.gatekeeper.db.tables.Customers
 import com.gatekeeper.feature.customer.domain.repository.CustomerRepository
 import org.jetbrains.exposed.sql.ResultRow
 import org.jetbrains.exposed.sql.SortOrder
+import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
 import org.jetbrains.exposed.sql.insert
+import org.jetbrains.exposed.sql.update
+import org.jetbrains.exposed.sql.deleteWhere
 import org.jetbrains.exposed.sql.lowerCase
 import org.jetbrains.exposed.sql.or
 import org.jetbrains.exposed.sql.selectAll
 import org.jetbrains.exposed.sql.transactions.transaction
 import java.util.UUID
+import java.time.LocalDateTime
 
 class ExposedCustomerRepository : CustomerRepository {
     override fun findAll(): List<CustomerRepository.Record> = transaction {
@@ -50,6 +54,21 @@ class ExposedCustomerRepository : CustomerRepository {
             it[Customers.billingStatus] = billingStatus
         }
         Customers.selectAll().where { Customers.id eq id }.single().toRecord()
+    }
+
+    override fun update(id: UUID, firstName: String, lastName: String, contactEmail: String?, contactPhone: String?): CustomerRepository.Record? = transaction {
+        val changed = Customers.update({ Customers.id eq id }) {
+            it[Customers.firstName] = firstName
+            it[Customers.lastName] = lastName
+            it[Customers.contactEmail] = contactEmail
+            it[Customers.contactPhone] = contactPhone
+            it[Customers.updatedAt] = LocalDateTime.now()
+        }
+        if (changed == 0) null else Customers.selectAll().where { Customers.id eq id }.single().toRecord()
+    }
+
+    override fun delete(id: UUID): Boolean = transaction {
+        Customers.deleteWhere { Customers.id eq id } > 0
     }
 
     private fun ResultRow.toRecord() = CustomerRepository.Record(

@@ -667,6 +667,40 @@ paths:
         schema:
           type: string
   /api/admin/dashboard/customers/{id}:
+    put:
+      tags:
+      - Operations
+      summary: Update a dashboard customer
+      description: Updates the customer's first name, last name, email, and phone.
+      operationId: UpdateApiAdminDashboardCustomer
+      responses:
+        '200':
+          description: Customer updated.
+        default:
+          description: Operation-specific error response.
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    delete:
+      tags:
+      - Operations
+      summary: Delete a dashboard customer
+      description: Deletes a customer when no projects are assigned.
+      operationId: DeleteApiAdminDashboardCustomer
+      responses:
+        '200':
+          description: Customer deleted.
+        default:
+          description: Operation-specific error response.
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
     get:
       tags:
       - Operations
