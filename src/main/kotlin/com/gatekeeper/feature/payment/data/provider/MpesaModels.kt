@@ -1,6 +1,7 @@
 package com.gatekeeper.feature.payment.data.provider
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonPrimitive
 
 @Serializable data class MpesaTokenResponse(val access_token: String, val expires_in: String)
 @Serializable data class MpesaStkRequest(
@@ -12,7 +13,7 @@ import kotlinx.serialization.Serializable
 @Serializable data class MpesaStkResponse(
     val MerchantRequestID: String? = null, val CheckoutRequestID: String? = null,
     val ResponseCode: String? = null, val ResponseDescription: String? = null,
-    val ResultCode: Int? = null, val ResultDesc: String? = null,
+    val ResultCode: JsonPrimitive? = null, val ResultDesc: String? = null,
     val CustomerMessage: String? = null
 )
 @Serializable data class MpesaCallback(val Body: MpesaCallbackBody? = null)

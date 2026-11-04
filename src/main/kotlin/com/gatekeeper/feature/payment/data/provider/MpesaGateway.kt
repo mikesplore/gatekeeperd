@@ -6,7 +6,6 @@ import com.gatekeeper.feature.payment.domain.gateway.InitiatePaymentCommand
 import com.gatekeeper.feature.payment.domain.gateway.InitiatedPayment
 import com.gatekeeper.feature.payment.domain.gateway.VerifiedPayment
 import io.ktor.client.*
-import io.ktor.client.call.*
 import io.ktor.client.plugins.contentnegotiation.*
 import io.ktor.client.request.*
 import io.ktor.client.statement.bodyAsText
@@ -66,10 +65,24 @@ class MpesaGateway(private val settings: AppSettings.PaymentSettings) : PaymentG
         val response = http.post("$baseUrl/mpesa/stkpushquery/v1/query") {
             bearerAuth(token()); contentType(ContentType.Application.Json)
             setBody(mapOf("BusinessShortCode" to settings.mpesaShortCode, "Password" to password, "Timestamp" to timestamp, "CheckoutRequestID" to reference))
-        }.body<MpesaStkResponse>()
+        }
+        val responseBody = response.bodyAsText()
+        if (!response.status.isSuccess()) {
+            error("Daraja STK query returned HTTP ${response.status.value}: ${responseBody.take(500)}")
+        }
+        val query = Json.decodeFromString<MpesaStkResponse>(responseBody)
+        if (query.ResponseCode != null && query.ResponseCode != "0") {
+            error("Daraja STK query rejected (code=${query.ResponseCode}): ${query.ResponseDescription ?: query.ResultDesc ?: "no description"}")
+        }
         // ResponseCode only confirms that Daraja accepted the query. ResultCode
         // carries the checkout transaction outcome and must drive payment state.
-        VerifiedPayment(mpesaQueryStatus(response.ResultCode))
+        val resultCode = query.ResultCode?.content?.toIntOrNull()
+        if (query.ResultCode != null && resultCode == null) {
+            error("Daraja STK query returned an invalid ResultCode: ${query.ResultCode.content}")
+        }
+        VerifiedPayment(mpesaQueryStatus(resultCode))
+    }.onFailure { error ->
+        logger.warn("M-Pesa STK status query failed for checkout reference={}: {}", reference, error.message)
     }
 
     fun close() = http.close()
@@ -78,6 +91,7 @@ class MpesaGateway(private val settings: AppSettings.PaymentSettings) : PaymentG
 internal fun mpesaQueryStatus(resultCode: Int?): String = when (resultCode) {
     0 -> "success"
     1032 -> "abandoned"
+    4999 -> "pending"
     null -> "pending"
     else -> "failed"
 }
