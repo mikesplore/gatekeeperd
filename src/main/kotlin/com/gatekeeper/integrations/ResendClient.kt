@@ -27,4 +27,23 @@ class ResendClient(private val settings: AppSettings.IntegrationSettings) {
             }.status.isSuccess()
         }.onFailure { logger.warn("Password reset email delivery failed: ${it.message}") }.getOrDefault(false)
     }
+
+    suspend fun sendCustomerAccessCode(email: String, code: String): Boolean {
+        val key = settings.resendApiKey.trim()
+        val from = settings.resendFromEmail.trim()
+        return !(key.isBlank() || from.isBlank()) && runCatching {
+            http.post("https://api.resend.com/emails") {
+                contentType(ContentType.Application.Json)
+                header(HttpHeaders.Authorization, "Bearer $key")
+                setBody(
+                    ResendEmail(
+                        from,
+                        listOf(email),
+                        "Your Gatekeeperd support sign-in code",
+                        "<p>Use this code to securely view your hosted services and billing information:</p><p style=\"font-size:28px;font-weight:700;letter-spacing:8px\">$code</p><p>This code expires in 5 minutes and can only be used once. If you did not request it, you can ignore this email.</p>"
+                    )
+                )
+            }.status.isSuccess()
+        }.onFailure { logger.warn("Customer support access email delivery failed") }.getOrDefault(false)
+    }
 }

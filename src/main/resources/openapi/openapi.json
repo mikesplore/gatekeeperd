@@ -7124,7 +7124,11 @@
             }
           }
         ],
-        "security": []
+        "security": [
+          {
+            "CustomerSupportSession": []
+          }
+        ]
       }
     },
     "/api/customer/projects/{slug}/portal": {
@@ -7198,7 +7202,11 @@
             }
           }
         ],
-        "security": []
+        "security": [
+          {
+            "CustomerSupportSession": []
+          }
+        ]
       }
     },
     "/api/customer/projects/{slug}/status": {
@@ -7207,7 +7215,11 @@
           "Customer"
         ],
         "summary": "Get customer-safe project status and payment data",
-        "security": [],
+        "security": [
+          {
+            "CustomerSupportSession": []
+          }
+        ],
         "parameters": [
           {
             "$ref": "#/components/parameters/SlugPath"
@@ -7229,7 +7241,8 @@
             "$ref": "#/components/responses/NotFound"
           }
         },
-        "operationId": "GetApiCustomerProjectsByslugStatus"
+        "operationId": "GetApiCustomerProjectsByslugStatus",
+        "description": "Requires a verified Gatekeeperd Support customer session and returns data only for a project owned by that customer."
       }
     },
     "/api/customer/projects/{slug}/support": {
@@ -7927,6 +7940,11 @@
         "type": "http",
         "scheme": "bearer",
         "bearerFormat": "JWT"
+      },
+      "CustomerSupportSession": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "gk_customer_session"
       }
     },
     "parameters": {

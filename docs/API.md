@@ -170,15 +170,21 @@ Paystack browser return URL after payment. Redirects the browser to the project 
 
 **Note:** when a payment is confirmed, Gatekeeper clears the project's `due_date` and sets the project back to `active`. That stops overdue tracking until an admin assigns a new due date.
 
-### Customer frontend integration
+### Gatekeeperd Support
 
-Set `GATEKEEPER_FRONTEND_URL` to the deployed customer frontend origin. The backend does not render customer screens; it supplies the data and redirects the browser to that frontend.
+Gatekeeperd serves the customer support and billing experience directly. Route the support hostname to the Gatekeeperd backend. `GET /` and `GET /support` render the public help page; after email verification, `/support/services` shows only projects and services assigned to that customer.
+
+`POST /support/access/request` accepts an `application/x-www-form-urlencoded` `email` field. The response is intentionally the same whether or not the email belongs to a customer. Matching accounts receive a six-digit code that expires after five minutes. A code is limited to five verification attempts, and requests are limited to three per email per 15 minutes. A successful code creates an opaque, HttpOnly, SameSite=Strict session cookie for eight hours; production cookies are Secure. Redis must be available for this flow.
+
+The support page shows access suspension separately from a live HTTP check against the configured service upstream. The connection check requests `/` and considers HTTP 200–499 responsive; this is an availability signal, not a full website test. Missing upstream configuration is shown as unknown.
+
+`POST /support/logout` revokes the support session. The customer status, receipt, and reminder APIs below also require this session and return not-found for projects not owned by the verified customer.
 
 #### GET /api/customer/projects/{slug}/status
-Returns customer-safe access status, amount due, due date, payment history, receipt URLs, payment URL, portal URL, and support URL.
+Requires the Gatekeeperd Support session cookie. Returns that customer's access status, amount due, due date, payment history, receipt URLs, payment URL, portal URL, and support URL.
 
 #### GET /api/customer/projects/{slug}/payments/{paymentId}/receipt
-Returns receipt data for a successful payment. The frontend can render or print it.
+Requires the Gatekeeperd Support session cookie and verifies project ownership. Returns receipt data for a successful payment. The frontend can render or print it.
 
 #### GET /api/customer/projects/{slug}/portal
 Redirects to `${GATEKEEPER_FRONTEND_URL}/portal/{slug}`.
@@ -187,7 +193,7 @@ Redirects to `${GATEKEEPER_FRONTEND_URL}/portal/{slug}`.
 Redirects to `${GATEKEEPER_FRONTEND_URL}/payment/success` with project and reference query parameters.
 
 #### GET /api/customer/projects/{slug}/reminder
-Returns an email-ready reminder payload containing the recipient, subject, message, and payment URL. Email delivery remains a frontend/notification-provider concern.
+Requires the Gatekeeperd Support session cookie and verifies project ownership. Returns an email-ready reminder payload containing the recipient, subject, message, and payment URL.
 
 #### POST /api/customer/projects/{slug}/support
 Creates a persisted support request. Body:

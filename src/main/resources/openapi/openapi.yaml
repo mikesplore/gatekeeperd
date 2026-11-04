@@ -4876,7 +4876,8 @@ paths:
         required: true
         schema:
           type: string
-      security: []
+      security:
+      - CustomerSupportSession: []
   /api/customer/projects/{slug}/portal:
     get:
       tags:
@@ -4926,13 +4927,16 @@ paths:
         required: true
         schema:
           type: string
-      security: []
+      security:
+      - CustomerSupportSession: []
   /api/customer/projects/{slug}/status:
     get:
       tags:
       - Customer
       summary: Get customer-safe project status and payment data
-      security: []
+      description: Requires a verified Gatekeeperd Support customer session and returns data only for a project owned by that customer.
+      security:
+      - CustomerSupportSession: []
       parameters:
       - $ref: '#/components/parameters/SlugPath'
       responses:
@@ -5399,6 +5403,10 @@ components:
       type: http
       scheme: bearer
       bearerFormat: JWT
+    CustomerSupportSession:
+      type: apiKey
+      in: cookie
+      name: gk_customer_session
   parameters:
     ProjectSlug:
       name: project

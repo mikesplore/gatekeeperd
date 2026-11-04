@@ -11,6 +11,7 @@ import com.gatekeeper.auth.configureAuthRoutes
 import com.gatekeeper.config.AppSettings
 import com.gatekeeper.security.SecretValueCipher
 import com.gatekeeper.customer.configureCustomerRoutes
+import com.gatekeeper.customer.configureCustomerSupportRoutes
 import com.gatekeeper.db.tables.Users
 import com.gatekeeper.db.ServiceIdentityBackfill
 import com.gatekeeper.deployment.DeploymentWorker
@@ -171,6 +172,7 @@ fun Application.module() {
     configureGateRoutes()
     configurePaymentRoutes()
     configureCustomerRoutes()
+    configureCustomerSupportRoutes()
     configureAuthRoutes()
     configureRbacAdminRoutes()
     configureProjectAdminRoutes()

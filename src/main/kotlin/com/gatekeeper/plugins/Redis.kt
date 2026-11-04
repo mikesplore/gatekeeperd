@@ -78,6 +78,16 @@ object RedisService {
         } }
     }
 
+    /** Atomically consumes a key only when its current value matches the verified value. */
+    fun compareAndDeleteRequired(key: String, expectedValue: String): Boolean {
+        val activePool = pool ?: throw RedisUnavailableException()
+        val script = "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) else return 0 end"
+        val result = activePool.resource.use { jedis ->
+            jedis.eval(script, listOf(key), listOf(expectedValue))
+        }
+        return result == 1L
+    }
+
     fun delete(key: String) {
         pool?.resource?.use { jedis ->
             jedis.del(key)

@@ -1,6 +1,7 @@
 package com.gatekeeper.plugins
 
 import com.gatekeeper.customer.CustomerApplicationService
+import com.gatekeeper.customer.CustomerSupportAccessService
 import com.gatekeeper.auth.AuthUserRepository
 import com.gatekeeper.auth.ExposedAuthUserRepository
 import com.gatekeeper.rbac.domain.RbacRepository
@@ -219,6 +220,7 @@ private val applicationModule = module {
     single<RegistryCredentialStore> { ExposedRegistryCredentialRepository(get<ProviderCredentialStore>()) }
     single { GitHubAppClient(get(), get(), get<AppSettings>().github) }
     single { ResendClient(get<AppSettings>().integrations) }
+    single { CustomerSupportAccessService(get<CustomerStore>(), get<ProjectStore>(), get<ResendClient>(), get<AppSettings>().auth) }
     single { ScribedIntegrationClient(get<AppSettings>().integrations, get<ProjectStore>()) }
     single<DeploymentPortAllocationPort> { ExposedDeploymentPortAllocationRepository() }
     single<EnvironmentSetStore> { ExposedEnvironmentSetRepository() }

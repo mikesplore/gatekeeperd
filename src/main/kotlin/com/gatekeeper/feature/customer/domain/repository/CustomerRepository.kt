@@ -11,6 +11,7 @@ interface CustomerRepository {
     fun findAll(): List<Record>
     fun findPage(query: String?, limit: Int, offset: Int): Pair<List<Record>, Int>
     fun findById(id: UUID): Record?
+    fun findByContactEmail(email: String): Record?
     fun existsByContactEmail(email: String): Boolean
     fun create(firstName: String, lastName: String, contactEmail: String?, contactPhone: String?, billingStatus: String = "unknown"): Record
     fun update(id: UUID, firstName: String, lastName: String, contactEmail: String?, contactPhone: String?): Record?

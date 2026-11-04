@@ -36,6 +36,13 @@ class ExposedCustomerRepository : CustomerRepository {
         Customers.selectAll().where { Customers.id eq id }.singleOrNull()?.toRecord()
     }
 
+    override fun findByContactEmail(email: String): CustomerRepository.Record? = transaction {
+        val normalized = email.trim().lowercase()
+        if (normalized.isBlank()) null else Customers.selectAll().where {
+            Customers.contactEmail.lowerCase() eq normalized
+        }.singleOrNull()?.toRecord()
+    }
+
     override fun existsByContactEmail(email: String): Boolean = transaction {
         val normalized = email.trim().lowercase()
         normalized.isNotBlank() && Customers.selectAll().where {
