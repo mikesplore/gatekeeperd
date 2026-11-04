@@ -259,6 +259,7 @@ private val applicationModule = module {
     }
     single {
         NginxConfigRenderer(
+            gatekeeperUpstream = if (get<AppSettings>().nginx.environment == com.gatekeeper.config.AppEnvironment.PROD) "gatekeeperd_backend" else "127.0.0.1:8080",
             sslCertPath = get<AppSettings>().nginx.sslCertPath,
             upstreamIncludeDirectory = get<AppSettings>().nginx.upstreamIncludeDirectory,
             nginxValidation = get()

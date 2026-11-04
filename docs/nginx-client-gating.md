@@ -16,7 +16,7 @@ The `/api/gate/` location is a separate bypass path for payment and callback tra
 
 ## Example: `acw.mikesplore.me`
 
-Replace `acw` with your project slug and `9921` with your app port.
+Replace `acw` with your project slug and `9921` with your app port. This production example routes Gatekeeperd calls through the stable `gatekeeperd_backend` upstream installed by the VPS deployment. Local DEV configurations use `127.0.0.1:8080` instead.
 
 ```nginx
 server {
@@ -34,7 +34,7 @@ server {
     # Payment callbacks, webhooks, and paywall APIs bypass auth_request
     # -------------------------------------------------------------------------
     location /api/gate/ {
-        proxy_pass http://127.0.0.1:8080/api/gate/;
+        proxy_pass http://gatekeeperd_backend/api/gate/;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -66,7 +66,7 @@ server {
     # -------------------------------------------------------------------------
     location = /gatekeeper-auth-acw {
         internal;
-        proxy_pass http://127.0.0.1:8080/api/gate/auth?project=acw&domain=acw.mikesplore.me;
+        proxy_pass http://gatekeeperd_backend/api/gate/auth?project=acw&domain=acw.mikesplore.me;
 
         # Always force subrequest method to GET
         proxy_method GET;
@@ -105,7 +105,7 @@ server {
     # -------------------------------------------------------------------------
     location @gatekeeper_paywall_acw {
         rewrite ^ /api/gate/paywall?project=acw&domain=acw.mikesplore.me break;
-        proxy_pass http://127.0.0.1:8080;
+        proxy_pass http://gatekeeperd_backend;
 
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -170,7 +170,7 @@ https://gateapi.mikesplore.me/api/paystack/webhook
 ## Verify
 
 ```bash
-curl -i "http://127.0.0.1:8080/api/gate/paywall?project=acw"   # 402 HTML paywall
+curl -i "https://gateapi.mikesplore.me/api/gate/paywall?project=acw"   # 402 HTML paywall
 curl -i "https://acw.mikesplore.me/api/v1/health"               # 402 HTML when blocked (browser)
 curl -i -H "Accept: application/json" "https://acw.mikesplore.me/api/v1/health"  # 402 JSON for API clients
 ```

@@ -10,7 +10,7 @@ import java.util.UUID
 
 /** Pure renderer for Gatekeeper-managed nginx site configuration. */
 class NginxConfigRenderer(
-    private val gatekeeperPort: Int = 8080,
+    private val gatekeeperUpstream: String = "127.0.0.1:8080",
     private val sslCertPath: String = "/etc/letsencrypt/live",
     private val upstreamIncludeDirectory: String = "/etc/nginx/conf.d/gatekeeperd-upstreams",
     private val nginxValidation: NginxValidationService
@@ -97,7 +97,7 @@ class NginxConfigRenderer(
                 require(path.startsWith("/") && path.endsWith("/") && !path.contains(';')) { "Invalid bypass path" }
                 if (path == "/api/paystack/") appendLine("    # Payment provider callbacks must not be gated by the client project")
                 appendLine("    location $path {")
-                appendLine("        proxy_pass http://127.0.0.1:$gatekeeperPort$path;")
+                appendLine("        proxy_pass http://$gatekeeperUpstream$path;")
                 appendLine("        proxy_set_header Host \$host;")
                 appendLine("        proxy_set_header X-Real-IP \$remote_addr;")
                 appendLine("        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;")
@@ -174,7 +174,7 @@ class NginxConfigRenderer(
             appendLine("    # gatekeeperd:block:auth_request")
             appendLine("    location = /gatekeeper-auth-$slug {")
                 appendLine("        internal;")
-                appendLine("        proxy_pass http://127.0.0.1:$gatekeeperPort/api/gate/auth?project=$slug&domain=$domain;")
+                appendLine("        proxy_pass http://$gatekeeperUpstream/api/gate/auth?project=$slug&domain=$domain;")
                 appendLine()
                 appendLine("        # Always force subrequest method to GET")
                 appendLine("        proxy_method GET;")
@@ -217,7 +217,7 @@ class NginxConfigRenderer(
             appendLine("    # gatekeeperd:block:paywall")
             appendLine("    location @gatekeeper_paywall_$slug {")
             appendLine("        rewrite ^ /api/gate/paywall?project=$slug&domain=$domain break;")
-            appendLine("        proxy_pass http://127.0.0.1:$gatekeeperPort;")
+            appendLine("        proxy_pass http://$gatekeeperUpstream;")
             appendLine("        proxy_set_header Host \$host;")
             appendLine("        proxy_set_header X-Real-IP \$remote_addr;")
             appendLine("        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;")
