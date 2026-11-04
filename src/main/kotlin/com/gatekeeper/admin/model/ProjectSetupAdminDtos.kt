@@ -231,6 +231,15 @@ data class ProjectDeploymentHistoryItem(
 )
 
 @Serializable
+data class ProjectDeploymentDiagnosticsResponse(
+    val deploymentId: String,
+    val status: String,
+    val step: String,
+    val errorMessage: String?,
+    val logs: String
+)
+
+@Serializable
 data class ProjectDeploymentHistoryResponse(val projectId: String, val environment: String, val items: List<ProjectDeploymentHistoryItem>)
 
 @Serializable

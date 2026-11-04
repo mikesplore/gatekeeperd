@@ -270,6 +270,20 @@ fun Route.registerProjectDeploymentRoutes(dependencies: ProjectSetupDependencies
             call.respond(ProjectDeploymentHistoryResponse(project.id.toString(), environment, items))
     }
 
+    get("/api/admin/projects/{slug}/deployments/{id}/diagnostics") {
+        val slug = call.parameters["slug"] ?: return@get call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing project slug")
+        val project = projects.findBySlug(slug)
+            ?: return@get call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
+        val id = call.parameters["id"]?.let { runCatching { UUID.fromString(it) }.getOrNull() }
+            ?: return@get call.respondError(HttpStatusCode.BadRequest, "invalid_deployment_id", "Deployment ID is invalid")
+        val job = deploymentJobs.find(id)?.takeIf { it.projectId == project.id }
+            ?: return@get call.respondError(HttpStatusCode.NotFound, "deployment_not_found", "Deployment diagnostics were not found for this project")
+        val secrets = runCatching { deploymentJobs.resolveEnvironmentForExecution(id).values.values }.getOrDefault(emptyList())
+        val logs = SecretValueCipher.redact(job.logs, secrets).takeLast(16_000)
+        val errorMessage = job.errorMessage?.let { SecretValueCipher.redact(it, secrets) }
+        call.respond(ProjectDeploymentDiagnosticsResponse(id.toString(), job.status, job.currentStep, errorMessage, logs))
+    }
+
     post("/api/admin/projects/{slug}/deployments/{id}/redeploy") {
         val slug = call.parameters["slug"] ?: return@post call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing project slug")
         val project = projects.findBySlug(slug)

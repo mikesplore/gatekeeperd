@@ -22,7 +22,8 @@ class SourceFetcher(
             githubTokens.installationToken()
         } catch (error: Exception) {
             if (error is CancellationException) throw error
-            onLog("GitHub App is not connected; attempting public repository clone for $repository")
+            val reason = error.message?.takeIf(String::isNotBlank) ?: error.javaClass.simpleName
+            onLog("GitHub App installation token could not be obtained: $reason. Attempting an unauthenticated clone for $repository.")
             ""
         }
         val clone = listOf("git", "clone", "--depth", "1", "--branch", gitRef, "https://github.com/$repository.git", workspace.toString())
@@ -37,10 +38,23 @@ class SourceFetcher(
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Exception) {
-            if (token.isBlank()) throw error
-            onLog("Authenticated clone unavailable for $repository; retrying as public repository")
+            if (token.isBlank()) {
+                throw IllegalStateException("Git clone failed for $repository@$gitRef. See deployment diagnostics for Git output.", error)
+            }
+            val authenticatedFailure = (error.message?.takeIf(String::isNotBlank) ?: error.javaClass.simpleName)
+                .replace(token, "[REDACTED]")
+            onLog("Authenticated Git clone failed for $repository@$gitRef: $authenticatedFailure. Retrying without authentication.")
             resetWorkspace()
-            commands.run(clone, workspace, checkCancelled = checkCancelled) { onOutput(it, "") }
+            try {
+                commands.run(clone, workspace, checkCancelled = checkCancelled) { onOutput(it, "") }
+            } catch (publicError: Exception) {
+                if (publicError is CancellationException) throw publicError
+                val publicFailure = publicError.message?.takeIf(String::isNotBlank) ?: publicError.javaClass.simpleName
+                throw IllegalStateException(
+                    "Git clone failed for $repository@$gitRef. Authenticated attempt: $authenticatedFailure. Unauthenticated attempt: $publicFailure. See deployment diagnostics for Git output.",
+                    publicError
+                )
+            }
         }
         return commands.output(listOf("git", "rev-parse", "HEAD"), workspace).trim()
     }

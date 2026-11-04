@@ -321,7 +321,10 @@ class DeploymentWorker(
                         Files.createDirectories(workspace)
                     },
                     checkCancelled = { ensureNotCancelled(job.id, requireNotNull(job.claimToken)) },
-                    onLog = logger::info,
+                    onLog = { message ->
+                        logger.info(message)
+                        update(job, log = message)
+                    },
                     onOutput = { line, token ->
                         update(job, log = SecretValueCipher.redact(line, listOf(token)))
                     }
