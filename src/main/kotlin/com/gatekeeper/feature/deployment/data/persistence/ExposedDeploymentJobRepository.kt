@@ -1334,7 +1334,7 @@ class ExposedDeploymentJobRepository : DeploymentJobRepository {
             step == "starting_container" -> DeploymentStatus.STARTING
             step == "health_checking" -> DeploymentStatus.HEALTH_CHECKING
             step == "readiness_succeeded" -> DeploymentStatus.READY
-            step in setOf("cloning", "checked_out", "building", "pushing", "pulling") -> DeploymentStatus.BUILDING
+            step in setOf("cloning", "checked_out", "building", "pushing", "checking_image", "image_ready", "pulling") -> DeploymentStatus.BUILDING
             else -> null
         }
         lifecycleTarget?.let {

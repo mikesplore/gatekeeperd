@@ -292,14 +292,23 @@ class DeploymentWorker(
             val commit: String?
             val image: String
             var imageBuiltLocally = false
+            var prebuiltImageAvailableLocally = false
             if (rollbackArtifact != null) {
                 commit = rollbackArtifact.commitSha
                 image = rollbackArtifact.image
-                update(job, "pulling", "Pulling rollback artifact $image", commitSha = commit)
+                update(job, "checking_image", "Checking for rollback image on the deployment host: $image", commitSha = commit)
+                prebuiltImageAvailableLocally = docker.imageExists(image)
+                if (prebuiltImageAvailableLocally) {
+                    update(job, "image_ready", "Using rollback image already present on the deployment host")
+                }
             } else if (job.repository.isNullOrBlank()) {
                 commit = null
                 image = registryImage(job.registry, job.imageName, job.imageTag)
-                update(job, "pulling", "Using prebuilt registry image $image")
+                update(job, "checking_image", "Checking for image on the deployment host: $image")
+                prebuiltImageAvailableLocally = docker.imageExists(image)
+                if (prebuiltImageAvailableLocally) {
+                    update(job, "image_ready", "Using image already present on the deployment host")
+                }
             } else {
                 val repository = job.repository
                 update(job, "cloning", "Cloning $repository@${job.gitRef}")
@@ -320,7 +329,10 @@ class DeploymentWorker(
                 update(job, "checked_out", "Repository checked out", commitSha = commit)
                 image = registryImage(job.registry, job.imageName, job.imageTag)
             }
-            deploymentQueue.registryCredentialForDeployment(job.id)?.let { credential ->
+            val needsRegistry = rollbackArtifact != null && !prebuiltImageAvailableLocally ||
+                job.repository.isNullOrBlank() && !prebuiltImageAvailableLocally ||
+                rollbackArtifact == null && !job.repository.isNullOrBlank()
+            if (needsRegistry) deploymentQueue.registryCredentialForDeployment(job.id)?.let { credential ->
                 imageBuilder.authenticate(job.registry, credential.username, credential.password) {
                     ensureNotCancelled(job.id, requireNotNull(job.claimToken))
                 }
@@ -348,7 +360,7 @@ class DeploymentWorker(
                     deploymentQueue.update(job.id, requireNotNull(job.claimToken), log = line)
                 }
             }
-            if (!imageBuiltLocally) {
+            if (!imageBuiltLocally && !prebuiltImageAvailableLocally) {
                 update(job, "pulling", "Pulling $image on the deployment host")
                 imageBuilder.pull(
                     image,
