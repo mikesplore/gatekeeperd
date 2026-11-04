@@ -46,3 +46,6 @@ data class AdminLogsPage(
     val summary: AdminLogSummary
 )
 
+@Serializable
+data class NginxErrorLogsResponse(val logs: List<String>)
+

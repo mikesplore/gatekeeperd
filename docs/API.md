@@ -1,4 +1,4 @@
-# Gatekeeperd — API Documentation
+nected# Gatekeeperd — API Documentation
 
 Base URL: `http://localhost:8080` (development)  
 Content-Type: `application/json` unless noted otherwise
@@ -706,7 +706,7 @@ Successful block updates and rollbacks are recorded in the project audit log.
 
 ### GET /api/admin/logs
 
-Returns recent structured entries from the `gatekeeperd.service` systemd journal. This endpoint requires the admin JWT and journal-read permission for the Gatekeeperd service account. The reader scans up to the latest 10,000 journal entries per request; the response marks when that window was truncated.
+Returns recent structured entries from the Gatekeeperd bootstrap and blue/green slot systemd journals. This endpoint requires the admin JWT and journal-read permission for the Gatekeeperd service account. The reader scans up to the latest 10,000 journal entries per request; the response marks when that window was truncated.
 
 Query parameters:
 
@@ -716,6 +716,10 @@ Query parameters:
 - `level`: exact severity filter (`TRACE`, `DEBUG`, `INFO`, `WARN`, `ERROR`, or `FATAL`).
 
 The response includes the filtered page and total, `hasMore`, a truncation flag, and summary counts for the scanned window. Success and error rates are calculated from Ktor HTTP access log statuses (2xx/3xx versus 4xx/5xx). Values resembling credentials, authorization headers, and URL passwords are redacted before returning entries. If the system journal cannot be read, the endpoint returns `503 logs_unavailable`.
+
+### GET /api/admin/nginx/error-logs
+
+Returns the most recent Nginx error-log lines from `/var/log/nginx/error.log`. Accepts optional `lines` from 1 to 500 (default 200). Query values resembling passwords, tokens, secrets, API keys, or authorization values are redacted. Requires the `nginx.read` permission and a Gatekeeperd service account that can read the Nginx error log.
 
 Registry credentials are managed through `GET /api/admin/registries`, `PUT /api/admin/registries/{registry}`, and `DELETE /api/admin/registries/{registry}`. PUT creates or rotates an immutable credential version; prior versions are marked superseded and retained. Passwords are AES-256-GCM encrypted at rest and never returned. DELETE retires the current version while retaining its record. The deployment worker performs registry-scoped `docker login --password-stdin` before push/pull operations.
 

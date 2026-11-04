@@ -133,7 +133,7 @@ uses filesystem sandboxing, also allow these directories with `ReadWritePaths=`.
 uses local `nginx/sites-available` and `nginx/sites-enabled` paths in DEV mode; no host nginx
 permissions or sudo are needed for local development.
 
-The admin logs page reads `gatekeeperd.service` from the systemd journal; the Gatekeeperd service account must be allowed to read that journal.
+The admin logs page reads the bootstrap and both blue/green Gatekeeperd units from the systemd journal; the Gatekeeperd service account must be allowed to read that journal. The Nginx error-log view reads `/var/log/nginx/error.log`; ensure the service account can read that file (on Ubuntu, membership in `adm` normally provides access).
 
 ### Certbot certificate management
 

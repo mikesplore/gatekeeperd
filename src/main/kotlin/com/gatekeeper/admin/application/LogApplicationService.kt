@@ -48,7 +48,11 @@ data class JournalReadResult(val entries: List<LogEntry>, val truncated: Boolean
 
 object JournalLogApplicationService {
     private const val MAX_ENTRIES = 10_000
-    private const val JOURNAL_UNIT = "gatekeeperd.service"
+    private val JOURNAL_UNITS = listOf(
+        "gatekeeperd.service",
+        "gatekeeperd-slot@blue.service",
+        "gatekeeperd-slot@green.service"
+    )
     private val json = Json { ignoreUnknownKeys = true }
     private val ansi = Regex("\\u001B\\[[;\\d]*m")
     private val statusCode = Regex("\\b([1-5][0-9]{2})\\s+[A-Za-z]")
@@ -61,7 +65,7 @@ object JournalLogApplicationService {
     fun readLatest(processRunner: ProcessRunner): JournalReadResult {
         val result = try {
             processRunner.runStreaming(
-                listOf("/usr/bin/journalctl", "--unit=$JOURNAL_UNIT", "--output=json", "--no-pager", "--lines=${MAX_ENTRIES + 1}"),
+                listOf("/usr/bin/journalctl", *JOURNAL_UNITS.map { "--unit=$it" }.toTypedArray(), "--output=json", "--no-pager", "--lines=${MAX_ENTRIES + 1}"),
                 timeoutMillis = 10_000
             )
         } catch (timeout: ProcessTimeoutException) {

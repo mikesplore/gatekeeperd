@@ -24,6 +24,32 @@ fun Application.configureLogAdminRoutes() {
     routing {
         authenticate("auth-jwt") {
             install(com.gatekeeper.rbac.presentation.RbacAuthorizationPlugin)
+            get("/api/admin/nginx/error-logs") {
+                val requestedLines = call.request.queryParameters["lines"]?.toIntOrNull()
+                if (requestedLines != null && requestedLines !in 1..500) {
+                    call.respondError(HttpStatusCode.BadRequest, "invalid_lines", "lines must be between 1 and 500")
+                    return@get
+                }
+                val lines = requestedLines ?: 200
+                val result = try {
+                    processRunner.runStreaming(
+                        listOf("/usr/bin/tail", "-n", lines.toString(), "/var/log/nginx/error.log"),
+                        timeoutMillis = 10_000
+                    )
+                } catch (error: Exception) {
+                    logAdminLogger.error("Unable to read Nginx error log", error)
+                    call.respondError(HttpStatusCode.ServiceUnavailable, "nginx_logs_unavailable", "Nginx error logs are unavailable. Ensure the Gatekeeperd service account can read /var/log/nginx/error.log.")
+                    return@get
+                }
+                if (result.exitCode != 0) {
+                    call.respondError(HttpStatusCode.ServiceUnavailable, "nginx_logs_unavailable", "Nginx error logs are unavailable. Ensure the Gatekeeperd service account can read /var/log/nginx/error.log.")
+                    return@get
+                }
+                val secretQueryValue = Regex("(?i)([?&](?:password|token|secret|api[_-]?key|authorization)=)[^&\\s]+")
+                val sanitized = result.stdout.lineSequence().filter(String::isNotBlank)
+                    .map { it.replace(secretQueryValue, "\$1[REDACTED]") }.toList()
+                call.respond(NginxErrorLogsResponse(sanitized))
+            }
             get("/api/admin/logs") {
                 val query = call.request.queryParameters
                 val rawLimit = query["limit"]?.toIntOrNull()
