@@ -8,7 +8,14 @@ import io.ktor.server.application.*
 import io.ktor.server.auth.authenticate
 import io.ktor.server.response.respond
 import io.ktor.server.routing.*
+import kotlinx.serialization.Serializable
 import org.koin.ktor.ext.get
+
+@Serializable
+private data class SystemDeploymentTriggerResponse(
+    val started: Boolean,
+    val message: String
+)
 
 fun Application.configureSystemAdminRoutes() {
     routing {
@@ -35,9 +42,9 @@ fun Application.configureSystemAdminRoutes() {
                     return@post
                 }
                 call.respond(
-                    mapOf(
-                        "started" to true,
-                        "message" to "Deployment check started; refresh deployment status shortly."
+                    SystemDeploymentTriggerResponse(
+                        started = true,
+                        message = "Deployment check started; refresh deployment status shortly."
                     )
                 )
             }
