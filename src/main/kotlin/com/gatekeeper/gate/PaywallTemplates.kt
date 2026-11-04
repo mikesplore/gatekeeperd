@@ -316,7 +316,7 @@ if (document.getElementById('payment-method')) {
         .gate {
             min-height: 100vh;
             display: grid;
-            grid-template-columns: minmax(0, 5fr) minmax(0, 6fr);
+            grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
         }
 
         /* Status panel */
@@ -366,7 +366,7 @@ if (document.getElementById('payment-method')) {
         }
         .detail-inner {
             width: 100%;
-            max-width: 29rem;
+            max-width: 36rem;
             margin: 0 auto;
         }
 
