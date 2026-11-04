@@ -42,6 +42,7 @@ class DockerAdminApplicationService(
     fun start(name: String) = performContainerAction(name, "started", "container_start_failed") { docker.startContainer(name) }
     fun stop(name: String) = performContainerAction(name, "stopped", "container_stop_failed") { docker.stopContainer(name) }
     fun restart(name: String) = performContainerAction(name, "restarted", "container_restart_failed") { docker.restartContainer(name) }
+    fun delete(name: String) = performContainerAction(name, "deleted", "container_delete_failed") { docker.deleteContainer(name, force = true) }
 
     fun health(name: String): Map<String, String> {
         requireContainerName(name); requireAvailable()

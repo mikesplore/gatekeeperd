@@ -49,6 +49,10 @@ fun Application.configureDockerAdminRoutes() {
                 val name = call.parameters["name"] ?: throw HttpApiException(HttpStatusCode.BadRequest, "missing_container_name", "Missing container name path parameter")
                 call.respond(docker.restart(name))
             }
+            post("/api/admin/containers/{name}/delete") {
+                val name = call.parameters["name"] ?: throw HttpApiException(HttpStatusCode.BadRequest, "missing_container_name", "Missing container name path parameter")
+                call.respond(docker.delete(name))
+            }
             get("/api/admin/containers/{name}/health") {
                 val name = call.parameters["name"] ?: throw HttpApiException(HttpStatusCode.BadRequest, "missing_container_name", "Missing container name path parameter")
                 call.respond(docker.health(name))
