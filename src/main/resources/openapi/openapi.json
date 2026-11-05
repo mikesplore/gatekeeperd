@@ -568,6 +568,17 @@
         ]
       }
     },
+    "/api/admin/containers/{name}/networks/move": {
+      "post": {
+        "tags": ["Containers"],
+        "summary": "Move a container between Docker networks",
+        "description": "Connects the target network before disconnecting the selected source. Requires docker.manage.",
+        "operationId": "MoveApiAdminContainerNetwork",
+        "parameters": [{"name": "name", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "required": ["targetNetwork", "disconnectFromNetwork"], "properties": {"targetNetwork": {"type": "string"}, "disconnectFromNetwork": {"type": "string"}}}}}},
+        "responses": {"200": {"description": "Container network move completed"}, "400": {"description": "Invalid network selection"}, "404": {"description": "Container or network not found"}, "409": {"description": "Network move failed or could not be completed"}, "503": {"description": "Docker is unavailable"}}
+      }
+    },
     "/api/admin/containers/{name}/delete": {
       "post": {
         "tags": [

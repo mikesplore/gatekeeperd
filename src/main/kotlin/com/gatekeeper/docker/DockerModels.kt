@@ -116,6 +116,12 @@ data class VolumePage(val items: List<VolumeInfo>, val total: Int, val limit: In
 data class CreateNetworkRequest(val name: String, val driver: String = "bridge")
 
 @Serializable
+data class MoveContainerNetworkRequest(val targetNetwork: String, val disconnectFromNetwork: String)
+
+@Serializable
+data class ContainerNetworkMoveResponse(val container: String, val networks: List<String>)
+
+@Serializable
 data class VolumeMount(
     val hostPath: String,
     val containerPath: String,

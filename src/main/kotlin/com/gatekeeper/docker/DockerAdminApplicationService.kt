@@ -49,6 +49,34 @@ class DockerAdminApplicationService(
         return mapOf("container" to name, "health" to docker.containerHealth(name))
     }
 
+    fun moveContainerNetwork(name: String, request: MoveContainerNetworkRequest): ContainerNetworkMoveResponse {
+        requireContainerName(name)
+        requireAvailable()
+        val target = request.targetNetwork.trim()
+        val source = request.disconnectFromNetwork.trim()
+        if (!isValidDockerNetworkName(target) || !isValidDockerNetworkName(source)) {
+            throw HttpApiException(HttpStatusCode.BadRequest, "invalid_network_name", "Valid source and target network names are required")
+        }
+        val container = docker.getContainer(name)
+            ?: throw HttpApiException(HttpStatusCode.NotFound, "container_not_found", "Container not found")
+        if (target == source) throw HttpApiException(HttpStatusCode.BadRequest, "same_network", "Choose a different target network")
+        if (target !in docker.listNetworks().map { it.name }) throw HttpApiException(HttpStatusCode.NotFound, "network_not_found", "Target Docker network not found")
+        if (source !in container.networks) throw HttpApiException(HttpStatusCode.Conflict, "source_network_not_attached", "The selected source network is not attached to this container")
+        if (target in container.networks) throw HttpApiException(HttpStatusCode.Conflict, "target_network_already_attached", "The target network is already attached to this container")
+        try {
+            docker.connectContainerToNetwork(container.id, target)
+        } catch (error: Exception) {
+            throw HttpApiException(HttpStatusCode.Conflict, "network_connect_failed", error.message ?: "Could not connect container to target network")
+        }
+        try {
+            docker.disconnectContainerFromNetwork(container.id, source)
+        } catch (error: Exception) {
+            throw HttpApiException(HttpStatusCode.Conflict, "network_move_incomplete", "Container was connected to '$target' but could not be disconnected from '$source': ${error.message ?: "Docker operation failed"}")
+        }
+        val attached = docker.getContainer(name)?.networks ?: (container.networks - source + target).sorted()
+        return ContainerNetworkMoveResponse(name, attached)
+    }
+
     fun networks(search: String?, offset: Int, limit: Int): NetworkPage {
         requireAvailable()
         val all = docker.listNetworks().filter { search.isNullOrBlank() || it.name.contains(search, true) }
@@ -109,4 +137,6 @@ class DockerAdminApplicationService(
     private fun requireContainerName(name: String) {
         if (!InputValidators.isValidContainerName(name)) throw HttpApiException(HttpStatusCode.BadRequest, "invalid_container_name", "Invalid container name")
     }
+
+    private fun isValidDockerNetworkName(name: String): Boolean = name.length in 1..128 && name.matches(Regex("[a-zA-Z0-9][a-zA-Z0-9_.-]*"))
 }

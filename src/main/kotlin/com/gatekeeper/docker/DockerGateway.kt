@@ -43,6 +43,8 @@ interface DockerGateway : Closeable {
     fun containerLogs(containerNameOrId: String, tail: Int = 100): String = unsupported("containerLogs")
     fun getContainerPresetCredentials(containerNameOrId: String): ContainerPresetCredentialsResponse? = unsupported("getContainerPresetCredentials")
     fun startContainer(containerNameOrId: String): Unit = unsupported("startContainer")
+    fun connectContainerToNetwork(containerNameOrId: String, networkName: String): Unit = unsupported("connectContainerToNetwork")
+    fun disconnectContainerFromNetwork(containerNameOrId: String, networkName: String): Unit = unsupported("disconnectContainerFromNetwork")
     fun restartContainer(containerNameOrId: String): Unit = unsupported("restartContainer")
     fun createContainer(request: CreateContainerRequest): ContainerInfo = unsupported("createContainer")
     fun deleteImage(image: String, tag: String = "latest", force: Boolean = true): Unit = unsupported("deleteImage")

@@ -5,6 +5,7 @@ import com.gatekeeper.api.HttpApiException
 import com.gatekeeper.docker.CreateNetworkRequest
 import com.gatekeeper.docker.DockerAdminApplicationService
 import com.gatekeeper.docker.PullImageRequest
+import com.gatekeeper.docker.MoveContainerNetworkRequest
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.Application
 import io.ktor.server.auth.authenticate
@@ -56,6 +57,10 @@ fun Application.configureDockerAdminRoutes() {
             get("/api/admin/containers/{name}/health") {
                 val name = call.parameters["name"] ?: throw HttpApiException(HttpStatusCode.BadRequest, "missing_container_name", "Missing container name path parameter")
                 call.respond(docker.health(name))
+            }
+            post("/api/admin/containers/{name}/networks/move") {
+                val name = call.parameters["name"] ?: throw HttpApiException(HttpStatusCode.BadRequest, "missing_container_name", "Missing container name path parameter")
+                call.respond(docker.moveContainerNetwork(name, call.receive<MoveContainerNetworkRequest>()))
             }
             get("/api/admin/networks") {
                 val query = call.request.queryParameters

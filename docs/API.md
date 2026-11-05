@@ -1170,6 +1170,27 @@ Get details for a single container by name or ID prefix.
 ### GET /api/admin/containers/{name}/credentials
 Return only the standard PostgreSQL or Redis preset connection fields for a container, including its configured credentials and available Docker-host/network addresses. This JWT-protected endpoint does not return arbitrary environment variables. Redis containers without password authentication return a null password.
 
+### POST /api/admin/containers/{name}/networks/move
+Move a container from one attached Docker network to another. Gatekeeperd connects the target network before disconnecting the source, so the container retains network access during the move. The source must currently be attached, and the target must exist and not already be attached. Requires `docker.manage`.
+
+**Request:**
+```json
+{
+  "targetNetwork": "app-network",
+  "disconnectFromNetwork": "bridge"
+}
+```
+
+**Response:**
+```json
+{
+  "container": "acme-container",
+  "networks": ["app-network"]
+}
+```
+
+If Docker connects the target but cannot disconnect the source, the endpoint returns `409 network_move_incomplete` and leaves the container connected to both networks so it does not lose connectivity.
+
 ### POST /api/admin/containers/{name}/start
 Start a stopped container.
 

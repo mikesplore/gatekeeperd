@@ -299,6 +299,18 @@ class DockerService(
         logger.info("Started container: $containerNameOrId")
     }
 
+    override fun connectContainerToNetwork(containerNameOrId: String, networkName: String) {
+        val network = client.listNetworksCmd().withNameFilter(networkName).exec().firstOrNull { it.name == networkName }
+            ?: throw IllegalArgumentException("Docker network '$networkName' not found")
+        client.connectToNetworkCmd().withNetworkId(network.id).withContainerId(containerNameOrId).exec()
+    }
+
+    override fun disconnectContainerFromNetwork(containerNameOrId: String, networkName: String) {
+        val network = client.listNetworksCmd().withNameFilter(networkName).exec().firstOrNull { it.name == networkName }
+            ?: throw IllegalArgumentException("Docker network '$networkName' not found")
+        client.disconnectFromNetworkCmd().withNetworkId(network.id).withContainerId(containerNameOrId).withForce(false).exec()
+    }
+
     override fun stopContainer(containerNameOrId: String, timeoutSeconds: Int) {
         client.stopContainerCmd(containerNameOrId).withTimeout(timeoutSeconds).exec()
         logger.info("Stopped container: $containerNameOrId")
