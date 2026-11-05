@@ -62,7 +62,7 @@ class ServerTest {
 
         val specification = File("src/main/resources/openapi/openapi.yaml").readText()
         val pathSections = Regex(
-            "(?m)^  (/[^\\r\\n]+):\\r?\\n(.*?)(?=^  /|^components:|\\z)",
+            "(?m)^  (/[^\\r\\n]*):\\r?\\n(.*?)(?=^  /|^components:|\\z)",
             setOf(RegexOption.MULTILINE, RegexOption.DOT_MATCHES_ALL)
         ).findAll(specification)
         val operationDeclaration = Regex("(?m)^    (get|post|put|patch|delete|head|options):\\s*$")

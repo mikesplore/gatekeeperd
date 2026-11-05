@@ -28,6 +28,96 @@ tags:
 security:
 - BearerAuth: []
 paths:
+  /:
+    get:
+      tags: [Customer]
+      summary: Render public support landing page
+      operationId: GetSupportLanding
+      security: []
+      responses:
+        '200':
+          description: Support landing page HTML
+          content:
+            text/html:
+              schema: { type: string }
+  /support:
+    get:
+      tags: [Customer]
+      summary: Render public support landing page
+      operationId: GetSupportLandingAlias
+      security: []
+      responses:
+        '200':
+          description: Support landing page HTML
+          content:
+            text/html:
+              schema: { type: string }
+  /support/access/request:
+    post:
+      tags: [Customer]
+      summary: Request a customer support sign-in code
+      description: The response does not disclose whether the email belongs to a customer.
+      operationId: PostSupportAccessRequest
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+      responses:
+        '200':
+          description: Code entry page HTML
+          content:
+            text/html:
+              schema: { type: string }
+        '400': { description: Invalid email address }
+        '503': { description: Sign-in code service unavailable }
+  /support/access/verify:
+    post:
+      tags: [Customer]
+      summary: Verify a customer support sign-in code
+      operationId: PostSupportAccessVerify
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [challenge, code]
+              properties:
+                challenge: { type: string }
+                code: { type: string }
+      responses:
+        '302': { description: Verified; sets the support session cookie and redirects to services }
+        '400': { description: Invalid or expired code }
+        '503': { description: Sign-in verification unavailable }
+  /support/services:
+    get:
+      tags: [Customer]
+      summary: Show services for the signed-in customer
+      operationId: GetSupportServices
+      security: []
+      responses:
+        '200':
+          description: Customer services page HTML
+          content:
+            text/html:
+              schema: { type: string }
+        '302': { description: Missing or invalid support session redirects to sign-in }
+        '503': { description: Sign-in session service unavailable }
+  /support/logout:
+    post:
+      tags: [Customer]
+      summary: End the customer support session
+      operationId: PostSupportLogout
+      security: []
+      responses:
+        '302': { description: Clears the support session cookie and redirects to sign-in }
   /api/admin/rbac/permissions:
     get:
       tags: [Authentication]
