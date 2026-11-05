@@ -84,6 +84,16 @@ class DockerAdminApplicationService(
         return NetworkPage(page, all.size, limit, offset, offset + page.size < all.size)
     }
 
+    fun containerWizardContext(): ContainerWizardContextResponse {
+        requireAvailable()
+        val names = docker.listNetworks().map { it.name }.distinct().sorted()
+        return ContainerWizardContextResponse(
+            internalNetwork = settings.internalNetwork,
+            internalNetworkExists = settings.internalNetwork in names,
+            networks = names
+        )
+    }
+
     fun createNetwork(body: CreateNetworkRequest) = conflict("network_create_failed", "Unable to create network") { docker.createNetwork(body.name, body.driver) }
     fun deleteNetwork(name: String) = conflict("network_delete_failed", "Unable to delete network") { docker.deleteNetwork(name) }
 

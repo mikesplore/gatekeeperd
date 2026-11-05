@@ -25,6 +25,9 @@ fun Application.configureDockerAdminRoutes() {
                 val limit = query["limit"]?.toIntOrNull()?.coerceIn(1, 500) ?: 500
                 call.respond(docker.containers(query["search"]?.trim()?.lowercase(), query["state"], offset, limit))
             }
+            get("/api/admin/containers/wizard/context") {
+                call.respond(docker.containerWizardContext())
+            }
             get("/api/admin/containers/{name}") {
                 val name = call.parameters["name"] ?: throw HttpApiException(HttpStatusCode.BadRequest, "missing_container_name", "Missing container name path parameter")
                 call.respond(docker.container(name))

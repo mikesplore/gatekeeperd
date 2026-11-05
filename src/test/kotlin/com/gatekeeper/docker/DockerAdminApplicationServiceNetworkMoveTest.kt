@@ -7,6 +7,17 @@ import kotlin.test.assertFailsWith
 
 class DockerAdminApplicationServiceNetworkMoveTest {
     @Test
+    fun `container wizard context returns every Docker network and internal network status`() {
+        val service = DockerAdminApplicationService(FakeMoveDocker(), dockerSettings)
+
+        val result = service.containerWizardContext()
+
+        assertEquals("gk-internal", result.internalNetwork)
+        assertEquals(true, result.internalNetworkExists)
+        assertEquals(listOf("app", "bridge", "gk-internal"), result.networks)
+    }
+
+    @Test
     fun `moves container by connecting target before disconnecting source`() {
         val docker = FakeMoveDocker()
         val service = DockerAdminApplicationService(docker, dockerSettings)
@@ -49,7 +60,8 @@ class DockerAdminApplicationServiceNetworkMoveTest {
 
         override fun listNetworks() = listOf(
             NetworkInfo("bridge-id", "bridge", "bridge", "local"),
-            NetworkInfo("app-id", "app", "bridge", "local")
+            NetworkInfo("app-id", "app", "bridge", "local"),
+            NetworkInfo("internal-id", "gk-internal", "bridge", "local")
         )
 
         override fun getContainer(containerNameOrId: String) = ContainerInfo(
