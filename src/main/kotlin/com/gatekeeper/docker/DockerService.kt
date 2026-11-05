@@ -632,6 +632,32 @@ class DockerService(
         null
     }
 
+    override fun containerDiagnostics(containerNameOrId: String): DockerContainerDiagnostics? = try {
+        val inspect = client.inspectContainerCmd(containerNameOrId).exec()
+        val state = inspect.state ?: return null
+        DockerContainerDiagnostics(
+            state = state.status ?: "unknown",
+            restartCount = inspect.restartCount ?: 0,
+            exitCode = state.exitCodeLong?.toInt(),
+            oomKilled = state.oomKilled == true,
+            error = state.error?.takeIf(String::isNotBlank),
+            startedAt = state.startedAt?.takeIf(String::isNotBlank),
+            finishedAt = state.finishedAt?.takeIf(String::isNotBlank),
+            healthStatus = state.health?.status,
+            healthLog = state.health?.log.orEmpty().takeLast(5).map { item ->
+                HealthCheckDiagnostic(
+                    exitCode = item.exitCodeLong?.toInt(),
+                    startedAt = item.start?.takeIf(String::isNotBlank),
+                    endedAt = item.end?.takeIf(String::isNotBlank),
+                    output = item.output?.takeIf(String::isNotBlank)?.takeLast(2_000)
+                )
+            }
+        )
+    } catch (e: Exception) {
+        logger.debug("Could not inspect candidate container diagnostics for {}", containerNameOrId, e)
+        null
+    }
+
     override fun createContainer(request: CreateContainerRequest): ContainerInfo = createContainerTracked(request).info
 
     override fun createContainerTracked(request: CreateContainerRequest): CreatedContainer {

@@ -28,6 +28,26 @@ data class ContainerInfo(
     val ipAddresses: Map<String, String> = emptyMap()
 )
 
+/** Docker's last observed process and health-check state, captured before container cleanup. */
+data class DockerContainerDiagnostics(
+    val state: String,
+    val restartCount: Int,
+    val exitCode: Int?,
+    val oomKilled: Boolean,
+    val error: String?,
+    val startedAt: String?,
+    val finishedAt: String?,
+    val healthStatus: String?,
+    val healthLog: List<HealthCheckDiagnostic> = emptyList()
+)
+
+data class HealthCheckDiagnostic(
+    val exitCode: Int?,
+    val startedAt: String?,
+    val endedAt: String?,
+    val output: String?
+)
+
 @Serializable
 data class ContainerLogsResponse(val container: String, val tail: Int, val logs: String)
 

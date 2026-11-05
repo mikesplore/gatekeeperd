@@ -50,6 +50,7 @@ interface DockerGateway : Closeable {
     fun containerHealth(containerNameOrId: String): String
     fun dockerHealthStatus(containerNameOrId: String): String?
     fun getContainer(containerNameOrId: String): ContainerInfo? = null
+    fun containerDiagnostics(containerNameOrId: String): DockerContainerDiagnostics? = null
     fun adoptionDetails(containerIdOrName: String): AdoptionDetails? = null
     fun removeContainerIfPresent(containerName: String): Boolean = false
     fun createContainerTracked(request: CreateContainerRequest): CreatedContainer = unsupported("createContainerTracked")

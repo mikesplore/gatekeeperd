@@ -412,7 +412,7 @@ Returns canonical deployment history for a project (optional `environment`, defa
 
 ### GET /api/admin/projects/{slug}/deployments/{id}/diagnostics
 
-Returns the deployment status, current step, error message, and the most recent 16,000 characters of deployment output. Output is redacted against resolved deployment environment values and GitHub installation tokens before it is shown. When a failed or unstable candidate is removed, Gatekeeperd first appends up to its last 100 Docker log lines so application startup errors remain available here after container deletion. Use this endpoint to inspect clone, image build/pull, readiness, candidate startup, and cutover failures; the project deployment history UI loads it when a failed attempt is expanded.
+Returns the deployment status, current step, error message, and the most recent 16,000 characters of deployment output. Output is redacted against resolved deployment environment values and GitHub installation tokens before it is shown. Before a failed or unstable candidate is removed, Gatekeeperd appends its Docker state, restart count, exit code, OOM-kill flag, Docker error, timestamps, recent Docker health-check output, and up to 100 stdout/stderr log lines. This can distinguish common causes such as OOM kills, process exit codes, and failed Docker health checks; Docker may report some fields as unavailable after an automatic restart. Use this endpoint to inspect clone, image build/pull, readiness, candidate startup, and cutover failures; the project deployment history UI loads it when a failed attempt is expanded.
 
 ### DELETE /api/admin/projects/{slug}/deployments/{id}
 

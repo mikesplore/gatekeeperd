@@ -565,7 +565,7 @@ class DeploymentWorker(
             }
             if (candidateIsReady && error is CandidateRuntimeUnstableException) {
                 val runtimeName = DeploymentApplicationService.candidateContainerName(job.id)
-                runtimeName?.let { captureCandidateLogs(job, docker, it) }
+                runtimeName?.let { captureCandidateDiagnostics(job, docker, it) }
                 val removed = runtimeName == null || removeCandidateContainer(runtimeName)
                 if (!removed) {
                     DeploymentApplicationService.updateCutoverState(
@@ -651,7 +651,7 @@ class DeploymentWorker(
             if (cleanupDocker == null) cleanupDocker = docker
             // Docker deletes its log stream with the container. Snapshot the final
             // output into deployment diagnostics before removing a failed candidate.
-            captureCandidateLogs(job, cleanupDocker, containerId)
+            captureCandidateDiagnostics(job, cleanupDocker, containerId)
             cleanupDocker.removeContainerByIdIfPresent(containerId)
         } catch (cleanupFailure: Throwable) {
             if (cleanupFailure !== failure) failure.addSuppressed(cleanupFailure)
@@ -660,20 +660,27 @@ class DeploymentWorker(
         }
     }
 
-    private fun captureCandidateLogs(job: DeploymentJobRecord, docker: DockerGateway, containerId: String) {
+    private fun captureCandidateDiagnostics(job: DeploymentJobRecord, docker: DockerGateway, containerId: String) {
+        val runtime = runCatching { docker.containerDiagnostics(containerId) }
+            .onFailure { logger.warn("Could not inspect failed deployment candidate {}", containerId, it) }
+            .getOrNull()
         val tail = runCatching { docker.containerLogs(containerId, 100) }
             .onFailure { logger.warn("Could not capture final logs for failed deployment candidate {}", containerId, it) }
             .getOrNull()
-            ?.takeLast(16_000)
-            ?.takeIf(String::isNotBlank)
-            ?: return
         runCatching {
             deploymentQueue.update(
                 job.id,
                 requireNotNull(job.claimToken) { "Claim token missing for deployment ${job.id}" },
-                log = "\n--- final candidate container logs (last 100 lines) ---\n$tail\n--- end candidate container logs ---"
+                log = buildString {
+                    appendLine()
+                    append(CandidateDiagnosticsFormatter.format(runtime))
+                    appendLine("--- final candidate stdout/stderr (last 100 lines) ---")
+                    appendLine(tail?.takeLast(12_000)?.takeIf(String::isNotBlank)
+                        ?: "Docker returned no stdout/stderr output for this candidate")
+                    appendLine("--- end candidate diagnostics ---")
+                }
             )
-        }.onFailure { logger.warn("Could not persist final logs for failed deployment candidate {}", containerId, it) }
+        }.onFailure { logger.warn("Could not persist final diagnostics for failed deployment candidate {}", containerId, it) }
     }
 
     private fun removeCandidateContainer(containerName: String): Boolean = runCatching {
