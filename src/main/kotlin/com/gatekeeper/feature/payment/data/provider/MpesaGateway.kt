@@ -5,6 +5,7 @@ import com.gatekeeper.feature.payment.domain.gateway.PaymentGateway
 import com.gatekeeper.feature.payment.domain.gateway.InitiatePaymentCommand
 import com.gatekeeper.feature.payment.domain.gateway.InitiatedPayment
 import com.gatekeeper.feature.payment.domain.gateway.VerifiedPayment
+import com.gatekeeper.plugins.DistributedLock
 import io.ktor.client.*
 import io.ktor.client.plugins.contentnegotiation.*
 import io.ktor.client.request.*
@@ -18,6 +19,7 @@ import java.time.LocalDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.*
+import kotlinx.coroutines.delay
 
 class MpesaGateway(private val settings: AppSettings.PaymentSettings) : PaymentGateway {
     override val provider = "mpesa"
@@ -62,13 +64,19 @@ class MpesaGateway(private val settings: AppSettings.PaymentSettings) : PaymentG
         // Daraja's STK query is the authoritative polling/reconciliation endpoint.
         val timestamp = LocalDateTime.now(ZoneId.of("Africa/Nairobi")).format(DateTimeFormatter.ofPattern("yyyyMMddHHmmss"))
         val password = Base64.getEncoder().encodeToString("${settings.mpesaShortCode}${settings.mpesaPasskey}$timestamp".toByteArray())
-        val response = http.post("$baseUrl/mpesa/stkpushquery/v1/query") {
-            bearerAuth(token()); contentType(ContentType.Application.Json)
-            setBody(mapOf("BusinessShortCode" to settings.mpesaShortCode, "Password" to password, "Timestamp" to timestamp, "CheckoutRequestID" to reference))
+        val (responseStatus, responseBody) = DistributedLock.withSuspendLock("mpesa-stk-status-query") {
+            // Daraja enforces a low burst limit on status queries. Serialize all
+            // app instances and leave a gap between calls, including callbacks,
+            // manual checks, and the scheduled reconciler.
+            delay(2_000)
+            val response = http.post("$baseUrl/mpesa/stkpushquery/v1/query") {
+                bearerAuth(token()); contentType(ContentType.Application.Json)
+                setBody(mapOf("BusinessShortCode" to settings.mpesaShortCode, "Password" to password, "Timestamp" to timestamp, "CheckoutRequestID" to reference))
+            }
+            response.status to response.bodyAsText()
         }
-        val responseBody = response.bodyAsText()
-        if (!response.status.isSuccess()) {
-            error("Daraja STK query returned HTTP ${response.status.value}: ${responseBody.take(500)}")
+        if (!responseStatus.isSuccess()) {
+            error("Daraja STK query returned HTTP ${responseStatus.value}: ${responseBody.take(500)}")
         }
         val query = Json.decodeFromString<MpesaStkResponse>(responseBody)
         if (query.ResponseCode != null && query.ResponseCode != "0") {
