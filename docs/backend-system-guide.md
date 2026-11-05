@@ -264,7 +264,7 @@ The customer view shows service access separately from an HTTP connection check 
 
 Gatekeeperd owns invoice balances, adjustments, payment acceptance, and access decisions in PostgreSQL. Invoice downloads send a complete snapshot to Scribed's PDF generation API. Successful payment receipt requests are sent to Scribed's persisted, idempotent receipt API. Scribed availability does not determine whether a payment can be recorded.
 
-Customer support requests are durable PostgreSQL state. Scribed's base URL and API client token are managed from Settings; Gatekeeper stores the token encrypted and never returns it from the settings API. The admin health action checks both Scribed health and token acceptance. The customer APIs do not give customers general admin access.
+Customer support requests are durable PostgreSQL state. Scribed's base URL and Gatekeeperd client profile are managed from Settings. Gatekeeper uses the Scribed administrator token only for registration/update, stores the scoped client token encrypted, and never returns either token from its settings API. The admin health action checks both Scribed health and client-token acceptance. The customer APIs do not give customers general admin access.
 
 ## 10. Project and service administration
 

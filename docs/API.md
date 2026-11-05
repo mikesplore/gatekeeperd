@@ -378,6 +378,10 @@ Returns the active deployment's container name, image/commit metadata, and its s
 
 Returns the active runtime, or the latest ready candidate when no active deployment exists. The response includes its deployment `status`, container name, published port mappings (`containerPort` to `hostPort`), image/commit metadata, and shared/service environment version references. Port mappings come from the recorded deployment runtime so the UI can show them with the runtime response instead of making a later Docker lookup. A ready candidate has passed container readiness; it remains ready while an existing enabled managed Nginx site's upstream cutover is pending. If there is no enabled managed site, the deployment can become active without creating an Nginx config. Environment keys are represented only by their source and HMAC-SHA-256 fingerprint. No active or ready runtime returns `404 runtime_not_found`.
 
+#### GET /api/admin/projects/{projectId}/services/{serviceId}/connection-details?environment={name}
+
+For services typed `database` or `redis`, inspects the active runtime (or ready candidate) and returns recognized PostgreSQL/Redis database name, username, password, internal Docker address, and published host address when available. The Service deployments panel reveals these values on demand and supports copying the URLs. It does not return arbitrary environment variables. Requires deployment read permission.
+
 #### GET /api/admin/projects/{projectId}/services/{serviceId}/domains
 
 Lists the service's domain bindings, published container ports, and currently unbound ports. Domain bindings are managed independently from deployment configuration; before a deployment, a binding may remain pending.
@@ -546,7 +550,7 @@ If pending provider transactions are the only thing reserving the requested bala
 
 ### Scribed document-service settings
 
-`GET /api/admin/integrations/scribed` returns Scribed's base URL, whether an API client token is configured, and the current encrypted credential version. It never returns the token. `PUT` accepts `{ "baseUrl": "https://scribed.example.com", "apiToken": "..." }`; an empty token keeps the existing token while changing the URL. The token is encrypted using `DEPLOYMENT_SECRETS_KEY`.
+`GET /api/admin/integrations/scribed` returns Scribed's base URL, registered Gatekeeperd profile, token status, and encrypted credential version. It never returns either Scribed token. `POST /api/admin/integrations/scribed/register` accepts Gatekeeperd's profile (`name`, `address`, `contactEmail`, `phone`) and the Scribed administrator token. Gatekeeperd uses the administrator token only for the registration/update request, then stores the returned scoped API client token encrypted using `DEPLOYMENT_SECRETS_KEY`.
 
 `POST /api/admin/integrations/scribed/health` checks Scribed's dependency health endpoint and verifies that its configured API client token is accepted. Gatekeeper sends invoice render requests to `POST /generate/invoice` and persisted payment receipts to `POST /receipts`, using an idempotency key derived from the Gatekeeper payment ID.
 

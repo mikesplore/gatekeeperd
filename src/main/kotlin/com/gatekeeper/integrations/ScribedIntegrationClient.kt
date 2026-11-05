@@ -36,9 +36,32 @@ class ScribedIntegrationClient(
         }
     }
 
-    @Serializable data class DocumentApiSettings(val baseUrl: String, val apiToken: String)
+    @Serializable data class DocumentApiSettings(
+        val baseUrl: String,
+        val apiToken: String,
+        val clientId: Int? = null,
+        val clientName: String? = null,
+        val clientAddress: String? = null,
+        val contactEmail: String? = null,
+        val phone: String? = null
+    )
+    @Serializable data class ScribedClientProfile(
+        val name: String,
+        val address: String? = null,
+        val contact_email: String? = null,
+        val phone: String? = null
+    )
+    @Serializable private data class ScribedClientRegistrationResponse(val id: Int, val api_token: String? = null)
     @Serializable data class DocumentSettingsStatus(
-        val baseUrl: String, val configured: Boolean, val tokenConfigured: Boolean, val credentialVersion: Int?
+        val baseUrl: String,
+        val configured: Boolean,
+        val tokenConfigured: Boolean,
+        val clientRegistered: Boolean,
+        val clientName: String?,
+        val clientAddress: String?,
+        val contactEmail: String?,
+        val phone: String?,
+        val credentialVersion: Int?
     )
     @Serializable data class ReceiptRequest(
         val client_name: String,
@@ -83,23 +106,50 @@ class ScribedIntegrationClient(
             config.baseUrl,
             config.baseUrl.isNotBlank() && config.apiToken.isNotBlank(),
             config.apiToken.isNotBlank(),
+            config.clientId != null,
+            config.clientName,
+            config.clientAddress,
+            config.contactEmail,
+            config.phone,
             metadata?.version
         )
     }
 
-    fun saveDocumentSettings(baseUrl: String, apiToken: String) {
+    suspend fun registerDocumentClient(baseUrl: String, adminToken: String, profile: ScribedClientProfile) {
         val normalized = baseUrl.trim().trimEnd('/')
         val uri = runCatching { URI(normalized) }.getOrNull()
         require(uri != null && uri.scheme in setOf("https", "http") && !uri.host.isNullOrBlank() &&
             uri.userInfo == null && uri.query == null && uri.fragment == null) {
             "Scribed URL must be an http(s) URL without credentials, query, or fragment"
         }
-        val token = apiToken.trim().ifBlank { documentSettings().apiToken }
-        require(token.isNotBlank() && token.length <= 4096) { "A valid Scribed API client token is required" }
+        require(adminToken.isNotBlank() && adminToken.length <= 4096) { "Scribed administrator token is required to register the Gatekeeperd client" }
+        require(profile.name.isNotBlank() && profile.name.length <= 120) { "Client name must contain 1 to 120 characters" }
+        require((profile.address?.length ?: 0) <= 1000 && (profile.contact_email?.length ?: 0) <= 254 && (profile.phone?.length ?: 0) <= 40) {
+            "Client address, contact email, or phone is too long"
+        }
         check(SecretValueCipher.isConfigured()) { "Secret encryption is not configured" }
+        val previous = documentSettings()
+        val updating = previous.clientId != null && previous.baseUrl == normalized && previous.apiToken.isNotBlank()
+        val response = http.request {
+            method = if (updating) HttpMethod.Put else HttpMethod.Post
+            url(if (updating) "$normalized/api-clients/${previous.clientId}" else "$normalized/api-clients")
+            contentType(ContentType.Application.Json)
+            header(HttpHeaders.Authorization, "Bearer ${adminToken.trim()}")
+            setBody(profile)
+        }
+        if (!response.status.isSuccess()) {
+            throw IllegalStateException("Scribed client registration returned HTTP ${response.status.value}")
+        }
+        val result = runCatching { json.decodeFromString<ScribedClientRegistrationResponse>(response.bodyAsText()) }
+            .getOrElse { throw IllegalStateException("Scribed returned an invalid client registration response") }
+        val clientToken = if (updating) previous.apiToken else result.api_token
+            ?: throw IllegalStateException("Scribed did not return a client token")
         credentials.createOrRotate(
             "scribed", "api_client", "Scribed API client", "primary",
-            json.encodeToString(DocumentApiSettings(normalized, token))
+            json.encodeToString(DocumentApiSettings(
+                normalized, clientToken, result.id, profile.name.trim(), profile.address?.trim()?.takeIf(String::isNotEmpty),
+                profile.contact_email?.trim()?.takeIf(String::isNotEmpty), profile.phone?.trim()?.takeIf(String::isNotEmpty)
+            ))
         )
     }
 

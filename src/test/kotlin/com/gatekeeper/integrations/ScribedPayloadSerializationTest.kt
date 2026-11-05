@@ -23,4 +23,13 @@ class ScribedPayloadSerializationTest {
             serialized.keys
         )
     }
+
+    @Test
+    fun `client registration profile matches Scribed's snake case fields`() {
+        val payload = ScribedIntegrationClient.ScribedClientProfile(
+            name = "Gatekeeperd", address = "Main Street", contact_email = "ops@example.com", phone = "+254700000000"
+        )
+        val serialized = Json.encodeToString(payload).let(Json::parseToJsonElement).jsonObject
+        assertEquals(setOf("name", "address", "contact_email", "phone"), serialized.keys)
+    }
 }

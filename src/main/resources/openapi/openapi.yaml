@@ -1284,22 +1284,28 @@ paths:
       summary: Get Scribed document-service configuration status
       responses:
         '200': { description: Base URL and write-only credential status }
-    put:
+  /api/admin/integrations/scribed/register:
+    post:
       tags: [Integrations]
-      summary: Save Scribed document-service configuration
+      summary: Register Gatekeeperd's client profile with Scribed
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [baseUrl, apiToken]
+              required: [baseUrl, adminToken, name]
               properties:
                 baseUrl: { type: string, format: uri }
-                apiToken: { type: string, writeOnly: true }
+                adminToken: { type: string, writeOnly: true }
+                name: { type: string, maxLength: 120 }
+                address: { type: string, maxLength: 1000, nullable: true }
+                contactEmail: { type: string, format: email, maxLength: 254, nullable: true }
+                phone: { type: string, maxLength: 40, nullable: true }
       responses:
-        '200': { description: Configuration saved; token is not returned }
-        '400': { description: Invalid URL or missing token }
+        '200': { description: Gatekeeperd client registered and its scoped token stored encrypted }
+        '400': { description: Invalid URL or profile }
+        '502': { description: Scribed rejected the registration request }
         '503': { description: Secret encryption is not configured }
   /api/admin/integrations/scribed/health:
     post:
@@ -3337,6 +3343,21 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
       operationId: GetApiAdminProjectsByprojectIdServicesByserviceIdRuntime
+  /api/admin/projects/{projectId}/services/{serviceId}/connection-details:
+    get:
+      tags: [Services and deployments]
+      summary: Reveal supported PostgreSQL or Redis connection details for a service runtime
+      parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - $ref: '#/components/parameters/ServiceId'
+      - name: environment
+        in: query
+        schema: { type: string, default: production }
+      responses:
+        '200': { description: Connection addresses and supported service credentials }
+        '409': { description: Service is not a data service or credentials were not detected }
+        '404': { description: Service or runtime not found }
+      operationId: GetApiAdminProjectServiceConnectionDetails
   /api/admin/projects/{projectId}/services/{serviceId}/domains:
     parameters:
     - $ref: '#/components/parameters/ProjectId'

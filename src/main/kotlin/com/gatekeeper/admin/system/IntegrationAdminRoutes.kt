@@ -13,7 +13,14 @@ import com.gatekeeper.security.SecretValueCipher
 import com.gatekeeper.api.HttpApiException
 import io.ktor.http.HttpStatusCode
 
-@Serializable private data class ScribedSettingsRequest(val baseUrl: String, val apiToken: String)
+@Serializable private data class ScribedClientRegistrationRequest(
+    val baseUrl: String,
+    val adminToken: String,
+    val name: String,
+    val address: String? = null,
+    val contactEmail: String? = null,
+    val phone: String? = null
+)
 
 fun Application.configureIntegrationAdminRoutes() {
     routing {
@@ -22,12 +29,19 @@ fun Application.configureIntegrationAdminRoutes() {
             get("/api/admin/integrations/scribed") {
                 call.respond(get<ScribedIntegrationClient>().documentSettingsStatus())
             }
-            put("/api/admin/integrations/scribed") {
-                val body = runCatching { call.receive<ScribedSettingsRequest>() }.getOrNull()
-                    ?: throw HttpApiException(HttpStatusCode.BadRequest, "invalid_scribed_settings", "Scribed settings are invalid")
+            post("/api/admin/integrations/scribed/register") {
+                val body = runCatching { call.receive<ScribedClientRegistrationRequest>() }.getOrNull()
+                    ?: throw HttpApiException(HttpStatusCode.BadRequest, "invalid_scribed_settings", "Scribed client registration details are invalid")
                 if (!SecretValueCipher.isConfigured()) throw HttpApiException(HttpStatusCode.ServiceUnavailable, "secrets_unconfigured", "Secret encryption is not configured")
-                runCatching { get<ScribedIntegrationClient>().saveDocumentSettings(body.baseUrl, body.apiToken) }
-                    .getOrElse { throw HttpApiException(HttpStatusCode.BadRequest, "invalid_scribed_settings", it.message ?: "Scribed settings are invalid") }
+                runCatching {
+                    get<ScribedIntegrationClient>().registerDocumentClient(
+                        body.baseUrl, body.adminToken,
+                        ScribedIntegrationClient.ScribedClientProfile(body.name, body.address, body.contactEmail, body.phone)
+                    )
+                }.getOrElse { error ->
+                    val status = if (error is IllegalArgumentException) HttpStatusCode.BadRequest else HttpStatusCode.BadGateway
+                    throw HttpApiException(status, "scribed_registration_failed", error.message ?: "Scribed client registration failed")
+                }
                 call.respond(get<ScribedIntegrationClient>().documentSettingsStatus())
             }
             post("/api/admin/integrations/scribed/health") {

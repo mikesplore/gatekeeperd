@@ -135,10 +135,10 @@ class DockerService(
         val command = config.cmd.orEmpty().toList() + config.entrypoint.orEmpty().toList()
         val image = config.image.orEmpty().lowercase()
         val presetLabel = config.labels.orEmpty()["com.gatekeeperd.container-preset"]
-        val isPostgres = presetLabel == "postgres" ||
+        val imageName = image.substringAfterLast('/')
+        val isPostgres = presetLabel == "postgres" || imageName.startsWith("postgres") || imageName.startsWith("postgresql") ||
             (env.containsKey("POSTGRES_USER") && env.containsKey("POSTGRES_DB"))
-        val isRedis = presetLabel == "redis" ||
-            (image.substringAfterLast('/').startsWith("redis") || command.any { it == "redis-server" })
+        val isRedis = presetLabel == "redis" || imageName.startsWith("redis") || command.any { it == "redis-server" } || env.containsKey("REDIS_PASSWORD")
         if (!isPostgres && !isRedis) return null
 
         val containerPort = if (isPostgres) 5432 else 6379
@@ -150,7 +150,7 @@ class DockerService(
         val containerName = listed.names?.firstOrNull()?.removePrefix("/") ?: listed.id.take(12)
         val networkNames = inspected.networkSettings?.networks?.keys.orEmpty()
         val internalDnsAvailable = networkNames.any { it != "bridge" }
-        val password = if (isPostgres) env["POSTGRES_PASSWORD"] else {
+        val password = if (isPostgres) env["POSTGRES_PASSWORD"] else env["REDIS_PASSWORD"] ?: env["REDISCLI_AUTH"] ?: run {
             val requirePassIndex = command.indexOf("--requirepass")
             command.getOrNull(requirePassIndex + 1)
                 ?: command.firstOrNull { it.startsWith("--requirepass=") }?.substringAfter('=')

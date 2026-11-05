@@ -163,4 +163,28 @@ fun Route.registerServiceRuntimeRoutes(dependencies: ServiceAdminDependencies) {
             )
         call.respond(runtime.toView())
     }
+
+    get("/api/admin/projects/{projectId}/services/{serviceId}/connection-details") {
+        val (projectId, serviceId) = call.serviceCoordinates(projects) ?: return@get
+        val service = serviceRepository.findByProjectAndId(projectId, serviceId)
+            ?: return@get call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
+        if (service.serviceType !in setOf("database", "redis")) {
+            return@get call.respondError(HttpStatusCode.Conflict, "not_a_data_service", "Connection details are available for database and Redis services")
+        }
+        val rawEnvironment = call.request.queryParameters["environment"]
+        val environment = if (rawEnvironment == null) "production" else ServiceApplicationRules.normalizeEnvironment(rawEnvironment)
+            ?: return@get call.respondError(HttpStatusCode.BadRequest, "invalid_environment", "Environment name is invalid")
+        val runtime = environmentSets.runtimeDeployment(serviceId, environment)
+            ?: return@get call.respondError(HttpStatusCode.NotFound, "runtime_not_found", "No active or ready database deployment exists for this environment")
+        val containerName = runtime.containerName
+            ?: return@get call.respondError(HttpStatusCode.Conflict, "container_unavailable", "The database deployment has no inspectable container")
+        val details = runCatching { dependencies.docker.getContainerPresetCredentials(containerName) }.getOrElse {
+            return@get call.respondError(HttpStatusCode.ServiceUnavailable, "connection_details_unavailable", "Docker could not inspect this database container")
+        } ?: return@get call.respondError(
+            HttpStatusCode.Conflict,
+            "database_credentials_not_detected",
+            "No supported PostgreSQL or Redis connection variables were detected in this container"
+        )
+        call.respond(details)
+    }
 }

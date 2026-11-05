@@ -19,6 +19,7 @@ object RbacPermissionPolicy {
             path == "/api/admin/dashboard/summary" || path == "/api/admin/metrics" ||
                 path.startsWith("/api/admin/deployments/reconciliation") -> one("operations.read")
             path.startsWith("/api/admin/projects/") && path.contains("/payments") -> one("payments.$action")
+            path.startsWith("/api/admin/projects/") && path.contains("/services/") && path.endsWith("/connection-details") -> one("deployments.$action")
             path.startsWith("/api/admin/projects/") && path.contains("/services/") &&
                 (path.contains("/payments") || path.contains("/payment/")) -> one("payments.$action")
             path.startsWith("/api/admin/services/") && path.contains("/payments") -> one("payments.$action")
