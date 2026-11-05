@@ -35,6 +35,14 @@ private data class SharedEnvironmentSetReference(val id: UUID, val version: Int)
 
 typealias DeploymentJobRecord = DeploymentJobRecordModel
 
+internal fun <T> preferredDeploymentConfiguration(
+    serviceConfigurations: List<T>,
+    legacyConfigurations: List<T>,
+    updatedAt: (T) -> LocalDateTime,
+    createdAt: (T) -> LocalDateTime
+): T? = (serviceConfigurations.ifEmpty { legacyConfigurations })
+    .maxWithOrNull(compareBy<T>(updatedAt).thenBy(createdAt))
+
 class ExposedDeploymentJobRepository : DeploymentJobRepository {
     private val registryCredentials = ExposedRegistryCredentialRepository(ExposedProviderCredentialRepository())
     override fun findAutoDeployTargets(repository: String, gitRef: String): List<AutoDeployTarget> = transaction {
@@ -104,11 +112,17 @@ class ExposedDeploymentJobRepository : DeploymentJobRepository {
         val service = Services.selectAll().where {
             (Services.projectId eq projectId) and (Services.id eq serviceId)
         }.singleOrNull() ?: error("Service does not belong to project")
-        val row = DeploymentConfigurations.selectAll().where {
+        val matchingConfigurations = DeploymentConfigurations.selectAll().where {
             (DeploymentConfigurations.projectId eq projectId) and
                 ((DeploymentConfigurations.serviceId eq serviceId) or
                     (if (service[Services.isDefault]) DeploymentConfigurations.serviceId.isNull() else org.jetbrains.exposed.sql.Op.FALSE))
-        }.toList().firstOrNull { it[DeploymentConfigurations.environment] == environment }
+        }.toList().filter { it[DeploymentConfigurations.environment] == environment }
+        val row = preferredDeploymentConfiguration(
+            serviceConfigurations = matchingConfigurations.filter { it[DeploymentConfigurations.serviceId] == serviceId },
+            legacyConfigurations = matchingConfigurations.filter { it[DeploymentConfigurations.serviceId] == null },
+            updatedAt = { it[DeploymentConfigurations.updatedAt] },
+            createdAt = { it[DeploymentConfigurations.createdAt] }
+        )
         val updatedValues = if (replaceExisting) values else {
             val previousValues = if (row == null) {
                 latestServiceSecretSet(projectId, serviceId, environment)?.let(::serviceEnvironmentValues).orEmpty()
