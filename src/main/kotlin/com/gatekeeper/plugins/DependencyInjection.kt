@@ -130,7 +130,7 @@ import com.gatekeeper.feature.project.data.persistence.ExposedProjectQueryReposi
 import com.gatekeeper.feature.project.domain.repository.ProjectQueryRepository
 import com.gatekeeper.feature.service.data.persistence.ExposedServiceRepository
 import com.gatekeeper.feature.service.data.persistence.ExposedServiceInvoiceRepository
-import com.gatekeeper.feature.service.data.integration.ScribedServiceInvoiceAdapter
+import com.gatekeeper.feature.service.data.integration.GatekeeperOnlyInvoiceAdapter
 import com.gatekeeper.feature.service.domain.repository.ServiceInvoiceRepository
 import com.gatekeeper.feature.service.domain.repository.ServiceInvoiceIntegrationPort
 import com.gatekeeper.feature.service.application.ServiceInvoiceApplicationService
@@ -221,7 +221,7 @@ private val applicationModule = module {
     single { GitHubAppClient(get(), get(), get<AppSettings>().github) }
     single { ResendClient(get<AppSettings>().integrations) }
     single { CustomerSupportAccessService(get<CustomerStore>(), get<ProjectStore>(), get<ResendClient>(), get<AppSettings>().auth) }
-    single { ScribedIntegrationClient(get<AppSettings>().integrations, get<ProjectStore>()) }
+    single { ScribedIntegrationClient(get<AppSettings>().integrations, get<ProviderCredentialStore>()) }
     single<DeploymentPortAllocationPort> { ExposedDeploymentPortAllocationRepository() }
     single<EnvironmentSetStore> { ExposedEnvironmentSetRepository() }
     single<DeploymentJobRepository> { ExposedDeploymentJobRepository() }
@@ -381,7 +381,7 @@ private val applicationModule = module {
     }
     single<PaymentDomainRepository> { ExposedPaymentRepository() }
     single<ServiceInvoiceRepository> { ExposedServiceInvoiceRepository() }
-    single<ServiceInvoiceIntegrationPort> { ScribedServiceInvoiceAdapter(get()) }
+    single<ServiceInvoiceIntegrationPort> { GatekeeperOnlyInvoiceAdapter() }
     single { ServiceInvoiceApplicationService(get(), get<ServiceRepository>(), get<PaymentDomainRepository>(), get<ProjectAdjustmentStore>(), get()) }
     single { ProjectBalanceAdapter(get<PaymentDomainRepository>(), get<ProjectAdjustmentStore>(), get(), get()) }
     single<PaymentEventDomainRepository> { ExposedPaymentEventRepository() }
@@ -389,7 +389,7 @@ private val applicationModule = module {
     single<PaymentServicePort> { PaymentServiceAdapter() }
     single<ServiceMembershipRepository> { ExposedServiceMembershipRepository(get()) }
     single { PaymentBalanceAdapter(get<PaymentDomainRepository>(), get(), get(), get(), get<ProjectStore>()) }
-    single<PaymentEffects> { PaymentEffectsAdapter(get(), get(), get(), get<ProjectStore>(), get(), get()) }
+    single<PaymentEffects> { PaymentEffectsAdapter(get(), get<ProjectStore>(), get(), get()) }
     single { ApplyWebhookEvent(get(), get()) }
     single { PaystackClient(get<AppSettings>().payment) }
     single<PaymentGateway>(named("paystackGateway")) { PaystackGateway(get<AppSettings>().payment, get<AppSettings>().integrations, get()) }
@@ -430,8 +430,6 @@ private val applicationModule = module {
         AutoBlockerJob(
             projectRepository = get(),
             serviceRepository = get(),
-            outboxRepository = get(),
-            scribedClient = get(),
             serviceInvoices = get()
         )
     }

@@ -1278,56 +1278,35 @@ paths:
             schema:
               type: object
               additionalProperties: true
-  /api/admin/integrations/outbox:
+  /api/admin/integrations/scribed:
     get:
-      tags:
-      - Integrations
-      summary: Get integrations outbox
-      description: 'Implementation: `com/gatekeeper/admin/IntegrationAdminRoutes.kt:24`. This entry completes the
-        route inventory; consult docs/API.md for operation-specific rules and payload details.'
-      operationId: GetApiAdminIntegrationsOutbox
+      tags: [Integrations]
+      summary: Get Scribed document-service configuration status
       responses:
-        '200':
-          description: Successful response; payload shape depends on the operation.
-        default:
-          description: Operation-specific error response. The API uses the standard error object when applicable.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ApiError'
-      x-code-location: com/gatekeeper/admin/IntegrationAdminRoutes.kt:24
-  /api/admin/integrations/outbox/{id}/replay:
-    post:
-      tags:
-      - Integrations
-      summary: Submit or create integrations outbox by id replay
-      description: 'Implementation: `com/gatekeeper/admin/IntegrationAdminRoutes.kt:30`. This entry completes the
-        route inventory; consult docs/API.md for operation-specific rules and payload details.'
-      operationId: PostApiAdminIntegrationsOutboxByidReplay
-      responses:
-        '200':
-          description: Successful response; payload shape depends on the operation.
-        default:
-          description: Operation-specific error response. The API uses the standard error object when applicable.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ApiError'
-      x-code-location: com/gatekeeper/admin/IntegrationAdminRoutes.kt:30
-      parameters:
-      - name: id
-        in: path
-        required: true
-        schema:
-          type: string
+        '200': { description: Base URL and write-only credential status }
+    put:
+      tags: [Integrations]
+      summary: Save Scribed document-service configuration
       requestBody:
-        required: false
-        description: JSON request fields are operation-specific; see the referenced source and docs/API.md.
+        required: true
         content:
           application/json:
             schema:
               type: object
-              additionalProperties: true
+              required: [baseUrl, apiToken]
+              properties:
+                baseUrl: { type: string, format: uri }
+                apiToken: { type: string, writeOnly: true }
+      responses:
+        '200': { description: Configuration saved; token is not returned }
+        '400': { description: Invalid URL or missing token }
+        '503': { description: Secret encryption is not configured }
+  /api/admin/integrations/scribed/health:
+    post:
+      tags: [Integrations]
+      summary: Check Scribed health and API-client token
+      responses:
+        '200': { description: Scribed dependency and credential check result }
   /api/admin/logs:
     get:
       tags:
@@ -4985,7 +4964,10 @@ paths:
       operationId: GetApiCustomerProjectsByslugPaymentsBypaymentIdReceipt
       responses:
         '200':
-          description: Successful response; payload shape depends on the operation.
+          description: Persisted receipt PDF for a successful payment
+          content:
+            application/pdf:
+              schema: { type: string, format: binary }
         default:
           description: Operation-specific error response. The API uses the standard error object when applicable.
           content:

@@ -184,7 +184,7 @@ The support page shows access suspension separately from a live HTTP check again
 Requires the Gatekeeperd Support session cookie. Returns that customer's access status, amount due, due date, payment history, receipt URLs, payment URL, portal URL, and support URL.
 
 #### GET /api/customer/projects/{slug}/payments/{paymentId}/receipt
-Requires the Gatekeeperd Support session cookie and verifies project ownership. Returns receipt data for a successful payment. The frontend can render or print it.
+Requires the Gatekeeperd Support session cookie and verifies project ownership. For a successful payment, Gatekeeper asks Scribed to issue or idempotently return the persisted PDF receipt.
 
 #### GET /api/customer/projects/{slug}/portal
 Redirects to `${GATEKEEPER_FRONTEND_URL}/portal/{slug}`.
@@ -360,11 +360,11 @@ Read, update, or delete a service. PATCH accepts `name`, `accessStatus` (`active
 
 #### POST /api/admin/projects/{projectId}/services/{serviceId}/adjustments
 
-Add a service-scoped charge or discount with `{ "type": "ADDITIONAL_CHARGE", "amount": 500.00, "reason": "Added reporting feature" }`. The service must already have a Gatekeeper service invoice; otherwise the API returns `409 service_invoice_required`. The adjustment is stored against that service and synchronized to Scribed on a best-effort basis, leaving sibling service and project-level balances unchanged. The operation writes a `service_adjustment` audit entry.
+Add a service-scoped charge or discount with `{ "type": "ADDITIONAL_CHARGE", "amount": 500.00, "reason": "Added reporting feature" }`. The service must already have a Gatekeeper service invoice; otherwise the API returns `409 service_invoice_required`. The adjustment is stored against that service, leaving sibling service and project-level balances unchanged. The operation writes a `service_adjustment` audit entry.
 
 #### POST /api/admin/projects/{projectId}/services/{serviceId}/invoice
 
-Create a Gatekeeper invoice for a service that does not already have one. Accepts `{ "description": "Hosting and maintenance", "amount": 2500.00 }`; the amount is entered for that service and does not use the project amount. The project currency and due date are applied, and invoice identity is linked to both the project and service. Scribed document creation is best effort. Returns `409 service_invoice_already_exists` if the service already has an invoice.
+Create a Gatekeeper invoice for a service that does not already have one. Accepts `{ "description": "Hosting and maintenance", "amount": 2500.00 }`; the amount is entered for that service and does not use the project amount. The project currency and due date are applied, and invoice identity is linked to both the project and service. Returns `409 service_invoice_already_exists` if the service already has an invoice.
 
 #### GET, PUT /api/admin/projects/{projectId}/services/{serviceId}/environment?environment={name}
 
@@ -540,40 +540,17 @@ If pending provider transactions are the only thing reserving the requested bala
 ```
 
 **Notes:**
-- Uses the project's `amount_due` and `client_email` from the database if not overridden. When `serviceId` is provided, the amount is reserved against that service's Gatekeeper invoice and the payment is attributed to that service. Scribed receives the payment for document and notification workflows.
+- Uses the project's `amount_due` and `client_email` from the database if not overridden. When `serviceId` is provided, the amount is reserved against that service's Gatekeeper invoice and the payment is attributed to that service. Scribed is not sent payment events; it is called only when Gatekeeper requests a document.
 - Creates a pending `payments` row with the Paystack reference.
 - The client pays via the returned link. After successful payment, Paystack sends a webhook to `/api/paystack/webhook`, which activates the project.
 
-### POST /api/admin/projects/{slug}/invoice
-Create a Scribed invoice for a project that does not already have one.
+### Scribed document-service settings
 
-**Request:**
-```json
-{
-  "description": "Hosting and maintenance services"
-}
-```
+`GET /api/admin/integrations/scribed` returns Scribed's base URL, whether an API client token is configured, and the current encrypted credential version. It never returns the token. `PUT` accepts `{ "baseUrl": "https://scribed.example.com", "apiToken": "..." }`; an empty token keeps the existing token while changing the URL. The token is encrypted using `DEPLOYMENT_SECRETS_KEY`.
 
-Gatekeeperd supplies the project billing contact, current invoice total, currency, and due date from its project ledger. Scribed creates or links the invoice; Gatekeeperd then queues a ledger sync and replays successful payments so prior adjustments are reflected and missing receipts are generated. Verified payments also bootstrap a missing Scribed invoice automatically.
+`POST /api/admin/integrations/scribed/health` checks Scribed's dependency health endpoint and verifies that its configured API client token is accepted. Gatekeeper sends invoice render requests to `POST /generate/invoice` and persisted payment receipts to `POST /receipts`, using an idempotency key derived from the Gatekeeper payment ID.
 
-Service adjustments are synchronized through Scribed's authenticated `POST /integrations/gatekeeper/services/{service_id}/adjustments` endpoint. It updates only the invoice linked to that service and applies adjustment IDs idempotently.
-
-### GET /api/admin/projects/{slug}/invoice/download
-Download the current Scribed invoice PDF. If no invoice exists yet, Gatekeeperd creates or links one and queues a ledger/payment sync before returning the PDF.
-
-### POST /api/admin/projects/{slug}/invoice/resync
-Ensure the project has a Scribed invoice, synchronously reapply the current Gatekeeperd ledger and all successful payments, and verify Scribed's amount, paid total, and balance. Existing Scribed payments and adjustments are matched idempotently using the Gatekeeper project ID and provider references. After verification, related project ledger/payment outbox events are marked delivered; unrelated integration events remain queued for the automatic worker.
-
-The automatic integration outbox continues to deliver new events in the background. A failed sync returns the Scribed error and leaves the related events available for retry.
-
-### GET /api/admin/integrations/outbox
-Returns undelivered integration events, including `status`, `attempts`, and the latest sanitized `lastError` message when delivery failed. The error contains the remote HTTP status and message where available, but never a stack trace.
-
-### POST /api/admin/integrations/outbox/{id}/replay
-Retries one undelivered integration event. The response includes `replayed: false` and `error` when delivery fails; the same error is persisted on the event and remains visible in the Operations page.
-
-### GET /api/admin/projects/{slug}/payments/{paymentId}/receipt
-Ensure the Scribed invoice and receipt exist for a successful Gatekeeper payment, then return the receipt PDF. The path `paymentId` is the Gatekeeper payment UUID; repeated requests are idempotent.
+Scribed is a document processor only. Gatekeeper owns payment records, invoice balances, and access decisions; Scribed does not receive payment webhooks or ledger synchronization events.
 
 ### GET /api/admin/projects/{slug}/audit
 Get audit log for a project.
@@ -624,7 +601,7 @@ Request body:
 The response contains the generated cash reference and `status: "success"`. Reusing the same receipt number is rejected rather than creating a duplicate payment.
 
 ### GET /api/admin/projects/{projectId}/services/{serviceId}/invoice
-Return the Gatekeeper invoice and payment summary for a service. Admin payment capture screens use this endpoint to select a service and constrain the amount to its available balance. Existing Scribed invoices are imported on first lookup. It returns `404 invoice_unavailable` when the service has no invoice.
+Return the Gatekeeper invoice and payment summary for a service. Admin payment capture screens use this endpoint to select a service and constrain the amount to its available balance. It returns `404 invoice_unavailable` when the service has no invoice.
 
 **Query parameters (all optional):**
 - `status` — filter by `gateway_status` (`pending`, `success`, `failed`, `abandoned`, `reversed`)

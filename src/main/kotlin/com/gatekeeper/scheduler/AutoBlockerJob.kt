@@ -6,8 +6,6 @@ import java.time.LocalDate
 import java.math.BigDecimal
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.*
-import com.gatekeeper.integrations.ScribedIntegrationClient
-import com.gatekeeper.feature.integrations.domain.repository.IntegrationOutboxRepository
 import com.gatekeeper.feature.project.domain.repository.ProjectRepository
 import com.gatekeeper.feature.service.domain.repository.ServiceRepository
 import com.gatekeeper.feature.service.application.ServiceInvoiceApplicationService
@@ -15,8 +13,6 @@ import com.gatekeeper.feature.service.application.ServiceInvoiceApplicationServi
 class AutoBlockerJob(
     private val projectRepository: ProjectRepository,
     private val serviceRepository: ServiceRepository,
-    private val outboxRepository: IntegrationOutboxRepository,
-    private val scribedClient: ScribedIntegrationClient,
     private val serviceInvoices: ServiceInvoiceApplicationService
 ) {
     private val logger = LoggerFactory.getLogger("com.gatekeeper.scheduler.AutoBlockerJob")
@@ -29,8 +25,6 @@ class AutoBlockerJob(
                     val overdue = projectRepository.findPastDue(LocalDate.now())
                     overdue.forEach { project ->
                         projectRepository.updateStatus(project.id, "blocked", actor = "system", reason = "auto-block: payment overdue", blockReason = "overdue")
-                        scribedClient.notifySuspension(project.copy(status = "blocked", blockReason = "overdue"), "payment_overdue", outboxRepository)
-                        scribedClient.notifyInvoiceDue(project, outboxRepository)
                         logger.warn("Auto-blocked project: ${project.slug} (due: ${project.dueDate}, grace: ${project.gracePeriodDays} days)")
                     }
 

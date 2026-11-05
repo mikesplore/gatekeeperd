@@ -144,7 +144,7 @@ Environment variables are versioned. Service-level values override values import
 
 ### 4.3 Other durable records
 
-PostgreSQL also stores users, password-reset tokens, certificates, registry/provider credentials, GitHub App installation/webhook state, notifications, support requests, audit events, and the Scribed integration outbox. The database is the system of record for these items; Redis is not their durable replacement.
+PostgreSQL also stores users, password-reset tokens, certificates, registry/provider credentials, GitHub App installation/webhook state, notifications, support requests, and audit events. The database is the system of record for these items; Redis is not their durable replacement.
 
 ## 5. HTTP request pipeline and API groups
 
@@ -166,7 +166,7 @@ JSON serialization uses kotlinx.serialization. Most API errors use the common `{
 | `/api/admin/nginx*`, certificates                   | Admin JWT                                                | Site config lifecycle, custom blocks, migration/repair, certificate inventory and renewal. | `admin/operations/*`, `feature/nginx/presentation/*`                                         |
 | `/api/admin/containers*`, networks, volumes, images | Admin JWT                                                | Docker inventory and container wizard actions.                                             | `admin/system/DockerAdminRoutes.kt`, `docker/*`                |
 | `/api/admin/logs`, audit, operations                | Admin JWT                                                | Recent application logs, audit history, dashboards, notification state, health and drift.  | `admin/system/LogAdminRoutes.kt`, `admin/project/ProjectAdminRoutes.kt`, `admin/operations/*` |
-| `/api/admin/integrations*`, GitHub                  | Admin JWT; GitHub callbacks separately verified          | Scribed outbox, GitHub App setup/webhook activity.                                         | `admin/system/IntegrationAdminRoutes.kt`, `integrations/*`                            |
+| `/api/admin/integrations*`, GitHub                  | Admin JWT; GitHub callbacks separately verified          | Scribed document-service settings/health and GitHub App setup/webhook activity.           | `admin/system/IntegrationAdminRoutes.kt`, `integrations/*`                            |
 | `/api/admin/registries*`, provider credentials      | Admin JWT                                                | Registry and provider configuration.                                                       | `admin/system/RegistryAdminRoutes.kt`                                                 |
 
 Admin API groups use the `auth-jwt` provider and a route permission policy. Permissions are checked against the user's current role grants on each request. The built-in `admin` role is the immutable superuser; `operator` and `viewer` are editable starting roles.
@@ -260,13 +260,11 @@ Admin payment APIs expose listing, revenue/dashboard data, project payment histo
 
 Gatekeeperd renders its customer help and billing pages directly. Customers verify their email with a short-lived code; Redis stores the code hash, customer reference and opaque session state, with HMAC-protected identifiers. Successful sessions expire after eight hours. Customer data is selected by the canonical `customer_id` relationship, not by a project slug or project billing email. The status, receipt and reminder API routes enforce that same session ownership check.
 
-The customer view shows service access separately from an HTTP connection check against the configured upstream. The check does not guarantee every application route works. Invoice balances and payment initiation use the existing service billing and payment core. Scribed remains the document and notification integration for invoice PDFs, receipts and payment notices.
+The customer view shows service access separately from an HTTP connection check against the configured upstream. The check does not guarantee every application route works. Invoice balances and payment initiation use the existing service billing and payment core. Scribed is a document processing service used to render invoices and issue payment receipt PDFs; it does not receive payment or suspension notifications.
 
-Gatekeeperd owns service invoice balances, adjustments, payment acceptance, and access decisions in PostgreSQL. A lazy one-time import copies pre-existing Scribed service invoices, including their paid totals and due dates, when a service is first accessed. Scribed remains the document and notification integration for invoice PDFs, receipts, payment notices, and suspension notices; its availability does not determine whether a new invoice or verified payment can be recorded.
+Gatekeeperd owns invoice balances, adjustments, payment acceptance, and access decisions in PostgreSQL. Invoice downloads send a complete snapshot to Scribed's PDF generation API. Successful payment receipt requests are sent to Scribed's persisted, idempotent receipt API. Scribed availability does not determine whether a payment can be recorded.
 
-Outbound events that must survive a Gatekeeperd restart are written to `integration_outbox` with a unique idempotency key. The outbox worker leases/claims pending or retryable events, delivers them, marks successes delivered, and schedules retry on failure. This avoids making a successful local payment/status transaction depend on an immediate Scribed request.
-
-Customer support requests and outbox records are durable PostgreSQL state. The customer APIs do not give customers general admin access.
+Customer support requests are durable PostgreSQL state. Scribed's base URL and API client token are managed from Settings; Gatekeeper stores the token encrypted and never returns it from the settings API. The admin health action checks both Scribed health and token acceptance. The customer APIs do not give customers general admin access.
 
 ## 10. Project and service administration
 
@@ -378,9 +376,8 @@ Optional `DOCKER_ALLOWED_REGISTRIES` and `DOCKER_ALLOWED_VOLUME_ROOTS` restrict 
 
 | Worker | Initial delay / interval | Responsibility | Failure approach |
 |---|---|---|---|
-| Auto blocker | Starts after about 10 seconds; default every 60 minutes. | Blocks project invoices past due plus project grace period; checks Gatekeeper service invoice balances and auto-blocks overdue services. Sends Scribed notices. | Logs failures; run loop uses exponential backoff capped by configured interval. |
+| Auto blocker | Starts after about 10 seconds; default every 60 minutes. | Blocks project invoices past due plus project grace period; checks Gatekeeper service invoice balances and auto-blocks overdue services. | Logs failures; run loop uses exponential backoff capped by configured interval. |
 | Payment reconciliation | Starts after about 1 minute; default every 15 minutes. | Rechecks provider transactions that have remained pending past `RECONCILIATION_STALE_MINUTES` (default 30). | Durable payment events and retryable later runs. |
-| Integration outbox | Starts immediately; 60-second interval. | Claims Scribed notification/integration events, delivers, marks delivered or retryable failure. | Durable status, attempt count, backoff/lease in PostgreSQL. |
 | Deployment worker | Starts on application startup; polls about once per second. | Claims and processes queued deployments, recovers interrupted cutovers on startup, checks stale running jobs about once per minute. | Persisted job state, claim token, advisory locks and recovery snapshots. |
 
 Scheduled workers use `runWorkerLoop`, which takes a PostgreSQL advisory lock for the worker name, records run/success/failure metrics, logs errors and applies bounded exponential backoff. The deployment worker instead uses job claim ownership and service/environment locks for the parts that mutate one runtime.
@@ -411,7 +408,7 @@ The outbox, payment event dedupe key, deployment claim token, unique host-port a
 ## 17. Security and secret handling
 
 - Require TLS at the public reverse proxy for dashboard/customer/provider traffic.
-- Keep `.env`, JWT secret, provider secrets, database password, Scribed integration secret/API token, and GitHub credentials out of source control and logs.
+- Keep `.env`, JWT secret, provider secrets, database password, Scribed API client token, and GitHub credentials out of source control and logs.
 - Admin JWT uses HMAC256 and Redis-backed revocation. Refresh tokens are random, stored hashed, rotated on refresh, and revocable.
 - Paystack webhooks validate the raw-body HMAC signature before processing.
 - Passwords use BCrypt; TOTP secrets are encrypted; recovery and reset tokens are stored as hashes.
@@ -456,7 +453,7 @@ See [.env.example](../.env.example) for all values and deployment comments. The 
 | Redis | `REDIS_HOST`, `REDIS_PORT` | Cache and authentication-state store. Use a reachable Docker service name when Gatekeeperd itself is in Docker, or a published loopback/host address when it runs on the host. |
 | Admin auth | `JWT_SECRET`, `JWT_ISSUER`, `JWT_AUDIENCE`, `ADMIN_EMAIL`, `ADMIN_PASSWORD` | JWT configuration and one-time initial admin seed. |
 | Payment | `PAYSTACK_SECRET_KEY`, `PAYSTACK_PUBLIC_KEY`, `MPESA_*`, `GATEKEEPER_PUBLIC_URL`, `SUPPORT_CONTACT_EMAIL` | Provider credentials, callback addresses and paywall contact. |
-| Customer/integrations | `GATEKEEPER_FRONTEND_URL`, `SCRIBED_*`, `RESEND_*`, `PASSWORD_RESET_URL` | Portal redirects, Scribed sync/notifications and password-reset email. |
+| Customer/integrations | `GATEKEEPER_FRONTEND_URL`, optional `SCRIBED_BASE_URL` and `SCRIBED_API_CLIENT_TOKEN`, `RESEND_*`, `PASSWORD_RESET_URL` | Portal redirects, Scribed document generation and password-reset email. Prefer managing Scribed credentials in Settings; environment variables are a bootstrap fallback. |
 | GitHub | `GITHUB_APP_*`, `GITHUB_WEBHOOK_SECRET` | Private repository clone, deployment webhook and repository integration. |
 | Deployment | `DEPLOYMENT_HOST_PORT_RANGE`, `DEPLOYMENT_DRAIN_DELAY_SECONDS`, `DEPLOYMENT_STALE_MINUTES`, `DEPLOYMENT_SECRETS_KEY` | Stable host-port pool, cutover drain, job stale threshold and encrypted env storage. |
 | Docker | `DOCKER_SOCKET`, `DOCKER_PULL_VIA_CLI`, `DOCKER_ALLOWED_REGISTRIES`, `DOCKER_ALLOWED_VOLUME_ROOTS`, `GATEKEEPER_INTERNAL_NETWORK` | Host runtime access and optional allowlists. |
@@ -480,7 +477,7 @@ Configuration values are read once into `AppConfig` at startup. Most changes req
 | Candidate keeps changing public port | Not expected for managed deployments | Inspect persisted deployment port map, `deployment_port_allocations`, actual Docker mapping, and whether the site is deployment-managed or adopted/explicit. Managed routes use persisted pool ports; adoption preserves existing mappings. |
 | Certificate renewal fails | Certbot / DNS / host mutation | Admin operation result, Gatekeeperd logs, `journalctl` sudo/Certbot records, DNS/challenge reachability, certificate files and nginx validation. The helper command log alone may not contain Certbot's full diagnostic. |
 | Payment callback is received but status unchanged | Provider event processing | Verify signature/config, payment event status/error, provider reference, reconciliation, dedupe, and `payment_events`/`payments` rows. Browser redirect alone does not activate a project. |
-| Scribed notification not delivered | Integration outbox or Scribed | Inspect outbox status/attempt/error, Scribed URL/token/secret, Scribed journal and admin outbox replay endpoint. |
+| Scribed invoice/receipt PDF fails | Scribed integration | Use Settings → Scribed → Check health, verify the base URL and registered API client token, then inspect Gatekeeperd and Scribed logs. |
 
 For application-only logs use dashboard Logs or `journalctl -u gatekeeperd`. For container/service/system failures also inspect `docker logs`, `journalctl -u nginx`, nginx error logs, and Certbot/sudo journal entries.
 
@@ -492,7 +489,7 @@ These observations are based on repository code, not an inspection of a producti
 2. **Nginx and Docker are host-side dependencies.** Unit tests use fakes/temp dirs for most logic, but real sudoers, nginx include placement, systemd behavior, Docker networking, DNS, Certbot validation and file ownership still need server-side verification.
 3. **Gate `FAIL_MODE` applies only when both the Redis cache path and PostgreSQL lookup fail.** A missing project is deliberately denied; Redis-only failure falls back to PostgreSQL.
 4. **The public version endpoint reports the timer's latest known successful build, not an instantaneous query to GitHub.** If the timer cannot run or GitHub is unavailable, the result becomes stale/unknown rather than being a guaranteed live CI query.
-5. **External Scribed and payment-provider outcomes depend on their own availability and configuration.** Outbox/reconciliation reduce transient coupling, but cannot guarantee a third-party service eventually accepts an event.
+5. **External Scribed and payment-provider outcomes depend on their own availability and configuration.** Payment reconciliation reduces transient coupling; document generation depends on Scribed being available when requested.
 
 This guide is a source-based architecture explanation. Production-specific database contents, host service unit overrides, DNS, nginx state and credentials must be verified on the deployed host; they cannot be inferred from this checkout.
 

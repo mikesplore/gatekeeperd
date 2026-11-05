@@ -268,7 +268,6 @@ fun Application.configureProjectAdminRoutes() {
                     actor,
                     "${type.name} amount=$amount oldBalance=$oldBalance newBalance=$newBalance reason=${body.reason.trim()}"
                 )
-                scribed.notifyLedger(project, "adjustment-${adjustment.id}", call.application.get<ProjectBalanceAdapter>(), call.application.get())
                 projects.invalidateCache(slug)
                 call.respond(ProjectAdjustmentResponse(adjustment.id.toString(), project.id.toString(), type.name, amount.toDouble(), adjustment.reason, actor, adjustment.createdAt.toString(), oldBalance.toDouble(), newBalance.toDouble()))
             }
@@ -394,7 +393,6 @@ fun Application.configureProjectAdminRoutes() {
                     blockReasonNote = body.blockReasonNote?.takeIf { it.isNotBlank() } ?: reason
                 )
                 projects.invalidateCache(slug)
-                scribed.notifySuspension(project.copy(status = "manual_block", blockReason = "manual"), "manual_block: $reason", call.application.get())
 
                 projectAdminLogger.info("Project blocked: $slug by $actor")
                 call.respond(StatusChangeResponse(status = "blocked", slug = slug))

@@ -16,8 +16,8 @@ class RegistryAdminApplicationService(
     private val registryCredentials: RegistryCredentialStore
 ) {
     fun listProviderCredentials(provider: String?, type: String?): List<ProviderCredentialMetadataResponse> {
-        if ((provider != null && provider !in setOf("docker", "github")) ||
-            (type != null && type !in setOf("registry", "app_private_key", "webhook_secret"))) {
+        if ((provider != null && provider !in setOf("docker", "github", "scribed")) ||
+            (type != null && type !in setOf("registry", "app_private_key", "webhook_secret", "api_client"))) {
             throw HttpApiException(HttpStatusCode.BadRequest, "invalid_credential_filter", "Credential provider or type is invalid")
         }
         return providerCredentials.listMetadata(provider, type).map { it.toMetadataResponse() }

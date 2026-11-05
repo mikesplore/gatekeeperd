@@ -12,6 +12,7 @@ import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import org.koin.ktor.ext.get
+import com.gatekeeper.integrations.ScribedIntegrationClient
 
 
 
@@ -61,15 +62,14 @@ fun Application.configureCustomerRoutes() {
             val payment = customerService.payment(paymentId)?.takeIf { it.projectId == project.id }
                 ?: return@get call.respondError(HttpStatusCode.NotFound, "payment_not_found", "Payment not found")
             if (payment.status != "success") return@get call.respondError(HttpStatusCode.Conflict, "payment_not_complete", "A receipt is available after successful payment")
-            call.respond(CustomerReceiptResponse(
-                receiptNumber = payment.providerReference,
-                project = project.name,
-                domain = project.domain,
-                amount = payment.amount.toDouble(),
-                currency = project.currency,
-                paidAt = payment.paidAt?.toString(),
-                reference = payment.providerReference
-            ))
+            val (status, bytes) = call.application.get<ScribedIntegrationClient>().issueReceipt(
+                project, payment, "Payment received for ${project.name}"
+            )
+            if (bytes == null) return@get call.respondError(
+                status, "receipt_download_failed", "Scribed could not issue this receipt"
+            )
+            call.response.header(HttpHeaders.ContentDisposition, "attachment; filename=receipt-${project.slug}-${payment.id}.pdf")
+            call.respondBytes(bytes, ContentType.Application.Pdf)
         }
 
         get("/api/customer/projects/{slug}/portal") {

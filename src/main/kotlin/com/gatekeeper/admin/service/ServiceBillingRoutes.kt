@@ -110,18 +110,22 @@ fun Route.registerServiceBillingRoutes(dependencies: ServiceAdminDependencies) {
         if (service == null) {
             return@get call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
         }
-        serviceInvoices.ensureDocument(project, serviceId, service.name)
-        val (status, bytes) = scribed.serviceInvoicePdf(
-            project,
-            serviceId,
-            call.application.get<PaymentDomainRepository>(),
-            call.application.get<ProjectBalanceAdapter>()
+        val invoice = serviceInvoices.find(serviceId)
+            ?: return@get call.respondError(HttpStatusCode.NotFound, "invoice_unavailable", "No invoice has been created for this service")
+        val serviceAdjustments = call.application.get<ProjectBalanceAdapter>().serviceAdjustments(serviceId)
+        val billedAmount = serviceAdjustments.fold(invoice.amount) { total, adjustment ->
+            total + if (adjustment.type == AdjustmentType.ADDITIONAL_CHARGE) adjustment.amount else -adjustment.amount
+        }
+        val (status, bytes) = scribed.generateInvoice(
+            project, "${project.name} — ${service.name}", invoice.description,
+            billedAmount.max(BigDecimal.ZERO).toPlainString(), invoice.currency,
+            invoice.dueDate, serviceId.toString()
         )
         if (bytes == null) {
             return@get call.respondError(
-                HttpStatusCode.BadGateway,
+                status,
                 "invoice_download_failed",
-                "Scribed could not synchronize or retrieve the service invoice"
+                "Scribed could not generate the service invoice"
             )
         }
         call.response.header(
@@ -229,12 +233,6 @@ fun Route.registerServiceBillingRoutes(dependencies: ServiceAdminDependencies) {
             "service_adjustment",
             actor,
             "service=${service.name} ${type.name} amount=$amount reason=${body.reason.trim()}"
-        )
-        scribed.notifyServiceLedger(
-            serviceId,
-            "adjustment-${adjustment.id}",
-            call.application.get<ProjectBalanceAdapter>(),
-            call.application.get()
         )
         call.respond(
             HttpStatusCode.Created,

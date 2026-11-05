@@ -69,9 +69,10 @@ class ExposedProviderCredentialRepository : ProviderCredentialStore {
         payload: String,
         actor: String
     ): ProviderCredentialMetadata = transaction {
-        require(provider in setOf("docker", "github")) { "Unsupported credential provider" }
+        require(provider in setOf("docker", "github", "scribed")) { "Unsupported credential provider" }
         require((provider == "docker" && credentialType == "registry") ||
-            (provider == "github" && credentialType in setOf("app_private_key", "webhook_secret"))) {
+            (provider == "github" && credentialType in setOf("app_private_key", "webhook_secret")) ||
+            (provider == "scribed" && credentialType == "api_client")) {
             "Unsupported credential type"
         }
         val current = ProviderCredentials.selectAll().where {

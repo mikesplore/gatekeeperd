@@ -22,7 +22,7 @@ Nginx or Traefik remains the public reverse proxy. Gatekeeperd answers whether t
 
 ## Configuration reference
 
-Keep [.env.example](../.env.example) as the environment-variable template. It documents the database, Redis, authentication, payment providers, Scribed/email integrations, Docker, GitHub, nginx, deployment, and gate settings. The backend system guide summarizes configuration groups and describes runtime behavior. Avoid copying full environment tables into other guides.
+Keep [.env.example](../.env.example) as the environment-variable template. It documents the database, Redis, authentication, payment providers, optional Scribed bootstrap settings, email, Docker, GitHub, nginx, deployment, and gate settings. Scribed’s URL and client token can also be managed from admin Settings; Gatekeeper stores that token encrypted. The backend system guide summarizes configuration groups and runtime behavior. Avoid copying full environment tables into other guides.
 
 ## Documentation ownership
 

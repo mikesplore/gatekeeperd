@@ -41,7 +41,6 @@ import com.gatekeeper.feature.service.domain.repository.ServiceRepository
 import com.gatekeeper.feature.service.domain.repository.SiteRepository
 import com.gatekeeper.infrastructure.ProcessRunnerImpl
 import com.gatekeeper.scheduler.AutoBlockerJob
-import com.gatekeeper.scheduler.IntegrationOutboxJob
 import com.gatekeeper.scheduler.ReconciliationJob
 import io.ktor.server.application.*
 import io.ktor.server.engine.*
@@ -194,7 +193,6 @@ fun Application.module() {
 
     autoBlockerJob.start(appScope, settings.scheduler)
     ReconciliationJob.start(appScope, get<ReconcilePayments>(), settings.scheduler)
-    IntegrationOutboxJob.start(appScope, get(), get<PaymentDomainRepository>(), get<ProjectBalanceAdapter>(), get<ScribedIntegrationClient>())
     get<DeploymentWorker>().start(appScope)
 
     monitor.subscribe(ApplicationStopping) {
