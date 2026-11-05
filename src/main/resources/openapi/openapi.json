@@ -5148,6 +5148,45 @@
         ]
       }
     },
+    "/api/admin/projects/{slug}/deployments/{id}/diagnostics": {
+      "get": {
+        "tags": ["Projects"],
+        "summary": "Get deployment diagnostics",
+        "description": "Returns deployment status, step, redacted output, and the final 100 candidate container log lines when a failed candidate was removed. See docs/API.md for details.",
+        "operationId": "GetApiAdminProjectsByslugDeploymentsByidDiagnostics",
+        "responses": {
+          "200": {
+            "description": "Deployment diagnostics",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "deploymentId": {"type": "string", "format": "uuid"},
+                    "status": {"type": "string"},
+                    "step": {"type": "string"},
+                    "errorMessage": {"type": "string", "nullable": true},
+                    "logs": {"type": "string"}
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Project or deployment not found",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/ApiError"}
+              }
+            }
+          }
+        },
+        "parameters": [
+          {"name": "slug", "in": "path", "required": true, "schema": {"type": "string"}},
+          {"name": "id", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}}
+        ]
+      }
+    },
     "/api/admin/projects/{slug}/deployments/{id}/cancel": {
       "post": {
         "tags": [

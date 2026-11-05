@@ -478,7 +478,7 @@ class DeploymentWorker(
                         dynamicContainerPorts.sorted().joinToString().ifBlank { "none declared" }
                     }"
                 )
-                candidateContainerId.let { removeCandidatePreservingFailure(docker, it, failure) }
+                candidateContainerId.let { removeCandidatePreservingFailure(job, docker, it, failure) }
                 candidateContainerId = null
                 candidateName = null
                 throw failure
@@ -528,7 +528,7 @@ class DeploymentWorker(
                 candidateContainerId = null
             }
         } catch (error: CancellationException) {
-            candidateContainerId?.let { id -> removeCandidatePreservingFailure(null, id, error) }
+            candidateContainerId?.let { id -> removeCandidatePreservingFailure(job, null, id, error) }
             if (deploymentQueue.isCancelled(job.id)) {
                 logger.info("Deployment {} cancelled", job.id)
             } else {
@@ -565,6 +565,7 @@ class DeploymentWorker(
             }
             if (candidateIsReady && error is CandidateRuntimeUnstableException) {
                 val runtimeName = DeploymentApplicationService.candidateContainerName(job.id)
+                runtimeName?.let { captureCandidateLogs(job, docker, it) }
                 val removed = runtimeName == null || removeCandidateContainer(runtimeName)
                 if (!removed) {
                     DeploymentApplicationService.updateCutoverState(
@@ -606,6 +607,7 @@ class DeploymentWorker(
             }
             if (routeRestored && !candidateIsReady) candidateContainerId?.let { id ->
                 removeCandidatePreservingFailure(
+                    job,
                     null,
                     id,
                     error
@@ -639,6 +641,7 @@ class DeploymentWorker(
     }
 
     private fun removeCandidatePreservingFailure(
+        job: DeploymentJobRecord,
         existingDocker: DockerGateway?,
         containerId: String,
         failure: Throwable
@@ -646,12 +649,31 @@ class DeploymentWorker(
         var cleanupDocker = existingDocker
         try {
             if (cleanupDocker == null) cleanupDocker = docker
+            // Docker deletes its log stream with the container. Snapshot the final
+            // output into deployment diagnostics before removing a failed candidate.
+            captureCandidateLogs(job, cleanupDocker, containerId)
             cleanupDocker.removeContainerByIdIfPresent(containerId)
         } catch (cleanupFailure: Throwable) {
             if (cleanupFailure !== failure) failure.addSuppressed(cleanupFailure)
             logger.warn("Could not remove failed deployment candidate {}", containerId, cleanupFailure)
         } finally {
         }
+    }
+
+    private fun captureCandidateLogs(job: DeploymentJobRecord, docker: DockerGateway, containerId: String) {
+        val tail = runCatching { docker.containerLogs(containerId, 100) }
+            .onFailure { logger.warn("Could not capture final logs for failed deployment candidate {}", containerId, it) }
+            .getOrNull()
+            ?.takeLast(16_000)
+            ?.takeIf(String::isNotBlank)
+            ?: return
+        runCatching {
+            deploymentQueue.update(
+                job.id,
+                requireNotNull(job.claimToken) { "Claim token missing for deployment ${job.id}" },
+                log = "\n--- final candidate container logs (last 100 lines) ---\n$tail\n--- end candidate container logs ---"
+            )
+        }.onFailure { logger.warn("Could not persist final logs for failed deployment candidate {}", containerId, it) }
     }
 
     private fun removeCandidateContainer(containerName: String): Boolean = runCatching {

@@ -166,7 +166,7 @@ Public service-scoped payment initiation. `serviceId` is required; `project` is 
 **Requires:** billing email and payment provider configuration. Project-wide checkout is rejected for public multi-service projects unless a service is selected.
 
 ### GET /api/gate/payment/callback?project={slug}&reference={ref}
-Paystack browser return URL after payment. Redirects the browser to the project domain. Project activation is handled by the Paystack webhook.
+Paystack browser return URL after payment. Redirects the browser to the project domain. The handler accepts Paystack's `reference` query parameter and its `trxref` alias; when `reference` is absent, it uses `trxref`. Project activation is handled by the signed Paystack webhook. A generic `route_not_found` 404 means the request did not reach a backend build with this route registered; `project_not_found` or a payment verification error means route matching succeeded.
 
 **Note:** when a payment is confirmed, Gatekeeper clears the project's `due_date` and sets the project back to `active`. That stops overdue tracking until an admin assigns a new due date.
 
@@ -412,7 +412,7 @@ Returns canonical deployment history for a project (optional `environment`, defa
 
 ### GET /api/admin/projects/{slug}/deployments/{id}/diagnostics
 
-Returns the deployment status, current step, error message, and the most recent 16,000 characters of command output. Output is redacted against resolved deployment environment values and GitHub installation tokens before it is shown. Use this endpoint to inspect clone, image build/pull, readiness, and cutover failures; the project deployment history UI loads it when a failed attempt is expanded.
+Returns the deployment status, current step, error message, and the most recent 16,000 characters of deployment output. Output is redacted against resolved deployment environment values and GitHub installation tokens before it is shown. When a failed or unstable candidate is removed, Gatekeeperd first appends up to its last 100 Docker log lines so application startup errors remain available here after container deletion. Use this endpoint to inspect clone, image build/pull, readiness, candidate startup, and cutover failures; the project deployment history UI loads it when a failed attempt is expanded.
 
 ### DELETE /api/admin/projects/{slug}/deployments/{id}
 
