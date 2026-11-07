@@ -96,6 +96,12 @@ Commit completed changes as part of the work unless the user explicitly asks not
 
 Use a concise imperative commit message that describes the completed change.
 
+## Push verification rule
+
+- Never push backend or frontend changes until the corresponding build has completed successfully for the exact changes being pushed. If any code changes after a successful build, run the build again before pushing.
+- If a build fails, fix the failure and rerun the build. Do not push while the relevant build is failing or has not been run.
+- For changes spanning both repositories, confirm both the backend Gradle build and the frontend production build pass before pushing either repository.
+
 ## Documentation and deployment references
 
 - `docs/README.md` is the documentation index and product-model overview. `.env.example` is the environment-variable template; `docs/backend-system-guide.md` summarizes configuration groups and runtime behavior.

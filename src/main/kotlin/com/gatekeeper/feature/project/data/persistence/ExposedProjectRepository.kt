@@ -13,6 +13,7 @@ import com.gatekeeper.feature.project.domain.model.ProjectRecord
 import com.gatekeeper.plugins.RedisService
 import com.gatekeeper.feature.project.domain.repository.ProjectRepository
 import com.gatekeeper.feature.service.domain.repository.SiteRepository
+import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
 import org.jetbrains.exposed.sql.*
 import org.jetbrains.exposed.sql.transactions.transaction
 import java.math.BigDecimal
