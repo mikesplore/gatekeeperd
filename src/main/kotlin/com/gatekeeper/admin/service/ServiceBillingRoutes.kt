@@ -119,11 +119,10 @@ fun Route.registerServiceBillingRoutes(dependencies: ServiceAdminDependencies) {
             ?: return@get call.respondError(HttpStatusCode.NotFound, "invoice_unavailable", "No invoice has been created for this service")
         val balance = serviceInvoices.balance(serviceId) ?: BigDecimal.ZERO
         val adjustmentItems = listOf(
-            ScribedIntegrationClient.InvoiceItem("Service", invoice.description, invoice.amount.toPlainString())
+            ScribedIntegrationClient.InvoiceItem(service.name, amount = invoice.amount.toPlainString())
         ) + serviceAdjustments.map { adjustment ->
             ScribedIntegrationClient.InvoiceItem(
                 name = if (adjustment.type == AdjustmentType.ADDITIONAL_CHARGE) "Additional charge" else "Discount",
-                description = adjustment.reason,
                 amount = (if (adjustment.type == AdjustmentType.ADDITIONAL_CHARGE) adjustment.amount else adjustment.amount.negate()).toPlainString()
             )
         }

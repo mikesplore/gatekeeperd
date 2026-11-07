@@ -9,8 +9,8 @@ class DeploymentContainerNamingTest {
     @Test
     fun `runtime names include readable service and environment`() {
         assertEquals(
-            "weusifix-api-production-12345678",
-            deploymentContainerName("Weusifix API", "production", UUID.fromString("12345678-1234-1234-1234-123456789abc"))
+            "gatekeeperd-api-production-12345678",
+            deploymentContainerName("Gatekeeperd API", "production", UUID.fromString("12345678-1234-1234-1234-123456789abc"))
         )
     }
 

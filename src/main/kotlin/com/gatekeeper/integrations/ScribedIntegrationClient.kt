@@ -92,7 +92,7 @@ class ScribedIntegrationClient(
         val issue_date: String,
         val due_date: String?,
         val invoice_number: String,
-        val payment_instructions: String = "Payment details will be shared by email.",
+        val payment_instructions: String = "Log in to your portal using your email address to pay.",
         val paid_amount: String = "0.00",
         val balance_due: String? = null,
         val items: List<InvoiceItem>? = null,

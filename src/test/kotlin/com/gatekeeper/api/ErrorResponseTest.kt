@@ -8,7 +8,7 @@ class ErrorResponseTest {
     fun `unwraps Docker status JSON into a readable volume conflict`() {
         val response = errorResponse(
             "volume_delete_failed",
-            "Status 409: {\"message\":\"remove weusifixvolume: volume is in use - [379caf]\"}"
+            "Status 409: {\"message\":\"remove gatekeeperdvolume: volume is in use - [379caf]\"}"
         )
 
         assertEquals(
