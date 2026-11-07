@@ -1331,6 +1331,32 @@ paths:
         '400': { description: Scribed URL or scoped token is missing or invalid }
         '502': { description: Scribed is unreachable or rejected the token }
         '503': { description: Secret encryption is not configured }
+  /api/admin/integrations/scribed/profile:
+    get:
+      tags: [Integrations]
+      summary: Get Gatekeeperd's own Scribed API client profile
+      responses:
+        '200': { description: Business profile associated with the scoped API token }
+        '502': { description: Scribed rejected the token or is unavailable }
+    put:
+      tags: [Integrations]
+      summary: Update Gatekeeperd's own Scribed API client profile
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string, maxLength: 120 }
+                address: { type: string, maxLength: 1000, nullable: true }
+                contactEmail: { type: string, format: email, maxLength: 254, nullable: true }
+                phone: { type: string, maxLength: 40, nullable: true }
+      responses:
+        '200': { description: Business profile updated in Scribed }
+        '400': { description: Invalid business profile }
+        '502': { description: Scribed rejected the profile update }
   /api/admin/integrations/scribed/register:
     post:
       tags: [Integrations]

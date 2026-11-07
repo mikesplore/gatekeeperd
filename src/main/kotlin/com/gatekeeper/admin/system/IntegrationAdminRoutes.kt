@@ -22,6 +22,13 @@ import io.ktor.http.HttpStatusCode
     val phone: String? = null
 )
 
+@Serializable private data class ScribedBusinessProfileRequest(
+    val name: String,
+    val address: String? = null,
+    val contactEmail: String? = null,
+    val phone: String? = null
+)
+
 fun Application.configureIntegrationAdminRoutes() {
     routing {
         authenticate("auth-jwt") {
@@ -44,6 +51,35 @@ fun Application.configureIntegrationAdminRoutes() {
                         }
                         throw HttpApiException(status, code, error.message ?: "Could not import the Scribed API client token")
                     }
+                call.respond(get<ScribedIntegrationClient>().documentSettingsStatus())
+            }
+            get("/api/admin/integrations/scribed/profile") {
+                runCatching { get<ScribedIntegrationClient>().documentClientProfile() }
+                    .getOrElse { error ->
+                        val status = if (error is IllegalArgumentException) HttpStatusCode.BadRequest else HttpStatusCode.BadGateway
+                        throw HttpApiException(status, "scribed_profile_lookup_failed", error.message ?: "Could not load the Scribed business profile")
+                    }.also { call.respond(it) }
+            }
+            put("/api/admin/integrations/scribed/profile") {
+                val body = runCatching { call.receive<ScribedBusinessProfileRequest>() }.getOrNull()
+                    ?: throw HttpApiException(HttpStatusCode.BadRequest, "invalid_scribed_profile", "Scribed business profile is invalid")
+                runCatching {
+                    get<ScribedIntegrationClient>().updateDocumentClientProfile(
+                        ScribedIntegrationClient.ScribedClientProfile(body.name, body.address, body.contactEmail, body.phone)
+                    )
+                }.getOrElse { error ->
+                    val status = when (error) {
+                        is IllegalArgumentException -> HttpStatusCode.BadRequest
+                        is IllegalStateException -> if (error.message == "Secret encryption is not configured") HttpStatusCode.ServiceUnavailable else HttpStatusCode.BadGateway
+                        else -> HttpStatusCode.BadGateway
+                    }
+                    val code = when (status) {
+                        HttpStatusCode.BadRequest -> "invalid_scribed_profile"
+                        HttpStatusCode.ServiceUnavailable -> "secrets_unconfigured"
+                        else -> "scribed_profile_update_failed"
+                    }
+                    throw HttpApiException(status, code, error.message ?: "Could not update the Scribed business profile")
+                }
                 call.respond(get<ScribedIntegrationClient>().documentSettingsStatus())
             }
             post("/api/admin/integrations/scribed/register") {

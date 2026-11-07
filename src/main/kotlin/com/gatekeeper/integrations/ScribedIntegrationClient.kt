@@ -52,6 +52,13 @@ class ScribedIntegrationClient(
         val phone: String? = null
     )
     @Serializable private data class ScribedClientRegistrationResponse(val id: Int, val api_token: String? = null)
+    @Serializable data class ScribedClientProfileResponse(
+        val id: Int,
+        val name: String,
+        val address: String? = null,
+        val contact_email: String? = null,
+        val phone: String? = null
+    )
     @Serializable data class DocumentSettingsStatus(
         val baseUrl: String,
         val configured: Boolean,
@@ -133,11 +140,75 @@ class ScribedIntegrationClient(
         val config = DocumentApiSettings(baseUrl, token, clientName = "Gatekeeperd")
         val result = healthCheck(config)
         check(result.reachable) { result.message }
+        val profile = fetchClientProfile(config)
         credentials.createOrRotate(
             "scribed", "api_client", "Scribed API client", "primary",
-            json.encodeToString(config)
+            json.encodeToString(config.withProfile(profile))
         )
     }
+
+    suspend fun updateDocumentClientProfile(profile: ScribedClientProfile) {
+        val normalized = profile.normalized()
+        require(normalized.name.isNotBlank() && normalized.name.length <= 120) { "Business name must contain 1 to 120 characters" }
+        require((normalized.address?.length ?: 0) <= 1000 && (normalized.contact_email?.length ?: 0) <= 254 && (normalized.phone?.length ?: 0) <= 40) {
+            "Business address, contact email, or phone is too long"
+        }
+        require(normalized.contact_email == null || normalized.contact_email.matches(Regex("[^\\s@]+@[^\\s@]+\\.[^\\s@]+"))) {
+            "Business contact email is invalid"
+        }
+        check(SecretValueCipher.isConfigured()) { "Secret encryption is not configured" }
+        val config = documentSettings()
+        check(config.apiToken.isNotBlank() && config.baseUrl.isNotBlank()) { "Scribed client token is not configured" }
+        val response = http.patch("${config.baseUrl}/api-clients/me") {
+            contentType(ContentType.Application.Json)
+            header(HttpHeaders.Authorization, "Bearer ${config.apiToken}")
+            setBody(normalized)
+        }
+        if (!response.status.isSuccess()) {
+            throw IllegalStateException("Scribed profile update returned HTTP ${response.status.value}")
+        }
+        val updated = runCatching { json.decodeFromString<ScribedClientProfileResponse>(response.bodyAsText()) }
+            .getOrElse { throw IllegalStateException("Scribed returned an invalid API client profile") }
+        credentials.createOrRotate(
+            "scribed", "api_client", "Scribed API client", "primary",
+            json.encodeToString(config.withProfile(updated))
+        )
+    }
+
+    suspend fun documentClientProfile(): ScribedClientProfileResponse = fetchClientProfile(documentSettings())
+
+    private suspend fun fetchClientProfile(config: DocumentApiSettings): ScribedClientProfileResponse {
+        check(config.apiToken.isNotBlank() && config.baseUrl.isNotBlank()) { "Scribed client token is not configured" }
+        val response = http.get("${config.baseUrl}/api-clients/me") {
+            header(HttpHeaders.Authorization, "Bearer ${config.apiToken}")
+        }
+        if (!response.status.isSuccess()) {
+            throw IllegalStateException("Scribed did not return the scoped API client profile (HTTP ${response.status.value})")
+        }
+        return runCatching { json.decodeFromString<ScribedClientProfileResponse>(response.bodyAsText()) }
+            .getOrElse { throw IllegalStateException("Scribed returned an invalid scoped API client profile") }
+    }
+
+    private fun DocumentApiSettings.withProfile(profile: ScribedClientProfileResponse) = copy(
+        clientId = profile.id,
+        clientName = profile.name,
+        clientAddress = profile.address,
+        contactEmail = profile.contact_email,
+        phone = profile.phone
+    )
+
+    private fun DocumentApiSettings.withProfile(profile: ScribedClientProfile) = copy(
+        clientName = profile.name,
+        clientAddress = profile.address,
+        contactEmail = profile.contact_email,
+        phone = profile.phone
+    )
+
+    private fun ScribedClientProfile.normalized() = copy(
+        name = name.trim(), address = address?.trim()?.takeIf(String::isNotEmpty),
+        contact_email = contact_email?.trim()?.takeIf(String::isNotEmpty),
+        phone = phone?.trim()?.takeIf(String::isNotEmpty)
+    )
 
     suspend fun registerDocumentClient(baseUrl: String, adminToken: String, profile: ScribedClientProfile) {
         val normalized = baseUrl.trim().trimEnd('/')
