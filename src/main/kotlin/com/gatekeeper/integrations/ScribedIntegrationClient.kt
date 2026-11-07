@@ -92,8 +92,13 @@ class ScribedIntegrationClient(
         val issue_date: String,
         val due_date: String?,
         val invoice_number: String,
-        val payment_instructions: String = "Payment details will be shared by email."
+        val payment_instructions: String = "Payment details will be shared by email.",
+        val paid_amount: String = "0.00",
+        val balance_due: String? = null,
+        val items: List<InvoiceItem>? = null,
+        val payment_status: String? = null
     )
+    @Serializable data class InvoiceItem(val name: String, val description: String? = null, val amount: String)
 
     @Serializable data class HealthResult(val configured: Boolean, val reachable: Boolean, val status: Int? = null, val message: String)
 
@@ -295,7 +300,8 @@ class ScribedIntegrationClient(
 
     suspend fun generateInvoice(
         project: ProjectRecord, projectName: String, description: String, amount: String,
-        currency: String, dueDate: LocalDate?, invoiceKey: String
+        currency: String, dueDate: LocalDate?, invoiceKey: String, issueDate: LocalDate,
+        paidAmount: String, balanceDue: String, items: List<InvoiceItem>, paymentStatus: String
     ): Pair<HttpStatusCode, ByteArray?> {
         val config = documentSettings()
         if (config.baseUrl.isBlank() || config.apiToken.isBlank()) return HttpStatusCode.ServiceUnavailable to null
@@ -306,9 +312,13 @@ class ScribedIntegrationClient(
             description = description,
             amount = amount,
             currency = currency,
-            issue_date = LocalDate.now().toString(),
+            issue_date = issueDate.toString(),
             due_date = dueDate?.toString(),
-            invoice_number = "GK-${invoiceKey.take(24)}"
+            invoice_number = "GK-$invoiceKey",
+            paid_amount = paidAmount,
+            balance_due = balanceDue,
+            items = items.takeIf { it.isNotEmpty() },
+            payment_status = paymentStatus
         )
         return postPdf("/generate/invoice", payload, config)
     }
@@ -336,12 +346,12 @@ class ScribedIntegrationClient(
     ): Pair<HttpStatusCode, ByteArray?> = issueReceipt(project, payment, "Payment received for ${project.name}")
 
     suspend fun receiptPdfForServicePayment(
-        project: ProjectRecord, serviceId: java.util.UUID, payment: Payment,
+        project: ProjectRecord, serviceName: String, payment: Payment,
         @Suppress("UNUSED_PARAMETER") payments: PaymentDomainRepository,
         @Suppress("UNUSED_PARAMETER") balances: ProjectBalanceAdapter
     ): Pair<HttpStatusCode, ByteArray?> = issueReceipt(
-        project.copy(name = "${project.name} — $serviceId"), payment,
-        "Payment received for service $serviceId"
+        project.copy(name = "${project.name} — $serviceName"), payment,
+        "Payment received for ${project.name} — $serviceName"
     )
 
     private suspend inline fun <reified T : Any> postPdf(

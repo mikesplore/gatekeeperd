@@ -130,9 +130,7 @@ import com.gatekeeper.feature.project.data.persistence.ExposedProjectQueryReposi
 import com.gatekeeper.feature.project.domain.repository.ProjectQueryRepository
 import com.gatekeeper.feature.service.data.persistence.ExposedServiceRepository
 import com.gatekeeper.feature.service.data.persistence.ExposedServiceInvoiceRepository
-import com.gatekeeper.feature.service.data.integration.GatekeeperOnlyInvoiceAdapter
 import com.gatekeeper.feature.service.domain.repository.ServiceInvoiceRepository
-import com.gatekeeper.feature.service.domain.repository.ServiceInvoiceIntegrationPort
 import com.gatekeeper.feature.service.application.ServiceInvoiceApplicationService
 import com.gatekeeper.feature.service.data.persistence.ExposedSiteRepository
 import com.gatekeeper.feature.service.domain.repository.ServiceRepository
@@ -381,8 +379,7 @@ private val applicationModule = module {
     }
     single<PaymentDomainRepository> { ExposedPaymentRepository() }
     single<ServiceInvoiceRepository> { ExposedServiceInvoiceRepository() }
-    single<ServiceInvoiceIntegrationPort> { GatekeeperOnlyInvoiceAdapter() }
-    single { ServiceInvoiceApplicationService(get(), get<ServiceRepository>(), get<PaymentDomainRepository>(), get<ProjectAdjustmentStore>(), get()) }
+    single { ServiceInvoiceApplicationService(get(), get<PaymentDomainRepository>(), get<ProjectAdjustmentStore>()) }
     single { ProjectBalanceAdapter(get<PaymentDomainRepository>(), get<ProjectAdjustmentStore>(), get(), get()) }
     single<PaymentEventDomainRepository> { ExposedPaymentEventRepository() }
     single { PaymentProjectAdapter(get<ProjectStore>(), get()) }

@@ -561,7 +561,7 @@ If pending provider transactions are the only thing reserving the requested bala
 
 `GET /api/admin/integrations/scribed/profile` reads Gatekeeperd's business profile from Scribed using the stored scoped token. `PUT /api/admin/integrations/scribed/profile` updates it using that token; it accepts `name`, `address`, `contactEmail`, and `phone`. No Scribed administrator token is required for profile changes after registration.
 
-`POST /api/admin/integrations/scribed/health` checks Scribed's dependency health endpoint and verifies that its configured API client token is accepted. Gatekeeper sends invoice render requests to `POST /generate/invoice` and persisted payment receipts to `POST /receipts`, using an idempotency key derived from the Gatekeeper payment ID.
+`POST /api/admin/integrations/scribed/health` checks Scribed's dependency health endpoint and verifies that its configured API client token is accepted. Gatekeeper sends invoice snapshots to `POST /generate/invoice` and persisted payment receipts to `POST /receipts`, using an idempotency key derived from the Gatekeeper payment ID. Invoice snapshots carry the stable Gatekeeper service UUID, invoice creation date, adjustment lines, paid-to-date amount, and current balance; they do not claim Scribed verification because they are rendered from Gatekeeper's billing ledger rather than persisted as Scribed documents.
 
 Scribed is a document processor only. Gatekeeper owns payment records, invoice balances, and access decisions; Scribed does not receive payment webhooks or ledger synchronization events.
 

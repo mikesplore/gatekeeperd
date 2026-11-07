@@ -8,6 +8,7 @@ import com.gatekeeper.db.tables.AdjustmentType
 import com.gatekeeper.feature.payment.data.persistence.ProjectBalanceAdapter
 import com.gatekeeper.feature.payment.domain.usecase.GetPayment
 import com.gatekeeper.feature.service.application.ServiceInvoiceApplicationService
+import com.gatekeeper.integrations.ScribedIntegrationClient
 import io.ktor.http.*
 import io.ktor.server.auth.*
 import io.ktor.server.auth.jwt.*
@@ -69,8 +70,6 @@ fun Route.registerServiceBillingRoutes(dependencies: ServiceAdminDependencies) {
                 e.message ?: "An invoice already exists for this service"
             )
         }
-        // Document mirroring is best effort. Billing state has already been committed locally.
-        runCatching { serviceInvoices.ensureDocument(project, serviceId, service.name) }
         auditRepository.write(
             projectId,
             "service_invoice_created",
@@ -116,10 +115,28 @@ fun Route.registerServiceBillingRoutes(dependencies: ServiceAdminDependencies) {
         val billedAmount = serviceAdjustments.fold(invoice.amount) { total, adjustment ->
             total + if (adjustment.type == AdjustmentType.ADDITIONAL_CHARGE) adjustment.amount else -adjustment.amount
         }
+        val invoiceView = serviceInvoices.view(serviceId)
+            ?: return@get call.respondError(HttpStatusCode.NotFound, "invoice_unavailable", "No invoice has been created for this service")
+        val balance = serviceInvoices.balance(serviceId) ?: BigDecimal.ZERO
+        val adjustmentItems = listOf(
+            ScribedIntegrationClient.InvoiceItem("Service", invoice.description, invoice.amount.toPlainString())
+        ) + serviceAdjustments.map { adjustment ->
+            ScribedIntegrationClient.InvoiceItem(
+                name = if (adjustment.type == AdjustmentType.ADDITIONAL_CHARGE) "Additional charge" else "Discount",
+                description = adjustment.reason,
+                amount = (if (adjustment.type == AdjustmentType.ADDITIONAL_CHARGE) adjustment.amount else adjustment.amount.negate()).toPlainString()
+            )
+        }
         val (status, bytes) = scribed.generateInvoice(
             project, "${project.name} — ${service.name}", invoice.description,
             billedAmount.max(BigDecimal.ZERO).toPlainString(), invoice.currency,
-            invoice.dueDate, serviceId.toString()
+            invoice.dueDate, serviceId.toString(), invoice.createdAt.toLocalDate(),
+            invoiceView.paid.toPlainString(), balance.toPlainString(), adjustmentItems,
+            when {
+                balance.signum() == 0 -> "paid"
+                invoiceView.paid.signum() > 0 -> "partially_paid"
+                else -> "unpaid"
+            }
         )
         if (bytes == null) {
             return@get call.respondError(
@@ -143,7 +160,6 @@ fun Route.registerServiceBillingRoutes(dependencies: ServiceAdminDependencies) {
         if (service == null) {
             return@get call.respondError(HttpStatusCode.NotFound, "service_not_found", "Service not found")
         }
-        serviceInvoices.ensureDocument(project, serviceId, service.name)
         val paymentId = runCatching { UUID.fromString(call.parameters["paymentId"]) }.getOrNull()
             ?: return@get call.respondError(HttpStatusCode.BadRequest, "invalid_payment_id", "Invalid payment ID")
         val payment =
@@ -158,7 +174,7 @@ fun Route.registerServiceBillingRoutes(dependencies: ServiceAdminDependencies) {
         }
         val (status, bytes) = scribed.receiptPdfForServicePayment(
             project,
-            serviceId,
+            service.name,
             payment,
             call.application.get<PaymentDomainRepository>(),
             call.application.get<ProjectBalanceAdapter>()
@@ -215,6 +231,14 @@ fun Route.registerServiceBillingRoutes(dependencies: ServiceAdminDependencies) {
                 HttpStatusCode.Conflict,
                 "service_invoice_required",
                 "Create a service invoice before adding service charges"
+            )
+        }
+        if (type == AdjustmentType.DISCOUNT) {
+            val remaining = serviceInvoices.balance(serviceId) ?: BigDecimal.ZERO
+            if (amount > remaining) return@post call.respondError(
+                HttpStatusCode.BadRequest,
+                "discount_exceeds_balance",
+                "A discount cannot exceed this service's outstanding balance"
             )
         }
         val actor = call.principal<JWTPrincipal>()?.payload?.subject ?: "unknown"
