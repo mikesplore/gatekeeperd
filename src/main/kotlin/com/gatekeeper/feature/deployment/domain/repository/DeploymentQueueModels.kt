@@ -1,12 +1,15 @@
 package com.gatekeeper.feature.deployment.domain.repository
 
 import com.gatekeeper.docker.VolumeMount
+import com.gatekeeper.docker.ContainerRuntimeOptions
 import java.time.LocalDateTime
 import java.util.UUID
 
 data class DeploymentJobRecord(
     val id: UUID, val repository: String?, val gitRef: String, val registry: String,
     val imageName: String, val imageTag: String, val hostPort: Int?, val containerPort: Int?, val network: String, val restartPolicy: String,
+    val preset: String? = null,
+    val runtimeOptions: ContainerRuntimeOptions = ContainerRuntimeOptions(),
     val env: Map<String, String>, val secretEnv: Map<String, String>, val volumes: List<VolumeMount>, val createNetworkIfMissing: Boolean,
     val status: String, val currentStep: String, val logs: String, val commitSha: String?, val imageDigest: String?, val errorMessage: String?,
     val createdAt: LocalDateTime, val startedAt: LocalDateTime?, val completedAt: LocalDateTime?, val updatedAt: LocalDateTime,

@@ -33,6 +33,7 @@ object ProjectSetupApplicationService {
             body.imageName.matches(Regex("^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*$")) &&
             body.registry.matches(Regex("^(docker\\.io|[A-Za-z0-9.-]+(:[0-9]{1,5})?)$")) &&
             body.imageTag.matches(Regex("^[A-Za-z0-9_.-]+$")) && body.environment.isNotBlank() &&
+            (body.preset == null || body.preset in setOf("postgres", "redis")) &&
             (body.containerPort == null || body.containerPort in 1..65535) &&
             (body.env.keys + body.secretEnv.keys).all { it.matches(Regex("[A-Za-z_][A-Za-z0-9_]*")) } &&
             body.volumes.all { it.hostPath.isNotBlank() && it.containerPath.isNotBlank() } &&

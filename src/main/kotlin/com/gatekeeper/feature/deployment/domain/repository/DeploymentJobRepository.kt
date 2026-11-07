@@ -6,6 +6,8 @@ import com.gatekeeper.docker.AdoptionDetails
 import com.gatekeeper.feature.integrations.domain.repository.RegistryCredentialRecord
 import java.time.LocalDateTime
 import java.util.UUID
+import com.gatekeeper.docker.VolumeMount
+import com.gatekeeper.docker.ContainerRuntimeOptions
 
 interface DeploymentJobRepository {
     data class AutoDeployTarget(
@@ -21,6 +23,8 @@ interface DeploymentJobRepository {
         val registry: String,
         val imageName: String,
         val imageTag: String,
+        val preset: String?,
+        val runtimeOptions: ContainerRuntimeOptions,
         val autoDeploy: Boolean,
         val containerPort: Int?,
         val hostPort: Int?,
@@ -29,6 +33,7 @@ interface DeploymentJobRepository {
         val environment: String,
         val env: Map<String, String>,
         val envKeys: List<String>,
+        val volumes: List<VolumeMount>,
         val secretSetId: UUID?,
         val secretSetVersion: Int?
     )

@@ -2,6 +2,7 @@ package com.gatekeeper.deployment
 
 import kotlinx.serialization.Serializable
 import com.gatekeeper.docker.VolumeMount
+import com.gatekeeper.docker.ContainerRuntimeOptions
 
 @Serializable
 data class CreateDeploymentRequest(
@@ -10,6 +11,8 @@ data class CreateDeploymentRequest(
     val registry: String = "docker.io",
     val imageName: String,
     val imageTag: String = "latest",
+    val preset: String? = null,
+    val runtimeOptions: ContainerRuntimeOptions = ContainerRuntimeOptions(),
     val hostPort: Int? = null,
     val containerPort: Int? = null,
     val network: String = "bridge",
@@ -39,6 +42,8 @@ data class UpdateDeploymentConfigurationRequest(
     val registry: String? = null,
     val imageName: String? = null,
     val imageTag: String? = null,
+    val preset: String? = null,
+    val runtimeOptions: ContainerRuntimeOptions? = null,
     val hostPort: Int? = null,
     val containerPort: Int? = null,
     val network: String? = null,

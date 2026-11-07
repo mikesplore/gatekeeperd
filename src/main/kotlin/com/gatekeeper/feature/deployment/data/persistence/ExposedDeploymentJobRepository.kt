@@ -220,7 +220,9 @@ class ExposedDeploymentJobRepository : DeploymentJobRepository {
             registry = row[DeploymentConfigurations.registry], imageName = row[DeploymentConfigurations.imageName],
             imageTag = row[DeploymentConfigurations.imageTag], hostPort = row[DeploymentConfigurations.hostPort],
             containerPort = row[DeploymentConfigurations.containerPort], network = row[DeploymentConfigurations.network],
-            restartPolicy = row[DeploymentConfigurations.restartPolicy], projectId = row[DeploymentConfigurations.projectId].toString(),
+            restartPolicy = row[DeploymentConfigurations.restartPolicy], preset = row[DeploymentConfigurations.preset],
+            runtimeOptions = Json.decodeFromString(row[DeploymentConfigurations.runtimeOptionsJson]),
+            projectId = row[DeploymentConfigurations.projectId].toString(),
             serviceId = serviceId.toString(), autoDeploy = row[DeploymentConfigurations.autoDeploy], triggerSource = trigger,
             sharedEnvironmentSetId = row[DeploymentConfigurations.sharedEnvironmentSetId]?.toString(),
             sharedEnvironmentSetVersion = row[DeploymentConfigurations.sharedEnvironmentSetVersion],
@@ -329,9 +331,9 @@ class ExposedDeploymentJobRepository : DeploymentJobRepository {
         val envKeys = (serviceEnvironmentValues(serviceSet).keys + sharedEnvironmentValues(sharedSet).keys).distinct().sorted()
         ConfigurationSummary(
             id, row[DeploymentConfigurations.repository], row[DeploymentConfigurations.gitRef], row[DeploymentConfigurations.registry],
-            row[DeploymentConfigurations.imageName], row[DeploymentConfigurations.imageTag], row[DeploymentConfigurations.autoDeploy], row[DeploymentConfigurations.containerPort],
+            row[DeploymentConfigurations.imageName], row[DeploymentConfigurations.imageTag], row[DeploymentConfigurations.preset], Json.decodeFromString(row[DeploymentConfigurations.runtimeOptionsJson]), row[DeploymentConfigurations.autoDeploy], row[DeploymentConfigurations.containerPort],
             row[DeploymentConfigurations.hostPort], row[DeploymentConfigurations.network], row[DeploymentConfigurations.restartPolicy],
-            row[DeploymentConfigurations.environment], emptyMap(), envKeys,
+            row[DeploymentConfigurations.environment], emptyMap(), envKeys, Json.decodeFromString(row[DeploymentConfigurations.volumesJson]),
             row[DeploymentConfigurations.secretSetId], row[DeploymentConfigurations.secretSetVersion]
         )
     }
@@ -342,7 +344,7 @@ class ExposedDeploymentJobRepository : DeploymentJobRepository {
             ?: return createConfiguration(projectId, request)
         val updated = updateConfiguration(currentId, UpdateDeploymentConfigurationRequest(
             repository = request.repository, gitRef = request.gitRef, registry = request.registry,
-            imageName = request.imageName, imageTag = request.imageTag,
+            imageName = request.imageName, imageTag = request.imageTag, preset = request.preset, runtimeOptions = request.runtimeOptions,
             hostPort = request.hostPort, containerPort = request.containerPort, network = request.network,
             restartPolicy = request.restartPolicy, env = request.env, volumes = request.volumes,
             sharedEnvironmentSetId = request.sharedEnvironmentSetId,
@@ -391,6 +393,8 @@ class ExposedDeploymentJobRepository : DeploymentJobRepository {
                 repository = saved[DeploymentConfigurations.repository], gitRef = saved[DeploymentConfigurations.gitRef],
                 registry = saved[DeploymentConfigurations.registry], imageName = saved[DeploymentConfigurations.imageName],
                 imageTag = saved[DeploymentConfigurations.imageTag],
+                preset = saved[DeploymentConfigurations.preset],
+                runtimeOptions = Json.decodeFromString(saved[DeploymentConfigurations.runtimeOptionsJson]),
                 hostPort = saved[DeploymentConfigurations.hostPort], containerPort = saved[DeploymentConfigurations.containerPort],
                 network = saved[DeploymentConfigurations.network], restartPolicy = saved[DeploymentConfigurations.restartPolicy],
                 projectId = saved[DeploymentConfigurations.projectId].toString(), autoDeploy = saved[DeploymentConfigurations.autoDeploy],
@@ -417,6 +421,7 @@ class ExposedDeploymentJobRepository : DeploymentJobRepository {
             "Service does not belong to project"
         }
         validateReadiness(request.readinessType, request.readinessTarget, request.readinessTimeoutSeconds, request.readinessIntervalSeconds, request.readinessProbeTimeoutMillis)
+        require(request.preset == null || request.preset in setOf("postgres", "redis")) { "Container preset must be postgres or redis" }
         check(DeploymentConfigurations.selectAll().where {
             (DeploymentConfigurations.projectId eq projectId) and (DeploymentConfigurations.serviceId eq serviceId)
         }.none { it[DeploymentConfigurations.environment] == environment }) {
@@ -435,7 +440,8 @@ class ExposedDeploymentJobRepository : DeploymentJobRepository {
         DeploymentConfigurations.insert {
             it[DeploymentConfigurations.id] = id
             it[repository] = request.repository; it[gitRef] = request.gitRef; it[registry] = request.registry
-            it[imageName] = request.imageName; it[imageTag] = request.imageTag
+            it[imageName] = request.imageName; it[imageTag] = request.imageTag; it[preset] = request.preset
+            it[runtimeOptionsJson] = Json.encodeToString(request.runtimeOptions)
             it[hostPort] = request.hostPort; it[containerPort] = request.containerPort; it[network] = request.network
             it[restartPolicy] = request.restartPolicy; it[DeploymentConfigurations.envJson] = "{}"
             it[DeploymentConfigurations.secretEnvEncrypted] = null
@@ -616,6 +622,8 @@ class ExposedDeploymentJobRepository : DeploymentJobRepository {
             request.gitRef?.let { value -> it[gitRef] = value }
             request.registry?.let { value -> it[registry] = value }; request.imageName?.let { value -> it[imageName] = value }
             request.imageTag?.let { value -> it[imageTag] = value }
+            if (replaceRepository) it[preset] = request.preset else request.preset?.let { value -> it[preset] = value }
+            request.runtimeOptions?.let { value -> it[runtimeOptionsJson] = Json.encodeToString(value) }
             request.hostPort?.let { value -> it[hostPort] = value }; request.containerPort?.let { value -> it[containerPort] = value }
             request.network?.let { value -> it[network] = value }; request.restartPolicy?.let { value -> it[restartPolicy] = value }
             if (environmentValuesChanged) {
@@ -645,6 +653,8 @@ class ExposedDeploymentJobRepository : DeploymentJobRepository {
             request.gitRef?.let { value -> it[gitRef] = value }
             request.registry?.let { value -> it[registry] = value }; request.imageName?.let { value -> it[imageName] = value }
             request.imageTag?.let { value -> it[imageTag] = value }
+            if (replaceRepository) it[preset] = request.preset else request.preset?.let { value -> it[preset] = value }
+            request.runtimeOptions?.let { value -> it[runtimeOptionsJson] = Json.encodeToString(value) }
             request.hostPort?.let { value -> it[hostPort] = value }; request.containerPort?.let { value -> it[containerPort] = value }
             request.network?.let { value -> it[network] = value }; request.restartPolicy?.let { value -> it[restartPolicy] = value }
             if (environmentValuesChanged) {
@@ -697,6 +707,8 @@ class ExposedDeploymentJobRepository : DeploymentJobRepository {
                 registry = row[DeploymentConfigurations.registry],
                 imageName = row[DeploymentConfigurations.imageName],
                 imageTag = row[DeploymentConfigurations.imageTag],
+                preset = row[DeploymentConfigurations.preset],
+                runtimeOptions = Json.decodeFromString(row[DeploymentConfigurations.runtimeOptionsJson]),
                 hostPort = activeHostPort,
                 containerPort = activeContainerPort,
                 network = row[DeploymentConfigurations.network],
@@ -796,6 +808,8 @@ class ExposedDeploymentJobRepository : DeploymentJobRepository {
             it[DeploymentConfigurations.id] = id
             it[repository] = request.repository; it[gitRef] = request.gitRef; it[registry] = request.registry
             it[imageName] = request.imageName; it[imageTag] = request.imageTag
+            it[preset] = request.preset
+            it[runtimeOptionsJson] = Json.encodeToString(request.runtimeOptions)
             it[hostPort] = request.hostPort; it[containerPort] = request.containerPort; it[network] = request.network
             it[restartPolicy] = request.restartPolicy; it[DeploymentConfigurations.envJson] = "{}"
             it[DeploymentConfigurations.secretEnvEncrypted] = null; it[DeploymentConfigurations.volumesJson] = volumesJson
@@ -818,6 +832,8 @@ class ExposedDeploymentJobRepository : DeploymentJobRepository {
             it[repository] = request.repository; it[gitRef] = request.gitRef; it[registry] = request.registry
             it[DeploymentExecutions.registryCredentialId] = registryCredentialId
             it[imageName] = request.imageName; it[imageTag] = request.imageTag
+            it[preset] = request.preset
+            it[runtimeOptionsJson] = Json.encodeToString(request.runtimeOptions)
             it[hostPort] = request.hostPort; it[containerPort] = request.containerPort; it[network] = request.network
             it[restartPolicy] = request.restartPolicy; it[DeploymentExecutions.envJson] = "{}"
             it[DeploymentExecutions.secretEnvEncrypted] = null; it[DeploymentExecutions.volumesJson] = volumesJson
@@ -844,6 +860,8 @@ class ExposedDeploymentJobRepository : DeploymentJobRepository {
             it[registry] = request.registry
             it[imageName] = request.imageName
             it[imageTag] = request.imageTag
+            it[preset] = request.preset
+            it[runtimeOptionsJson] = Json.encodeToString(request.runtimeOptions)
             it[hostPort] = request.hostPort
             it[containerPort] = request.containerPort
             it[network] = request.network
@@ -921,6 +939,8 @@ class ExposedDeploymentJobRepository : DeploymentJobRepository {
             registry = execution[DeploymentExecutions.registry],
             imageName = execution[DeploymentExecutions.imageName],
             imageTag = execution[DeploymentExecutions.imageTag],
+            preset = execution[DeploymentExecutions.preset],
+                runtimeOptions = Json.decodeFromString(execution[DeploymentExecutions.runtimeOptionsJson]),
             projectId = ownerId.toString(),
             autoDeploy = false,
             hostPort = execution[DeploymentExecutions.hostPort],
@@ -950,6 +970,8 @@ class ExposedDeploymentJobRepository : DeploymentJobRepository {
             it[DeploymentConfigurations.id] = id
             it[repository] = request.repository; it[gitRef] = request.gitRef; it[registry] = request.registry
             it[imageName] = request.imageName; it[imageTag] = request.imageTag
+            it[preset] = request.preset
+            it[runtimeOptionsJson] = Json.encodeToString(request.runtimeOptions)
             it[hostPort] = request.hostPort; it[containerPort] = request.containerPort
             it[network] = request.network; it[restartPolicy] = request.restartPolicy
             it[DeploymentConfigurations.envJson] = "{}"; it[DeploymentConfigurations.secretEnvEncrypted] = null
@@ -971,6 +993,8 @@ class ExposedDeploymentJobRepository : DeploymentJobRepository {
             it[DeploymentExecutions.id] = id; it[configurationId] = id
             it[repository] = request.repository; it[gitRef] = request.gitRef; it[registry] = request.registry
             it[imageName] = request.imageName; it[imageTag] = request.imageTag
+            it[preset] = request.preset
+            it[runtimeOptionsJson] = Json.encodeToString(request.runtimeOptions)
             it[hostPort] = request.hostPort; it[containerPort] = request.containerPort
             it[network] = request.network; it[restartPolicy] = request.restartPolicy
             it[DeploymentExecutions.envJson] = "{}"; it[DeploymentExecutions.secretEnvEncrypted] = null
@@ -994,6 +1018,8 @@ class ExposedDeploymentJobRepository : DeploymentJobRepository {
             it[DeploymentJobs.id] = id
             it[repository] = request.repository; it[gitRef] = request.gitRef; it[registry] = request.registry
             it[imageName] = request.imageName; it[imageTag] = request.imageTag
+            it[DeploymentJobs.preset] = request.preset
+            it[DeploymentJobs.runtimeOptionsJson] = Json.encodeToString(request.runtimeOptions)
             it[hostPort] = request.hostPort; it[containerPort] = request.containerPort
             it[network] = request.network; it[restartPolicy] = request.restartPolicy
             it[DeploymentJobs.envJson] = "{}"; it[DeploymentJobs.secretEnvEncrypted] = null
@@ -1364,7 +1390,7 @@ class ExposedDeploymentJobRepository : DeploymentJobRepository {
         val serviceName = Services.selectAll().where { Services.id eq serviceId }.singleOrNull()?.get(Services.name) ?: "default"
         return DeploymentJobRecord(
         this[DeploymentJobs.id], this[DeploymentJobs.repository], this[DeploymentJobs.gitRef], this[DeploymentJobs.registry],
-        this[DeploymentJobs.imageName], this[DeploymentJobs.imageTag], this[DeploymentJobs.hostPort], this[DeploymentJobs.containerPort], this[DeploymentJobs.network], this[DeploymentJobs.restartPolicy], runCatching { Json.decodeFromString<Map<String, String>>(this[DeploymentJobs.envJson]) }.getOrDefault(emptyMap()), if (includeSecretEnv) this[DeploymentJobs.secretEnvEncrypted]?.let { Json.decodeFromString<Map<String, String>>(SecretValueCipher.decrypt(it)) }.orEmpty() else emptyMap(), runCatching { Json.decodeFromString<List<VolumeMount>>(this[DeploymentJobs.volumesJson]) }.getOrDefault(emptyList()), this[DeploymentJobs.createNetworkIfMissing], this[DeploymentJobs.status], this[DeploymentJobs.currentStep],
+        this[DeploymentJobs.imageName], this[DeploymentJobs.imageTag], this[DeploymentJobs.hostPort], this[DeploymentJobs.containerPort], this[DeploymentJobs.network], this[DeploymentJobs.restartPolicy], this[DeploymentJobs.preset], Json.decodeFromString(this[DeploymentJobs.runtimeOptionsJson]), runCatching { Json.decodeFromString<Map<String, String>>(this[DeploymentJobs.envJson]) }.getOrDefault(emptyMap()), if (includeSecretEnv) this[DeploymentJobs.secretEnvEncrypted]?.let { Json.decodeFromString<Map<String, String>>(SecretValueCipher.decrypt(it)) }.orEmpty() else emptyMap(), runCatching { Json.decodeFromString<List<VolumeMount>>(this[DeploymentJobs.volumesJson]) }.getOrDefault(emptyList()), this[DeploymentJobs.createNetworkIfMissing], this[DeploymentJobs.status], this[DeploymentJobs.currentStep],
         this[DeploymentJobs.logs], this[DeploymentJobs.commitSha], this[DeploymentJobs.imageDigest], this[DeploymentJobs.errorMessage],
         this[DeploymentJobs.createdAt], this[DeploymentJobs.startedAt], this[DeploymentJobs.completedAt], this[DeploymentJobs.updatedAt], this[DeploymentJobs.projectId], this[DeploymentJobs.triggerSource], this[DeploymentJobs.environment],
         this[DeploymentJobs.readinessType], this[DeploymentJobs.readinessTarget], this[DeploymentJobs.readinessTimeoutSeconds], this[DeploymentJobs.readinessIntervalSeconds], this[DeploymentJobs.readinessProbeTimeoutMillis],

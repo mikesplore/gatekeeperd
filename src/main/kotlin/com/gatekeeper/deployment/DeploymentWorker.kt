@@ -434,6 +434,8 @@ class DeploymentWorker(
                 try {
                     val result = docker.createContainerTracked(
                         CreateContainerRequest(
+                            preset = job.preset,
+                            runtimeOptions = job.runtimeOptions,
                             name = candidateName,
                             image = immutableImageReference,
                             ports = reservedPorts.map { (containerPort, hostPort) -> hostPort to containerPort }

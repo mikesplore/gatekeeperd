@@ -5,6 +5,6 @@ import com.gatekeeper.admin.model.*
 import com.gatekeeper.feature.deployment.domain.repository.DeploymentJobRepository
 
 fun DeploymentJobRepository.ConfigurationSummary.toSetupResponse() = ProjectSetupConfigurationResponse(
-    id.toString(), repository, gitRef, registry, imageName, imageTag, autoDeploy, containerPort, hostPort, network, restartPolicy,
+    id.toString(), repository, gitRef, registry, imageName, imageTag, preset, runtimeOptions, volumes, autoDeploy, containerPort, hostPort, network, restartPolicy,
     environment, env, envKeys, secretSetId?.toString(), secretSetVersion
 )

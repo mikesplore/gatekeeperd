@@ -13,6 +13,8 @@ object DeploymentConfigurations : Table("deployment_configurations") {
     val registry = text("registry")
     val imageName = text("image_name")
     val imageTag = text("image_tag")
+    val preset = text("preset").nullable()
+    val runtimeOptionsJson = text("runtime_options_json").default("{}")
     val hostPort = integer("host_port").nullable()
     val containerPort = integer("container_port").nullable()
     val network = text("network")
