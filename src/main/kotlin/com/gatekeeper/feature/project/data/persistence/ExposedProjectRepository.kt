@@ -70,8 +70,9 @@ class ExposedProjectRepository(
         }
     }
 
-    override fun findByCustomerId(customerId: UUID): List<ProjectRecord> = transaction {
-        Projects.selectAll().where { (Projects.customerId eq customerId) and Projects.deletedAt.isNull() }
+    override fun findByCustomerId(customerId: UUID, includeArchived: Boolean): List<ProjectRecord> = transaction {
+        val query = Projects.selectAll().where { Projects.customerId eq customerId }
+        (if (includeArchived) query else query.andWhere { Projects.deletedAt.isNull() })
             .orderBy(Projects.createdAt, SortOrder.DESC).map { it.toProjectRecord() }
     }
 
@@ -409,7 +410,8 @@ class ExposedProjectRepository(
         updatedAt = this[Projects.updatedAt],
         customerId = this[Projects.customerId],
         blockReasonCode = this[Projects.blockReasonCode],
-        blockReasonNote = this[Projects.blockReasonNote]
+        blockReasonNote = this[Projects.blockReasonNote],
+        archived = this[Projects.deletedAt] != null
     )
 }
 

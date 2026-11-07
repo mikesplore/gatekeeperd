@@ -52,7 +52,7 @@ object OperationsDashboardService {
 
 
     fun customerOwnedProjects(projectRepository: ProjectRepository,siteRepository: SiteRepository, customerId: UUID): List<CustomerOwnedProject> {
-        val projects = projectRepository.findByCustomerId(customerId)
+        val projects = projectRepository.findByCustomerId(customerId, includeArchived = true)
         val sites = siteRepository.findByProjectIds(projects.map { it.id })
         return projects.map { project -> CustomerOwnedProject(project, sites[project.id]) }
     }

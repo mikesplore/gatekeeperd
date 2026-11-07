@@ -30,7 +30,8 @@ data class ProjectRecord(
     val updatedAt: LocalDateTime,
     val customerId: UUID? = null,
     val blockReasonCode: AccessBlockReason? = null,
-    val blockReasonNote: String? = null
+    val blockReasonNote: String? = null,
+    val archived: Boolean = false
 )
 
 data class OverdueProject(

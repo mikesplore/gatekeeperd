@@ -4603,6 +4603,26 @@ paths:
         required: true
         schema:
           type: string
+  /api/admin/volumes/prune:
+    post:
+      tags:
+      - Containers
+      summary: Prune unused Docker volumes
+      description: Remove Docker volumes that are not attached to any container.
+      operationId: PruneApiAdminVolumes
+      responses:
+        '200':
+          description: Cleanup summary
+  /api/admin/networks/prune:
+    post:
+      tags:
+      - Containers
+      summary: Prune unused Docker networks
+      description: Remove unused custom networks while preserving built-in and internal networks.
+      operationId: PruneApiAdminNetworks
+      responses:
+        '200':
+          description: Cleanup summary
   /api/admin/volumes:
     get:
       tags:

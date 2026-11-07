@@ -117,7 +117,7 @@ fun Route.registerCustomerDashboardRoutes(dependencies: OperationsAdminDependenc
         val customer = customers.update(id, body.firstName.trim(), body.lastName.trim(), email, body.contactPhone?.trim()?.takeIf { it.isNotBlank() }) ?: run {
             call.respondError(HttpStatusCode.NotFound, "customer_not_found", "Customer not found"); return@put
         }
-        call.respond(DashboardCustomerResponse(customer.id.toString(), customer.firstName, customer.lastName, customer.contactEmail, customer.contactPhone, customer.billingStatus, projects.findByCustomerId(id).size))
+        call.respond(DashboardCustomerResponse(customer.id.toString(), customer.firstName, customer.lastName, customer.contactEmail, customer.contactPhone, customer.billingStatus, projects.findByCustomerId(id, includeArchived = true).size))
     }
 
     delete("/api/admin/dashboard/customers/{id}") {
@@ -128,13 +128,23 @@ fun Route.registerCustomerDashboardRoutes(dependencies: OperationsAdminDependenc
         if (customers.findById(id) == null) {
             call.respondError(HttpStatusCode.NotFound, "customer_not_found", "Customer not found"); return@delete
         }
-        if (projects.findByCustomerId(id).isNotEmpty()) {
-            call.respondError(HttpStatusCode.Conflict, "customer_has_projects", "Reassign this customer's projects before deleting the customer"); return@delete
+        if (projects.findByCustomerId(id, includeArchived = true).isNotEmpty()) {
+            call.respondError(HttpStatusCode.Conflict, "customer_has_projects", "Reassign all projects owned by this customer, including archived projects, before deleting the customer"); return@delete
         }
         try {
-            customers.delete(id)
-        } catch (_: Exception) {
-            call.respondError(HttpStatusCode.Conflict, "customer_has_projects", "Reassign this customer's projects before deleting the customer"); return@delete
+            if (!customers.delete(id)) {
+                call.respondError(HttpStatusCode.NotFound, "customer_not_found", "Customer not found"); return@delete
+            }
+        } catch (error: Exception) {
+            val sqlState = generateSequence<Throwable>(error) { it.cause }
+                .filterIsInstance<java.sql.SQLException>()
+                .firstOrNull()?.sqlState
+            if (sqlState == "23503") {
+                call.respondError(HttpStatusCode.Conflict, "customer_has_projects", "Reassign all projects owned by this customer, including archived projects, before deleting the customer")
+            } else {
+                call.respondError(HttpStatusCode.InternalServerError, "customer_delete_failed", "Could not delete this customer. Please try again.")
+            }
+            return@delete
         }
         call.respond(mapOf("deleted" to true, "id" to id.toString()))
     }
@@ -239,7 +249,7 @@ fun Route.registerCustomerDashboardRoutes(dependencies: OperationsAdminDependenc
                 id = project.id.toString(), slug = project.slug, name = project.name, domain = project.domain,
                 amountDue = projectFinancials.billed.toDouble(), totalPaid = projectFinancials.paid.toDouble(),
                 balance = projectFinancials.balance.toDouble(),
-                status = project.status
+                status = if (project.archived) "archived" else project.status
             )
         }
         call.respond(

@@ -14,7 +14,7 @@ interface ProjectRepository {
     fun findActiveById(id: UUID): ProjectRecord?
     fun assignCustomer(id: UUID, customerId: UUID?): ProjectRecord?
     fun findAll(includeArchived: Boolean = false): List<ProjectRecord>
-    fun findByCustomerId(customerId: UUID): List<ProjectRecord>
+    fun findByCustomerId(customerId: UUID, includeArchived: Boolean = false): List<ProjectRecord>
     fun create(
         slug: String, name: String, domain: String,
         billingName: String?, billingEmail: String?, billingAddress: String?, amountDue: BigDecimal?,
