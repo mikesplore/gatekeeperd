@@ -86,11 +86,13 @@ fun Route.registerGlobalSearchRoutes() {
                     project?.let { "/app/projects/${it.slug}/services/${service.id}" } ?: "/app/projects"
                 } else "/app/nginx"
                 val serviceDomains = domains.listByService(service.id)
-                (serviceDomains.map { it.domain to "Service binding · ${service.name}" } +
-                    listOfNotNull(service.domain?.let { it to "Service domain · ${service.name}" }))
+                (serviceDomains.map { it.domain to "Service binding" } +
+                    listOfNotNull(service.domain?.let { it to "Service domain" }))
                     .filter { (domain, _) -> domain.contains(normalized, ignoreCase = true) }
-                    .forEach { (domain, source) ->
-                        results += GlobalSearchItem("Domains", "domain", domain, listOfNotNull(source, project?.name).joinToString(" · "), href)
+                    .groupBy({ it.first }, { it.second })
+                    .forEach { (domain, sources) ->
+                        val sourceLabel = sources.distinct().joinToString(" + ")
+                        results += GlobalSearchItem("Domains", "domain", domain, listOfNotNull(sourceLabel, service.name, project?.name).joinToString(" · "), href)
                     }
             }
         }
