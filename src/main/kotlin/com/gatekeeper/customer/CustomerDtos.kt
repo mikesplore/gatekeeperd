@@ -64,3 +64,45 @@ data class CustomerReminderResponse(
     val paymentUrl: String,
     val frontendUrl: String? = null
 )
+
+@Serializable
+data class CustomerAccountResponse(
+    val name: String,
+    val email: String,
+    val services: List<CustomerAccountService>,
+    val payments: List<CustomerAccountPayment>
+)
+
+@Serializable
+data class CustomerAccountService(
+    val project: String,
+    val projectName: String,
+    val serviceId: String,
+    val serviceName: String,
+    val domain: String,
+    val accessStatus: String,
+    val invoiceAmount: String?,
+    val paid: String?,
+    val balance: String?,
+    val currency: String,
+    val dueDate: String?,
+    val invoiceUrl: String?,
+    val paymentUrl: String?
+)
+
+@Serializable
+data class CustomerAccountPayment(
+    val id: String,
+    val serviceName: String,
+    val amount: String,
+    val currency: String,
+    val status: String,
+    val createdAt: String?,
+    val paidAt: String?,
+    val receiptUrl: String?
+)
+
+@Serializable data class CustomerAccessRequest(val email: String)
+@Serializable data class CustomerAccessChallenge(val challenge: String, val message: String)
+@Serializable data class CustomerAccessVerify(val challenge: String, val code: String)
+@Serializable data class CustomerAccessSession(val authenticated: Boolean)

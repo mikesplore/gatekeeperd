@@ -5092,6 +5092,84 @@ paths:
               type: object
               additionalProperties: true
       security: []
+  /api/customer/access/request:
+    post:
+      tags: [Customer]
+      summary: Request a customer email sign-in code
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+      responses:
+        '200': { description: Opaque challenge and generic response }
+        '400': { $ref: '#/components/responses/BadRequest' }
+      operationId: PostCustomerAccessRequest
+  /api/customer/access/verify:
+    post:
+      tags: [Customer]
+      summary: Verify a customer email sign-in code
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [challenge, code]
+              properties:
+                challenge: { type: string }
+                code: { type: string, pattern: '^[0-9]{6}$' }
+      responses:
+        '200': { description: Customer session cookie set }
+        '401': { description: Invalid or expired code }
+      operationId: PostCustomerAccessVerify
+  /api/customer/access/logout:
+    post:
+      tags: [Customer]
+      summary: Revoke the current customer session
+      security: []
+      responses:
+        '200': { description: Customer session revoked }
+      operationId: PostCustomerAccessLogout
+  /api/customer/account:
+    get:
+      tags: [Customer]
+      summary: Read the signed-in customer's billing portal
+      security:
+      - CustomerSupportSession: []
+      responses:
+        '200':
+          description: Customer services, invoices, balances, payments, and receipts
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        '401': { description: Customer session required }
+      operationId: GetCustomerAccount
+  /api/customer/services/{serviceId}/invoice:
+    get:
+      tags: [Customer]
+      summary: Download a customer-owned service invoice
+      security:
+      - CustomerSupportSession: []
+      parameters:
+      - name: serviceId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Invoice PDF
+          content:
+            application/pdf:
+              schema: { type: string, format: binary }
+        '404': { description: Invoice not found }
+      operationId: GetCustomerServiceInvoice
   /api/customer/projects/{slug}/payment-success:
     get:
       tags:
@@ -5233,7 +5311,8 @@ paths:
       tags:
       - Customer
       summary: Submit a customer support request
-      security: []
+      security:
+      - CustomerSupportSession: []
       parameters:
       - $ref: '#/components/parameters/SlugPath'
       requestBody:
@@ -5243,7 +5322,6 @@ paths:
             schema:
               type: object
               required:
-              - name
               - email
               - message
               properties:

@@ -179,11 +179,28 @@ Paystack browser return URL after payment. Redirects the browser to the project 
 
 Gatekeeperd serves the customer support and billing experience directly. Route the support hostname to the Gatekeeperd backend. `GET /` and `GET /support` render the public help page; after email verification, `/support/services` shows only projects and services assigned to that customer.
 
+The React customer portal is served from the configured customer frontend URL and uses the same email-code customer session. It provides a cross-service invoice and payment view. Its account endpoint scopes all records from the session; callers must not supply a customer ID.
+
 `POST /support/access/request` accepts an `application/x-www-form-urlencoded` `email` field. The response is intentionally the same whether or not the email belongs to a customer. Matching accounts receive a six-digit code that expires after five minutes. A code is limited to five verification attempts, and requests are limited to three per email per 15 minutes. A successful code creates an opaque, HttpOnly, SameSite=Strict session cookie for eight hours; production cookies are Secure. Redis must be available for this flow.
 
 The support page shows access suspension separately from a live HTTP check against the configured service upstream. The connection check requests `/` and considers HTTP 200–499 responsive; this is an availability signal, not a full website test. Missing upstream configuration is shown as unknown.
 
-`POST /support/logout` revokes the support session. The customer status, receipt, and reminder APIs below also require this session and return not-found for projects not owned by the verified customer.
+`POST /support/logout` revokes the support session. Customer status, account, invoice, receipt, reminder, and support APIs require this session. Project and service records are resolved from that verified customer, and cross-customer records return not-found.
+
+#### POST /api/customer/access/request
+Accepts JSON `{ "email": "customer@example.com" }` and returns a generic message with an opaque challenge. It does not reveal whether the email is registered.
+
+#### POST /api/customer/access/verify
+Accepts JSON `{ "challenge": "...", "code": "123456" }`. A valid code sets the same HttpOnly customer session cookie used by the support flow.
+
+#### GET /api/customer/account
+Requires the customer session cookie. Returns only the signed-in customer's services, invoice totals, paid amounts, balances, due dates, payment history, and receipt links. The response is private and must not be cached.
+
+#### GET /api/customer/services/{serviceId}/invoice
+Requires the customer session cookie and returns an invoice PDF only if the service is linked to that customer.
+
+#### POST /api/customer/access/logout
+Revokes the current customer session and clears the session cookie.
 
 #### GET /api/customer/projects/{slug}/status
 Requires the Gatekeeperd Support session cookie. Returns that customer's access status, amount due, due date, payment history, receipt URLs, payment URL, portal URL, and support URL.

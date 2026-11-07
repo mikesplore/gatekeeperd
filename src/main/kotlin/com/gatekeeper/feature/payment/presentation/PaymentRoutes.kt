@@ -4,10 +4,13 @@ import com.gatekeeper.api.InputValidators
 import com.gatekeeper.api.respondError
 import com.gatekeeper.feature.payment.domain.usecase.CompletePaystackCallback
 import com.gatekeeper.feature.payment.domain.usecase.InitiatePayment
+import com.gatekeeper.config.AppSettings
 import io.ktor.http.*
 import io.ktor.server.application.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
+import org.koin.ktor.ext.get
+import org.koin.ktor.ext.get
 import org.koin.ktor.ext.get
 import org.slf4j.LoggerFactory
 
@@ -34,8 +37,13 @@ fun Application.configurePaymentRoutes() {
             if (serviceId == null) {
                 return@get call.respondError(HttpStatusCode.BadRequest, "service_required", "A service is required for payment")
             }
+            val integrationSettings = call.application.get<AppSettings>().integrations
+            val callbackUrl = if (call.request.queryParameters["return"] == "portal") {
+                val base = integrationSettings.publicBaseUrl.trim().trimEnd('/')
+                if (base.isBlank()) null else "$base/api/gate/payment/callback?project=${java.net.URLEncoder.encode(slug.orEmpty(), Charsets.UTF_8)}&return=portal"
+            } else null
             call.application.get<InitiatePayment>()(
-                InitiatePayment.Command("paystack", slug.orEmpty(), amount, currency = "", serviceId = serviceId)
+                InitiatePayment.Command("paystack", slug.orEmpty(), amount, currency = "", callbackUrl = callbackUrl, serviceId = serviceId)
             ).fold(
                 onSuccess = { initiated ->
                     call.respondRedirect(
@@ -56,6 +64,7 @@ fun Application.configurePaymentRoutes() {
         }
 
         get("/api/gate/payment/callback") {
+            val integrationSettings = call.application.get<AppSettings>().integrations
             val slug = call.request.queryParameters["project"].orEmpty()
             val reference = call.request.queryParameters["reference"] ?: call.request.queryParameters["trxref"].orEmpty()
             if (slug.isBlank() || reference.isBlank()) {
@@ -65,7 +74,11 @@ fun Application.configurePaymentRoutes() {
                 onSuccess = { completion ->
                     if (completion.successful) logger.info("Payment callback verified and applied for ${completion.projectSlug}, ref=$reference")
                     else logger.warn("Payment callback could not be verified for ${completion.projectSlug}, ref=$reference")
-                    call.respondRedirect(projectRedirectUrl(completion.projectDomain), permanent = false)
+                    if (call.request.queryParameters["return"] == "portal" && integrationSettings.frontendBaseUrl.isNotBlank()) {
+                        val base = integrationSettings.frontendBaseUrl.trimEnd('/')
+                        val path = "/portal/${java.net.URLEncoder.encode(completion.projectSlug, Charsets.UTF_8)}?payment=${if (completion.successful) "success" else "pending"}"
+                        call.respondRedirect("$base$path", permanent = false)
+                    } else call.respondRedirect(projectRedirectUrl(completion.projectDomain), permanent = false)
                 },
                 onFailure = { error ->
                     val failure = error as? CompletePaystackCallback.CallbackFailure
