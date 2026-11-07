@@ -65,7 +65,8 @@ class AppSettings private constructor(
         val resendFromEmail: String,
         val passwordResetUrl: String,
         val scribedBaseUrl: String,
-        val scribedApiClientToken: String
+        val scribedApiClientToken: String,
+        val scribedApiToken: String
     )
 
     data class TelemetrySettings(val otlpEndpoint: String?)
@@ -171,7 +172,8 @@ class AppSettings private constructor(
             optional("GATEKEEPER_PUBLIC_URL", ""), optional("GATEKEEPER_FRONTEND_URL", ""),
             optional("SUPPORT_CONTACT_EMAIL", "support@gatekeeper.local"), optional("RESEND_API_KEY", ""),
             optional("RESEND_FROM_EMAIL", ""), optional("PASSWORD_RESET_URL", ""),
-            optional("SCRIBED_BASE_URL", ""), optional("SCRIBED_API_CLIENT_TOKEN", "")
+            optional("SCRIBED_BASE_URL", ""), optional("SCRIBED_API_CLIENT_TOKEN", ""),
+            optional("SCRIBED_API_TOKEN", "")
         )
     }
     val telemetry: TelemetrySettings by lazy { TelemetrySettings(get("OTEL_EXPORTER_OTLP_ENDPOINT")) }

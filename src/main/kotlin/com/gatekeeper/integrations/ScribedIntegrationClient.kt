@@ -120,32 +120,47 @@ class ScribedIntegrationClient(
             config.contactEmail,
             config.phone,
             metadata?.version,
-            settings.scribedApiClientToken.isNotBlank()
+            settings.scribedApiClientToken.isNotBlank() || settings.scribedApiToken.isNotBlank()
         )
     }
 
     suspend fun importEnvironmentClientToken() {
         val baseUrl = settings.scribedBaseUrl.trim().trimEnd('/')
-        val token = settings.scribedApiClientToken.trim()
+        val environmentToken = settings.scribedApiClientToken.trim()
+        val adminToken = settings.scribedApiToken.trim().ifBlank { environmentToken }
         val uri = runCatching { URI(baseUrl) }.getOrNull()
         require(uri != null && uri.scheme in setOf("https", "http") && !uri.host.isNullOrBlank() &&
             uri.userInfo == null && uri.query == null && uri.fragment == null && uri.path in setOf("", "/")) {
             "SCRIBED_BASE_URL must be a service root URL"
         }
-        require(token.isNotBlank() && token.length <= 4096) {
-            "SCRIBED_API_CLIENT_TOKEN must contain a scoped Scribed client token"
+        require((environmentToken.isNotBlank() || adminToken.isNotBlank()) &&
+            environmentToken.length <= 4096 && adminToken.length <= 4096) {
+            "Set Scribed's API token in Gatekeeperd's environment"
         }
         check(SecretValueCipher.isConfigured()) { "Secret encryption is not configured" }
 
-        val config = DocumentApiSettings(baseUrl, token, clientName = "Gatekeeperd")
-        val result = healthCheck(config)
-        check(result.reachable) { result.message }
-        // Requiring the client-scoped endpoint prevents accidentally storing Scribed's
-        // administrator token, which also has access to document endpoints.
-        val profile = fetchClientProfile(config)
-        credentials.createOrRotate(
-            "scribed", "api_client", "Scribed API client", "primary",
-            json.encodeToString(config.withProfile(profile))
+        if (environmentToken.isNotBlank()) {
+            val config = DocumentApiSettings(baseUrl, environmentToken, clientName = "Gatekeeperd")
+            val profile = runCatching { fetchClientProfile(config) }.getOrNull()
+            if (profile != null) {
+                credentials.createOrRotate(
+                    "scribed", "api_client", "Scribed API client", "primary",
+                    json.encodeToString(config.withProfile(profile))
+                )
+                return
+            }
+        }
+
+        // If the configured token is Scribed's administrator token, register a scoped
+        // Gatekeeperd client automatically and persist only the scoped token it returns.
+        val previous = documentSettings()
+        registerDocumentClient(
+            baseUrl,
+            adminToken,
+            ScribedClientProfile(
+                previous.clientName?.takeIf(String::isNotBlank) ?: "Gatekeeperd",
+                previous.clientAddress, previous.contactEmail, previous.phone
+            )
         )
     }
 

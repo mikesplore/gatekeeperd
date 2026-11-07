@@ -1325,11 +1325,11 @@ paths:
   /api/admin/integrations/scribed/import-env:
     post:
       tags: [Integrations]
-      summary: Validate and import the scoped Scribed client token from Gatekeeperd's environment
+      summary: Bootstrap Gatekeeperd's Scribed API client from an environment token
       responses:
-        '200': { description: Scoped token validated and stored encrypted }
-        '400': { description: Scribed URL or scoped token is missing or invalid }
-        '502': { description: Scribed is unreachable or rejected the token }
+        '200': { description: Scoped client token registered or imported and stored encrypted }
+        '400': { description: Scribed URL or token is missing or invalid }
+        '502': { description: Scribed is unreachable or rejected registration }
         '503': { description: Secret encryption is not configured }
   /api/admin/integrations/scribed/profile:
     get:
