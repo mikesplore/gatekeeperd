@@ -3,6 +3,7 @@ package com.gatekeeper.admin.system
 import com.gatekeeper.api.respondError
 import com.gatekeeper.docker.DockerCleanupService
 import com.gatekeeper.deployment.DeploymentTriggerService
+import com.gatekeeper.deployment.SystemDeploymentDiagnosticsService
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.*
 import io.ktor.server.auth.authenticate
@@ -21,6 +22,17 @@ fun Application.configureSystemAdminRoutes() {
     routing {
         authenticate("auth-jwt") {
             install(com.gatekeeper.rbac.presentation.RbacAuthorizationPlugin)
+            get("/api/admin/system/deployment-diagnostics") {
+                try {
+                    call.respond(SystemDeploymentDiagnosticsService().latest())
+                } catch (_: Exception) {
+                    call.respondError(
+                        HttpStatusCode.ServiceUnavailable,
+                        "deployment_diagnostics_unavailable",
+                        "System deployment diagnostics could not be read"
+                    )
+                }
+            }
             post("/api/admin/system/prune") {
                 val dryRun = call.request.queryParameters["dryRun"]?.toBooleanStrictOrNull() ?: false
                 val prefix = call.request.queryParameters["imagePrefix"]?.takeIf { it.isNotBlank() }

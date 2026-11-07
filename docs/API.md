@@ -86,6 +86,11 @@ Example response:
 }
 ```
 
+### GET /api/admin/system/deployment-diagnostics
+Returns metadata for the latest host deployment attempt. If that attempt failed, the response includes the last 64 KiB of its combined deployment output with common credential patterns redacted. Requires the `logs.read` permission. The endpoint reads only the deployment attempt directory; it does not expose arbitrary host files.
+
+The deployer stores one `.meta` file and one `.log` file per attempt under `/opt/gatekeeperd/deployment-attempts`. Log files are readable by the Gatekeeperd service account and attempts older than 90 days are removed on the next deployment attempt.
+
 ### POST /api/admin/system/deploy
 Start an immediate check for and deployment of the latest successful Gatekeeperd build (JWT required).
 

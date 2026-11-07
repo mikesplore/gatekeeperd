@@ -80,6 +80,8 @@ class RbacAuthorizationTest {
         assertEquals(setOf("payments.read"), RbacPermissionPolicy.permissions(HttpMethod.Get, "/api/admin/projects/1/services/2/payments/3/receipt"))
         assertEquals(setOf("payments.manage"), RbacPermissionPolicy.permissions(HttpMethod.Post, "/api/admin/projects/1/payments"))
         assertEquals(setOf("operations.read"), RbacPermissionPolicy.permissions(HttpMethod.Get, "/api/admin/deployments/reconciliation"))
+        assertEquals(setOf("logs.read"), RbacPermissionPolicy.permissions(HttpMethod.Get, "/api/admin/system/deployment-diagnostics"))
+        assertEquals(setOf("system.manage"), RbacPermissionPolicy.permissions(HttpMethod.Post, "/api/admin/system/deploy"))
         assertEquals(setOf("deployments.manage"), RbacPermissionPolicy.permissions(HttpMethod.Post, "/api/admin/projects/demo/deployments/4/rollback"))
         assertEquals(
             setOf("projects.manage", "deployments.manage"),

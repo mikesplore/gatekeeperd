@@ -197,12 +197,21 @@ nginx_has_draining_workers() {
   sudo ps -eo args= | grep -F 'nginx: worker process is shutting down' | grep -qv grep
 }
 
+nginx_draining_worker_details() {
+  sudo ps -eo pid=,etime=,args= | grep -F 'nginx: worker process is shutting down' | grep -v grep || true
+}
+
 wait_for_nginx_drain() {
   local start="$SECONDS" end=$((SECONDS + NGINX_DRAIN_TIMEOUT_SECONDS)) last_report="$SECONDS"
   log "Waiting for old Nginx workers to drain (timeout: ${NGINX_DRAIN_TIMEOUT_SECONDS}s)..."
   while nginx_has_draining_workers; do
     if (( SECONDS >= end )); then
       warn "Nginx still has old workers after ${NGINX_DRAIN_TIMEOUT_SECONDS}s; keeping the retired Gatekeeperd slot running and delaying this deployment."
+      local workers
+      workers="$(nginx_draining_worker_details)"
+      if [[ -n "${workers}" ]]; then
+        while IFS= read -r worker; do warn "Lingering Nginx worker (PID, age, command): ${worker}"; done <<<"${workers}"
+      fi
       return 1
     fi
     if (( SECONDS - last_report >= 10 )); then

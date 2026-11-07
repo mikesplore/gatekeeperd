@@ -9,6 +9,43 @@ DEPLOY_SCRIPT="${TARGET_DIR}/deploy.sh"
 SOURCE_COMMIT_FILE="${TARGET_DIR}/source-commit.txt"
 FAILED_COMMIT_FILE="${TARGET_DIR}/auto-deploy-failed-commit.txt"
 LATEST_BUILD_FILE="${TARGET_DIR}/latest-successful-build.txt"
+DIAGNOSTICS_DIR="${DEPLOY_DIAGNOSTICS_DIR:-${TARGET_DIR}/deployment-attempts}"
+DIAGNOSTICS_RETENTION_DAYS="${DEPLOY_DIAGNOSTICS_RETENTION_DAYS:-90}"
+ATTEMPT_ID=""
+ATTEMPT_META=""
+ATTEMPT_LOG=""
+ATTEMPT_STARTED_AT=""
+
+write_attempt_metadata() {
+  local state="$1" phase="$2" exit_code="$3" finished_at="$4" tmp
+  [[ -n "${ATTEMPT_META}" ]] || return 0
+  tmp="${ATTEMPT_META}.tmp.$$"
+  umask 0027
+  cat >"${tmp}" <<EOF
+id=${ATTEMPT_ID}
+runId=${RUN_ID}
+commit=${COMMIT_SHA}
+status=${state}
+phase=${phase}
+exitCode=${exit_code}
+startedAt=${ATTEMPT_STARTED_AT}
+finishedAt=${finished_at}
+EOF
+  mv -f "${tmp}" "${ATTEMPT_META}"
+}
+
+finish_attempt() {
+  local exit_code=$?
+  trap - EXIT
+  if [[ -n "${ATTEMPT_META}" ]]; then
+    if (( exit_code == 0 )); then
+      write_attempt_metadata succeeded complete 0 "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    else
+      write_attempt_metadata failed deployment "${exit_code}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    fi
+  fi
+  exit "${exit_code}"
+}
 
 if [[ "${EUID}" -ne 0 ]]; then
   echo "Error: Automatic deployment checker must run as root." >&2
@@ -63,6 +100,36 @@ if [[ "${FAILED_SHA}" == "${COMMIT_SHA}" ]]; then
 fi
 
 echo "Deploying successful workflow run ${RUN_ID} (${COMMIT_SHA})..."
+ATTEMPT_STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+ATTEMPT_ID="$(date -u +%Y%m%dT%H%M%SZ)-${RUN_ID}-${COMMIT_SHA:0:12}"
+install -d -o root -g root -m 0755 "${DIAGNOSTICS_DIR}"
+APP_USER="$(systemctl show gatekeeperd-slot@blue.service --property=User --value 2>/dev/null || true)"
+if [[ -z "${APP_USER}" ]]; then APP_USER="$(systemctl show gatekeeperd.service --property=User --value 2>/dev/null || true)"; fi
+APP_GROUP="$(id -gn "${APP_USER}" 2>/dev/null || true)"
+if [[ -z "${APP_GROUP}" ]]; then
+  echo "Error: Could not determine the Gatekeeperd service group for deployment diagnostics."
+  exit 1
+fi
+chgrp "${APP_GROUP}" "${DIAGNOSTICS_DIR}"
+chmod 2750 "${DIAGNOSTICS_DIR}"
+ATTEMPT_META="${DIAGNOSTICS_DIR}/attempt-${ATTEMPT_ID}.meta"
+ATTEMPT_LOG="${DIAGNOSTICS_DIR}/attempt-${ATTEMPT_ID}.log"
+ATTEMPT_STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+if [[ ! "${DIAGNOSTICS_RETENTION_DAYS}" =~ ^[0-9]+$ ]]; then
+  echo "Error: DEPLOY_DIAGNOSTICS_RETENTION_DAYS must be a non-negative integer."
+  exit 1
+fi
+while IFS= read -r -d '' old_meta; do
+  old_id="$(sed -n 's/^id=//p' "${old_meta}" | head -n 1)"
+  if [[ "${old_id}" =~ ^[A-Za-z0-9T-]+$ && "${old_id}" != "${ATTEMPT_ID}" ]]; then
+    rm -f -- "${DIAGNOSTICS_DIR}/attempt-${old_id}.meta" "${DIAGNOSTICS_DIR}/attempt-${old_id}.log"
+  fi
+done < <(find "${DIAGNOSTICS_DIR}" -type f -name 'attempt-*.meta' -mtime "+${DIAGNOSTICS_RETENTION_DAYS}" -print0)
+umask 0027
+write_attempt_metadata running starting_deploy 0 ""
+trap finish_attempt EXIT
+exec > >(tee -a "${ATTEMPT_LOG}") 2>&1
+write_attempt_metadata running deployment 0 ""
 if "${DEPLOY_SCRIPT}" --run-id "${RUN_ID}"; then
   rm -f "${FAILED_COMMIT_FILE}"
 else

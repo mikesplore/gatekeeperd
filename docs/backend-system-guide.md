@@ -439,6 +439,13 @@ The timer writes:
 - `/opt/gatekeeperd/latest-successful-build.txt` — latest build SHA and UTC check time;
 - `/opt/gatekeeperd/auto-deploy-failed-commit.txt` — a commit whose rollout failed and should not be retried endlessly.
 
+Each auto-deploy attempt also writes a private `.meta` record and combined stdout/stderr
+log to `/opt/gatekeeperd/deployment-attempts/`. The Gatekeeperd service account can
+read this directory through its shared service group. The admin deployment settings
+endpoint exposes metadata and a redacted 64 KiB log tail for the latest failed attempt;
+attempts older than 90 days are pruned on the next deployment attempt. Systemd journal
+output remains available as a secondary record.
+
 `GET /api/version` reads these local files, reports `up_to_date`, `update_available`, `deployment_failed`, `check_stale` or `unknown`, and does not query GitHub per API request. A GitHub connectivity failure can leave old metadata; status becomes stale after 15 minutes.
 
 The backend project’s AGENTS instructions require Gradle builds to run on the host with permission. Do not use a custom Gradle installation or alternate Gradle cache for verification. The frontend is built in its own repository with the configured Node/NVM toolchain.

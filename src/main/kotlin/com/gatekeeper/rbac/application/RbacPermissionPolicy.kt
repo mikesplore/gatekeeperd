@@ -58,6 +58,7 @@ object RbacPermissionPolicy {
             path.startsWith("/api/admin/integrations/") || path.startsWith("/api/admin/github/") ||
                 path.startsWith("/api/admin/registries") || path.startsWith("/api/admin/provider-credentials") -> one("integrations.$action")
             path.startsWith("/api/admin/logs") -> one("logs.read")
+            path == "/api/admin/system/deployment-diagnostics" -> one("logs.read")
             path.startsWith("/api/admin/notifications") -> one("notifications.$action")
             path.startsWith("/api/admin/system/") -> one("system.manage")
             else -> null

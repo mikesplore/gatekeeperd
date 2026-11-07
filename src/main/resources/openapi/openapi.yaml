@@ -4368,6 +4368,60 @@ paths:
         required: false
         schema:
           type: string
+  /api/admin/system/deployment-diagnostics:
+    get:
+      tags:
+      - Operations
+      summary: Get latest system deployment diagnostics
+      description: Returns the latest host deployment attempt and a redacted bounded log tail when it failed. Requires logs.read.
+      operationId: GetApiAdminSystemDeploymentDiagnostics
+      responses:
+        '200':
+          description: Latest attempt metadata and optional failure log
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - available
+                properties:
+                  available:
+                    type: boolean
+                  id:
+                    type: string
+                    nullable: true
+                  runId:
+                    type: string
+                    nullable: true
+                  commit:
+                    type: string
+                    nullable: true
+                  status:
+                    type: string
+                    nullable: true
+                  phase:
+                    type: string
+                    nullable: true
+                  exitCode:
+                    type: integer
+                    nullable: true
+                  startedAt:
+                    type: string
+                    nullable: true
+                  finishedAt:
+                    type: string
+                    nullable: true
+                  errorLog:
+                    type: string
+                  logTruncated:
+                    type: boolean
+        default:
+          description: Deployment diagnostics could not be read.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      x-code-location: com/gatekeeper/admin/system/SystemAdminRoutes.kt
   /api/admin/system/prune:
     post:
       tags:
