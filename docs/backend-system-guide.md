@@ -199,7 +199,7 @@ Admin routes are protected by the current role's permission grants, evaluated fo
 
 - **nginx `auth_request`:** call `GET /api/gate/auth`. It returns an empty `200` when allowed and empty `403` when blocked or unknown. nginx `auth_request` expects `401`/`403` denials; returning `402` directly from the subrequest can become an nginx 500.
 - **Traefik ForwardAuth:** call `GET /api/gate/check`. It returns `200` when allowed and `402` when blocked. For browser requests, the endpoint can return HTML; for API clients it returns structured JSON.
-- **Paywall:** `/api/gate/paywall` renders the blocked page; `/api/gate/pay` begins checkout. These routes are expected to be explicitly bypassed by the site gate so blocked customers can view the paywall and pay.
+- **Paywall:** `/api/gate/paywall` renders the blocked page and links customers to their portal. The signed-in portal presents payment choices; `/api/gate/pay` begins Paystack checkout. These routes are expected to be explicitly bypassed by the site gate.
 
 Full nginx examples and required bypass locations are in [nginx-client-gating.md](nginx-client-gating.md).
 
@@ -233,7 +233,7 @@ Koin wires the providers, repositories, adapters, and use cases in `plugins/Depe
 
 ### 8.2 Checkout lifecycle
 
-1. A blocked customer requests checkout through `/api/gate/pay` or M-Pesa initiation through `/api/mpesa/pay`.
+1. A customer signs in to the portal and chooses Paystack or M-Pesa; Gatekeeperd initiates checkout through `/api/gate/pay` or `/api/mpesa/pay`.
 2. `InitiatePayment` validates project and optional service selection, available amount, currency/provider availability, and payment constraints. Multi-service billing requires a service selection where no unambiguous project-level balance exists.
 3. The provider gateway creates a checkout or payment request. Gatekeeperd stores a payment record with provider reference, amount and pending state before returning a redirect or pending response.
 4. Paystack returns the browser to the callback route. This browser return is not the authoritative payment signal: Gatekeeperd verifies the reference with Paystack and records the outcome. The webhook is the normal asynchronous source of confirmation.

@@ -3,7 +3,6 @@ package com.gatekeeper.gate
 import com.gatekeeper.api.InputValidators
 import com.gatekeeper.api.respondError
 import com.gatekeeper.config.AppSettings
-import com.gatekeeper.feature.payment.domain.usecase.GetPaymentMethodAvailability
 import io.ktor.http.*
 import io.ktor.server.application.*
 import io.ktor.server.response.*
@@ -48,8 +47,6 @@ fun Application.configureGateRoutes() {
                 HttpStatusCode.PaymentRequired,
                 PaywallTemplates.htmlBlockWall(
                     gateResult.paywall,
-                    payEnabled = true,
-                    paymentMethods = call.application.get<GetPaymentMethodAvailability>()(gateResult.paywall.currency),
                     serviceInvoices = serviceInvoices,
                     serviceBillingMode = serviceBillingMode,
                     integrationSettings = integrationSettings

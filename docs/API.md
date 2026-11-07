@@ -159,12 +159,12 @@ Lightweight gate check for **nginx `auth_request` only**. Returns empty body. Th
 See `docs/nginx-client-gating.md` for a full nginx example.
 
 ### GET /api/gate/paywall?project={slug}[&domain={domain}]
-Reason-specific HTML block page for blocked clients. The site's domain resolves to its service. A project block applies to every service and takes precedence when choosing the reason and note; a service-only block applies only to that service. Payment blocks include billing details and payment controls. Other reasons show their reason and support contact without payment controls.
+Reason-specific HTML block page for blocked clients. The site's domain resolves to its service. A project block applies to every service and takes precedence when choosing the reason and note; a service-only block applies only to that service. Payment blocks show the balance and direct the customer to sign in to the customer portal to choose a payment method and pay. Other reasons show their reason and support contact.
 
 **Response:** `402 Payment Required`, `Content-Type: text/html`
 
 ### GET /api/gate/pay?serviceId={uuid}[&project={slug}][&amount={amount}]
-Public service-scoped payment initiation. `serviceId` is required; `project` is optional and, when omitted, Gatekeeperd resolves the owning project from the service. The balance is read from that service’s linked invoice; the default is its full available balance. A requested amount must be greater than zero and no more than the available balance after pending payments. The multi-service paywall lists each service with an outstanding invoice and provides separate Paystack and M-Pesa actions.
+Public service-scoped Paystack initiation. `serviceId` is required; `project` is optional and, when omitted, Gatekeeperd resolves the owning project from the service. The balance is read from that service’s linked invoice; the default is its full available balance. A requested amount must be greater than zero and no more than the available balance after pending payments. Customer payment choices are presented in the signed-in portal; the public paywall links there instead of initiating checkout.
 
 **Response:** `302` redirect to Paystack, or `4xx/5xx` JSON error if Paystack is not configured.
 
@@ -194,7 +194,7 @@ Accepts JSON `{ "email": "customer@example.com" }` and returns a generic message
 Accepts JSON `{ "challenge": "...", "code": "123456" }`. A valid code sets the same HttpOnly customer session cookie used by the support flow.
 
 #### GET /api/customer/account
-Requires the customer session cookie. Returns only the signed-in customer's services, invoice totals, paid amounts, balances, due dates, payment history, and receipt links. The response is private and must not be cached.
+Requires the customer session cookie. Returns only the signed-in customer's services, invoice totals, paid amounts, balances, due dates, available payment methods for each service, payment history, and receipt links. The response is private and must not be cached.
 
 #### GET /api/customer/services/{serviceId}/invoice
 Requires the customer session cookie and returns an invoice PDF only if the service is linked to that customer.

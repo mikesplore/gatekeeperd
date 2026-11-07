@@ -3,7 +3,6 @@ package com.gatekeeper.gate
 import com.gatekeeper.api.InputValidators
 import com.gatekeeper.api.respondError
 import com.gatekeeper.config.AppSettings
-import com.gatekeeper.feature.payment.domain.usecase.GetPaymentMethodAvailability
 import io.ktor.http.*
 import io.ktor.server.application.*
 import io.ktor.server.response.*
@@ -39,7 +38,7 @@ internal suspend fun ApplicationCall.respondBlocked(gateService: GateApplication
     if (prefersHtml() && paywall != null) {
         val (serviceBillingMode, serviceInvoices) = gateService.serviceInvoices(paywall)
         response.header(HttpHeaders.ContentType, ContentType.Text.Html.withCharset(Charsets.UTF_8).toString())
-        respond(HttpStatusCode.PaymentRequired, PaywallTemplates.htmlBlockWall(paywall, payEnabled = true, paymentMethods = application.get<GetPaymentMethodAvailability>()(paywall.currency), serviceInvoices = serviceInvoices, serviceBillingMode = serviceBillingMode, integrationSettings = integrationSettings))
+        respond(HttpStatusCode.PaymentRequired, PaywallTemplates.htmlBlockWall(paywall, serviceInvoices = serviceInvoices, serviceBillingMode = serviceBillingMode, integrationSettings = integrationSettings))
         return
     }
 
@@ -48,7 +47,7 @@ internal suspend fun ApplicationCall.respondBlocked(gateService: GateApplication
             if (paywall != null) {
                 val (serviceBillingMode, serviceInvoices) = gateService.serviceInvoices(paywall)
                 response.header(HttpHeaders.ContentType, ContentType.Text.Html.withCharset(Charsets.UTF_8).toString())
-                respond(HttpStatusCode.PaymentRequired, PaywallTemplates.htmlBlockWall(paywall, payEnabled = true, paymentMethods = application.get<GetPaymentMethodAvailability>()(paywall.currency), serviceInvoices = serviceInvoices, serviceBillingMode = serviceBillingMode, integrationSettings = integrationSettings))
+                respond(HttpStatusCode.PaymentRequired, PaywallTemplates.htmlBlockWall(paywall, serviceInvoices = serviceInvoices, serviceBillingMode = serviceBillingMode, integrationSettings = integrationSettings))
             } else {
                 respond(HttpStatusCode.PaymentRequired, PaywallTemplates.jsonBlocked(null, integrationSettings))
             }

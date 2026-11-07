@@ -87,7 +87,8 @@ data class CustomerAccountService(
     val currency: String,
     val dueDate: String?,
     val invoiceUrl: String?,
-    val paymentUrl: String?
+    val paymentUrl: String?,
+    val availablePaymentMethods: List<String> = emptyList()
 )
 
 @Serializable

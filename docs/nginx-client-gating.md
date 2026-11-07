@@ -7,8 +7,9 @@ Gate client apps behind nginx using gatekeeperd. nginx stays the reverse proxy; 
 | Endpoint | Used for | Response |
 |----------|----------|----------|
 | `/api/gate/auth?project={slug}&domain={domain}` | nginx `auth_request` subrequest | **403** when blocked (empty body) |
-| `/api/gate/paywall?project={slug}&domain={domain}` | Reason-specific block page shown to clients | **402** HTML; payment controls appear only for payment blocks |
-| `/api/gate/pay?project={slug}` | Client clicks Pay Now | Redirect to Paystack checkout |
+| `/api/gate/paywall?project={slug}&domain={domain}` | Reason-specific block page shown to clients | **402** HTML; payment blocks link to the customer portal |
+| `/api/customer/projects/{slug}/portal` | Customer opens portal from paywall | Redirect to customer portal sign-in |
+| `/api/gate/pay?project={slug}&serviceId={uuid}` | Signed-in customer starts Paystack checkout | Redirect to Paystack checkout |
 | `/api/gate/payment/callback?project={slug}` | Paystack return URL | Redirect to project domain |
 
 nginx `auth_request` only accepts **401** or **403** as deny codes. Never use `/api/gate/check` for the auth subrequest.
@@ -178,8 +179,9 @@ curl -i -H "Accept: application/json" "https://acw.mikesplore.me/api/v1/health" 
 ## Client payment flow
 
 1. Client visits site → nginx blocks → shows paywall (project name, amount, due date)
-2. Client clicks **Pay Now** → `/api/gate/pay?project=acw` → Paystack checkout
-3. After payment → browser redirects to project domain → webhook activates project → site works again
+2. Client opens the customer portal and signs in with their email code
+3. Customer chooses a payment method for the service and completes payment
+4. Provider confirmation updates the balance and restores access when the outstanding balance is cleared
 
 No admin action required to generate a link.
 

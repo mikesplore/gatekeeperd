@@ -9,6 +9,7 @@ import com.gatekeeper.feature.service.domain.repository.ServiceRepository
 import com.gatekeeper.feature.project.domain.repository.ProjectRepository
 import com.gatekeeper.feature.customer.domain.repository.CustomerRepository
 import com.gatekeeper.feature.service.application.ServiceInvoiceApplicationService
+import com.gatekeeper.feature.payment.domain.usecase.GetPaymentMethodAvailability
 import com.gatekeeper.db.tables.AdjustmentType
 import com.gatekeeper.feature.payment.data.persistence.ProjectBalanceAdapter
 import com.gatekeeper.feature.payment.domain.repository.PaymentRepository as PaymentDomainRepository
@@ -110,6 +111,9 @@ fun Application.configureCustomerRoutes() {
                         invoiceUrl = invoice?.let { "/api/customer/services/${service.id}/invoice" },
                         paymentUrl = balance?.takeIf { it > BigDecimal.ZERO }?.let {
                             customerPaymentUrl(project.slug, service.id, settings)
+                        },
+                        availablePaymentMethods = call.application.get<GetPaymentMethodAvailability>()(invoice?.currency ?: project.currency).let { methods ->
+                            listOfNotNull("paystack".takeIf { methods.paystack }, "mpesa".takeIf { methods.mpesa })
                         }
                     )
                 }

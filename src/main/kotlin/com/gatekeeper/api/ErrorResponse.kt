@@ -98,7 +98,7 @@ fun paymentRequiredResponse(
             null -> "Access is currently unavailable."
         },
         timestamp = currentErrorTimestamp(),
-        pay_url = paywall?.let { "/api/gate/pay?project=${it.slug}" }.orEmpty(),
+        pay_url = paywall?.let { "/api/customer/projects/${java.net.URLEncoder.encode(it.slug, Charsets.UTF_8)}/portal" }.orEmpty(),
         project = paywall?.name.orEmpty(),
         domain = paywall?.domain.orEmpty(),
         amount_due = paywall?.amountDue?.stripTrailingZeros()?.toPlainString().orEmpty(),

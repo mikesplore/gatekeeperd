@@ -3,7 +3,6 @@ package com.gatekeeper.gate
 import com.gatekeeper.config.AppSettings
 import com.gatekeeper.api.PaymentRequiredResponse
 import com.gatekeeper.api.paymentRequiredResponse
-import com.gatekeeper.feature.payment.domain.model.PaymentMethodAvailability
 import com.gatekeeper.db.tables.AccessBlockReason
 import java.math.BigDecimal
 import java.time.format.DateTimeFormatter
@@ -30,20 +29,13 @@ object PaywallTemplates {
 
     fun htmlBlockWall(
         info: PaywallInfo,
-        payEnabled: Boolean,
-        paymentMethods: PaymentMethodAvailability,
         serviceInvoices: List<ServiceInvoiceDue> = emptyList(),
         serviceBillingMode: Boolean = false,
         integrationSettings: AppSettings.IntegrationSettings
     ): String {
         val amountLabel = formatAmount(info.amountDue, info.currency)
-        val amountValue = info.amountDue?.stripTrailingZeros()?.toPlainString().orEmpty()
         val dueLabel = info.dueDate?.format(dateFormatter)
-        val payUrl = "/api/gate/pay?project=${encode(info.slug)}"
-        val mpesaUrl = "/api/mpesa/pay?project=${encode(info.slug)}"
-        val mpesaAvailable = paymentMethods.mpesa
-        val paystackAvailable = paymentMethods.paystack
-        val defaultPaymentMethod = if (paystackAvailable) "paystack" else "mpesa"
+        val portalUrl = "/api/customer/projects/${encode(info.slug)}/portal"
         val scope = if (info.reasonSource == "project") "this project" else "this service"
         val presentation = when (info.blockReasonCode) {
             AccessBlockReason.PAYMENT -> BlockPresentation(
@@ -78,16 +70,6 @@ object PaywallTemplates {
             )
         }
         val paymentBlock = info.blockReasonCode == AccessBlockReason.PAYMENT
-        val payDisabledReason = when {
-            !paystackAvailable && !mpesaAvailable ->
-                "Online payment is not configured yet. Please contact support."
-            info.amountDue == null -> "No payment amount is configured for this project."
-            info.amountDue <= BigDecimal.ZERO -> "This project has no outstanding balance."
-            info.customerEmail.isNullOrBlank() -> "No billing email is configured for this project."
-            integrationSettings.publicBaseUrl.isBlank() -> "Payment callback URL is not configured on the server."
-            else -> null
-        }
-        val showPayButton = paymentBlock && payEnabled && payDisabledReason == null
 
         // Left panel: the status, stated once.
         val statusPanel = """
@@ -123,66 +105,23 @@ object PaywallTemplates {
         val serviceBillingSection = if (serviceInvoices.isEmpty()) {
             "<p class=\"helper\">No outstanding service invoices were found. Contact support if you believe this is incorrect.</p>"
         } else serviceInvoices.joinToString(separator = "") { invoice ->
-            val serviceParam = "&serviceId=${encode(invoice.serviceId.toString())}"
-            val servicePayUrl = "/api/gate/pay?project=${encode(info.slug)}$serviceParam"
-            val serviceMpesaUrl = "/api/mpesa/pay?project=${encode(info.slug)}$serviceParam"
             val due = invoice.dueDate?.format(dateFormatter)?.let { "<span class=\"due\">Due ${escapeHtml(it)}</span>" }.orEmpty()
-            val payButtons = buildString {
-                val canPaystack = paystackAvailable && !info.customerEmail.isNullOrBlank() && integrationSettings.publicBaseUrl.isNotBlank()
-                if (canPaystack && payEnabled) append("<a class=\"btn\" href=\"$servicePayUrl\">Pay ${escapeHtml(invoice.serviceName)} with Paystack</a>")
-                else if (paystackAvailable && payEnabled && info.customerEmail.isNullOrBlank()) append("<p class=\"helper helper-error\">Paystack is unavailable because no billing email is configured.</p>")
-                if (mpesaAvailable && payEnabled) {
-                    val serviceKey = invoice.serviceId.toString()
-                    append("""<div class="service-mpesa">
-                        <label class="label" for="phone-$serviceKey">M-Pesa phone number</label>
-                        <input id="phone-$serviceKey" class="input" type="tel" inputmode="tel" placeholder="2547XXXXXXXX">
-                        <button type="button" class="btn" onclick="payServiceWithMpesa('$serviceMpesaUrl','${invoice.amountDue.stripTrailingZeros().toPlainString()}','phone-$serviceKey','message-$serviceKey')">Pay ${escapeHtml(invoice.serviceName)} with M-Pesa</button>
-                        <p id="message-$serviceKey" class="helper"></p>
-                    </div>""")
-                }
-                if (!payEnabled || (!canPaystack && !mpesaAvailable)) append("<p class=\"helper helper-error\">Online payment is currently unavailable. Contact support.</p>")
-            }
             """<div class="invoice">
                 <div class="invoice-head">
                     <span class="invoice-name">${escapeHtml(invoice.serviceName)}</span>
                     <strong class="invoice-amount">${escapeHtml(formatAmount(invoice.amountDue, invoice.currency))}</strong>
                 </div>
                 $due
-                $payButtons
             </div>"""
         }
-
-        val paymentControls = if (showPayButton) """
-                <div class="field">
-                    <label class="label" for="payment-amount">Amount to pay (${escapeHtml(info.currency)})</label>
-                    <input id="payment-amount" class="input" type="number" min="0.01" max="$amountValue" step="0.01" value="$amountValue" required oninput="updatePaymentAmount()">
-                    <p class="hint">You can pay part now. Access returns once the balance is paid in full.</p>
-                </div>
-                <div class="field">
-                    <label class="label" for="payment-method">Payment method</label>
-                    <select id="payment-method" class="select" onchange="toggleMpesa()">
-                        ${if (paystackAvailable) "<option value=\"paystack\">Card or bank (Paystack)</option>" else ""}
-                        ${if (mpesaAvailable) "<option value=\"mpesa\">M-Pesa</option>" else ""}
-                    </select>
-                </div>
-                <a id="paystack-button" href="$payUrl" data-base-url="$payUrl" class="btn" ${if (defaultPaymentMethod == "mpesa") "hidden" else ""}>Pay with Paystack</a>
-                <div id="mpesa-form" class="mpesa-form" data-base-url="$mpesaUrl" ${if (defaultPaymentMethod == "paystack") "hidden" else ""}>
-                    <label class="label" for="mpesa-phone">M-Pesa phone number</label>
-                    <input id="mpesa-phone" class="input" type="tel" inputmode="tel" placeholder="2547XXXXXXXX">
-                    <button type="button" class="btn" onclick="payWithMpesa()">Pay with M-Pesa</button>
-                    <p id="mpesa-message" class="helper"></p>
-                </div>
-        """ else """
-                <div class="btn btn-disabled">Pay now unavailable</div>
-                <p class="helper helper-error">${escapeHtml(payDisabledReason ?: "Payment is currently unavailable.")}</p>
-        """
 
         val actionSection = when {
             serviceBillingMode -> """
             <section class="action">
                 <h2>Outstanding service invoices</h2>
-                <p class="hint">Each service has its own balance. Paying one service does not pay or unblock another.</p>
+                <p class="hint">Sign in to your customer portal to choose a payment method and pay each service balance.</p>
                 $serviceBillingSection
+                <a class="btn" href="$portalUrl">Log in to customer portal</a>
             </section>
             """
             paymentBlock -> """
@@ -190,7 +129,8 @@ object PaywallTemplates {
                 <p class="label">Amount due</p>
                 <p class="amount">${escapeHtml(amountLabel)}</p>
                 ${if (dueLabel != null) """<p class="due">Due $dueLabel</p>""" else ""}
-                $paymentControls
+                <p class="hint">Log in to your customer portal to review your invoice and choose a payment method.</p>
+                <a class="btn" href="$portalUrl">Log in to customer portal</a>
             </section>
             """
             else -> ""
@@ -237,58 +177,6 @@ object PaywallTemplates {
 </head>
 <body class="theme-$theme">
 $body
-<script>
-function toggleMpesa() {
-    var mpesa = document.getElementById('mpesa-form');
-    var paystack = document.getElementById('paystack-button');
-    var isMpesa = document.getElementById('payment-method').value === 'mpesa';
-    mpesa.hidden = !isMpesa;
-    paystack.hidden = isMpesa;
-    updatePaymentAmount();
-}
-function updatePaymentAmount() {
-    var amount = document.getElementById('payment-amount').value.trim();
-    var paystack = document.getElementById('paystack-button');
-    var mpesa = document.getElementById('mpesa-form');
-    paystack.href = paystack.dataset.baseUrl + '&amount=' + encodeURIComponent(amount);
-    mpesa.dataset.url = mpesa.dataset.baseUrl + '&amount=' + encodeURIComponent(amount);
-    if (!Number.isInteger(Number(amount))) mpesa.querySelector('button').disabled = true;
-    else mpesa.querySelector('button').disabled = false;
-}
-async function payWithMpesa() {
-    var form = document.getElementById('mpesa-form');
-    var phone = document.getElementById('mpesa-phone').value.trim();
-    var message = document.getElementById('mpesa-message');
-    var amount = document.getElementById('payment-amount');
-    if (!amount.reportValidity()) return;
-    if (!Number.isInteger(Number(amount.value))) { message.textContent = 'M-Pesa payments must be a whole KES amount.'; return; }
-    if (!phone) { message.textContent = 'Enter your M-Pesa phone number.'; return; }
-    message.textContent = 'Sending payment prompt\u2026';
-    try {
-        var response = await fetch(form.dataset.url + '&phone=' + encodeURIComponent(phone), { method: 'POST' });
-        if (!response.ok) throw new Error('Unable to initiate payment');
-        message.textContent = 'Check your phone and approve the M-Pesa prompt.';
-    } catch (error) { message.textContent = error.message; }
-}
-async function payServiceWithMpesa(baseUrl, amount, phoneId, messageId) {
-    var phone = document.getElementById(phoneId).value.trim();
-    var message = document.getElementById(messageId);
-    if (!Number.isInteger(Number(amount))) { message.textContent = 'M-Pesa payments must be a whole KES amount.'; return; }
-    if (!phone) { message.textContent = 'Enter your M-Pesa phone number.'; return; }
-    message.textContent = 'Sending payment prompt\u2026';
-    try {
-        var response = await fetch(baseUrl + '&amount=' + encodeURIComponent(amount) + '&phone=' + encodeURIComponent(phone), { method: 'POST' });
-        if (!response.ok) throw new Error('Unable to initiate payment');
-        message.textContent = 'Check your phone and approve the M-Pesa prompt.';
-    } catch (error) { message.textContent = error.message; }
-}
-if (document.getElementById('payment-method')) {
-    toggleMpesa();
-    document.getElementById('paystack-button').addEventListener('click', function(event) {
-        if (!document.getElementById('payment-amount').reportValidity()) event.preventDefault();
-    });
-}
-</script>
 </body>
 </html>
     """.trimIndent()
