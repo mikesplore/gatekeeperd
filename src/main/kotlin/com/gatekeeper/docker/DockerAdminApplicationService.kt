@@ -94,6 +94,34 @@ class DockerAdminApplicationService(
         )
     }
 
+    internal fun containerCreatePlan(request: CreateContainerRequest): ContainerCreatePlanResult {
+        requireAvailable()
+        val inspect = object : DockerWizardInspect {
+            override fun imageExists(imageRef: String) = docker.imageExists(imageRef)
+            override fun containerExists(name: String) = docker.getContainer(name) != null
+            override fun listNetworkNames() = docker.listNetworks().map { it.name }.toSet()
+            override fun hostPortsInUse() = docker.hostPortsInUse()
+        }
+        return computeContainerCreatePlan(request, settings.internalNetwork, inspect)
+    }
+
+    internal fun hostPortsInUse(): Set<Int> {
+        requireAvailable()
+        return docker.hostPortsInUse()
+    }
+
+    internal fun runContainerCreate(plan: ContainerCreatePlan, onStatus: (String) -> Unit = {}) {
+        if (plan.willPullImage) {
+            onStatus("pulling")
+            val request = plan.normalizedRequest
+            if (request.pullViaCli || settings.pullViaCli) docker.pullImageViaCli(request.image, settings.socket)
+            else docker.pullImage(plan.parsedImage.repository, plan.parsedImage.tag)
+        }
+        if (plan.willCreateInternalNetworkIfMissing) docker.createNetworkIfMissing(settings.internalNetwork)
+        onStatus("creating")
+        docker.createContainer(plan.normalizedRequest)
+    }
+
     fun createNetwork(body: CreateNetworkRequest) = conflict("network_create_failed", "Unable to create network") { docker.createNetwork(body.name, body.driver) }
     fun deleteNetwork(name: String) = conflict("network_delete_failed", "Unable to delete network") { docker.deleteNetwork(name) }
 
