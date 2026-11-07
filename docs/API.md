@@ -559,7 +559,7 @@ If pending provider transactions are the only thing reserving the requested bala
 
 `POST /api/admin/integrations/scribed/register` remains available for administrator-token-based client registration and accepts Gatekeeperd's profile (`name`, `address`, `contactEmail`, `phone`) and the Scribed administrator token. The Settings UI uses the environment import flow instead.
 
-`GET /api/admin/integrations/scribed/profile` reads Gatekeeperd's business profile from Scribed using the stored scoped token. `PUT /api/admin/integrations/scribed/profile` updates it using that token; it accepts `name`, `address`, `contactEmail`, and `phone`. No Scribed administrator token is required.
+`GET /api/admin/integrations/scribed/profile` reads Gatekeeperd's business profile from Scribed using the stored scoped token. `PUT /api/admin/integrations/scribed/profile` updates it using that token; it accepts `name`, `address`, `contactEmail`, and `phone`. No Scribed administrator token is required. `SCRIBED_API_CLIENT_TOKEN` must be the scoped `api_token` returned when registering the Gatekeeperd API client; `SCRIBED_API_TOKEN` is the administrator credential and is rejected by the scoped profile check.
 
 `POST /api/admin/integrations/scribed/health` checks Scribed's dependency health endpoint and verifies that its configured API client token is accepted. Gatekeeper sends invoice render requests to `POST /generate/invoice` and persisted payment receipts to `POST /receipts`, using an idempotency key derived from the Gatekeeper payment ID.
 

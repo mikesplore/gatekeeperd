@@ -140,12 +140,12 @@ class ScribedIntegrationClient(
         val config = DocumentApiSettings(baseUrl, token, clientName = "Gatekeeperd")
         val result = healthCheck(config)
         check(result.reachable) { result.message }
-        // Token rotation is independent of profile management. Older Scribed deployments
-        // may accept document requests but not yet expose the scoped /api-clients/me API.
-        val profile = runCatching { fetchClientProfile(config) }.getOrNull()
+        // Requiring the client-scoped endpoint prevents accidentally storing Scribed's
+        // administrator token, which also has access to document endpoints.
+        val profile = fetchClientProfile(config)
         credentials.createOrRotate(
             "scribed", "api_client", "Scribed API client", "primary",
-            json.encodeToString(profile?.let { config.withProfile(it) } ?: config)
+            json.encodeToString(config.withProfile(profile))
         )
     }
 
@@ -185,6 +185,9 @@ class ScribedIntegrationClient(
             header(HttpHeaders.Authorization, "Bearer ${config.apiToken}")
         }
         if (!response.status.isSuccess()) {
+            if (response.status == HttpStatusCode.Forbidden) {
+                throw IllegalArgumentException("SCRIBED_API_CLIENT_TOKEN must be a scoped API client token, not Scribed's administrator token")
+            }
             throw IllegalStateException("Scribed did not return the scoped API client profile (HTTP ${response.status.value})")
         }
         return runCatching { json.decodeFromString<ScribedClientProfileResponse>(response.bodyAsText()) }
@@ -261,15 +264,15 @@ class ScribedIntegrationClient(
             if (!health.status.isSuccess()) {
                 HealthResult(true, false, health.status.value, "Scribed health check returned HTTP ${health.status.value}")
             } else {
-                // A missing receipt is expected; 401/403 means the client token is invalid or revoked.
-                val tokenProbe = http.get("${config.baseUrl}/receipts/0") {
+                // This endpoint accepts only scoped client tokens, not the administrator token.
+                val tokenProbe = http.get("${config.baseUrl}/api-clients/me") {
                     header(HttpHeaders.Authorization, "Bearer ${config.apiToken}")
                 }
-                val authorized = tokenProbe.status == HttpStatusCode.NotFound || tokenProbe.status.isSuccess()
+                val authorized = tokenProbe.status.isSuccess()
                 HealthResult(
                     true, authorized, tokenProbe.status.value,
-                    if (authorized) "Scribed is healthy and the API client token is accepted"
-                    else "Scribed is healthy but rejected the API client token (HTTP ${tokenProbe.status.value})"
+                    if (authorized) "Scribed is healthy and the scoped API client token is accepted"
+                    else "Scribed is healthy but rejected scoped API client access (HTTP ${tokenProbe.status.value}); verify the token is not the administrator token"
                 )
             }
         }.getOrElse { HealthResult(true, false, message = "Scribed health check could not connect") }
