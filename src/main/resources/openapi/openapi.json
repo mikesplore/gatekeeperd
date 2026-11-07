@@ -4057,6 +4057,47 @@
         ]
       }
     },
+    "/api/admin/search": {
+      "get": {
+        "tags": [
+          "Search"
+        ],
+        "summary": "Search customers, projects, services, and domains",
+        "description": "Results are limited to categories the authenticated user can read. Domain results include service bindings and Nginx site/config records.",
+        "operationId": "GetApiAdminSearch",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 2,
+              "maxLength": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Categorized search results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
     "/api/admin/projects": {
       "get": {
         "tags": [
