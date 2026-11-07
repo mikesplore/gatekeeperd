@@ -32,13 +32,13 @@ class HandleMpesaCallback(
                 verifiedVia = "webhook", validationError = validationError
             )
         )
-        if (validationError == null) paymentVerifier.verify(callback.reference!!)
+        if (validationError == null) paymentVerifier.verify(callback.reference!!, callback.resultCode!!)
         return outcome
     }
 }
 
 fun interface MpesaPaymentVerifier {
-    suspend fun verify(reference: String)
+    suspend fun verify(reference: String, callbackResultCode: Int)
 }
 
 data class MpesaCallbackData(val reference: String?, val resultCode: Int?)

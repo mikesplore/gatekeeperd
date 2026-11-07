@@ -10,11 +10,13 @@ import io.ktor.server.application.*
 import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
+import org.slf4j.LoggerFactory
 
 
 
 fun Application.configureMpesaRoutes() {
     val handleMpesaCallback = get<HandleMpesaCallback>()
+    val logger = LoggerFactory.getLogger("com.gatekeeper.feature.payment.MpesaCallback")
     routing {
         post("/api/mpesa/pay") {
             val request = runCatching { call.receive<MpesaPaymentRequest>() }.getOrElse {
@@ -57,7 +59,8 @@ fun Application.configureMpesaRoutes() {
 
         post("/api/mpesa/callback") {
             val raw = call.receiveText()
-            handleMpesaCallback(raw)
+            val outcome = handleMpesaCallback(raw)
+            logger.info("Safaricom M-Pesa callback received; outcome={}", outcome)
             call.respond(HttpStatusCode.OK, MpesaCallbackAck())
         }
     }

@@ -412,8 +412,8 @@ private val applicationModule = module {
     single { GetPaymentEventForReplay(get()) }
     single<MpesaCallbackDecoder> { JsonMpesaCallbackDecoder() }
     single<MpesaPaymentVerifier> {
-        MpesaPaymentVerifier { reference ->
-            get<ReconcilePayments>().reconcile("mpesa", reference)
+        MpesaPaymentVerifier { reference, callbackResultCode ->
+            get<ReconcilePayments>().reconcileMpesaCallback(reference, callbackResultCode)
         }
     }
     single { HandleMpesaCallback(get(), get(), get()) }

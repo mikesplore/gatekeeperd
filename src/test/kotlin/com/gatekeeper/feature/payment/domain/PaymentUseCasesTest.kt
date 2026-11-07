@@ -248,17 +248,43 @@ class PaymentUseCasesTest {
             ApplyWebhookEvent(repository, effects)
         )
         var verifiedReference: String? = null
+        var verifiedResultCode: Int? = null
         val useCase = HandleMpesaCallback(
             { MpesaCallbackData("checkout-1", 0) },
             process,
-            MpesaPaymentVerifier { reference -> verifiedReference = reference }
+            MpesaPaymentVerifier { reference, resultCode ->
+                verifiedReference = reference
+                verifiedResultCode = resultCode
+            }
         )
 
         assertEquals(ProcessPaymentEvent.Outcome.PROCESSED, useCase("callback"))
         assertEquals("checkout-1", verifiedReference)
+        assertEquals(0, verifiedResultCode)
         assertEquals("pending", repository.payment?.status)
         assertEquals(0, effects.successCount)
         assertEquals("processed", events.status)
+    }
+
+    @Test
+    fun `successful mpesa callback retries a pending query until Daraja reports success`() = runBlocking {
+        val repository = FakePaymentRepository(payment().copy(provider = "mpesa", reference = "checkout-1", providerReference = "checkout-1"))
+        val effects = FakePaymentEffects()
+        var queryCount = 0
+        val gateway = object : PaymentGateway {
+            override val provider = "mpesa"
+            override suspend fun initiate(command: InitiatePaymentCommand) = Result.failure<InitiatedPayment>(UnsupportedOperationException())
+            override suspend fun verify(reference: String): Result<VerifiedPayment> {
+                queryCount++
+                return Result.success(VerifiedPayment(if (queryCount == 1) "pending" else "success"))
+            }
+        }
+        val reconcile = ReconcilePayments(repository, mapOf("mpesa" to gateway), ApplyWebhookEvent(repository, effects), callbackRetryDelayMs = 0)
+
+        assertTrue(reconcile.reconcileMpesaCallback("checkout-1", callbackResultCode = 0))
+        assertEquals(2, queryCount)
+        assertEquals("success", repository.payment?.status)
+        assertEquals(1, effects.successCount)
     }
 
     @Test
@@ -307,6 +333,7 @@ class PaymentUseCasesTest {
             payment = payment?.copy(status = status, amount = amount ?: payment!!.amount, paidAt = paidAt ?: payment!!.paidAt)
         }
         override fun pendingPayments(olderThanMinutes: Long) = listOfNotNull(payment?.takeIf { it.status == "pending" })
+        override fun pendingMpesaPayments(limit: Int) = listOfNotNull(payment?.takeIf { it.status == "pending" && it.provider == "mpesa" }).take(limit)
         override fun findPendingByProjectId(projectId: UUID) =
             listOfNotNull(payment?.takeIf { it.projectId == projectId && it.status == "pending" })
         override fun successfulAmountForProject(projectId: UUID) =

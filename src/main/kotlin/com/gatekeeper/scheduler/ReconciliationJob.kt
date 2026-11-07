@@ -12,6 +12,12 @@ object ReconciliationJob {
     fun start(scope: CoroutineScope, reconcilePayments: ReconcilePayments, settings: AppSettings.SchedulerSettings) {
         scope.launch {
             delay(1.minutes)
+            runWorkerLoop("mpesa-payment-callback-recovery", 60_000, "worker:mpesa-payment-callback-recovery", logger) {
+                reconcilePayments.reconcilePendingMpesaBatch()
+            }
+        }
+        scope.launch {
+            delay(1.minutes)
             runWorkerLoop("payment-reconciliation", settings.reconciliationIntervalMinutes * 60_000, "worker:payment-reconciliation", logger) {
                 reconcilePayments(settings.reconciliationStaleMinutes)
             }
