@@ -140,10 +140,12 @@ class ScribedIntegrationClient(
         val config = DocumentApiSettings(baseUrl, token, clientName = "Gatekeeperd")
         val result = healthCheck(config)
         check(result.reachable) { result.message }
-        val profile = fetchClientProfile(config)
+        // Token rotation is independent of profile management. Older Scribed deployments
+        // may accept document requests but not yet expose the scoped /api-clients/me API.
+        val profile = runCatching { fetchClientProfile(config) }.getOrNull()
         credentials.createOrRotate(
             "scribed", "api_client", "Scribed API client", "primary",
-            json.encodeToString(config.withProfile(profile))
+            json.encodeToString(profile?.let { config.withProfile(it) } ?: config)
         )
     }
 
