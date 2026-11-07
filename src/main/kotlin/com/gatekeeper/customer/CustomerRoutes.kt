@@ -9,10 +9,10 @@ import com.gatekeeper.feature.service.domain.repository.ServiceRepository
 import com.gatekeeper.feature.project.domain.repository.ProjectRepository
 import com.gatekeeper.feature.customer.domain.repository.CustomerRepository
 import com.gatekeeper.feature.service.application.ServiceInvoiceApplicationService
+import com.gatekeeper.feature.payment.domain.model.Payment
 import com.gatekeeper.feature.payment.domain.usecase.GetPaymentMethodAvailability
 import com.gatekeeper.db.tables.AdjustmentType
 import com.gatekeeper.feature.payment.data.persistence.ProjectBalanceAdapter
-import com.gatekeeper.feature.payment.domain.repository.PaymentRepository as PaymentDomainRepository
 import io.ktor.http.*
 import io.ktor.server.application.*
 import io.ktor.server.request.*
@@ -21,11 +21,6 @@ import io.ktor.server.routing.*
 import org.koin.ktor.ext.get
 import com.gatekeeper.integrations.ScribedIntegrationClient
 import java.math.BigDecimal
-
-
-
-
-
 
 
 fun Application.configureCustomerRoutes() {
@@ -77,9 +72,7 @@ fun Application.configureCustomerRoutes() {
         }
 
         get("/api/customer/account") {
-            val session = call.customerSession(customerAccess)
-            if (session.unavailable) return@get call.respondError(HttpStatusCode.ServiceUnavailable, "customer_access_unavailable", "Customer access is temporarily unavailable")
-            val customerId = session.customerId ?: return@get call.respondError(
+            val customerId = call.customerId(customerAccess) ?: return@get call.respondError(
                 HttpStatusCode.Unauthorized, "customer_session_required", "Sign in to view your account"
             )
             call.response.headers.append(HttpHeaders.CacheControl, "no-store, private")
@@ -92,25 +85,21 @@ fun Application.configureCustomerRoutes() {
                     val invoice = invoices.find(service.id)
                     val view = invoice?.let { invoices.view(service.id) }
                     val balance = invoice?.let { invoices.balance(service.id) }
-                    val adjustments = invoice?.let { call.application.get<ProjectBalanceAdapter>().serviceAdjustments(service.id) }.orEmpty()
-                    val invoiceTotal = invoice?.let { base -> adjustments.fold(base.amount) { total, adjustment ->
-                        total + if (adjustment.type == AdjustmentType.ADDITIONAL_CHARGE) adjustment.amount else -adjustment.amount
-                    }.max(BigDecimal.ZERO) }
                     CustomerAccountService(
                         project = project.slug,
                         projectName = project.name,
                         serviceId = service.id.toString(),
                         serviceName = service.name,
                         domain = service.domain?.takeIf(String::isNotBlank) ?: project.domain,
-                        accessStatus = if (project.status.equals("active", true) && service.accessStatus.equals("active", true)) "active" else "paused",
-                        invoiceAmount = invoiceTotal?.toPlainString(),
+                        accessStatus = service.accessStatus,
+                        invoiceAmount = invoice?.amount?.toPlainString(),
                         paid = view?.paid?.toPlainString(),
                         balance = balance?.toPlainString(),
                         currency = invoice?.currency ?: project.currency,
                         dueDate = invoice?.dueDate?.toString(),
                         invoiceUrl = invoice?.let { "/api/customer/services/${service.id}/invoice" },
                         paymentUrl = balance?.takeIf { it > BigDecimal.ZERO }?.let {
-                            customerPaymentUrl(project.slug, service.id, settings)
+                            "/api/gate/pay?project=${java.net.URLEncoder.encode(project.slug, Charsets.UTF_8)}&serviceId=${service.id}"
                         },
                         availablePaymentMethods = call.application.get<GetPaymentMethodAvailability>()(invoice?.currency ?: project.currency).let { methods ->
                             listOfNotNull(
@@ -139,9 +128,7 @@ fun Application.configureCustomerRoutes() {
         }
 
         get("/api/customer/services/{serviceId}/invoice") {
-            val session = call.customerSession(customerAccess)
-            if (session.unavailable) return@get call.respondError(HttpStatusCode.ServiceUnavailable, "customer_access_unavailable", "Customer access is temporarily unavailable")
-            val customerId = session.customerId ?: return@get call.respondError(
+            val customerId = call.customerId(customerAccess) ?: return@get call.respondError(
                 HttpStatusCode.Unauthorized, "customer_session_required", "Sign in to view your account"
             )
             val serviceId = call.parameters["serviceId"]?.let { runCatching { java.util.UUID.fromString(it) }.getOrNull() }
@@ -185,7 +172,7 @@ fun Application.configureCustomerRoutes() {
             val project = lookup.project ?: return@get call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
             val paymentService = serviceRepository.listByProjectId(project.id).firstOrNull { it.isDefault }
                 ?: serviceRepository.listByProjectId(project.id).firstOrNull()
-            val paymentUrl = paymentService?.let { customerPaymentUrl(slug, it.id, settings) }.orEmpty()
+            val paymentUrl = paymentService?.let { "/api/gate/pay?project=$slug&serviceId=${it.id}" }.orEmpty()
             val payments = customerService.payments(project.id).map { payment ->
                 CustomerPaymentResponse(
                     id = payment.id.toString(), reference = payment.providerReference,
@@ -213,18 +200,10 @@ fun Application.configureCustomerRoutes() {
             val project = lookup.project ?: return@get call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
             val payment = customerService.payment(paymentId)?.takeIf { it.projectId == project.id }
                 ?: return@get call.respondError(HttpStatusCode.NotFound, "payment_not_found", "Payment not found")
-            if (!payment.status.equals("success", ignoreCase = true)) return@get call.respondError(HttpStatusCode.Conflict, "payment_not_complete", "A receipt is available after successful payment")
-            val scribed = call.application.get<ScribedIntegrationClient>()
-            val receipt = payment.serviceId?.let { serviceId ->
-                val service = serviceRepository.findByProjectAndId(project.id, serviceId)
-                service?.let {
-                    scribed.receiptPdfForServicePayment(
-                        project, it.name, payment, call.application.get<PaymentDomainRepository>(),
-                        call.application.get<ProjectBalanceAdapter>()
-                    )
-                }
-            } ?: scribed.issueReceipt(project, payment, "Payment received for ${project.name}")
-            val (status, bytes) = receipt
+            if (payment.status != "success") return@get call.respondError(HttpStatusCode.Conflict, "payment_not_complete", "A receipt is available after successful payment")
+            val (status, bytes) = call.application.get<ScribedIntegrationClient>().issueReceipt(
+                project, payment, "Payment received for ${project.name}"
+            )
             if (bytes == null) return@get call.respondError(
                 status, "receipt_download_failed", "Scribed could not issue this receipt"
             )
@@ -261,30 +240,23 @@ fun Application.configureCustomerRoutes() {
                 recipient = recipient,
                 subject = "Payment required for ${project.name}",
                 message = "Access to ${project.domain} is currently ${project.status}. Please complete the outstanding payment to restore access.",
-                paymentUrl = customerPaymentUrl(slug, paymentService.id, settings),
+                paymentUrl = "/api/gate/pay?project=$slug&serviceId=${paymentService.id}",
                 frontendUrl = frontendUrl("payment/$slug", settings)
             ))
         }
 
         post("/api/customer/projects/{slug}/support") {
             val slug = call.parameters["slug"] ?: return@post call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing project slug")
-            val lookup = call.ownedCustomerProject(slug, customerAccess, customerService)
-            if (lookup.unavailable) return@post call.respondError(HttpStatusCode.ServiceUnavailable, "customer_access_unavailable", "Customer access is temporarily unavailable")
-            val project = lookup.project ?: return@post call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
+            val project = customerService.project(slug) ?: return@post call.respondError(HttpStatusCode.NotFound, "project_not_found", "Project not found")
             val body = runCatching { call.receive<SupportRequestBody>() }.getOrNull()
                 ?: return@post call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Support request body is invalid")
             if (!InputValidators.isValidEmail(body.email) || body.message.isBlank() || body.message.length > 5000) {
                 return@post call.respondError(HttpStatusCode.BadRequest, "invalid_request", "Provide a valid email and a message of 1–5000 characters")
             }
-            val verifiedEmail = project.customerId?.let { customers.findById(it)?.contactEmail }?.trim()?.lowercase()
-                ?: return@post call.respondError(HttpStatusCode.Conflict, "missing_customer_email", "Your customer account has no email address for support follow-up")
-            if (body.email.trim().lowercase() != verifiedEmail) return@post call.respondError(
-                HttpStatusCode.Forbidden, "customer_email_mismatch", "Use the email address verified for your customer account"
-            )
             val id = customerService.createSupportRequest(
                 project.id,
                 body.name?.trim()?.takeIf { it.isNotBlank() },
-                verifiedEmail,
+                body.email.trim().lowercase(),
                 body.message.trim()
             )
             call.respond(HttpStatusCode.Accepted, SupportRequestResponse(id.toString(), "open", "Your support request has been received."))
@@ -292,25 +264,15 @@ fun Application.configureCustomerRoutes() {
     }
 }
 
-private data class CustomerSessionLookup(val customerId: java.util.UUID? = null, val unavailable: Boolean = false)
-
-private suspend fun ApplicationCall.customerSession(access: CustomerSupportAccessService): CustomerSessionLookup {
+private suspend fun ApplicationCall.customerId(access: CustomerSupportAccessService): java.util.UUID? {
     return try {
-        CustomerSessionLookup(access.customerIdForSession(request.cookies[CustomerSupportAccessService.SESSION_COOKIE]))
-    } catch (_: RedisUnavailableException) {
-        CustomerSessionLookup(unavailable = true)
+        access.customerIdForSession(request.cookies[CustomerSupportAccessService.SESSION_COOKIE])
     } catch (_: Exception) {
-        CustomerSessionLookup(unavailable = true)
+        null
     }
 }
 
 private data class CustomerProjectLookup(val project: ProjectRecord? = null, val unavailable: Boolean = false)
-
-private fun customerPaymentUrl(slug: String, serviceId: java.util.UUID, settings: AppSettings.IntegrationSettings): String {
-    val project = java.net.URLEncoder.encode(slug, Charsets.UTF_8)
-    val path = "/api/gate/pay?project=$project&serviceId=$serviceId&return=portal"
-    return settings.publicBaseUrl.trim().trimEnd('/').takeIf(String::isNotBlank)?.plus(path) ?: path
-}
 
 private suspend fun ApplicationCall.ownedCustomerProject(
     slug: String,
