@@ -99,22 +99,6 @@ class ExposedPaymentRepository : PaymentRepository {
         }
     }
 
-    override fun pendingMpesaPayments(limit: Int): List<Payment> = transaction {
-        Payments.selectAll().where {
-            (Payments.provider eq "mpesa") and (Payments.gatewayStatus eq "pending")
-        }.orderBy(Payments.verifiedAt to SortOrder.ASC, Payments.createdAt to SortOrder.ASC)
-            .limit(limit.coerceIn(1, 100)).map { it.toDomain() }
-    }
-
-    override fun recordVerificationAttempt(provider: String, reference: String) {
-        transaction {
-            Payments.update({
-                (Payments.provider eq provider.lowercase()) and
-                    ((Payments.providerReference eq reference) or (Payments.paystackReference eq reference))
-            }) { it[Payments.verifiedAt] = LocalDateTime.now() }
-        }
-    }
-
     override fun findPendingByProjectId(projectId: UUID): List<Payment> = transaction {
         Payments.selectAll().where { (Payments.projectId eq projectId) and (Payments.gatewayStatus eq "pending") }
             .orderBy(Payments.createdAt).map { it.toDomain() }

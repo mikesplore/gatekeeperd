@@ -5576,13 +5576,12 @@ paths:
         '401':
           description: Invalid signature
       operationId: PostApiIntegrationsGithubWebhook
-  /api/mpesa/callback:
+  /api/mpesa/callback/{token}:
     post:
       tags:
       - Payments
-      summary: Submit or create mpesa callback
-      description: 'Implementation: `com/gatekeeper/feature/payment/presentation/MpesaRoutes.kt:52`. This entry
-        completes the route inventory; consult docs/API.md for operation-specific rules and payload details.'
+      summary: Receive an authenticated Daraja callback
+      description: Validates the shared callback token and settles a successful callback after checking its checkout reference, amount and receipt.
       operationId: PostApiMpesaCallback
       responses:
         '200':
@@ -5603,12 +5602,18 @@ paths:
               type: object
               additionalProperties: true
       security: []
+      parameters:
+      - name: token
+        in: path
+        required: true
+        schema:
+          type: string
   /api/mpesa/pay:
     post:
       tags:
       - Payments
       summary: Submit or create mpesa pay
-      description: Starts an M-Pesa STK Push from a structured payment request. A callback is audited and verified against Daraja before settlement.
+      description: Starts an M-Pesa STK Push. A valid Daraja callback settles the matching payment; explicit status checks use Daraja's rate-limited query API.
       operationId: PostApiMpesaPay
       responses:
         '202':

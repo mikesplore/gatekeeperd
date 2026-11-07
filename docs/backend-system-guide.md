@@ -238,7 +238,7 @@ Koin wires the providers, repositories, adapters, and use cases in `plugins/Depe
 3. The provider gateway creates a checkout or payment request. Gatekeeperd stores a payment record with provider reference, amount and pending state before returning a redirect or pending response.
 4. Paystack returns the browser to the callback route. This browser return is not the authoritative payment signal: Gatekeeperd verifies the reference with Paystack and records the outcome. The webhook is the normal asynchronous source of confirmation.
 5. The provider event is deduplicated and processed; successful payment effects update access/billing state and invalidate gate cache. Reversals can restore a block/reversal due date.
-6. Scheduled reconciliation verifies stale pending records with the provider and passes outcomes through the same event-processing path.
+6. Scheduled reconciliation verifies stale pending Paystack records. M-Pesa successful callbacks are validated against the pending checkout reference, amount, and receipt, then applied directly; scheduled jobs do not poll Daraja's rate-limited STK query endpoint.
 
 For project-scoped billing, a successful payment clears the project due date and activates it only once the remaining project balance is zero or less; partial payments are recorded without prematurely reactivating the project. For a service-scoped invoice, the service's automatic payment block is cleared when the successful amount covers the outstanding service balance. A reversal currently applies a project-level block with reason `payment_reversed` and sets its due date to the reversal day.
 
@@ -250,7 +250,7 @@ The raw callback payload is persisted for event audit/replay. Treat this as sens
 
 ### 8.4 M-Pesa
 
-M-Pesa initiation accepts project, optional service, phone, and amount, and returns an accepted/pending response with a reference. `POST /api/mpesa/callback` decodes the Daraja callback and delegates payment handling. Configuration includes consumer credentials, short code, passkey, environment, and callback URL. The M-Pesa client is closed at application shutdown. Provider availability is derived from configured readiness; payment methods can differ by currency.
+M-Pesa initiation accepts project, optional service, phone, and amount, and returns an accepted/pending response with a reference. `POST /api/mpesa/callback/{token}` authenticates using the shared callback token, then validates successful callback metadata against the checkout reference, amount, and receipt before settling the matching payment. Callback events are deduplicated and retained for audit. Scheduled reconciliation skips M-Pesa to avoid repeated requests against Daraja's tightly rate-limited STK query API; an explicit administrator verification performs a single query. Configuration includes consumer credentials, short code, passkey, environment, callback URL, and a random callback token of at least 32 characters. The configured callback URL is the base `/api/mpesa/callback` URL; Gatekeeperd appends the token when requesting the STK push. The M-Pesa client is closed at application shutdown. Provider availability is derived from configured readiness; payment methods can differ by currency.
 
 ### 8.5 Cash entries, adjustments, reconciliation, and admin views
 
@@ -379,7 +379,7 @@ Optional `DOCKER_ALLOWED_REGISTRIES` and `DOCKER_ALLOWED_VOLUME_ROOTS` restrict 
 | Worker | Initial delay / interval | Responsibility | Failure approach |
 |---|---|---|---|
 | Auto blocker | Starts after about 10 seconds; default every 60 minutes. | Blocks project invoices past due plus project grace period; checks Gatekeeper service invoice balances and auto-blocks overdue services. | Logs failures; run loop uses exponential backoff capped by configured interval. |
-| Payment reconciliation | Starts after about 1 minute; default every 15 minutes. | Rechecks provider transactions that have remained pending past `RECONCILIATION_STALE_MINUTES` (default 30). | Durable payment events and retryable later runs. |
+| Payment reconciliation | Starts after about 1 minute; default every 15 minutes. | Rechecks stale pending Paystack transactions past `RECONCILIATION_STALE_MINUTES` (default 30). M-Pesa is settled from callbacks; its rate-limited STK query runs only on an explicit administrator check. | Durable payment events and retryable later runs. |
 | Deployment worker | Starts on application startup; polls about once per second. | Claims and processes queued deployments, recovers interrupted cutovers on startup, checks stale running jobs about once per minute. | Persisted job state, claim token, advisory locks and recovery snapshots. |
 
 Scheduled workers use `runWorkerLoop`, which takes a PostgreSQL advisory lock for the worker name, records run/success/failure metrics, logs errors and applies bounded exponential backoff. The deployment worker instead uses job claim ownership and service/environment locks for the parts that mutate one runtime.

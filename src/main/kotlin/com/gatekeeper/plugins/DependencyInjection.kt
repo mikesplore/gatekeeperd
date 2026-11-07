@@ -57,7 +57,6 @@ import com.gatekeeper.feature.payment.domain.usecase.VerifyPayment
 import com.gatekeeper.feature.payment.domain.usecase.ListPaymentEvents
 import com.gatekeeper.feature.payment.domain.usecase.GetPaymentMethodAvailability
 import com.gatekeeper.feature.payment.domain.usecase.HandleMpesaCallback
-import com.gatekeeper.feature.payment.domain.usecase.MpesaPaymentVerifier
 import com.gatekeeper.feature.payment.domain.usecase.MpesaCallbackDecoder
 import com.gatekeeper.feature.payment.domain.usecase.ListPayments
 import com.gatekeeper.feature.payment.domain.usecase.ReconcilePayment
@@ -411,11 +410,6 @@ private val applicationModule = module {
     single { ReplayPaystackEvent(get(), get()) }
     single { GetPaymentEventForReplay(get()) }
     single<MpesaCallbackDecoder> { JsonMpesaCallbackDecoder() }
-    single<MpesaPaymentVerifier> {
-        MpesaPaymentVerifier { reference, callbackResultCode ->
-            get<ReconcilePayments>().reconcileMpesaCallback(reference, callbackResultCode)
-        }
-    }
     single { HandleMpesaCallback(get(), get(), get()) }
     single { ListPaymentEvents(get()) }
     single { VerifyPayment(mapOf("paystack" to get(named("paystackGateway")), "mpesa" to get(named("mpesaGateway"))), get()) }

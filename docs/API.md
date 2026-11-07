@@ -1352,9 +1352,9 @@ Delete a Docker image from the local Docker host.
 
 ### M-Pesa
 
-`POST /api/mpesa/pay` accepts `{ "serviceId": "<uuid>", "phoneNumber": "<msisdn>", "amount": "<optional whole KES amount>", "projectSlug": "<optional slug>" }`, starts an M-Pesa STK Push, and returns `202` with a pending provider reference. `serviceId` is required; when `projectSlug` is omitted, Gatekeeperd resolves the owning project from the service. The balance is isolated to that service invoice. Kenyan mobile numbers may use `07XXXXXXXX`, `01XXXXXXXX`, `2547XXXXXXXX`, `2541XXXXXXXX`, or `+254...` format; Gatekeeperd normalizes them to `254...` before sending them to Daraja. `amount` defaults to the selected balance; partial requests must be whole KES amounts and cannot exceed the available balance after pending payments. `POST /api/mpesa/callback` receives the Daraja callback, records it for audit, and queries Daraja before changing payment state. M-Pesa payments are stored and reconciled through the same payment application and reconciliation service as Paystack.
+`POST /api/mpesa/pay` accepts `{ "serviceId": "<uuid>", "phoneNumber": "<msisdn>", "amount": "<optional whole KES amount>", "projectSlug": "<optional slug>" }`, starts an M-Pesa STK Push, and returns `202` with a pending provider reference. `serviceId` is required; when `projectSlug` is omitted, Gatekeeperd resolves the owning project from the service. The balance is isolated to that service invoice. Kenyan mobile numbers may use `07XXXXXXXX`, `01XXXXXXXX`, `2547XXXXXXXX`, `2541XXXXXXXX`, or `+254...` format; Gatekeeperd normalizes them to `254...` before sending them to Daraja. `amount` defaults to the selected balance; partial requests must be whole KES amounts and cannot exceed the available balance after pending payments. `POST /api/mpesa/callback/{token}` validates the shared callback token, checkout reference, exact amount, and receipt on a successful Daraja callback, then applies the payment directly and records the event for audit. `MPESA_CALLBACK_URL` is the base callback URL ending in `/api/mpesa/callback`; Gatekeeperd appends `MPESA_CALLBACK_TOKEN` when it sends the STK request. Use a random token of at least 32 characters. Scheduled reconciliation does not query pending M-Pesa checkouts; an administrator can request a one-off status query when needed.
 
-Required configuration: `MPESA_CONSUMER_KEY`, `MPESA_CONSUMER_SECRET`, `MPESA_SHORT_CODE`, `MPESA_PASSKEY`, `MPESA_CALLBACK_URL`, and `MPESA_ENVIRONMENT` (`sandbox` or `production`).
+Required configuration: `MPESA_CONSUMER_KEY`, `MPESA_CONSUMER_SECRET`, `MPESA_SHORT_CODE`, `MPESA_PASSKEY`, `MPESA_CALLBACK_URL`, `MPESA_CALLBACK_TOKEN`, and `MPESA_ENVIRONMENT` (`sandbox` or `production`).
 
 ### POST /api/paystack/webhook
 Paystack webhook handler. Verifies HMAC-SHA512 signature via `x-paystack-signature` header.
@@ -1392,7 +1392,7 @@ Transient processing errors return `500` so Paystack can retry delivery.
 - On `charge.success`: marks payment success, clears the project's `due_date`, activates project, writes audit log, invalidates Redis cache.
 - On `charge.failed`: records failure; does **not** change project status.
 - On reversal: re-blocks the project if the reversed payment had been successful and restores `due_date` to the reversal day.
-- A reconciliation job also verifies stale pending payments via Paystack's verify API (`RECONCILIATION_STALE_MINUTES`, `RECONCILIATION_INTERVAL_MINUTES`).
+- A reconciliation job verifies stale pending Paystack payments via Paystack's verify API (`RECONCILIATION_STALE_MINUTES`, `RECONCILIATION_INTERVAL_MINUTES`). Pending M-Pesa payments are settled from Daraja callbacks; the rate-limited STK query is reserved for explicit administrator checks.
 - Must respond quickly (Paystack retries on timeout).
 
 ---

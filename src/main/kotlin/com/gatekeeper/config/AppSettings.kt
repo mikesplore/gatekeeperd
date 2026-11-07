@@ -95,6 +95,7 @@ class AppSettings private constructor(
         val mpesaShortCode: String,
         val mpesaPasskey: String,
         val mpesaCallbackUrl: String,
+        val mpesaCallbackToken: String,
         val mpesaEnvironment: String
     )
 
@@ -195,7 +196,8 @@ class AppSettings private constructor(
             optional("PAYSTACK_SECRET_KEY", ""), optional("PAYSTACK_PUBLIC_KEY", ""),
             optional("MPESA_CONSUMER_KEY", ""), optional("MPESA_CONSUMER_SECRET", ""),
             optional("MPESA_SHORT_CODE", optional("MPESA_SHORTCODE", "")), optional("MPESA_PASSKEY", ""),
-            optional("MPESA_CALLBACK_URL", ""), optional("MPESA_ENVIRONMENT", "sandbox")
+            optional("MPESA_CALLBACK_URL", ""), optional("MPESA_CALLBACK_TOKEN", ""),
+            optional("MPESA_ENVIRONMENT", "sandbox")
         )
     }
     val scheduler: SchedulerSettings by lazy {

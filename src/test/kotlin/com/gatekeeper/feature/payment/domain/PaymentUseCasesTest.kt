@@ -23,7 +23,7 @@ import com.gatekeeper.feature.payment.domain.usecase.PaymentServicePort
 import com.gatekeeper.feature.payment.domain.usecase.ProcessPaymentEvent
 import com.gatekeeper.feature.payment.domain.usecase.HandleMpesaCallback
 import com.gatekeeper.feature.payment.domain.usecase.MpesaCallbackData
-import com.gatekeeper.feature.payment.domain.usecase.MpesaPaymentVerifier
+import com.gatekeeper.feature.payment.data.provider.JsonMpesaCallbackDecoder
 import com.gatekeeper.feature.payment.data.provider.mpesaQueryStatus
 import com.gatekeeper.feature.payment.domain.usecase.GetPaymentMethodAvailability
 import com.gatekeeper.feature.payment.domain.usecase.PaymentProviderReadiness
@@ -238,7 +238,7 @@ class PaymentUseCasesTest {
     }
 
     @Test
-    fun `mpesa callback never applies callback result without provider verification`() = kotlinx.coroutines.runBlocking {
+    fun `successful mpesa callback settles matching payment from validated callback`() = kotlinx.coroutines.runBlocking {
         val repository = FakePaymentRepository(payment().copy(provider = "mpesa", reference = "checkout-1", providerReference = "checkout-1"))
         val events = FakePaymentEventRepository()
         val effects = FakePaymentEffects()
@@ -247,27 +247,20 @@ class PaymentUseCasesTest {
             object : PaymentProjectPort { override fun find(slug: String) = null },
             ApplyWebhookEvent(repository, effects)
         )
-        var verifiedReference: String? = null
-        var verifiedResultCode: Int? = null
         val useCase = HandleMpesaCallback(
-            { MpesaCallbackData("checkout-1", 0) },
+            { MpesaCallbackData("checkout-1", 0, BigDecimal("20.00"), "ABC123", LocalDateTime.now()) },
             process,
-            MpesaPaymentVerifier { reference, resultCode ->
-                verifiedReference = reference
-                verifiedResultCode = resultCode
-            }
+            repository
         )
 
         assertEquals(ProcessPaymentEvent.Outcome.PROCESSED, useCase("callback"))
-        assertEquals("checkout-1", verifiedReference)
-        assertEquals(0, verifiedResultCode)
-        assertEquals("pending", repository.payment?.status)
-        assertEquals(0, effects.successCount)
+        assertEquals("success", repository.payment?.status)
+        assertEquals(1, effects.successCount)
         assertEquals("processed", events.status)
     }
 
     @Test
-    fun `successful mpesa callback retries a pending query until Daraja reports success`() = runBlocking {
+    fun `scheduled reconciliation never queries pending mpesa payments`() = runBlocking {
         val repository = FakePaymentRepository(payment().copy(provider = "mpesa", reference = "checkout-1", providerReference = "checkout-1"))
         val effects = FakePaymentEffects()
         var queryCount = 0
@@ -279,12 +272,12 @@ class PaymentUseCasesTest {
                 return Result.success(VerifiedPayment(if (queryCount == 1) "pending" else "success"))
             }
         }
-        val reconcile = ReconcilePayments(repository, mapOf("mpesa" to gateway), ApplyWebhookEvent(repository, effects), callbackRetryDelayMs = 0)
+        val reconcile = ReconcilePayments(repository, mapOf("mpesa" to gateway), ApplyWebhookEvent(repository, effects))
 
-        assertTrue(reconcile.reconcileMpesaCallback("checkout-1", callbackResultCode = 0))
-        assertEquals(2, queryCount)
-        assertEquals("success", repository.payment?.status)
-        assertEquals(1, effects.successCount)
+        assertEquals(0, reconcile(0))
+        assertEquals(0, queryCount)
+        assertEquals("pending", repository.payment?.status)
+        assertEquals(0, effects.successCount)
     }
 
     @Test
@@ -304,6 +297,18 @@ class PaymentUseCasesTest {
         assertEquals("success", mpesaQueryStatus(0))
         assertEquals("abandoned", mpesaQueryStatus(1032))
         assertEquals("failed", mpesaQueryStatus(1))
+    }
+
+    @Test
+    fun `daraja callback decoder extracts successful settlement metadata`() {
+        val callback = JsonMpesaCallbackDecoder().decode(
+            """{"Body":{"stkCallback":{"CheckoutRequestID":"checkout-1","ResultCode":0,"CallbackMetadata":{"Item":[{"Name":"Amount","Value":20},{"Name":"MpesaReceiptNumber","Value":"ABC123"},{"Name":"TransactionDate","Value":20261108005134}]}}}}"""
+        )
+
+        assertEquals("checkout-1", callback?.reference)
+        assertEquals(BigDecimal("20"), callback?.amount)
+        assertEquals("ABC123", callback?.receiptNumber)
+        assertEquals(LocalDateTime.of(2026, 11, 8, 0, 51, 34), callback?.paidAt)
     }
 
     private fun command(amount: BigDecimal = BigDecimal("20.00")) = ApplyWebhookEvent.Command(
@@ -333,7 +338,6 @@ class PaymentUseCasesTest {
             payment = payment?.copy(status = status, amount = amount ?: payment!!.amount, paidAt = paidAt ?: payment!!.paidAt)
         }
         override fun pendingPayments(olderThanMinutes: Long) = listOfNotNull(payment?.takeIf { it.status == "pending" })
-        override fun pendingMpesaPayments(limit: Int) = listOfNotNull(payment?.takeIf { it.status == "pending" && it.provider == "mpesa" }).take(limit)
         override fun findPendingByProjectId(projectId: UUID) =
             listOfNotNull(payment?.takeIf { it.projectId == projectId && it.status == "pending" })
         override fun successfulAmountForProject(projectId: UUID) =

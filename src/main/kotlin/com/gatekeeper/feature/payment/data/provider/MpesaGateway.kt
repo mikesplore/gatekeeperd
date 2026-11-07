@@ -26,7 +26,7 @@ class MpesaGateway(private val settings: AppSettings.PaymentSettings) : PaymentG
     private val logger = LoggerFactory.getLogger("com.gatekeeper.feature.payment.MpesaGateway")
     private val http = HttpClient { install(ContentNegotiation) { json(Json { ignoreUnknownKeys = true }) } }
     private val baseUrl get() = if (settings.mpesaEnvironment.equals("production", true)) "https://api.safaricom.co.ke" else "https://sandbox.safaricom.co.ke"
-    fun isConfigured() = listOf(settings.mpesaConsumerKey, settings.mpesaConsumerSecret, settings.mpesaShortCode, settings.mpesaPasskey, settings.mpesaCallbackUrl).all { it.isNotBlank() }
+    fun isConfigured() = listOf(settings.mpesaConsumerKey, settings.mpesaConsumerSecret, settings.mpesaShortCode, settings.mpesaPasskey, settings.mpesaCallbackUrl).all { it.isNotBlank() } && settings.mpesaCallbackToken.length >= 32
 
     override suspend fun initiate(command: InitiatePaymentCommand): Result<InitiatedPayment> = runCatching {
         require(isConfigured()) { "M-Pesa is not configured" }
@@ -36,7 +36,8 @@ class MpesaGateway(private val settings: AppSettings.PaymentSettings) : PaymentG
         val password = Base64.getEncoder().encodeToString("${settings.mpesaShortCode}${settings.mpesaPasskey}$timestamp".toByteArray())
         val response = http.post("$baseUrl/mpesa/stkpush/v1/processrequest") {
             bearerAuth(token()); contentType(ContentType.Application.Json)
-            setBody(MpesaStkRequest(settings.mpesaShortCode, password, timestamp, TransactionType = "CustomerPayBillOnline", Amount = command.amount.longValueExact(), PartyA = phone, PartyB = settings.mpesaShortCode, PhoneNumber = phone, CallBackURL = settings.mpesaCallbackUrl, AccountReference = command.projectSlug, TransactionDesc = "Gatekeeper payment"))
+            val callbackUrl = "${settings.mpesaCallbackUrl.trimEnd('/')}/${settings.mpesaCallbackToken}"
+            setBody(MpesaStkRequest(settings.mpesaShortCode, password, timestamp, TransactionType = "CustomerPayBillOnline", Amount = command.amount.longValueExact(), PartyA = phone, PartyB = settings.mpesaShortCode, PhoneNumber = phone, CallBackURL = callbackUrl, AccountReference = command.projectSlug, TransactionDesc = "Gatekeeper payment"))
         }
         val responseBody = response.bodyAsText()
         if (!response.status.isSuccess()) error("Daraja STK Push returned HTTP ${response.status.value}: ${responseBody.take(500)}")
@@ -61,14 +62,13 @@ class MpesaGateway(private val settings: AppSettings.PaymentSettings) : PaymentG
     }
 
     override suspend fun verify(reference: String): Result<VerifiedPayment> = runCatching {
-        // Daraja's STK query is the authoritative polling/reconciliation endpoint.
+        // This query is reserved for explicit checks; callbacks settle normal payments.
         val timestamp = LocalDateTime.now(ZoneId.of("Africa/Nairobi")).format(DateTimeFormatter.ofPattern("yyyyMMddHHmmss"))
         val password = Base64.getEncoder().encodeToString("${settings.mpesaShortCode}${settings.mpesaPasskey}$timestamp".toByteArray())
         val (responseStatus, responseBody) = DistributedLock.withSuspendLock("mpesa-stk-status-query") {
-            // Daraja enforces a low burst limit on status queries. Serialize all
-            // app instances and leave a gap between calls, including callbacks,
-            // manual checks, and the scheduled reconciler.
-            delay(2_000)
+            // Daraja enforces a low burst limit on status queries. Serialize
+            // app instances and leave a conservative gap between manual checks.
+            delay(3_000)
             val response = http.post("$baseUrl/mpesa/stkpushquery/v1/query") {
                 bearerAuth(token()); contentType(ContentType.Application.Json)
                 setBody(mapOf("BusinessShortCode" to settings.mpesaShortCode, "Password" to password, "Timestamp" to timestamp, "CheckoutRequestID" to reference))

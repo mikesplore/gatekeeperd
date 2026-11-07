@@ -55,7 +55,9 @@ class PaymentBalanceAdapter(
         var pending = payments.pendingAmountForServiceId(serviceId)
         var available = balance - pending
         if (pending > BigDecimal.ZERO && (available <= BigDecimal.ZERO || requestedAmount?.let { it > available } == true)) {
-            payments.findPendingByServiceId(serviceId).forEach { reconciliation.reconcile(it.provider, it.providerReference) }
+            payments.findPendingByServiceId(serviceId)
+                .filterNot { it.provider.equals("mpesa", ignoreCase = true) }
+                .forEach { reconciliation.reconcile(it.provider, it.providerReference) }
             balance = serviceInvoices.balance(serviceId) ?: error("No invoice is linked to this service")
             pending = payments.pendingAmountForServiceId(serviceId)
             available = balance - pending

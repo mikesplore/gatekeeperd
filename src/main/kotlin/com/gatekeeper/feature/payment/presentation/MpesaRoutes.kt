@@ -2,6 +2,7 @@ package com.gatekeeper.feature.payment.presentation
 
 import com.gatekeeper.api.respondError
 import com.gatekeeper.api.InputValidators
+import com.gatekeeper.config.AppSettings
 import com.gatekeeper.feature.payment.domain.usecase.HandleMpesaCallback
 import com.gatekeeper.feature.payment.domain.usecase.InitiatePayment
 import org.koin.ktor.ext.get
@@ -16,6 +17,7 @@ import org.slf4j.LoggerFactory
 
 fun Application.configureMpesaRoutes() {
     val handleMpesaCallback = get<HandleMpesaCallback>()
+    val callbackToken = get<AppSettings>().payment.mpesaCallbackToken
     val logger = LoggerFactory.getLogger("com.gatekeeper.feature.payment.MpesaCallback")
     routing {
         post("/api/mpesa/pay") {
@@ -57,7 +59,13 @@ fun Application.configureMpesaRoutes() {
             )
         }
 
-        post("/api/mpesa/callback") {
+        post("/api/mpesa/callback/{token}") {
+            val supplied = call.parameters["token"].orEmpty().toByteArray(Charsets.UTF_8)
+            val expected = callbackToken.toByteArray(Charsets.UTF_8)
+            if (expected.size < 32 || !java.security.MessageDigest.isEqual(supplied, expected)) {
+                call.respondError(HttpStatusCode.NotFound, "not_found", "Callback not found")
+                return@post
+            }
             val raw = call.receiveText()
             val outcome = handleMpesaCallback(raw)
             logger.info("Safaricom M-Pesa callback received; outcome={}", outcome)
