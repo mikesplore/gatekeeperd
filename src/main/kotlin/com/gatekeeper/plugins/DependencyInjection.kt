@@ -190,7 +190,7 @@ private val applicationModule = module {
     single { HealthApplicationService() }
     single { GitHubWebhookApplicationService(get<AppSettings>(), get<GitHubCredentialStore>(), get<GitHubWebhookStore>(), get<DeploymentJobRepository>(), get<AuditRepository>()) }
     single { GitHubAdminApplicationService(get<AppSettings>(), get<GitHubCredentialStore>(), get<GitHubInstallationStore>(), get<GitHubAppClient>(), get<AuditRepository>()) }
-    single { DockerCleanupService(get<DockerGateway>(), get<AuditRepository>()) }
+    single { DockerCleanupService(get<DockerGateway>(), get<AuditRepository>(), setOf(get<AppSettings>().docker.internalNetwork)) }
     single { DeploymentTriggerService(get<ProcessRunner>()) }
     single<PortProbe> { TcpPortProbe() }
     single<NginxPortProbe> { NginxPortProbe(get<PortProbe>()) }

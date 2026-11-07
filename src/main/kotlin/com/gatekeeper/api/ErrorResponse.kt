@@ -7,6 +7,9 @@ import kotlinx.serialization.EncodeDefault
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 
@@ -52,9 +55,33 @@ fun currentErrorTimestamp(): String = LocalDateTime.now().format(timestampFormat
 
 fun errorResponse(error: String, message: String): ErrorResponse = ErrorResponse(
     error = error,
-    message = message,
+    message = normalizeErrorMessage(message),
     timestamp = currentErrorTimestamp()
 )
+
+/** Remove Docker client's HTTP/JSON wrapper from messages returned to API clients. */
+internal fun normalizeErrorMessage(message: String): String {
+    var normalized = message.trim()
+    repeat(2) {
+        val statusPrefix = Regex("^Status\\s+\\d{3}:\\s*").find(normalized)
+        if (statusPrefix != null) normalized = normalized.substring(statusPrefix.range.last + 1).trim()
+        val nestedMessage = runCatching {
+            val json = kotlinx.serialization.json.Json.parseToJsonElement(normalized)
+            (json as? JsonObject)?.get("message")?.let { value ->
+                (value as? JsonPrimitive)?.contentOrNull
+            }
+        }.getOrNull()
+        if (nestedMessage != null) normalized = nestedMessage.trim()
+    }
+
+    return when {
+        Regex("(?i)^remove\\s+.*?:\\s*volume is in use").containsMatchIn(normalized) ->
+            "This volume is still attached to one or more containers. Stop or remove those containers before deleting it."
+        Regex("(?i)^remove\\s+.*?:\\s*network .*active endpoints").containsMatchIn(normalized) ->
+            "This network is still in use by one or more containers. Disconnect them before deleting it."
+        else -> normalized.ifBlank { message }
+    }
+}
 
 fun paymentRequiredResponse(
     paywall: com.gatekeeper.gate.PaywallInfo?,
@@ -95,5 +122,5 @@ suspend fun ApplicationCall.respondErrorWithData(
     message: String,
     data: JsonElement
 ) {
-    respond(status, ErrorResponse(error, message, currentErrorTimestamp(), data))
+    respond(status, ErrorResponse(error, normalizeErrorMessage(message), currentErrorTimestamp(), data))
 }

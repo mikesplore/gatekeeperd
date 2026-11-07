@@ -1272,6 +1272,12 @@ List Docker networks.
 ]
 ```
 
+### POST /api/admin/volumes/prune
+Clear Docker volumes not attached to any container. Volumes attached to stopped containers are kept because Docker reports them as in use. Returns a cleanup summary with removed names, skipped in-use count, and failures. The operation is recorded in the audit log.
+
+### POST /api/admin/networks/prune
+Clear custom Docker networks with no attached containers. Built-in networks and Gatekeeperd's configured internal network are kept. Returns a cleanup summary with removed names, skipped in-use count, protected count, and failures. The operation is recorded in the audit log.
+
 ### POST /api/admin/images/pull
 Pull a Docker image from a registry.
 

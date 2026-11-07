@@ -4,6 +4,7 @@ package com.gatekeeper.admin.system
 import com.gatekeeper.api.HttpApiException
 import com.gatekeeper.docker.CreateNetworkRequest
 import com.gatekeeper.docker.DockerAdminApplicationService
+import com.gatekeeper.docker.DockerCleanupService
 import com.gatekeeper.docker.PullImageRequest
 import com.gatekeeper.docker.MoveContainerNetworkRequest
 import com.gatekeeper.docker.CreateContainerRequest
@@ -140,6 +141,9 @@ fun Application.configureDockerAdminRoutes() {
                 val limit = query["limit"]?.toIntOrNull()?.coerceIn(1, 500) ?: 100
                 call.respond(docker.networks(query["q"]?.trim()?.lowercase(), offset, limit))
             }
+            post("/api/admin/networks/prune") {
+                call.respond(get<DockerCleanupService>().clearUnusedNetworks("admin"))
+            }
             post("/api/admin/networks") {
                 val body = call.receive<CreateNetworkRequest>()
                 docker.createNetwork(body)
@@ -155,6 +159,9 @@ fun Application.configureDockerAdminRoutes() {
                 val offset = query["offset"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0
                 val limit = query["limit"]?.toIntOrNull()?.coerceIn(1, 500) ?: 100
                 call.respond(docker.volumes(query["q"]?.trim()?.lowercase(), offset, limit))
+            }
+            post("/api/admin/volumes/prune") {
+                call.respond(get<DockerCleanupService>().clearUnusedVolumes("admin"))
             }
             post("/api/admin/volumes") {
                 val body = call.receive<CreateNetworkRequest>()
