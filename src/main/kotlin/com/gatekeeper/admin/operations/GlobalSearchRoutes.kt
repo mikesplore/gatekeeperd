@@ -33,7 +33,7 @@ fun Route.registerGlobalSearchRoutes() {
         val results = mutableListOf<GlobalSearchItem>()
 
         val projects = if (canProjects || canServices || canNginx) {
-            call.application.get<ProjectRepository>().findAll(includeArchived = true)
+            call.application.get<ProjectRepository>().findAll()
         } else emptyList()
         val projectById = projects.associateBy { it.id }
 
@@ -61,7 +61,10 @@ fun Route.registerGlobalSearchRoutes() {
             }
         }
 
-        val services = if (canServices || canNginx) call.application.get<ServiceRepository>().listAll() else emptyList()
+        val activeProjectIds = projectById.keys
+        val services = if (canServices || canNginx) {
+            call.application.get<ServiceRepository>().listAll().filter { it.projectId in activeProjectIds }
+        } else emptyList()
         val serviceById = services.associateBy { it.id }
         if (canServices) {
             services.filter { service ->
@@ -99,7 +102,7 @@ fun Route.registerGlobalSearchRoutes() {
 
         if (canNginx) {
             val siteRepository = call.application.get<SiteRepository>()
-            val sites = siteRepository.findAll()
+            val sites = siteRepository.findAll().filter { it.projectId in activeProjectIds }
             sites.filter { it.domain.contains(normalized, ignoreCase = true) }.forEach { site ->
                 val project = projectById[site.projectId]
                 results += GlobalSearchItem(

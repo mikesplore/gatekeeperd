@@ -6,6 +6,7 @@ import com.gatekeeper.db.tables.ProjectStatus
 import com.gatekeeper.db.tables.AccessBlockReason
 import com.gatekeeper.db.tables.Projects
 import com.gatekeeper.db.tables.Services
+import com.gatekeeper.db.tables.ServiceDomains
 import com.gatekeeper.db.tables.Customers
 import com.gatekeeper.feature.project.domain.model.OverdueProject
 import com.gatekeeper.feature.project.domain.model.ProjectRecord
@@ -216,6 +217,14 @@ class ExposedProjectRepository(
                 .where { (Projects.slug eq slug) and Projects.deletedAt.isNull() }
                 .singleOrNull()
                 ?: return@transaction false
+
+            // Archived projects no longer have a management page or public Nginx
+            // routes. Release their globally unique service domains atomically.
+            Services.select(Services.id).where { Services.projectId eq project[Projects.id] }
+                .map { it[Services.id] }
+                .forEach { serviceId ->
+                    ServiceDomains.deleteWhere { ServiceDomains.serviceId eq serviceId }
+                }
 
             val now = LocalDateTime.now()
             Projects.update({ Projects.id eq project[Projects.id] }) {
