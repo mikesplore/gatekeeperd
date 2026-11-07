@@ -113,7 +113,10 @@ fun Application.configureCustomerRoutes() {
                             customerPaymentUrl(project.slug, service.id, settings)
                         },
                         availablePaymentMethods = call.application.get<GetPaymentMethodAvailability>()(invoice?.currency ?: project.currency).let { methods ->
-                            listOfNotNull("paystack".takeIf { methods.paystack }, "mpesa".takeIf { methods.mpesa })
+                            listOfNotNull(
+                                "paystack".takeIf { methods.paystack },
+                                "mpesa".takeIf { methods.mpesa && balance?.stripTrailingZeros()?.scale()?.let { it <= 0 } == true }
+                            )
                         }
                     )
                 }
