@@ -29,6 +29,23 @@ fun Application.configureIntegrationAdminRoutes() {
             get("/api/admin/integrations/scribed") {
                 call.respond(get<ScribedIntegrationClient>().documentSettingsStatus())
             }
+            post("/api/admin/integrations/scribed/import-env") {
+                runCatching { get<ScribedIntegrationClient>().importEnvironmentClientToken() }
+                    .getOrElse { error ->
+                        val status = when (error) {
+                            is IllegalArgumentException -> HttpStatusCode.BadRequest
+                            is IllegalStateException -> if (error.message == "Secret encryption is not configured") HttpStatusCode.ServiceUnavailable else HttpStatusCode.BadGateway
+                            else -> HttpStatusCode.BadGateway
+                        }
+                        val code = when (status) {
+                            HttpStatusCode.BadRequest -> "scribed_environment_invalid"
+                            HttpStatusCode.ServiceUnavailable -> "secrets_unconfigured"
+                            else -> "scribed_token_import_failed"
+                        }
+                        throw HttpApiException(status, code, error.message ?: "Could not import the Scribed API client token")
+                    }
+                call.respond(get<ScribedIntegrationClient>().documentSettingsStatus())
+            }
             post("/api/admin/integrations/scribed/register") {
                 val body = runCatching { call.receive<ScribedClientRegistrationRequest>() }.getOrNull()
                     ?: throw HttpApiException(HttpStatusCode.BadRequest, "invalid_scribed_settings", "Scribed client registration details are invalid")

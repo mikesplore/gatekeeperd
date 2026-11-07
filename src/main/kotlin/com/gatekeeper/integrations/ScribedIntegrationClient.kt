@@ -61,7 +61,8 @@ class ScribedIntegrationClient(
         val clientAddress: String?,
         val contactEmail: String?,
         val phone: String?,
-        val credentialVersion: Int?
+        val credentialVersion: Int?,
+        val environmentTokenAvailable: Boolean
     )
     @Serializable data class ReceiptRequest(
         val client_name: String,
@@ -111,7 +112,30 @@ class ScribedIntegrationClient(
             config.clientAddress,
             config.contactEmail,
             config.phone,
-            metadata?.version
+            metadata?.version,
+            settings.scribedApiClientToken.isNotBlank()
+        )
+    }
+
+    suspend fun importEnvironmentClientToken() {
+        val baseUrl = settings.scribedBaseUrl.trim().trimEnd('/')
+        val token = settings.scribedApiClientToken.trim()
+        val uri = runCatching { URI(baseUrl) }.getOrNull()
+        require(uri != null && uri.scheme in setOf("https", "http") && !uri.host.isNullOrBlank() &&
+            uri.userInfo == null && uri.query == null && uri.fragment == null && uri.path in setOf("", "/")) {
+            "SCRIBED_BASE_URL must be a service root URL"
+        }
+        require(token.isNotBlank() && token.length <= 4096) {
+            "SCRIBED_API_CLIENT_TOKEN must contain a scoped Scribed client token"
+        }
+        check(SecretValueCipher.isConfigured()) { "Secret encryption is not configured" }
+
+        val config = DocumentApiSettings(baseUrl, token, clientName = "Gatekeeperd")
+        val result = healthCheck(config)
+        check(result.reachable) { result.message }
+        credentials.createOrRotate(
+            "scribed", "api_client", "Scribed API client", "primary",
+            json.encodeToString(config)
         )
     }
 
@@ -153,8 +177,9 @@ class ScribedIntegrationClient(
         )
     }
 
-    suspend fun healthCheck(): HealthResult {
-        val config = documentSettings()
+    suspend fun healthCheck(): HealthResult = healthCheck(documentSettings())
+
+    private suspend fun healthCheck(config: DocumentApiSettings): HealthResult {
         if (config.baseUrl.isBlank() || config.apiToken.isBlank()) {
             return HealthResult(false, false, message = "Scribed URL or API client token is not configured")
         }
