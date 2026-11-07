@@ -19,7 +19,7 @@ class ExposedServiceInvoiceRepository : ServiceInvoiceRepository {
     }
 
     override fun create(record: ServiceInvoiceRepository.Record): ServiceInvoiceRepository.Record = transaction {
-        ServiceInvoices.insertIgnore {
+        val insert = ServiceInvoices.insertIgnore {
             it[serviceId] = record.serviceId
             it[projectId] = record.projectId
             it[description] = record.description
@@ -30,6 +30,9 @@ class ExposedServiceInvoiceRepository : ServiceInvoiceRepository {
             it[scribedInvoiceId] = record.scribedInvoiceId
             it[createdAt] = record.createdAt
             it[updatedAt] = LocalDateTime.now()
+        }
+        if (insert.insertedCount == 0) {
+            throw IllegalArgumentException("An invoice already exists for this service")
         }
         ServiceInvoices.selectAll().where { ServiceInvoices.serviceId eq record.serviceId }.single().record()
     }
