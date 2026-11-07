@@ -12,6 +12,7 @@ object RbacPermissionPolicy {
 
         fun one(code: String) = setOf(code)
         return when {
+            path == "/api/admin/search" -> one("projects.read")
             path == "/api/admin/rbac/permissions" -> one("roles.read")
             path == "/api/admin/rbac/roles" || path.startsWith("/api/admin/rbac/roles/") -> one("roles.$action")
             path == "/api/admin/users" || path.startsWith("/api/admin/users/") -> one("users.$action")

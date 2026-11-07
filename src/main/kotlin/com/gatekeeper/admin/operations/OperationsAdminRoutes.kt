@@ -39,6 +39,7 @@ fun Application.configureOperationsAdminRoutes() {
     routing {
         authenticate("auth-jwt") {
             install(com.gatekeeper.rbac.presentation.RbacAuthorizationPlugin)
+            registerGlobalSearchRoutes()
             registerTelemetryRoutes(dependencies)
             registerNginxOperationsRoutes(dependencies)
             registerCustomerDashboardRoutes(dependencies)

@@ -124,8 +124,23 @@ fun Route.registerServiceManagementRoutes(dependencies: ServiceAdminDependencies
                 "Selected container port is not published"
             )
         }
-        if (serviceDomains.findByDomain(domain) != null) {
-            return@post call.respondError(HttpStatusCode.Conflict, "domain_in_use", "Domain is already bound")
+        val existing = serviceDomains.findByDomain(domain)
+        if (existing != null) {
+            if (existing.serviceId == service.id) {
+                val selectedPort = body.containerPort ?: existing.containerPort ?: ports.singleOrNull()
+                val saved = serviceDomains.update(existing.id, service.id, domain, selectedPort)
+                return@post call.respond(HttpStatusCode.OK, (saved ?: existing).toView())
+            }
+            val owner = serviceRepository.findById(existing.serviceId)
+            val ownerProject = owner?.let { projects.findById(it.projectId) }
+            val ownerDescription = owner?.let { serviceOwner ->
+                ownerProject?.name?.let { "${serviceOwner.name} ($it)" } ?: serviceOwner.name
+            }
+            return@post call.respondError(
+                HttpStatusCode.Conflict,
+                "domain_in_use",
+                if (ownerDescription != null) "This domain is already assigned to $ownerDescription. Search for the domain to open its current binding, then remove or change it before reassigning." else "This domain is already assigned to another service. Search for the domain to locate its current binding before reassigning it."
+            )
         }
         val binding = serviceDomains.add(service.id, domain, body.containerPort ?: ports.singleOrNull())
         call.respond(HttpStatusCode.Created, binding.toView())

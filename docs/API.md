@@ -273,6 +273,9 @@ Permission codes follow `<resource>.<action>`; available resources are `roles`, 
 
 Some combined operations require multiple permissions. For example, project setup deployments require both `projects.manage` and `deployments.manage`; configuring a domain gateway requires project and nginx permissions.
 
+#### GET /api/admin/search?q={query}
+Searches customers, projects, services, and domain records. Requires `projects.read`; each result category is included only when the user also has its corresponding read permission. Domain results include service bindings, project domains, active Nginx sites, and managed or manual Nginx configs so stale ownership can be located.
+
 ### GET /api/admin/projects
 List all projects with their status, client info, and due dates.
 
@@ -410,7 +413,7 @@ Lists the service's domain bindings, published container ports, and currently un
 
 #### POST /api/admin/projects/{projectId}/services/{serviceId}/domains
 
-Creates a binding with `{ "domain": "app.example.com", "containerPort": 8080 }`. The port is optional for a single-port or not-yet-deployed service, but is required when the active runtime publishes multiple ports.
+Creates a binding with `{ "domain": "app.example.com", "containerPort": 8080 }`. The port is optional for a single-port or not-yet-deployed service, but is required when the active runtime publishes multiple ports. Repeating the request for a domain already bound to this service returns the existing binding; if another service owns it, the conflict response identifies that service. Use global search to locate the current binding before reassigning the domain.
 
 #### PUT /api/admin/projects/{projectId}/services/{serviceId}/domains/{bindingId}
 
