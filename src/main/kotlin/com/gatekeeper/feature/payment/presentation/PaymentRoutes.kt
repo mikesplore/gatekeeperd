@@ -10,8 +10,6 @@ import io.ktor.server.application.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import org.koin.ktor.ext.get
-import org.koin.ktor.ext.get
-import org.koin.ktor.ext.get
 import org.slf4j.LoggerFactory
 
 private val logger = LoggerFactory.getLogger("com.gatekeeper.feature.payment.PaymentRoutes")
@@ -74,11 +72,22 @@ fun Application.configurePaymentRoutes() {
                 onSuccess = { completion ->
                     if (completion.successful) logger.info("Payment callback verified and applied for ${completion.projectSlug}, ref=$reference")
                     else logger.warn("Payment callback could not be verified for ${completion.projectSlug}, ref=$reference")
-                    if (call.request.queryParameters["return"] == "portal" && integrationSettings.frontendBaseUrl.isNotBlank()) {
+                    val projectTarget = projectRedirectUrl(completion.projectDomain)
+                    val portalTarget = if (
+                        (call.request.queryParameters["return"] == "portal" || projectTarget == null) &&
+                        integrationSettings.frontendBaseUrl.isNotBlank()
+                    ) {
                         val base = integrationSettings.frontendBaseUrl.trimEnd('/')
                         val path = "/portal/${java.net.URLEncoder.encode(completion.projectSlug, Charsets.UTF_8)}?payment=${if (completion.successful) "success" else "pending"}"
-                        call.respondRedirect("$base$path", permanent = false)
-                    } else call.respondRedirect(projectRedirectUrl(completion.projectDomain), permanent = false)
+                        "$base$path"
+                    } else null
+                    val redirectTarget = portalTarget ?: projectTarget
+                    if (redirectTarget != null) {
+                        call.respondRedirect(redirectTarget, permanent = false)
+                    } else {
+                        val message = if (completion.successful) "Payment confirmed. You may close this page." else "Payment could not be confirmed yet. Please contact your service provider."
+                        call.respondText(message, ContentType.Text.Plain)
+                    }
                 },
                 onFailure = { error ->
                     val failure = error as? CompletePaystackCallback.CallbackFailure
