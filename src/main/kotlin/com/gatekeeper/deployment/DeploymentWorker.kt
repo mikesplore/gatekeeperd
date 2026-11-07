@@ -275,7 +275,7 @@ class DeploymentWorker(
         val workspace = withContext(Dispatchers.IO) {
             Files.createTempDirectory("gatekeeper-deployment-${job.id}-")
         }
-        val deterministicCandidateName = deploymentContainerName(job.serviceName, job.id)
+        val deterministicCandidateName = deploymentContainerName(job.serviceName, job.environment, job.id)
         var candidateName: String? = null
         var candidateContainerId: String? = null
         var routeRollback: (() -> Boolean)? = null
@@ -701,16 +701,6 @@ class DeploymentWorker(
                     "bind for 127.0.0.1" in message
         }
 
-    private fun deploymentContainerName(serviceName: String, deploymentId: UUID): String {
-        val normalizedServiceName = serviceName.lowercase()
-            .replace(Regex("[^a-z0-9_.-]+"), "-")
-            .trim('-', '.', '_')
-            .ifBlank { "service" }
-            .take(48)
-            .trimEnd('-', '.', '_')
-            .ifBlank { "service" }
-        return "$normalizedServiceName-${deploymentId.toString().take(8)}"
-    }
 
     private fun cutover(
         job: DeploymentJobRecord,
