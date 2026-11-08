@@ -105,7 +105,9 @@ sudo /opt/gatekeeperd/deploy.sh --check
 
 Preflight may create `/etc/gatekeeperd/deploy.env` or an nginx upstream stub. Edit
 `DEPLOY_GATEWAY_URL` (and other values) in `/etc/gatekeeperd/deploy.env`, then rerun
-`--check` until it exits 0.
+`--check` until it exits 0. It also installs a narrowly scoped sudoers rule for the
+Gatekeeperd service account to start the root-owned auto-deploy unit from the admin UI,
+and gives that account's systemd group read access to private deployment diagnostics.
 
 ### 4. Deploy (blue/green; may migrate legacy → slots)
 

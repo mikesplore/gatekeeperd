@@ -168,7 +168,57 @@ gk_preflight_prepare_directories() {
   sudo install -d -o root -g root -m 0755 "$(dirname "${LOCK_FILE:-/run/lock/gatekeeperd-deploy.lock}")"
   sudo touch "${LOCK_FILE:-/run/lock/gatekeeperd-deploy.lock}" 2>/dev/null || true
   sudo chmod 0644 "${LOCK_FILE:-/run/lock/gatekeeperd-deploy.lock}" 2>/dev/null || true
-  sudo install -d -o root -g root -m 0750 "${DEPLOY_DIAGNOSTICS_DIR:-${td}/deployment-attempts}" 2>/dev/null || true
+  # The application reads deployment diagnostics through the admin API. Keep
+  # logs private, but grant the service's configured group access to the folder.
+  local diagnostics_group="$(gk_preflight_service_group 2>/dev/null || true)"
+  if [[ -n "${diagnostics_group}" ]]; then
+    sudo install -d -o root -g "${diagnostics_group}" -m 2750 "${DEPLOY_DIAGNOSTICS_DIR:-${td}/deployment-attempts}"
+  else
+    sudo install -d -o root -g root -m 0750 "${DEPLOY_DIAGNOSTICS_DIR:-${td}/deployment-attempts}"
+  fi
+}
+
+gk_preflight_service_group() {
+  local service user group
+  for service in gatekeeperd-slot@blue.service gatekeeperd.service; do
+    user="$(sudo systemctl show "${service}" --property=User --value 2>/dev/null || true)"
+    [[ -n "${user}" ]] || continue
+    group="$(sudo systemctl show "${service}" --property=Group --value 2>/dev/null || true)"
+    if [[ -z "${group}" ]]; then group="$(id -gn "${user}" 2>/dev/null || true)"; fi
+    if [[ -n "${group}" ]] && getent group "${group}" >/dev/null 2>&1; then
+      printf '%s\n' "${group}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+gk_preflight_install_deploy_trigger_sudoers() {
+  local service user sudoers_file rendered
+  service="gatekeeperd-slot@blue.service"
+  user="$(sudo systemctl show "${service}" --property=User --value 2>/dev/null || true)"
+  if [[ -z "${user}" ]]; then
+    service="${SERVICE_NAME:-gatekeeperd.service}"
+    user="$(sudo systemctl show "${service}" --property=User --value 2>/dev/null || true)"
+  fi
+  [[ -n "${user}" && "${user}" != root ]] || return 0
+  [[ "${user}" =~ ^[a-zA-Z_][a-zA-Z0-9_.-]*\$?$ ]] && id "${user}" >/dev/null 2>&1 \
+    || gk_preflight_fail_prepare "Cannot resolve Gatekeeperd service user '${user}' for the deployment UI trigger."
+
+  sudoers_file="/etc/sudoers.d/gatekeeperd-deploy-trigger"
+  if sudo test -e "${sudoers_file}" && ! sudo grep -Fq '# Managed by Gatekeeperd deployment preflight.' "${sudoers_file}"; then
+    gk_preflight_fail_prepare "${sudoers_file} already exists and is not managed by Gatekeeperd; review it manually."
+  fi
+  rendered="$(mktemp)"
+  printf '# Managed by Gatekeeperd deployment preflight. Do not edit.\n%s ALL=(root) NOPASSWD: /bin/systemctl start --no-block gatekeeperd-auto-deploy.service\n' "${user}" >"${rendered}"
+  chmod 0440 "${rendered}"
+  if ! sudo visudo -cf "${rendered}" >/dev/null; then
+    rm -f "${rendered}"
+    gk_preflight_fail_prepare "Generated deployment-trigger sudoers rule did not validate."
+  fi
+  sudo install -o root -g root -m 0440 "${rendered}" "${sudoers_file}"
+  rm -f "${rendered}"
+  sudo visudo -c >/dev/null || gk_preflight_fail_prepare "Sudoers validation failed after installing the deployment UI trigger rule."
 }
 
 gk_preflight_prepare_upstream_stub() {
@@ -267,6 +317,7 @@ gk_preflight_prepare_host() {
   fi
   gk_preflight_prepare_upstream_stub
   gk_preflight_install_slot_unit
+  gk_preflight_install_deploy_trigger_sudoers
   gk_preflight_prepare_systemd_timer_units
   gk_preflight_log "Host preparation finished."
 }

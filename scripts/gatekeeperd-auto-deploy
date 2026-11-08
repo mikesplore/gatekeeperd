@@ -126,9 +126,15 @@ echo "Deploying successful workflow run ${RUN_ID} (${COMMIT_SHA})..."
 ATTEMPT_STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 ATTEMPT_ID="$(date -u +%Y%m%dT%H%M%SZ)-${RUN_ID}-${COMMIT_SHA:0:12}"
 install -d -o root -g root -m 0755 "${DIAGNOSTICS_DIR}"
-APP_USER="$(systemctl show gatekeeperd-slot@blue.service --property=User --value 2>/dev/null || true)"
-if [[ -z "${APP_USER}" ]]; then APP_USER="$(systemctl show gatekeeperd.service --property=User --value 2>/dev/null || true)"; fi
-APP_GROUP="$(id -gn "${APP_USER}" 2>/dev/null || true)"
+APP_SERVICE="gatekeeperd-slot@blue.service"
+APP_USER="$(systemctl show "${APP_SERVICE}" --property=User --value 2>/dev/null || true)"
+if [[ -z "${APP_USER}" ]]; then
+  APP_SERVICE="gatekeeperd.service"
+  APP_USER="$(systemctl show "${APP_SERVICE}" --property=User --value 2>/dev/null || true)"
+fi
+APP_USER="${APP_USER:-root}"
+APP_GROUP="$(systemctl show "${APP_SERVICE}" --property=Group --value 2>/dev/null || true)"
+if [[ -z "${APP_GROUP}" ]]; then APP_GROUP="$(id -gn "${APP_USER}" 2>/dev/null || true)"; fi
 if [[ -z "${APP_GROUP}" ]]; then
   echo "Error: Could not determine the Gatekeeperd service group for deployment diagnostics."
   exit 1
