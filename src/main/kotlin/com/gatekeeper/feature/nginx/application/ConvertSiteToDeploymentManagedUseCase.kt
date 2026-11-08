@@ -79,7 +79,16 @@ class ConvertSiteToDeploymentManagedUseCase(
             )
             try {
                 includes.write(serviceId, target)
-                check(nginxTestRunner().valid) { "nginx -t failed with the service upstream include" }
+                val nginxTest = nginxTestRunner()
+                if (!nginxTest.valid) {
+                    nginxServiceLogger.error(
+                        "nginx -t rejected the service upstream include for site {} (exitCode={}): {}",
+                        site.id,
+                        nginxTest.exitCode,
+                        nginxTest.output.ifBlank { "<no output>" }
+                    )
+                    error("nginx -t failed with the service upstream include (exitCode=${nginxTest.exitCode})")
+                }
                 check(
                     siteConfig.enableProject(
                         slug,
