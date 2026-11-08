@@ -42,6 +42,7 @@ class DeploymentWorker(
     private val deploymentLock: DeploymentLock,
     private val docker: DockerGateway,
     private val schedulerSettings: AppSettings.SchedulerSettings,
+    private val workerSettings: AppSettings.DeploymentWorkerSettings,
     private val nginxSettings: AppSettings.NginxSettings,
     private val readinessPorts: PortProbe,
     private val readinessHttp: HttpPortProbe,
@@ -55,6 +56,7 @@ class DeploymentWorker(
     private val convertSiteToDeploymentManagedUseCase: ConvertSiteToDeploymentManagedUseCase
 ) {
     private val logger = LoggerFactory.getLogger("com.gatekeeper.deployment.DeploymentWorker")
+    private val slotLeadership = DeploymentWorkerSlotLeadership(workerSettings)
     private val started = AtomicBoolean(false)
     private val restartLoopDetector = CandidateRestartLoopDetector()
     private val readinessChecker = ReadinessChecker(readinessPorts, readinessHttp, restartLoopDetector)
@@ -63,18 +65,28 @@ class DeploymentWorker(
     fun start(scope: CoroutineScope) {
         if (!started.compareAndSet(false, true)) return
         scope.launch(Dispatchers.IO) {
-            runCatching { recoverInterruptedCutovers() }
-                .onFailure { logger.error("Interrupted deployment cutover recovery failed", it) }
             var nextRecoveryAt = Long.MIN_VALUE
+            var wasActive: Boolean? = null
             while (isActive) {
-                if (System.nanoTime() >= nextRecoveryAt) {
-                    runCatching { recoverInterruptedCutovers() }
-                        .onFailure { logger.error("Interrupted deployment cutover recovery failed", it) }
-                    runCatching { recoverStaleJobs() }
-                        .onFailure { logger.error("Stale deployment recovery failed", it) }
-                    nextRecoveryAt = System.nanoTime() + TimeUnit.MINUTES.toNanos(1)
+                val active = slotLeadership.isActive()
+                if (active != wasActive) {
+                    logger.info(
+                        "Deployment worker {} for slot {}",
+                        if (active) "enabled" else "paused",
+                        workerSettings.slotName ?: "standalone"
+                    )
+                    wasActive = active
                 }
-                runCatching { processNext() }.onFailure { logger.error("Deployment worker cycle failed", it) }
+                if (active) {
+                    if (System.nanoTime() >= nextRecoveryAt) {
+                        runCatching { recoverInterruptedCutovers() }
+                            .onFailure { logger.error("Interrupted deployment cutover recovery failed", it) }
+                        runCatching { recoverStaleJobs() }
+                            .onFailure { logger.error("Stale deployment recovery failed", it) }
+                        nextRecoveryAt = System.nanoTime() + TimeUnit.MINUTES.toNanos(1)
+                    }
+                    runCatching { processNext() }.onFailure { logger.error("Deployment worker cycle failed", it) }
+                }
                 delay(1000.milliseconds)
             }
         }

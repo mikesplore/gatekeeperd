@@ -170,10 +170,11 @@ public API origin, then run `sudo ./deploy.sh --check` again until it succeeds.
 The script downloads a specific workflow artifact and checks its JAR, Certbot helper,
 and deployment-tool checksums. Systemd deployments use blue/green slots: the inactive
 slot starts on a separate localhost port, passes dependency readiness and a stability
-soak, then Nginx switches traffic with a graceful reload. The previous slot remains
-running as a rollback target. If the candidate fails before or after cutover, traffic
-stays on or returns to the previous slot; the script never restarts the active slot to
-test a new release. It records the active commit in
+soak, then Nginx switches traffic with a graceful reload. After old Nginx workers drain,
+the previous slot stops while its release remains installed for rollback. A slot runs
+deployment jobs only while its port is the active Nginx upstream. If the candidate fails
+before or after cutover, traffic stays on or returns to the previous slot; the script
+never restarts the active slot to test a new release. It records the active commit in
 `/opt/gatekeeperd/source-commit.txt` and preserves the current and previous slot releases.
 Host preflight failures exit with code 10 or 11 and do **not** set the auto-deploy
 failed-commit latch.

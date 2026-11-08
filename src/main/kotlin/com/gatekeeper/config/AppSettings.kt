@@ -2,6 +2,7 @@ package com.gatekeeper.config
 
 import io.github.cdimascio.dotenv.dotenv
 import com.gatekeeper.config.AppEnvironment
+import java.io.File
 
 /**
  * Immutable snapshot of process configuration.
@@ -126,6 +127,12 @@ class AppSettings private constructor(
         val deploymentDrainDelaySeconds: Long
     )
 
+    data class DeploymentWorkerSettings(
+        val slotName: String?,
+        val listenerPort: Int,
+        val activeUpstreamFile: File
+    )
+
     val db: DbSettings by lazy {
         DbSettings(
             required("DB_URL"),
@@ -209,6 +216,17 @@ class AppSettings private constructor(
     }
     val telemetry: TelemetrySettings by lazy { TelemetrySettings(get("OTEL_EXPORTER_OTLP_ENDPOINT")) }
     val operations: OperationsSettings by lazy { OperationsSettings(boolean("NGINX_CONFIG_LOG_ENABLED", true)) }
+    val deploymentWorker: DeploymentWorkerSettings by lazy {
+        val slotName = optional("GATEKEEPER_SLOT_NAME", "").trim().takeIf { it.isNotEmpty() }
+        val listenerPort = optional("PORT", "8080").toInt().also {
+            require(it in 1..65535) { "PORT must be between 1 and 65535" }
+        }
+        DeploymentWorkerSettings(
+            slotName,
+            listenerPort,
+            File(optional("GATEKEEPER_ACTIVE_UPSTREAM_FILE", "/etc/nginx/conf.d/gatekeeperd-upstream.conf"))
+        )
+    }
     val application: ApplicationSettings by lazy {
         ApplicationSettings(
             optional("ADMIN_EMAIL", ""), optional("ADMIN_PASSWORD", ""),

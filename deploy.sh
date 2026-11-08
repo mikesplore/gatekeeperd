@@ -304,8 +304,10 @@ install_slot_unit() {
   sudo install -o root -g root -m 0644 "${rendered}" /etc/systemd/system/gatekeeperd-slot@.service
   rm -f "${rendered}"
   sudo install -d -o root -g root -m 0755 "${SLOT_ENV_DIR}" "${SLOT_DIR}/blue" "${SLOT_DIR}/green"
-  printf 'PORT=%s\n' "${BLUE_PORT}" | sudo tee "${SLOT_ENV_DIR}/blue.env" >/dev/null
-  printf 'PORT=%s\n' "${GREEN_PORT}" | sudo tee "${SLOT_ENV_DIR}/green.env" >/dev/null
+  printf 'PORT=%s\nGATEKEEPER_ACTIVE_UPSTREAM_FILE="%s"\n' "${BLUE_PORT}" "${ACTIVE_UPSTREAM_FILE}" \
+    | sudo tee "${SLOT_ENV_DIR}/blue.env" >/dev/null
+  printf 'PORT=%s\nGATEKEEPER_ACTIVE_UPSTREAM_FILE="%s"\n' "${GREEN_PORT}" "${ACTIVE_UPSTREAM_FILE}" \
+    | sudo tee "${SLOT_ENV_DIR}/green.env" >/dev/null
   sudo chmod 0644 "${SLOT_ENV_DIR}/blue.env" "${SLOT_ENV_DIR}/green.env"
   sudo systemctl daemon-reload
 }
@@ -473,7 +475,8 @@ activate_release() {
   commit="$(release_commit "${id}")"
   if [[ -n "${commit}" ]]; then printf '%s\n' "${commit}" | sudo tee "${TARGET_DIR}/source-commit.txt" >/dev/null
   else sudo rm -f "${TARGET_DIR}/source-commit.txt"; fi
-  log "Nginx now routes to ${candidate_slot} (${candidate_port}); ${active_slot} remains running for rollback."
+  retire_slot_after_cutover "${active_slot}"
+  log "Nginx now routes to ${candidate_slot} (${candidate_port}); ${active_slot} is stopped after its Nginx workers drained and remains available for rollback."
 }
 
 prune_releases() {

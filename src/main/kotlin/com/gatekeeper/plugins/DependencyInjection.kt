@@ -235,7 +235,7 @@ private val applicationModule = module {
     single { SourceFetcher(get<DeploymentCommandRunner>(), get<GitHubTokenProvider>()) }
     single { ImageBuilder(get<DeploymentCommandRunner>()) }
     single<DeploymentLock> { DistributedDeploymentLock() }
-    single { DeploymentWorker(get(), get(),get(),get(),get(), get(),get(), get(), get(), get(),get(), get(), get(), get(), get(), get(), get(), get(), get()) }
+    single { DeploymentWorker(get(), get(),get(),get(),get(), get(),get(), get(), get<AppSettings>().deploymentWorker, get(), get(),get(), get(), get(), get(), get(), get(), get(), get(), get()) }
     single<ProjectQueryRepository> { ExposedProjectQueryRepository(get<ProjectStore>(), get(), get()) }
     single<SupportRequestRepository> { ExposedSupportRequestRepository() }
     single { CustomerApplicationService(get<ProjectQueryRepository>(), get(), get(), get<SupportRequestRepository>()) }

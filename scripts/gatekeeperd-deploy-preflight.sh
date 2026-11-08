@@ -239,6 +239,7 @@ gk_preflight_prepare_upstream_stub() {
 
 gk_preflight_install_slot_unit() {
   local template env_file="${DEPLOY_APP_ENV_FILE:-/etc/gatekeeperd/gatekeeperd.env}"
+  local upstream_file="${ACTIVE_UPSTREAM_FILE:-/etc/nginx/conf.d/gatekeeperd-upstream.conf}"
   template="$(gk_preflight_resolve_slot_template)" \
     || gk_preflight_fail_prepare "Blue/green systemd template is missing. Run deploy from a CI artifact or copy scripts/gatekeeperd-slot@.service to ${TARGET_DIR}/gatekeeperd-slot@.service.in."
 
@@ -266,8 +267,10 @@ gk_preflight_install_slot_unit() {
   fi
   rm -f "${rendered}"
 
-  printf 'PORT=%s\n' "${BLUE_PORT:-18081}" | sudo tee "${SLOT_ENV_DIR:-/etc/gatekeeperd/slots}/blue.env" >/dev/null
-  printf 'PORT=%s\n' "${GREEN_PORT:-18082}" | sudo tee "${SLOT_ENV_DIR:-/etc/gatekeeperd/slots}/green.env" >/dev/null
+  printf 'PORT=%s\nGATEKEEPER_ACTIVE_UPSTREAM_FILE="%s"\n' "${BLUE_PORT:-18081}" "${upstream_file}" \
+    | sudo tee "${SLOT_ENV_DIR:-/etc/gatekeeperd/slots}/blue.env" >/dev/null
+  printf 'PORT=%s\nGATEKEEPER_ACTIVE_UPSTREAM_FILE="%s"\n' "${GREEN_PORT:-18082}" "${upstream_file}" \
+    | sudo tee "${SLOT_ENV_DIR:-/etc/gatekeeperd/slots}/green.env" >/dev/null
   sudo chmod 0644 "${SLOT_ENV_DIR:-/etc/gatekeeperd/slots}/blue.env" "${SLOT_ENV_DIR:-/etc/gatekeeperd/slots}/green.env"
   sudo systemctl daemon-reload
 }

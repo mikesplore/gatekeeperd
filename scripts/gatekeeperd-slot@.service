@@ -10,6 +10,7 @@ Type=simple
 WorkingDirectory=/opt/gatekeeperd
 EnvironmentFile=@APP_ENV_FILE@
 EnvironmentFile=/etc/gatekeeperd/slots/%i.env
+Environment=GATEKEEPER_SLOT_NAME=%i
 ExecStart=/usr/bin/java -jar /opt/gatekeeperd/slots/%i/current/gatekeeperd-all.jar
 Restart=on-failure
 RestartSec=3
