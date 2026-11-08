@@ -107,11 +107,25 @@ class ConvertSiteToDeploymentManagedUseCase(
                 ) { "Unable to persist deployment-managed site kind" }
                 true
             } catch (error: Exception) {
-                runCatching {
-                    if (previousSite != null) nginxSiteStorage.restoreSiteConfiguration(slug, previousSite)
-                    else nginxSiteStorage.removeSite(slug)
-                }
                 runCatching { nginxSiteStorage.restoreUpstreamInclude(includes, serviceId, previousInclude) }
+                    .onFailure { rollbackError ->
+                        nginxServiceLogger.error("Unable to restore upstream include for site {}", site.id, rollbackError)
+                    }
+                runCatching {
+                    if (previousSite != null) {
+                        check(nginxSiteStorage.restoreSiteConfiguration(slug, previousSite)) {
+                            "Could not restore the previous site config"
+                        }
+                    } else {
+                        val siteWasActivated = nginxSiteStorage.siteExists(slug) || nginxSiteStorage.isSiteEnabled(slug)
+                        nginxSiteStorage.removeSite(slug)
+                        if (siteWasActivated) check(nginxSiteStorage.reloadNginx()) {
+                            "Could not reload nginx after removing the failed site config"
+                        }
+                    }
+                }.onFailure { rollbackError ->
+                    nginxServiceLogger.error("Unable to restore nginx site state for {}", site.id, rollbackError)
+                }
                 nginxServiceLogger.error("Unable to convert site {} to deployment-managed upstream", site.id, error)
                 false
             }
