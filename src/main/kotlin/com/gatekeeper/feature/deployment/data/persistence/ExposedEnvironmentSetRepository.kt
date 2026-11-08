@@ -66,8 +66,12 @@ class ExposedEnvironmentSetRepository : EnvironmentSetRepository {
                 it[DeploymentConfigurations.serviceId], serviceId, service[Services.isDefault]
             )
         }
-            .sortedByDescending { it[DeploymentConfigurations.serviceId] == serviceId }
-        val configured = configurations.firstOrNull()
+        val configured = preferredDeploymentConfiguration(
+            serviceConfigurations = configurations.filter { it[DeploymentConfigurations.serviceId] == serviceId },
+            legacyConfigurations = configurations.filter { it[DeploymentConfigurations.serviceId] == null },
+            updatedAt = { it[DeploymentConfigurations.updatedAt] },
+            createdAt = { it[DeploymentConfigurations.createdAt] }
+        )
         val configuredServiceValues = when {
             configured == null -> versionRows.maxByOrNull { it[ProjectSecretSetVersions.version] }?.let { row ->
                 Json.decodeFromString<Map<String, String>>(SecretValueCipher.decrypt(row[ProjectSecretSetVersions.encryptedPayload]))
