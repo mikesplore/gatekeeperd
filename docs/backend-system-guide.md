@@ -207,13 +207,13 @@ Full nginx examples and required bypass locations are in [nginx-client-gating.md
 
 The effective decision for a resolved target is blocked if the project status is not active or the selected service access status is not active. Project-level payment status applies to all services. A service block only applies to the service resolved from the requested domain/site. A configured payment reason takes precedence when both project and service are blocked.
 
-The gate cache key prefix is `project:status:` and entries last 60 seconds. The Redis entry stores only effective `active` or `blocked` state. When a blocked cached entry is found, Gatekeeperd re-resolves the target from PostgreSQL to build current project/service-specific paywall details. Unknown cached states are not treated as active.
+Authorization decisions are read from PostgreSQL on every gate request. Redis status entries are not trusted for authorization because a failed invalidation could leave a stale `active` decision after a block. The `project:status:` prefix remains for cleanup of entries written by older versions; keys use the normalized resolved site slug as their canonical identity, including domain-specific services.
 
-When cache lookup fails, the service queries PostgreSQL, returns the current decision, and attempts a best-effort cache write. A cache write failure does not change a successful database-backed decision. When both Redis and PostgreSQL are unavailable, `FAIL_MODE=open` allows traffic and records a critical log/metric; `FAIL_MODE=closed` blocks it. An unknown `FAIL_MODE` defaults closed. A missing project/site is unknown and denied by the proxy-facing endpoints; it is not treated as a database outage.
+When the PostgreSQL gate-target lookup fails, the validated `FAIL_MODE` setting controls the outage decision. It defaults to `closed`; only the explicit value `open` allows traffic. Any other configured value prevents application startup. These outage decisions increment `gate.datastore_failure` and a `gate.fail_mode.open` or `gate.fail_mode.closed` metric, with critical decision logs. A missing project/site is unknown and denied by the proxy-facing endpoints; it is not treated as a database outage.
 
 ### 7.3 Cache invalidation and propagation
 
-Administrative status changes and successful payment effects invalidate relevant project/site cache keys. Otherwise changes can remain cached for up to 60 seconds. Redis is a cache for gate state but is required storage for authentication state; those are intentionally different failure policies.
+Administrative status changes and successful payment effects remove legacy project/site status keys. Invalidation failures increment `gate.cache_invalidation_failure` and are logged per key. Because the authorization path no longer reads Redis status, an invalidation failure cannot preserve stale access. Redis remains required for authentication state; that is a separate failure policy.
 
 ## 8. Payments and provider callbacks
 
@@ -391,7 +391,7 @@ Nginx site reconciliation and deployment reconciliation compare persisted state 
 ### 16.1 Storage choices
 
 - **PostgreSQL:** source of truth for projects, services, payments/events, user accounts, deployment configuration/executions/runtimes, environment versions, port reservations, sites/certificates, audit, notifications, support requests, and outbox deliveries.
-- **Redis:** short-lived gate cache, login rate-limit counters, 2FA challenge/lock state, refresh-token hashes, and JWT revocations. It is required for protected auth operations but optional for ordinary cache reads.
+- **Redis:** login rate-limit counters, 2FA challenge/lock state, refresh-token hashes, JWT revocations, and legacy gate-cache cleanup. It is required for protected auth operations but is not authoritative for gate decisions.
 - **Filesystem:** nginx site/config backups, per-service upstream include files, Certbot certificates, operational deployment marker files, and optionally GitHub App private key. These are host resources, not PostgreSQL rows.
 - **Docker Engine:** actual container/image/network/volume runtime state. Gatekeeperd persists enough metadata to compare and recover but Docker is the authority for what is currently running.
 
@@ -481,7 +481,7 @@ Configuration values are read once into `AppConfig` at startup. Most changes req
 | Health live works but readiness is 503 | PostgreSQL, Redis, or migrations | `/api/health/ready`; verify Redis from Gatekeeperd's own network namespace and credentials/TLS topology; inspect DB/migration state. |
 | Login responds 503 | Redis-backed auth storage | Redis DNS/route/port from Gatekeeperd process/container, pool logs, and required refresh-token storage. A successful startup ping does not prove every later auth operation succeeds. |
 | Login succeeds but an admin route returns 401 | JWT role/expiry/revocation | Admin management routes require the `admin` role; Redis revocation lookup must work. |
-| Gate is stale after admin/payment action | Redis gate cache | Verify invalidation logs and key `project:status:{slug}`; normal cache TTL is 60 seconds. |
+| Gate is stale after admin/payment action | PostgreSQL billing/access state | Inspect the project and selected service records; check `gate.cache_invalidation_failure` for legacy Redis cleanup failures. |
 | Candidate healthy but site still serves previous version | Deployment cutover/gateway | Inspect deployment status and cutover state; stable upstream include and checksum; nginx error log; `nginx -t`; local probe and host mutation lock; reconciliation report. |
 | Candidate keeps changing public port | Not expected for managed deployments | Inspect persisted deployment port map, `deployment_port_allocations`, actual Docker mapping, and whether the site is deployment-managed or adopted/explicit. Managed routes use persisted pool ports; adoption preserves existing mappings. |
 | Certificate renewal fails | Certbot / DNS / host mutation | Admin operation result, Gatekeeperd logs, `journalctl` sudo/Certbot records, DNS/challenge reachability, certificate files and nginx validation. The helper command log alone may not contain Certbot's full diagnostic. |
@@ -496,7 +496,7 @@ These observations are based on repository code, not an inspection of a producti
 
 1. **Route layering is mixed.** Koin-based use cases exist for gate, customer and payment workflows, while several older admin APIs call repositories directly. Changes should follow local conventions but avoid assuming a universal domain boundary.
 2. **Nginx and Docker are host-side dependencies.** Unit tests use fakes/temp dirs for most logic, but real sudoers, nginx include placement, systemd behavior, Docker networking, DNS, Certbot validation and file ownership still need server-side verification.
-3. **Gate `FAIL_MODE` applies only when both the Redis cache path and PostgreSQL lookup fail.** A missing project is deliberately denied; Redis-only failure falls back to PostgreSQL.
+3. **Gate `FAIL_MODE` applies when PostgreSQL cannot resolve a target.** It defaults closed; explicit `open` is an availability override. Gate authorization no longer depends on Redis status entries.
 4. **The public version endpoint reports the timer's latest known successful build, not an instantaneous query to GitHub.** If the timer cannot run or GitHub is unavailable, the result becomes stale/unknown rather than being a guaranteed live CI query.
 5. **External Scribed and payment-provider outcomes depend on their own availability and configuration.** Payment reconciliation reduces transient coupling; document generation depends on Scribed being available when requested.
 

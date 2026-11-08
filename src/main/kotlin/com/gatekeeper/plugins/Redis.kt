@@ -94,6 +94,12 @@ object RedisService {
         }
     }
 
+    /** Deletes an authorization cache entry and reports unavailable Redis to the caller. */
+    fun deleteRequired(key: String) {
+        val activePool = pool ?: throw RedisUnavailableException()
+        activePool.resource.use { jedis -> jedis.del(key) }
+    }
+
     fun incrementWithExpiry(key: String, ttlSeconds: Int): Long {
         val activePool = pool ?: throw RedisUnavailableException()
         return activePool.resource.use { jedis ->

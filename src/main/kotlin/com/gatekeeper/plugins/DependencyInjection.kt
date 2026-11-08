@@ -475,8 +475,8 @@ private val applicationModule = module {
     single {
         GateService(
             projects = get<ProjectQueryRepository>(),
-            latestPaymentLink = get<GetLatestPaymentLink>(),
-            projectBalances = get(),
+            latestPaymentLink = get<GetLatestPaymentLink>()::invoke,
+            projectFinancials = get<com.gatekeeper.feature.payment.data.persistence.ProjectBalanceAdapter>()::financials,
             applicationSettings = get<AppSettings>().application
         )
     }

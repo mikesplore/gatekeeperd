@@ -77,13 +77,23 @@ class AppSettings private constructor(
         val adminEmail: String,
         val adminPassword: String,
         val deploymentSecretsKey: String,
-        val failMode: String,
+        val failMode: FailMode,
         val corsAllowedHosts: List<CorsHost>,
         val defaultGracePeriodDays: Int,
         val deploymentStaleMinutes: Long,
         val deploymentHostPortRange: IntRange,
         val deploymentDrainDelaySeconds: Long
     )
+
+    enum class FailMode { OPEN, CLOSED;
+        companion object {
+            fun parse(value: String): FailMode = when (value.trim().lowercase()) {
+                "open" -> OPEN
+                "closed" -> CLOSED
+                else -> error("FAIL_MODE must be either 'open' or 'closed'")
+            }
+        }
+    }
 
     data class CorsHost(val host: String, val schemes: List<String>)
 
@@ -182,7 +192,7 @@ class AppSettings private constructor(
     val application: ApplicationSettings by lazy {
         ApplicationSettings(
             optional("ADMIN_EMAIL", ""), optional("ADMIN_PASSWORD", ""),
-            optional("DEPLOYMENT_SECRETS_KEY", ""), optional("FAIL_MODE", "open"), corsHosts(),
+            optional("DEPLOYMENT_SECRETS_KEY", ""), FailMode.parse(optional("FAIL_MODE", "closed")), corsHosts(),
             optional("DEFAULT_GRACE_PERIOD_DAYS", "3").toInt(),
             optional("DEPLOYMENT_STALE_MINUTES", "30").toLong(),
             parsePortRange(optional("DEPLOYMENT_HOST_PORT_RANGE", "32000-40000")),
@@ -250,13 +260,13 @@ class AppSettings private constructor(
     }
 
     companion object {
-        fun fromEnv(env: Map<String, String> = System.getenv()): AppSettings {
-            val local = dotenv {
+        fun fromEnv(env: Map<String, String> = System.getenv(), loadDotenv: Boolean = true): AppSettings {
+            val local = if (loadDotenv) dotenv {
                 filename = ".env"
                 ignoreIfMissing = true
-            }
+            } else null
             val merged = buildMap {
-                local.entries().forEach { entry -> put(entry.key, entry.value) }
+                local?.entries()?.forEach { entry -> put(entry.key, entry.value) }
                 putAll(env)
             }
             return AppSettings(merged.toMap())

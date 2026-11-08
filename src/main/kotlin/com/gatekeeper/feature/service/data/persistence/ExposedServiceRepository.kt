@@ -5,14 +5,17 @@ import com.gatekeeper.feature.service.domain.repository.AccessRecord
 import com.gatekeeper.feature.service.domain.repository.ServiceRecord
 import com.gatekeeper.feature.service.domain.repository.ServiceRepository
 import com.gatekeeper.feature.service.domain.repository.SiteRepository
-import com.gatekeeper.plugins.RedisService
+import com.gatekeeper.plugins.GateCacheInvalidator
 import org.jetbrains.exposed.sql.*
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
 import org.jetbrains.exposed.sql.transactions.transaction
 import java.util.*
 
 /** Persistence for service-level customer access policy. Runtime health is deliberately separate. */
-class ExposedServiceRepository(private val siteRepository: SiteRepository) : ServiceRepository {
+class ExposedServiceRepository(
+    private val siteRepository: SiteRepository,
+    private val gateCacheInvalidator: GateCacheInvalidator = GateCacheInvalidator()
+) : ServiceRepository {
     override fun listByProjectId(projectId: UUID): List<ServiceRecord> = transaction {
         Services.selectAll().where { Services.projectId eq projectId }
             .orderBy(Services.name).map(::toRecord)
@@ -254,11 +257,7 @@ class ExposedServiceRepository(private val siteRepository: SiteRepository) : Ser
     }
 
     private fun invalidateGateCache(slug: String) {
-        try {
-            RedisService.delete("project:status:$slug")
-        } catch (_: Exception) {
-            // Cache invalidation is best effort; the short TTL bounds stale access decisions.
-        }
+        gateCacheInvalidator.invalidate(listOf(slug))
     }
 }
 

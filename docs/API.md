@@ -145,7 +145,7 @@ When `domain` is supplied, Gatekeeperd resolves the configured site by domain, t
 
 **Notes:**
 - This endpoint must NOT be internet-reachable. Only Traefik on the internal Docker network should call it.
-- Redis cache TTL is 60 seconds. Admin actions explicitly delete the cache for instant propagation.
+- Gate authorization reads the current project/service state from PostgreSQL for each request; Redis status entries are not trusted for access decisions. Legacy gate-cache entries are deleted after state changes.
 
 ### GET /api/gate/auth?project={slug}[&domain={domain}]
 Lightweight gate check for **nginx `auth_request` only**. Returns empty body. The `project` parameter may be a project slug for its default service or a site slug for a service-specific site. Project billing blocks apply to every service; service access blocks apply only to that site's service.

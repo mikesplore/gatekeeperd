@@ -2,11 +2,10 @@ package com.gatekeeper.gate
 
 import com.gatekeeper.config.AppSettings
 import com.gatekeeper.db.tables.AccessBlockReason
-import com.gatekeeper.feature.payment.domain.usecase.GetLatestPaymentLink
-import com.gatekeeper.feature.payment.data.persistence.ProjectBalanceAdapter
+import com.gatekeeper.feature.payment.domain.model.ProjectFinancials
+import com.gatekeeper.feature.project.domain.model.ProjectRecord
 import com.gatekeeper.feature.project.domain.repository.GateTarget
 import com.gatekeeper.feature.project.domain.repository.ProjectQueryRepository
-import com.gatekeeper.plugins.RedisService
 import com.gatekeeper.plugins.Metrics
 import org.slf4j.LoggerFactory
 
@@ -14,15 +13,10 @@ private val logger = LoggerFactory.getLogger("com.gatekeeper.gate.GateService")
 
 class GateService(
     private val projects: ProjectQueryRepository,
-    private val latestPaymentLink: GetLatestPaymentLink,
-    private val projectBalances: ProjectBalanceAdapter,
+    private val latestPaymentLink: (java.util.UUID) -> String?,
+    private val projectFinancials: (ProjectRecord) -> ProjectFinancials,
     private val applicationSettings: AppSettings.ApplicationSettings
 ) {
-
-    companion object {
-        private const val REDIS_KEY_PREFIX = "project:status:"
-        private const val REDIS_TTL_SECONDS = 60
-    }
 
     private fun blockedResult(target: GateTarget): GateResult.Blocked {
         val project = target.project
@@ -39,7 +33,7 @@ class GateService(
         val source = if (projectBlocked) "project" else "service"
         val wall = PaywallInfo.from(
             project = project,
-            financials = projectBalances.financials(project),
+            financials = projectFinancials(project),
             domain = target.siteDomain,
             serviceId = target.serviceId,
             serviceName = target.serviceName,
@@ -58,62 +52,44 @@ class GateService(
 
     fun check(slug: String, domain: String? = null): GateResult {
         Metrics.increment("gate.check")
-        try {
-            val cached = RedisService.get("$REDIS_KEY_PREFIX$slug")
-            if (cached != null) {
-                return when (cached) {
-                    "active" -> GateResult.Active
-                    "blocked", "manual_block" -> {
-                        val target = if (domain.isNullOrBlank()) projects.findGateTargetBySlug(slug)
-                            else projects.findGateTargetByDomain(domain)
-                        target?.let(::blockedResult) ?: GateResult.Unknown("unknown project or site")
-                    }
-                    else -> GateResult.Unknown("unknown status: $cached")
-                }
-            }
+        val resolvedTarget = try {
+            if (domain.isNullOrBlank()) projects.findGateTargetBySlug(slug)
+            else projects.findGateTargetByDomain(domain)
         } catch (e: Exception) {
-            logger.warn("Redis unavailable for gate check (slug=$slug): ${e.message}")
+            Metrics.increment("gate.datastore_failure")
+            logger.error("Postgres unavailable for gate check slug={}", slug, e)
+            return datastoreFailureResult(slug)
         }
 
-        try {
-            val resolvedTarget = (if (domain.isNullOrBlank()) projects.findGateTargetBySlug(slug)
-                else projects.findGateTargetByDomain(domain))
-                ?: run {
-                    logger.warn("Gate check for unknown project/site: slug=$slug domain=$domain")
-                    return GateResult.Unknown("unknown project or site")
-                }
-            val project = resolvedTarget.project
-
-            // Project billing status applies to every service. A service access block is scoped
-            // to the resolved site's service and never derives from deployment health.
-            val blocked = project.status != "active" || resolvedTarget.serviceAccessStatus != "active"
-
-            val redisValue = if (blocked) "blocked" else "active"
-            try {
-                RedisService.set("$REDIS_KEY_PREFIX${resolvedTarget.siteSlug}", redisValue, REDIS_TTL_SECONDS)
-            } catch (e: Exception) {
-                logger.warn("Failed to write to Redis cache (non-fatal): ${e.message}")
-            }
-
-            return if (!blocked) GateResult.Active else blockedResult(resolvedTarget)
-        } catch (e: Exception) {
-            logger.error("Postgres unavailable for gate check (slug=$slug): ${e.message}")
+        if (resolvedTarget == null) {
+            logger.warn("Gate check for unknown project/site: slug={} domain={}", slug, domain)
+            return GateResult.Unknown("unknown project or site")
         }
 
-        logger.warn("Both Redis and Postgres unreachable for slug=$slug, applying FAIL_MODE=${applicationSettings.failMode}")
-        return when (applicationSettings.failMode.lowercase()) {
-            "open" -> {
+        // Project billing status applies to every service. A service access block is scoped
+        // to the resolved site's service and never derives from deployment health.
+        val blocked = resolvedTarget.project.status != "active" || resolvedTarget.serviceAccessStatus != "active"
+        return if (!blocked) GateResult.Active else try {
+            blockedResult(resolvedTarget)
+        } catch (e: Exception) {
+            // Failure to construct payment details must never turn a known block into an allow.
+            logger.error("Failed to build blocked gate response for slug={}", slug, e)
+            GateResult.Blocked(type = resolvedTarget.serviceType, paymentLink = null, projectName = resolvedTarget.project.name, paywall = null)
+        }
+    }
+
+    private fun datastoreFailureResult(slug: String): GateResult {
+        Metrics.increment("gate.fail_mode.${applicationSettings.failMode.name.lowercase()}")
+        logger.warn("Gate datastore lookup failed; applying fail mode={} slug={}", applicationSettings.failMode, slug)
+        return when (applicationSettings.failMode) {
+            AppSettings.FailMode.OPEN -> {
                 Metrics.increment("gate.fail_open")
-                logger.error("CRITICAL: FAIL_MODE=open — allowing traffic for slug=$slug despite DB outage")
+                logger.error("CRITICAL: FAIL_MODE=open; allowing traffic despite datastore outage slug={}", slug)
                 GateResult.Active
             }
-            "closed" -> {
+            AppSettings.FailMode.CLOSED -> {
                 Metrics.increment("gate.fail_closed")
-                logger.error("CRITICAL: FAIL_MODE=closed — blocking traffic for slug=$slug due to DB outage")
-                GateResult.Blocked(type = "backend", paymentLink = null, projectName = slug, paywall = null)
-            }
-            else -> {
-                logger.error("CRITICAL: Unknown FAIL_MODE=${applicationSettings.failMode}, defaulting to closed")
+                logger.error("CRITICAL: FAIL_MODE=closed; blocking traffic due to datastore outage slug={}", slug)
                 GateResult.Blocked(type = "backend", paymentLink = null, projectName = slug, paywall = null)
             }
         }

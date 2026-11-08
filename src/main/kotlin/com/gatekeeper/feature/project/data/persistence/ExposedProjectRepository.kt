@@ -10,7 +10,7 @@ import com.gatekeeper.db.tables.ServiceDomains
 import com.gatekeeper.db.tables.Customers
 import com.gatekeeper.feature.project.domain.model.OverdueProject
 import com.gatekeeper.feature.project.domain.model.ProjectRecord
-import com.gatekeeper.plugins.RedisService
+import com.gatekeeper.plugins.GateCacheInvalidator
 import com.gatekeeper.feature.project.domain.repository.ProjectRepository
 import com.gatekeeper.feature.service.domain.repository.SiteRepository
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
@@ -22,11 +22,9 @@ import java.time.LocalDateTime
 import java.util.*
 
 class ExposedProjectRepository(
-    private val siteRepository: SiteRepository
+    private val siteRepository: SiteRepository,
+    private val gateCacheInvalidator: GateCacheInvalidator = GateCacheInvalidator()
 ) : ProjectRepository {
-    private companion object {
-        const val REDIS_KEY_PREFIX = "project:status:"
-    }
 
     override fun findBySlug(slug: String, includeArchived: Boolean): ProjectRecord? {
         return transaction {
@@ -286,15 +284,9 @@ class ExposedProjectRepository(
     override fun delete(slug: String): Boolean = archive(slug, "system", "legacy delete call")
 
     override fun invalidateCache(slug: String, projectId: UUID?) {
-        try {
-            RedisService.delete("$REDIS_KEY_PREFIX$slug")
-            val id = projectId ?: findBySlug(slug)?.id
-            id?.let { siteRepository.findGateSlugsByProjectId(it).forEach { siteSlug ->
-                RedisService.delete("$REDIS_KEY_PREFIX$siteSlug")
-            } }
-        } catch (_: Exception) {
-            // Non-fatal
-        }
+        val id = projectId ?: findBySlug(slug)?.id
+        val siteSlugs = id?.let(siteRepository::findGateSlugsByProjectId).orEmpty()
+        gateCacheInvalidator.invalidate(listOf(slug) + siteSlugs)
     }
 
     override fun findOverdue(asOf: LocalDate): List<OverdueProject> {

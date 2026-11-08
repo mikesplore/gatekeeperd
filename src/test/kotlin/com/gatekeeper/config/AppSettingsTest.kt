@@ -2,6 +2,7 @@ package com.gatekeeper.config
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 
 class AppSettingsTest {
     @Test
@@ -20,6 +21,24 @@ class AppSettingsTest {
     @Test
     fun `blank values are not exposed`() {
         assertEquals(null, AppSettings.fromEnv(mapOf("EMPTY_SETTING" to "  "))["EMPTY_SETTING"])
+    }
+
+    @Test
+    fun `fail mode defaults closed`() {
+        assertEquals(AppSettings.FailMode.CLOSED, AppSettings.fromEnv(emptyMap(), loadDotenv = false).application.failMode)
+    }
+
+    @Test
+    fun `fail mode accepts explicit open and closed values case insensitively`() {
+        assertEquals(AppSettings.FailMode.OPEN, AppSettings.fromEnv(mapOf("FAIL_MODE" to "OPEN")).application.failMode)
+        assertEquals(AppSettings.FailMode.CLOSED, AppSettings.fromEnv(mapOf("FAIL_MODE" to "closed")).application.failMode)
+    }
+
+    @Test
+    fun `invalid fail mode is rejected`() {
+        assertFailsWith<IllegalStateException> {
+            AppSettings.fromEnv(mapOf("FAIL_MODE" to "sometimes")).application
+        }
     }
 
     @Test

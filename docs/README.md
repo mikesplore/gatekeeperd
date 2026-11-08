@@ -18,7 +18,7 @@ Gatekeeperd is a Kotlin/Ktor service that applies project and service access rul
 
 A **customer** owns one or more **projects**. A project can contain multiple **services**. Billing and access can apply at project level or to an individual service; a project-wide block overrides service access. Each service has its own runtime configuration, environment versions, deployment history, and optional domain/site.
 
-Nginx or Traefik remains the public reverse proxy. Gatekeeperd answers whether traffic may reach the application. Paystack and M-Pesa handle payments; PostgreSQL stores the billing/access state; Redis caches gate decisions; Scribed handles invoice and receipt documents and configured notifications.
+Nginx or Traefik remains the public reverse proxy. Gatekeeperd answers whether traffic may reach the application. Paystack and M-Pesa handle payments; PostgreSQL stores the billing/access state and supplies each gate decision; Redis supports authentication and other coordination; Scribed handles invoice and receipt documents and configured notifications.
 
 ## Configuration reference
 

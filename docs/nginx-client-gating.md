@@ -14,6 +14,7 @@ Gate client apps behind nginx using gatekeeperd. nginx stays the reverse proxy; 
 
 nginx `auth_request` only accepts **401** or **403** as deny codes. Never use `/api/gate/check` for the auth subrequest.
 The `/api/gate/` location is a separate bypass path for payment and callback traffic, so those requests do not pass through `auth_request`.
+If Gatekeeperd returns 403, nginx denies the protected request. If the Gatekeeperd upstream is unreachable, nginx returns an upstream error and does not proxy the protected request to the client app. This proxy-upstream failure is separate from `FAIL_MODE`, which applies only when Gatekeeperd itself is running but cannot resolve authorization state from PostgreSQL.
 
 ## Example: `acw.mikesplore.me`
 
