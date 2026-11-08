@@ -8,6 +8,7 @@ import com.gatekeeper.feature.nginx.application.DisableProjectUseCase
 import com.gatekeeper.feature.nginx.application.RemoveSiteConfigUseCase
 import com.gatekeeper.feature.nginx.application.RollbackSiteConfigUseCase
 import com.gatekeeper.feature.nginx.application.SwitchDeploymentUpstreamUseCase
+import com.gatekeeper.feature.nginx.application.ConvertSiteToDeploymentManagedUseCase
 import com.gatekeeper.feature.nginx.domain.port.NginxSiteStorage
 import com.gatekeeper.feature.nginx.domain.service.NginxConfigRendererService
 import com.gatekeeper.feature.nginx.domain.service.NginxConflictAnalyzer
@@ -41,7 +42,8 @@ fun Route.nginxSiteAdminRoutes(
     removeSiteConfigUseCase: RemoveSiteConfigUseCase,
     renderModelFromSite: RenderModelFromSite,
     planNginxEnableRequest: PlanNginxEnableRequest,
-    nginxSettings: AppSettings.NginxSettings
+    nginxSettings: AppSettings.NginxSettings,
+    convertSiteToDeploymentManagedUseCase: ConvertSiteToDeploymentManagedUseCase
 ) {
     val enableHandler = NginxSiteEnableHandler(
         applySiteConfig = applySiteConfig,
@@ -57,7 +59,8 @@ fun Route.nginxSiteAdminRoutes(
         conflictAnalyzer = conflictAnalyzer,
         removeSiteConfigUseCase = removeSiteConfigUseCase,
         renderModelFromSite = renderModelFromSite,
-        planNginxEnableRequest = planNginxEnableRequest
+        planNginxEnableRequest = planNginxEnableRequest,
+        convertSiteToDeploymentManagedUseCase = convertSiteToDeploymentManagedUseCase
     )
 
     val handler = NginxSiteAdminHandler(

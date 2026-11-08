@@ -45,7 +45,8 @@ fun Route.configureNginxRoutes() {
         removeSiteConfigUseCase = get(),
         renderModelFromSite = get(),
         planNginxEnableRequest = get(),
-        nginxSettings = get()
+        nginxSettings = get(),
+        convertSiteToDeploymentManagedUseCase = get()
     )
     nginxUpstreamRoutes(
         siteRepository = get(),

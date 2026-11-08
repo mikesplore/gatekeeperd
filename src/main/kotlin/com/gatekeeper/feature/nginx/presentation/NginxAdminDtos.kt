@@ -18,7 +18,15 @@ data class NginxBackfillReport(
 }
 
 @Serializable
-data class NginxEnableResponse(val success: Boolean, val message: String, val config: String? = null, val appPort: Int? = null, val sslEnabled: Boolean? = null, val certificateDomain: String? = null)
+data class NginxEnableResponse(
+    val success: Boolean,
+    val message: String,
+    val config: String? = null,
+    val appPort: Int? = null,
+    val sslEnabled: Boolean? = null,
+    val certificateDomain: String? = null,
+    val deploymentConnected: Boolean? = null
+)
 
 @Serializable
 data class NginxDisableResponse(val success: Boolean, val message: String)

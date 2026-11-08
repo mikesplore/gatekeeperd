@@ -8,6 +8,7 @@ import com.gatekeeper.db.tables.TlsMode
 import com.gatekeeper.db.tables.UpstreamMode
 import com.gatekeeper.feature.deployment.domain.repository.ServiceDomainRepository
 import com.gatekeeper.feature.nginx.application.ApplySiteConfigUseCase
+import com.gatekeeper.feature.nginx.application.ConvertSiteToDeploymentManagedUseCase
 import com.gatekeeper.feature.nginx.application.DisableProjectUseCase
 import com.gatekeeper.feature.nginx.application.RemoveSiteConfigUseCase
 import com.gatekeeper.feature.nginx.domain.port.NginxSiteStorage
@@ -46,7 +47,8 @@ class NginxSiteEnableHandler(
     private val conflictAnalyzer: NginxConflictAnalyzer,
     private val removeSiteConfigUseCase: RemoveSiteConfigUseCase,
     private val renderModelFromSite: RenderModelFromSite,
-    private val planNginxEnableRequest: PlanNginxEnableRequest
+    private val planNginxEnableRequest: PlanNginxEnableRequest,
+    private val convertSiteToDeploymentManagedUseCase: ConvertSiteToDeploymentManagedUseCase
 ) {
     suspend fun enable(call: ApplicationCall) {
         val body = call.receiveEnableRequestOrRespond() ?: return
@@ -153,6 +155,18 @@ class NginxSiteEnableHandler(
             if (!persisted) return
         }
 
+        val persistedSite = siteRepository.findByDomain(requestedDomain)
+        val deploymentTarget = requestedContainerPort?.let {
+            deploymentUpstreamResolver.resolveRuntime(serviceId, it, "production")
+        } ?: deploymentUpstreamResolver.resolveRuntime(serviceId, "production")
+        val deploymentConnected = when {
+            persistedSite?.upstreamKind == "DEPLOYMENT_MANAGED" -> true
+            persistedSite != null && deploymentTarget != null -> runCatching {
+                convertSiteToDeploymentManagedUseCase.execute(persistedSite, deploymentTarget.port)
+            }.getOrDefault(false)
+            else -> false
+        }
+
         nginxServiceLogger.info("Nginx enabled for project: $enabledSlug")
         call.respond(
             NginxEnableResponse(
@@ -161,7 +175,8 @@ class NginxSiteEnableHandler(
                 config = rendered.config,
                 appPort = rendered.appPort,
                 sslEnabled = rendered.sslEnabled,
-                certificateDomain = rendered.certificateDomain
+                certificateDomain = rendered.certificateDomain,
+                deploymentConnected = deploymentConnected
             )
         )
     }

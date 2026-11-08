@@ -58,7 +58,7 @@ data class DashboardSiteResponse(
     val upstreamExplicitPort: Int? = null, val runtimeHealth: String? = null,
     val resolvedUpstreamHost: String? = null, val resolvedUpstreamPort: Int? = null,
     val tlsMode: String? = null, val gateEnabled: Boolean? = null, val serviceId: String? = null,
-    val upstreamKind: String? = null, val configFilename: String? = null
+    val upstreamKind: String? = null, val configFilename: String? = null, val siteId: String? = null
 )
 
 @Serializable
@@ -80,15 +80,6 @@ data class DashboardSitesPageResponse(
 @Serializable
 data class DashboardSiteDeleteResponse(val deleted: Boolean, val slug: String)
 
-@Serializable
-data class UpstreamMigrationRow(
-    val siteId: String,
-    val projectSlug: String?,
-    val domain: String,
-    val currentKind: String?,
-    val result: String,
-    val reason: String? = null
-)
 
 @Serializable
 data class NginxConfigArtifactBackupResponse(val filename: String, val backup: String? = null)
