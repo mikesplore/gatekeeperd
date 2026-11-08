@@ -9,6 +9,7 @@ import com.gatekeeper.db.tables.UpstreamMode
 import com.gatekeeper.feature.nginx.infrastructure.DeploymentUpstreamResolver
 import com.gatekeeper.feature.nginx.infrastructure.NginxSelfDomainExclusion
 import com.gatekeeper.feature.payment.data.persistence.ProjectBalanceAdapter
+import com.gatekeeper.feature.nginx.application.SiteConfigIdentityResolver
 import com.gatekeeper.feature.project.domain.model.ProjectRecord
 import io.ktor.http.*
 import io.ktor.server.application.*
@@ -68,8 +69,11 @@ object OperationsDashboardService {
         val project = projectRepository.findById(site.projectId)
         val customer = project?.customerId?.let(customerStore::findById)
         val slug = site.projectSlug ?: site.projectId.toString()
-        val availableFile = File(nginxSettings.sitesAvailablePath, slug)
-        val enabledFile = File(nginxSettings.sitesEnabledPath, slug)
+        val configFilename = SiteConfigIdentityResolver(
+            nginxSettings.sitesAvailablePath, nginxSettings.sitesEnabledPath
+        ).resolve(site)
+        val availableFile = File(nginxSettings.sitesAvailablePath, configFilename)
+        val enabledFile = File(nginxSettings.sitesEnabledPath, configFilename)
         val selfDomainConfig = NginxSelfDomainExclusion(nginxSettings.selfDomains).let { exclusion ->
             exclusion.excludesFile(availableFile) || exclusion.excludesFile(enabledFile)
         }
@@ -98,7 +102,7 @@ object OperationsDashboardService {
             } else null,
             if (site.upstreamMode == com.gatekeeper.db.tables.UpstreamMode.EXPLICIT_PORT) configuredHost else resolved?.host,
             if (site.upstreamMode == com.gatekeeper.db.tables.UpstreamMode.EXPLICIT_PORT) configuredPort else resolved?.port,
-            site.tlsMode.value, site.gateEnabled, site.serviceId?.toString(), site.upstreamKind
+            site.tlsMode.value, site.gateEnabled, site.serviceId?.toString(), site.upstreamKind, configFilename
         )
     }
 

@@ -23,6 +23,7 @@ import java.io.File
 import java.util.*
 import com.gatekeeper.feature.customer.domain.repository.CustomerRepository as CustomerStore
 import com.gatekeeper.feature.service.domain.repository.SiteDashboardUpdate
+import com.gatekeeper.deployment.DeploymentApplicationService
 
 fun Route.registerSiteDashboardRoutes(dependencies: OperationsAdminDependencies) {
     val projects = dependencies.projects
@@ -41,6 +42,45 @@ fun Route.registerSiteDashboardRoutes(dependencies: OperationsAdminDependencies)
     val artifacts = dependencies.artifacts
     val inspector = dependencies.inspector
     val delManualConfigUseCase = dependencies.delManualConfigUseCase
+    val converter = dependencies.converter
+
+        get("/api/admin/nginx/upstream-migration") {
+            val rows = siteRepository.findAll().map { site ->
+                val serviceId = site.serviceId
+                val active = serviceId?.let { DeploymentApplicationService.activeDeploymentSummaryForService(it, "production") }
+                val result = when {
+                    serviceId == null -> "explicit_site_unchanged"
+                    site.upstreamKind == "DEPLOYMENT_MANAGED" -> "already_connected"
+                    active == null -> "needs_adoption_first"
+                    active.runtimeHostPort == null && active.runtimePorts.values.singleOrNull() == null -> "needs_adoption_first"
+                    else -> "ready_to_apply"
+                }
+                UpstreamMigrationRow(
+                    site.id.toString(), site.projectSlug, site.domain, site.upstreamKind, result,
+                    if (result == "needs_adoption_first") "An active production deployment with a published port is required" else null
+                )
+            }
+            call.respond(rows)
+        }
+
+        post("/api/admin/nginx/upstream-migration/sites/{siteId}") {
+            val siteId = call.parameters["siteId"]?.let { runCatching { UUID.fromString(it) }.getOrNull() }
+                ?: run { call.respondError(HttpStatusCode.BadRequest, "invalid_site_id", "Site ID is invalid"); return@post }
+            val site = siteRepository.findById(siteId)
+                ?: run { call.respondError(HttpStatusCode.NotFound, "site_not_found", "Site not found"); return@post }
+            val serviceId = site.serviceId
+                ?: run { call.respondError(HttpStatusCode.Conflict, "service_required", "Site is not attached to a service"); return@post }
+            val active = DeploymentApplicationService.activeDeploymentSummaryForService(serviceId, "production")
+                ?: run { call.respondError(HttpStatusCode.Conflict, "production_deployment_required", "An active production deployment is required"); return@post }
+            val hostPort = active.runtimeHostPort ?: active.runtimePorts.values.singleOrNull()
+                ?: run { call.respondError(HttpStatusCode.Conflict, "published_port_required", "The active production deployment has no unambiguous published port"); return@post }
+            if (!converter.execute(site, hostPort)) {
+                call.respondError(HttpStatusCode.BadGateway, "site_conversion_failed", "The Nginx site could not be connected to the active production deployment")
+                return@post
+            }
+            call.respond(mapOf("siteId" to site.id.toString(), "upstreamKind" to "DEPLOYMENT_MANAGED", "connected" to true))
+        }
+
         get("/api/admin/dashboard/sites") {
             val status = call.request.queryParameters["status"]?.lowercase()
             val offset = call.request.queryParameters["offset"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0
@@ -81,7 +121,9 @@ fun Route.registerSiteDashboardRoutes(dependencies: OperationsAdminDependencies)
             }
             val site = siteRepository.findByProjectSlug(slug) ?: siteRepository.findByDomain(slug)
             ?: run { call.respondError(HttpStatusCode.NotFound, "site_not_found", "Site not found"); return@get }
-            val siteSlug = site.projectSlug ?: slug
+            val siteSlug = com.gatekeeper.feature.nginx.application.SiteConfigIdentityResolver(
+                nginxSettings.sitesAvailablePath, nginxSettings.sitesEnabledPath
+            ).resolve(site)
             val inspection = inspectSiteConfig.inspectSite(siteSlug)
             val cert = certificateProvisioner.resolveCertificateForDomain(site.domain)
             val expiry = cert?.let { certificateProvisioner.certificateExpiry(it.certificateDomain) }

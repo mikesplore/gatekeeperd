@@ -42,7 +42,7 @@ class ConvertSiteToDeploymentManagedUseCase(
         hostPort: Int
     ): Boolean {
         val serviceId = site.serviceId ?: return false
-        val slug = site.projectSlug ?: return false
+        val slug = inspectSite.resolveSiteConfigSlug(site)
         require(hostPort in 1..65535)
         return DistributedLock.withLock("nginx-host-mutation") {
             // A site record can outlive its nginx file (for example after manual

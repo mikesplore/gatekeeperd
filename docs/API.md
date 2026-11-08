@@ -1514,9 +1514,10 @@ Unmatched API routes return JSON instead of a browser-generated error page:
 
 Dashboard write operations are also available to authenticated administrators:
 
+- `GET /api/admin/nginx/upstream-migration` reports whether each saved site can connect to an active production deployment. `POST /api/admin/nginx/upstream-migration/sites/{siteId}` safely converts the existing managed Nginx config to the stable deployment upstream and returns a conflict if there is no active production runtime or unambiguous published port.
 - `PATCH /api/admin/dashboard/sites/{slug}` updates desired Site render fields and activates the generated configuration through nginx validation and reload.
 - `DELETE /api/admin/dashboard/sites/{slug}` removes the Site record and its deployed nginx artifacts.
-- Dashboard site responses include `upstreamKind`; upstream repair is available only for `DEPLOYMENT_MANAGED` sites.
+- Dashboard site responses include `upstreamKind` and the resolved `configFilename`; available/enabled state is read from the managed Nginx config identified by its Gatekeeperd ownership markers. Upstream repair is available only for `DEPLOYMENT_MANAGED` sites.
 - `DELETE /api/admin/dashboard/dead-configs/{filename}` requires `{"confirm":true}`, moves the orphaned file to a timestamped backup, removes its enabled link, and reloads nginx. If reload fails, the file and link are restored.
 - Unmarked configs use the separate `/api/admin/nginx/manual-configs/{filename}` review, `/disable` and `DELETE` flow above; they are never removed through the orphan cleanup endpoint.
 - `POST /api/admin/dashboard/customers` creates a customer using required `firstName` and `lastName` fields, plus optional `contactEmail` and `contactPhone`. Customer list/detail responses expose `firstName`, `lastName`, `contactEmail`, and `contactPhone`. A nonblank contact email is unique case-insensitively; attempts to reuse it return `409 customer_exists`.

@@ -46,7 +46,7 @@ class ListConfigArtifactsUseCase(
             val identity = parseSiteIdentityMarker(content)
             val projectId = identity.projectId
             val siteId = identity.siteId
-            val serviceId = Regex("(?m)^# gatekeeperd:service_id:([0-9a-fA-F-]{36})/s*$")
+            val serviceId = Regex("(?m)^# gatekeeperd:service_id:([0-9a-fA-F-]{36})\\s*$")
                 .find(content)?.groupValues?.get(1)?.let { runCatching { java.util.UUID.fromString(it) }.getOrNull() }
             val domains = classified.serverNames
             val tracked = sites.any { site ->

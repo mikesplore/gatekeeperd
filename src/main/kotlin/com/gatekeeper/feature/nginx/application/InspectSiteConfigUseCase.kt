@@ -8,6 +8,7 @@ import com.gatekeeper.feature.nginx.infrastructure.DeploymentUpstreamIncludes
 import com.gatekeeper.feature.nginx.model.DomainRules
 import com.gatekeeper.feature.nginx.presentation.NginxConfigInspection
 import com.gatekeeper.feature.service.domain.repository.SiteRepository
+import com.gatekeeper.feature.service.domain.repository.SiteRecord
 import java.io.File
 import java.nio.file.Files
 import java.time.Instant
@@ -28,6 +29,9 @@ class InspectSiteConfigUseCase(
     private val sitesAvailablePath: String = "/etc/nginx/sites-available",
     private val sitesEnabledPath: String = "/etc/nginx/sites-enabled"
 ) {
+    fun resolveSiteConfigSlug(site: SiteRecord): String =
+        SiteConfigIdentityResolver(sitesAvailablePath, sitesEnabledPath).resolve(site)
+
     fun inspectSite(
         slug: String,
         sitesAvailablePath: String = this.sitesAvailablePath,

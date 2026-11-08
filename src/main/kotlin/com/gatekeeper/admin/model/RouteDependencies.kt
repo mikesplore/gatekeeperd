@@ -58,7 +58,8 @@ data class OperationsAdminDependencies(
     val removesite: RemoveSiteConfigUseCase,
     val artifacts: ListConfigArtifactsUseCase,
     val inspector: InspectManualConfigUseCase,
-    val delManualConfigUseCase: DeleteManualConfigUseCase
+    val delManualConfigUseCase: DeleteManualConfigUseCase,
+    val converter: ConvertSiteToDeploymentManagedUseCase
 )
 
 data class ProjectSetupDependencies(

@@ -34,7 +34,7 @@ import io.ktor.server.auth.authenticate
 
 fun Application.configureOperationsAdminRoutes() {
     val dependencies = OperationsAdminDependencies(
-        get(), get<AppSettings>().nginx, get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get()
+        get(), get<AppSettings>().nginx, get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get()
     )
     routing {
         authenticate("auth-jwt") {

@@ -27,7 +27,7 @@ data class ActiveDeploymentReconciliation(
     val environment: String,
     val deploymentId: String,
     val containerName: String?,
-    val expectedPorts: Map<Int, Int>,
+    val expectedPorts: Map<String, Int>,
     val observedContainerState: String? = null,
     val observedPorts: String? = null,
     val gatewayTarget: String? = null,
@@ -192,21 +192,22 @@ class DeploymentReconciliationService(
                     drift += DeploymentDriftItem("project_slug_missing", "Project slug is unavailable for managed gateway inspection")
                     return@observe ActiveDeploymentReconciliation(
                         projectId = deployment.projectId.toString(), projectSlug = null, environment = deployment.environment,
-                        deploymentId = deployment.id.toString(), containerName = containerName, expectedPorts = deployment.ports,
+                        deploymentId = deployment.id.toString(), containerName = containerName, expectedPorts = deployment.ports.entries.associate { it.key.toString() to it.value },
                         observedContainerState = observedState, observedPorts = observedPorts, gatewayTarget = gatewayTarget,
                         drift = drift.distinctBy { it.code to it.detail }
                     )
                 }
-                val inspection = runCatching { inspectSiteConfigUseCase.inspectSite(siteSlug) }.getOrElse {
+                val resolvedSiteSlug = inspectSiteConfigUseCase.resolveSiteConfigSlug(site)
+                val inspection = runCatching { inspectSiteConfigUseCase.inspectSite(resolvedSiteSlug) }.getOrElse {
                     errors += "nginx inspection failed for project ${deployment.projectId}: ${it.message ?: it.javaClass.simpleName}"
                     null
                 }
                 if (inspection == null || !inspection.available) {
-                    drift += DeploymentDriftItem("gateway_config_missing", "Managed nginx configuration '$siteSlug' is missing")
+                    drift += DeploymentDriftItem("gateway_config_missing", "Managed nginx configuration '$resolvedSiteSlug' is missing")
                 } else if (!inspection.enabled) {
-                    drift += DeploymentDriftItem("gateway_config_disabled", "Managed nginx configuration '$siteSlug' is not enabled")
+                    drift += DeploymentDriftItem("gateway_config_disabled", "Managed nginx configuration '$resolvedSiteSlug' is not enabled")
                 } else if (!inspection.managed) {
-                    drift += DeploymentDriftItem("gateway_config_unmanaged", "Nginx configuration '$siteSlug' has no Gatekeeperd managed marker")
+                    drift += DeploymentDriftItem("gateway_config_unmanaged", "Nginx configuration '$resolvedSiteSlug' has no Gatekeeperd managed marker")
                 } else {
                     val configuredTarget = Regex("(?m)^\\s*proxy_pass\\s+https?://([^;]+);")
                         .findAll(inspection.content.orEmpty()).map { it.groupValues[1].trim() }
@@ -243,7 +244,7 @@ class DeploymentReconciliationService(
 
         return ActiveDeploymentReconciliation(
             projectId = deployment.projectId.toString(), projectSlug = slug, environment = deployment.environment,
-            deploymentId = deployment.id.toString(), containerName = containerName, expectedPorts = deployment.ports,
+            deploymentId = deployment.id.toString(), containerName = containerName, expectedPorts = deployment.ports.entries.associate { it.key.toString() to it.value },
             observedContainerState = observedState, observedPorts = observedPorts, gatewayTarget = gatewayTarget,
             drift = drift.distinctBy { it.code to it.detail }
         )

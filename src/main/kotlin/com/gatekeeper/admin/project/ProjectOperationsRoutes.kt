@@ -39,7 +39,11 @@ fun Route.registerProjectOperationsRoutes(dependencies: OperationsAdminDependenc
                 docker.containerHealth(name)
             }.getOrNull()
         }
-        val nginxEnabled = artifacts.execute().any { it.filename == slug && it.available && it.enabled }
+        val projectSites = dependencies.siteRepository.findAll().filter { it.projectId == project.id }
+        val projectArtifacts = artifacts.execute(projectSites)
+        val nginxEnabled = projectArtifacts.any {
+            it.projectId == project.id.toString() && it.available && it.enabled
+        }
         val certificateInstalled = certificateProvisioner.isCertificateInstalled(project.domain)
         val ready =
             project.status == "active" && active != null && (containerHealth == null || containerHealth == "running")
