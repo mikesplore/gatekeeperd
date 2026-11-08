@@ -296,6 +296,31 @@ the rollback hold for that attempt, and a successful deployment clears the hold.
 Prefer deploying a newer successful build after an unsuccessful rollout. Run the
 command through `sudo` so the configured sudo logging policy records the operator action.
 
+### Check or deploy from the admin UI
+
+After host deployment tooling and the auto-deploy service are installed, an admin can
+open **Settings → Profile → Deployments**:
+
+- **Check deployment** reads `/api/version`, which compares the running commit with
+  the latest successful build recorded by the host checker. It does not query GitHub;
+  the snapshot may be up to five minutes old, or older if the checker is failing.
+- **Deploy latest now** starts the same host auto-deploy service used by the timer. It
+  checks GitHub for the latest successful `main` build and returns immediately; it does
+  not wait for the rollout. Watch the deployment diagnostics on the page, then check the
+  deployment status again after the attempt finishes.
+- The button does not bypass the failed-commit hold. If that exact build previously
+  failed, the checker skips it. Deploy a newer successful build, or inspect the failure
+  and deliberately retry from the VPS with `sudo /opt/gatekeeperd/deploy.sh --force`.
+
+The UI trigger depends on the root-owned auto-deploy systemd service, its GitHub CLI
+credentials, and the current deploy scripts being installed on the VPS. If the trigger
+returns an error or no attempt appears in diagnostics, inspect the host unit:
+
+```bash
+sudo systemctl status gatekeeperd-auto-deploy.service
+sudo journalctl -u gatekeeperd-auto-deploy.service -n 50 --no-pager
+```
+
 ## Verify deployment
 
 Check the public readiness endpoint:

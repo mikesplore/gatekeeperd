@@ -68,7 +68,9 @@ run performs blue/green cutover.
    [staging deployment — upgrade an existing VPS](docs/staging-deployment.md#upgrade-an-existing-vps).
 3. `sudo /opt/gatekeeperd/deploy.sh --check` — fix anything reported (often
    `DEPLOY_GATEWAY_URL` in `/etc/gatekeeperd/deploy.env`).
-4. `sudo /opt/gatekeeperd/deploy.sh` — downloads the JAR and blue/green deploys.
+4. `sudo /opt/gatekeeperd/deploy.sh` — downloads the JAR and blue/green deploys. After
+   host deployment tooling and the auto-deploy service are installed, you can instead
+   use **Settings → Profile → Deployments → Deploy latest now** in the admin UI.
 
 Ongoing upgrades after that: `sudo /opt/gatekeeperd/deploy.sh` (or the auto-deploy
 timer). Details: [staging and VPS deployment](docs/staging-deployment.md).
