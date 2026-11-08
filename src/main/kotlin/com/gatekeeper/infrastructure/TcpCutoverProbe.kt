@@ -42,19 +42,22 @@ class TcpCutoverProbe(
                 val status = statusLine.split(' ').getOrNull(1)?.toIntOrNull()
                     ?: return logProbeFailure(domain, "Invalid local probe response: $statusLine")
                 var marker = false
+                val responseHeaders = mutableListOf<String>()
                 while (true) {
                     val header = reader.readLine()
                         ?: return logProbeFailure(domain, "Local probe response ended before headers completed")
                     if (header.isEmpty()) break
+                    responseHeaders += header
                     if (header.equals("X-Gatekeeperd-Cutover-Probe: stable", ignoreCase = true)) marker = true
                 }
                 val passed = status in 200..499 && marker
                 if (!passed) {
                     logger.warn(
-                        "Local Nginx cutover probe failed for domain={} status={} stableMarker={}",
+                        "Local Nginx cutover probe failed for domain={} status={} stableMarker={} headers={}",
                         domain,
                         status,
-                        marker
+                        marker,
+                        responseHeaders.joinToString(" | ")
                     )
                 }
                 passed

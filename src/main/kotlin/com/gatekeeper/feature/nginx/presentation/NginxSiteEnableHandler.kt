@@ -162,7 +162,7 @@ class NginxSiteEnableHandler(
         val deploymentConnected = when {
             persistedSite?.upstreamKind == "DEPLOYMENT_MANAGED" -> true
             persistedSite != null && deploymentTarget != null -> runCatching {
-                convertSiteToDeploymentManagedUseCase.execute(persistedSite, deploymentTarget.port)
+                convertSiteToDeploymentManagedUseCase.execute(persistedSite, deploymentTarget.port).success
             }.getOrDefault(false)
             else -> false
         }

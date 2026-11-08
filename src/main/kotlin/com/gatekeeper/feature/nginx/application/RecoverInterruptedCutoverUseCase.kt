@@ -43,7 +43,7 @@ class RecoverInterruptedCutoverUseCase(
             if (pendingMatches && candidateRunning) {
                 val restored = if (site.upstreamKind != "DEPLOYMENT_MANAGED") {
                     val targetPort = nginxSiteStorage.includePort(pending) ?: return@withLock InterruptedCutoverResult.CONFLICT
-                    convertSiteToDeploymentManagedUseCase.execute(site, targetPort)
+                    convertSiteToDeploymentManagedUseCase.execute(site, targetPort).success
                 } else {
                     nginxTestRunner().valid && nginxReloadRunner() && localProbeRunner(domain, tls)
                 }

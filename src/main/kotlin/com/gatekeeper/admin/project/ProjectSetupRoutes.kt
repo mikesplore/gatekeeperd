@@ -169,7 +169,7 @@ fun Route.registerProjectSetupRoutes(dependencies: ProjectSetupDependencies) {
             if (site.upstreamKind == "DEPLOYMENT_MANAGED") {
                 switchDeploymentUpstream.switchDeploymentUpstream(adopted.serviceId, siteSlug, "127.0.0.1", request.containerPort, hostPort)
             } else {
-                converter.execute(site, hostPort)
+                converter.execute(site, hostPort).success
             }
         }.getOrDefault(false)
         if (!routed) {

@@ -96,10 +96,11 @@ fun Route.nginxUpstreamRoutes(
                 deploymentJobs.setPrimaryContainerPortForService(site.projectId, serviceId, legacyPrimary)
             }
             val migrated = convertSiteToDeploymentManagedUseCase.execute(site, target.port)
-            if (!migrated) return@post call.respondError(
+            if (!migrated.success) return@post call.respondError(
                 HttpStatusCode.InternalServerError,
                 "upstream_migration_failed",
-                "Site conversion failed; the previous route was restored where possible"
+                migrated.failureReason
+                    ?: "Site conversion failed; the previous route was restored where possible"
             )
             val backupName = site.projectSlug?.let { slug -> nginxSiteStorage.listBackups(slug).firstOrNull()?.name }
             call.respond(

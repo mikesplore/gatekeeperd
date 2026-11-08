@@ -19,6 +19,11 @@ import com.gatekeeper.plugins.DistributedLock
 import java.io.File
 import com.gatekeeper.feature.nginx.domain.port.NginxEnvironmentPolicy
 
+data class ConvertSiteToDeploymentManagedResult(
+    val success: Boolean,
+    val failureReason: String? = null,
+)
+
 class ConvertSiteToDeploymentManagedUseCase(
     private val upstreamIncludeDirectory: String = "/etc/nginx/conf.d/gatekeeperd-upstreams",
     private val nginxTestRunner: () -> NginxTestResult,
@@ -40,8 +45,8 @@ class ConvertSiteToDeploymentManagedUseCase(
     fun execute(
         site: SiteRecord,
         hostPort: Int
-    ): Boolean {
-        val serviceId = site.serviceId ?: return false
+    ): ConvertSiteToDeploymentManagedResult {
+        val serviceId = site.serviceId ?: return ConvertSiteToDeploymentManagedResult(false, "Site has no service")
         val slug = inspectSite.resolveSiteConfigSlug(site)
         require(hostPort in 1..65535)
         return DistributedLock.withLock("nginx-host-mutation") {
@@ -62,7 +67,7 @@ class ConvertSiteToDeploymentManagedUseCase(
                         it.replace("fullchain.pem", "privkey.pem")
                     )
                 }
-                    ?: return@withLock false
+                    ?: return@withLock ConvertSiteToDeploymentManagedResult(false, "Certificate path is missing")
             }
             val model = NginxSiteRenderModel(
                 slug = slug, projectId = site.projectId, serviceId = serviceId, siteId = site.id,
@@ -114,12 +119,8 @@ class ConvertSiteToDeploymentManagedUseCase(
                         "DEPLOYMENT_MANAGED"
                     ) != null
                 ) { "Unable to persist deployment-managed site kind" }
-                true
+                ConvertSiteToDeploymentManagedResult(true)
             } catch (error: Exception) {
-                runCatching { nginxSiteStorage.restoreUpstreamInclude(includes, serviceId, previousInclude) }
-                    .onFailure { rollbackError ->
-                        nginxServiceLogger.error("Unable to restore upstream include for site {}", site.id, rollbackError)
-                    }
                 runCatching {
                     if (previousSite != null) {
                         check(nginxSiteStorage.restoreSiteConfiguration(slug, previousSite)) {
@@ -135,8 +136,15 @@ class ConvertSiteToDeploymentManagedUseCase(
                 }.onFailure { rollbackError ->
                     nginxServiceLogger.error("Unable to restore nginx site state for {}", site.id, rollbackError)
                 }
+                runCatching { nginxSiteStorage.restoreUpstreamInclude(includes, serviceId, previousInclude) }
+                    .onFailure { rollbackError ->
+                        nginxServiceLogger.error("Unable to restore upstream include for site {}", site.id, rollbackError)
+                    }
                 nginxServiceLogger.error("Unable to convert site {} to deployment-managed upstream", site.id, error)
-                false
+                ConvertSiteToDeploymentManagedResult(
+                    false,
+                    error.message ?: "Site conversion failed"
+                )
             }
         }
     }

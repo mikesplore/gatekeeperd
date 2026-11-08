@@ -884,7 +884,7 @@ class DeploymentWorker(
                 restorePreviousRuntime(job.id, previousDeployment, previousConfig, docker, ownerSlug, managedSite)
             }
             val routeActivated = if (convertsLegacySite) {
-                convertSiteToDeploymentManagedUseCase.execute(managedSite, hostPort)
+                convertSiteToDeploymentManagedUseCase.execute(managedSite, hostPort).success
             } else {
                 switchDeploymentUpstreamUseCase.switchDeploymentUpstream(
                     job.serviceId,
