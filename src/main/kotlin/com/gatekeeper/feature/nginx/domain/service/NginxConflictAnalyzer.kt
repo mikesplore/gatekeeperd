@@ -93,9 +93,10 @@ class NginxConflictAnalyzer(
 
         return classifyAvailableConfigs.classifyAvailableConfigs(nginxSiteStorage = nginxSiteStorage, selfDomainExclusion = nginxSelfDomainExclusion).mapNotNull { existing ->
             val linked = candidate.siteId != null && candidate.siteId == existing.siteId
-            if (existing.filename == targetFilename && linked &&
-                existing.classification == NginxConfigClassification.GATEKEEPER_MANAGED
-            ) return@mapNotNull null
+            // The config at the target filename is the file being replaced, so
+            // it cannot conflict with the candidate even if its identity marker
+            // is missing or stale (for example during site migration).
+            if (existing.filename == targetFilename) return@mapNotNull null
 
             val matchingPorts = candidatePorts.intersect(existing.listenPorts.toSet()).sorted()
             if (matchingPorts.isEmpty()) return@mapNotNull null
