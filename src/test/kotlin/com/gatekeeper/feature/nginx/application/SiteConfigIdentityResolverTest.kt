@@ -21,7 +21,7 @@ class SiteConfigIdentityResolverTest {
         val siteId = UUID.randomUUID()
         val site = siteRecord(projectId, siteId, "weusifix-weusifix-mikesplore-tech")
         Files.writeString(
-            available.resolve("weusifix.mikesplore.tech"),
+            available.resolve("weusifix"),
             """
                 # gatekeeperd:project_id:$projectId
                 # gatekeeperd:site_id:$siteId
@@ -33,7 +33,7 @@ class SiteConfigIdentityResolverTest {
 
         val resolved = SiteConfigIdentityResolver(available.toString(), enabled.toString()).resolve(site)
 
-        assertEquals("weusifix.mikesplore.tech", resolved)
+        assertEquals("weusifix", resolved)
     }
 
     private fun siteRecord(projectId: UUID, siteId: UUID, projectSlug: String) = SiteRecord(

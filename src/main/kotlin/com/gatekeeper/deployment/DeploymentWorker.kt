@@ -772,7 +772,9 @@ class DeploymentWorker(
         val previousContainer = previousDeployment?.name
         val changesProductionRoute = job.environment == "production"
         val site = if (changesProductionRoute) siteRepository.findByServiceId(job.serviceId) else null
-        val siteOwnerSlug = site?.projectSlug
+        // The persisted project slug may be a dashboard slug that differs from the
+        // physical nginx filename. Resolve the file by Gatekeeperd ownership markers.
+        val siteOwnerSlug = site?.let(inspectSiteConfigUseCase::resolveSiteConfigSlug)
         val existingSiteConfig =
             if (siteOwnerSlug != null) inspectSiteConfigUseCase.inspectSite(siteOwnerSlug) else null
         // Legacy explicit sites may already receive managed deployments. Convert them on cutover
@@ -785,9 +787,13 @@ class DeploymentWorker(
             site?.upstreamKind,
             referencesStableUpstream
         )
-        val hasEnabledManagedSite =
-            (DeploymentSiteCutoverPolicy.hasDeploymentRoute(site?.upstreamKind) || referencesStableUpstream) &&
-                existingSiteConfig?.canDeploymentCutoverUpdateRoute() == true
+        val expectsManagedCutover =
+            DeploymentSiteCutoverPolicy.hasDeploymentRoute(site?.upstreamKind) || referencesStableUpstream
+        val canUpdateManagedRoute = existingSiteConfig?.canDeploymentCutoverUpdateRoute() == true
+        check(!expectsManagedCutover || canUpdateManagedRoute) {
+            "Managed nginx site config could not be resolved as an enabled Gatekeeperd-managed file; refusing to retire the previous runtime"
+        }
+        val hasEnabledManagedSite = expectsManagedCutover && canUpdateManagedRoute
         val managedRoute = if (hasEnabledManagedSite) {
             val managedSite = requireNotNull(site)
             val containerPort = job.containerPort ?: runtime.ports.keys.singleOrNull()
