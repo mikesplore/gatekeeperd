@@ -39,13 +39,15 @@ class ExposedPaymentRepository : PaymentRepository {
         status: String,
         rawPayload: String?,
         authorizationUrl: String?,
-        serviceId: UUID?
+        serviceId: UUID?,
+        payerFingerprint: String?
     ): Payment = transaction {
         val id = UUID.randomUUID()
         Payments.insert {
             it[Payments.id] = id
             it[Payments.projectId] = projectId
             it[Payments.serviceId] = serviceId
+            it[Payments.payerFingerprint] = payerFingerprint
             it[Payments.provider] = provider.lowercase()
             it[Payments.providerReference] = reference
             it[Payments.paystackReference] = reference
@@ -107,6 +109,15 @@ class ExposedPaymentRepository : PaymentRepository {
     override fun findPendingByServiceId(serviceId: UUID): List<Payment> = transaction {
         Payments.selectAll().where { (Payments.serviceId eq serviceId) and (Payments.gatewayStatus eq "pending") }
             .orderBy(Payments.createdAt).map { it.toDomain() }
+    }
+
+    override fun hasPendingMpesaPayment(serviceId: UUID, payerFingerprint: String): Boolean = transaction {
+        Payments.select(Payments.id).where {
+            (Payments.serviceId eq serviceId) and
+                (Payments.provider eq "mpesa") and
+                (Payments.gatewayStatus eq "pending") and
+                (Payments.payerFingerprint eq payerFingerprint)
+        }.limit(1).count() > 0
     }
 
     override fun successfulAmountForProject(projectId: UUID): BigDecimal = sumForProject(projectId, "success")
@@ -211,6 +222,7 @@ class ExposedPaymentRepository : PaymentRepository {
         reference = this[Payments.providerReference] ?: this[Payments.paystackReference],
         amount = this[Payments.amount], status = this[Payments.gatewayStatus], recordStatus = this[Payments.status],
         authorizationUrl = this[Payments.authorizationUrl], verifiedVia = this[Payments.verifiedVia],
-        rawPayload = this[Payments.rawWebhookPayload], paidAt = this[Payments.paidAt], createdAt = this[Payments.createdAt]
+        rawPayload = this[Payments.rawWebhookPayload], paidAt = this[Payments.paidAt], createdAt = this[Payments.createdAt],
+        payerFingerprint = this[Payments.payerFingerprint]
     )
 }

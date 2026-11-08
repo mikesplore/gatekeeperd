@@ -106,7 +106,12 @@ class AppSettings private constructor(
         val mpesaPasskey: String,
         val mpesaCallbackUrl: String,
         val mpesaCallbackToken: String,
-        val mpesaEnvironment: String
+        val mpesaEnvironment: String,
+        val mpesaRateLimitWindowSeconds: Int,
+        val mpesaRateLimitIpMax: Int,
+        val mpesaRateLimitServiceMax: Int,
+        val mpesaRateLimitPhoneMax: Int,
+        val mpesaInitiationCooldownSeconds: Int
     )
 
     data class SchedulerSettings(
@@ -207,7 +212,12 @@ class AppSettings private constructor(
             optional("MPESA_CONSUMER_KEY", ""), optional("MPESA_CONSUMER_SECRET", ""),
             optional("MPESA_SHORT_CODE", optional("MPESA_SHORTCODE", "")), optional("MPESA_PASSKEY", ""),
             optional("MPESA_CALLBACK_URL", ""), optional("MPESA_CALLBACK_TOKEN", ""),
-            optional("MPESA_ENVIRONMENT", "sandbox")
+            optional("MPESA_ENVIRONMENT", "sandbox"),
+            optional("MPESA_RATE_LIMIT_WINDOW_SECONDS", "60").toInt().also { require(it in 1..3600) { "MPESA_RATE_LIMIT_WINDOW_SECONDS must be between 1 and 3600" } },
+            optional("MPESA_RATE_LIMIT_IP_MAX", "120").toInt().also { require(it > 0) { "MPESA_RATE_LIMIT_IP_MAX must be positive" } },
+            optional("MPESA_RATE_LIMIT_SERVICE_MAX", "30").toInt().also { require(it > 0) { "MPESA_RATE_LIMIT_SERVICE_MAX must be positive" } },
+            optional("MPESA_RATE_LIMIT_PHONE_MAX", "3").toInt().also { require(it > 0) { "MPESA_RATE_LIMIT_PHONE_MAX must be positive" } },
+            optional("MPESA_INITIATION_COOLDOWN_SECONDS", "60").toInt().also { require(it in 1..3600) { "MPESA_INITIATION_COOLDOWN_SECONDS must be between 1 and 3600" } }
         )
     }
     val scheduler: SchedulerSettings by lazy {

@@ -20,7 +20,8 @@ data class Payment(
     val authorizationUrl: String? = null,
     val verifiedVia: String? = null,
     val createdAt: LocalDateTime? = null,
-    val serviceId: UUID? = null
+    val serviceId: UUID? = null,
+    val payerFingerprint: String? = null
 ) {
     val gatewayStatus: String get() = status
 }

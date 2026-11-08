@@ -53,6 +53,14 @@ class PaymentEffectsAdapter(
     override fun paymentReversed(payment: Payment) {
         val project = projects.findById(payment.projectId) ?: return
         if (payment.status == "success") {
+            if (payment.serviceId != null) {
+                serviceRepository.blockForPaymentReversal(project.id, payment.serviceId)
+                auditRepository.write(
+                    project.id, "service_payment_reversed", "system",
+                    "Payment reversed (ref=${payment.reference}) for service=${payment.serviceId}"
+                )
+                return
+            }
             projects.setStatusAndDueDate(project.id, "blocked", LocalDate.now(), blockReason = "payment_reversed")
             auditRepository.write(project.id, "blocked", "system", "Payment reversed (ref=${payment.reference})")
             projects.invalidateCache(project.slug)

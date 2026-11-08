@@ -7,6 +7,7 @@ object Payments : Table("payments") {
     val id = uuid("id").autoGenerate()
     val projectId = uuid("project_id").references(Projects.id)
     val serviceId = uuid("service_id").references(Services.id, onDelete = org.jetbrains.exposed.sql.ReferenceOption.SET_NULL).nullable().index()
+    val payerFingerprint = text("payer_fingerprint").nullable()
     val provider = text("provider").default("paystack")
     val providerReference = text("provider_reference").nullable()
     val paystackReference = text("paystack_reference").uniqueIndex()

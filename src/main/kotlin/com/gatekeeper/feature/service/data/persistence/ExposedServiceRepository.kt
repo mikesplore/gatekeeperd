@@ -256,6 +256,24 @@ class ExposedServiceRepository(
         return updated > 0
     }
 
+    /** A service reversal is service-scoped and must never create a project-wide block. */
+    override fun blockForPaymentReversal(projectId: UUID, id: UUID): Boolean {
+        val updated = transaction {
+            Services.update({
+                (Services.projectId eq projectId) and (Services.id eq id) and
+                    ((Services.accessStatus eq "active") or
+                        ((Services.accessStatus eq "blocked") and (Services.blockReasonCode eq AccessBlockReason.PAYMENT)))
+            }) {
+                it[Services.accessStatus] = "blocked"
+                it[Services.blockReason] = "payment_reversed"
+                it[Services.blockReasonCode] = AccessBlockReason.PAYMENT
+                it[Services.blockReasonNote] = null
+            }
+        }
+        if (updated > 0) siteRepository.findGateSlugsByServiceId(id).forEach(::invalidateGateCache)
+        return updated > 0
+    }
+
     private fun invalidateGateCache(slug: String) {
         gateCacheInvalidator.invalidate(listOf(slug))
     }

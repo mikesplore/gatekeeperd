@@ -1,5 +1,6 @@
 package com.gatekeeper.feature.payment.data.persistence
 
+import com.gatekeeper.db.tables.AccessBlockReason
 import com.gatekeeper.feature.project.domain.repository.ProjectRepository
 import com.gatekeeper.feature.service.domain.repository.ServiceRepository
 import com.gatekeeper.feature.payment.domain.repository.PaymentRepository
@@ -7,6 +8,7 @@ import com.gatekeeper.feature.payment.domain.usecase.PaymentBalancePort
 import com.gatekeeper.feature.payment.domain.usecase.PaymentProject
 import com.gatekeeper.feature.payment.domain.usecase.PaymentProjectPort
 import com.gatekeeper.feature.payment.domain.usecase.PaymentServicePort
+import com.gatekeeper.feature.payment.domain.usecase.PaymentEligibilityPort
 import com.gatekeeper.feature.payment.domain.usecase.ReconcilePayments
 import java.math.BigDecimal
 import java.util.UUID
@@ -17,17 +19,33 @@ class PaymentProjectAdapter(
     private val services: ServiceRepository
 ) : PaymentProjectPort {
     override fun find(slug: String): PaymentProject? = projects.findBySlug(slug)?.let {
-        PaymentProject(it.id, it.slug, it.currency, it.customerEmail, it.domain, it.status)
+        PaymentProject(it.id, it.slug, it.currency, it.customerEmail, it.domain, it.status, it.blockReason, it.blockReasonCode?.value)
     }
 
     override fun findForService(serviceId: UUID): PaymentProject? = services.findById(serviceId)
-        ?.let { projects.findById(it.projectId) }
-        ?.let { PaymentProject(it.id, it.slug, it.currency, it.customerEmail, it.domain, it.status) }
+        ?.let { projects.findActiveById(it.projectId) }
+        ?.let { PaymentProject(it.id, it.slug, it.currency, it.customerEmail, it.domain, it.status, it.blockReason, it.blockReasonCode?.value) }
 }
 
 class PaymentServiceAdapter : PaymentServicePort {
     override fun belongsToProject(serviceRepository: ServiceRepository, projectId: UUID, serviceId: UUID): Boolean =
         serviceRepository.findByProjectAndId(projectId, serviceId) != null
+}
+
+class PaymentEligibilityAdapter : PaymentEligibilityPort {
+    override fun mayPayProject(project: com.gatekeeper.feature.payment.domain.usecase.PaymentProject): Boolean {
+        if (project.status == "manual_block") return false
+        val reason = project.blockReasonCode?.let { code -> AccessBlockReason.entries.firstOrNull { it.value == code } }
+            ?: AccessBlockReason.fromLegacy(project.blockReason, project.status ?: "")
+        return reason == AccessBlockReason.PAYMENT
+    }
+
+    override fun mayPay(serviceRepository: ServiceRepository, projectId: UUID, serviceId: UUID): Boolean {
+        val service = serviceRepository.findByProjectAndId(projectId, serviceId) ?: return false
+        if (service.accessStatus == "active") return true
+        val reason = service.blockReasonCode ?: AccessBlockReason.fromLegacy(service.blockReason, service.accessStatus)
+        return reason == AccessBlockReason.PAYMENT
+    }
 }
 
 class PaymentBalanceAdapter(

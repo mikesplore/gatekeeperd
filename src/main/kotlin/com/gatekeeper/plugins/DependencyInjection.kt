@@ -36,6 +36,7 @@ import com.gatekeeper.feature.payment.data.persistence.PaymentEffectsAdapter
 import com.gatekeeper.feature.payment.data.persistence.PaymentProjectAdapter
 import com.gatekeeper.feature.payment.data.persistence.PaymentBalanceAdapter
 import com.gatekeeper.feature.payment.data.persistence.PaymentServiceAdapter
+import com.gatekeeper.feature.payment.data.persistence.PaymentEligibilityAdapter
 import com.gatekeeper.feature.payment.data.persistence.ExposedServiceMembershipRepository
 import com.gatekeeper.feature.payment.domain.repository.ServiceMembershipRepository
 import com.gatekeeper.feature.payment.data.persistence.ProjectBalanceAdapter
@@ -49,6 +50,8 @@ import com.gatekeeper.feature.payment.domain.usecase.PaymentEffects
 import com.gatekeeper.feature.payment.domain.usecase.ReconcilePayments
 import com.gatekeeper.feature.payment.domain.usecase.InitiatePayment
 import com.gatekeeper.feature.payment.domain.usecase.PaymentServicePort
+import com.gatekeeper.feature.payment.domain.usecase.PaymentEligibilityPort
+import com.gatekeeper.feature.payment.domain.usecase.MpesaInitiationGuard
 import com.gatekeeper.feature.payment.domain.usecase.ProcessPaymentEvent
 import com.gatekeeper.feature.payment.domain.usecase.HandlePaystackWebhook
 import com.gatekeeper.feature.payment.domain.usecase.ReplayPaystackEvent
@@ -75,6 +78,7 @@ import com.gatekeeper.feature.payment.data.provider.PaystackGateway
 import com.gatekeeper.feature.payment.data.provider.PaystackClient
 import com.gatekeeper.feature.payment.data.provider.MpesaGateway
 import com.gatekeeper.feature.payment.presentation.PaymentAdminApplicationService
+import com.gatekeeper.feature.payment.presentation.MpesaPaymentProtection
 import com.gatekeeper.feature.audit.domain.repository.AuditRepository
 import com.gatekeeper.feature.audit.data.persistence.ExposedAuditRepository
 import com.gatekeeper.feature.notification.domain.repository.NotificationRepository
@@ -415,6 +419,8 @@ private val applicationModule = module {
     single<PaymentEventDomainRepository> { ExposedPaymentEventRepository() }
     single { PaymentProjectAdapter(get<ProjectStore>(), get()) }
     single<PaymentServicePort> { PaymentServiceAdapter() }
+    single<com.gatekeeper.feature.payment.domain.usecase.PaymentEligibilityPort> { PaymentEligibilityAdapter() }
+    single<com.gatekeeper.feature.payment.domain.usecase.MpesaInitiationGuard> { MpesaPaymentProtection(get<AppSettings>().payment) }
     single<ServiceMembershipRepository> { ExposedServiceMembershipRepository(get()) }
     single { PaymentBalanceAdapter(get<PaymentDomainRepository>(), get(), get(), get(), get<ProjectStore>()) }
     single<PaymentEffects> { PaymentEffectsAdapter(get(), get<ProjectStore>(), get(), get()) }
@@ -436,7 +442,7 @@ private val applicationModule = module {
     single { RecordCashPayment(get<PaymentProjectAdapter>(), get<PaymentDomainRepository>(), get()) }
     single<PaymentCurrencyPort> { PaymentCurrencyPort { get<ProjectStore>().findAll().firstOrNull()?.currency } }
     single { GetPaymentRevenue(get<PaymentDomainRepository>(), get()) }
-    single { InitiatePayment(get(), get<PaymentProjectAdapter>(), get<PaymentBalanceAdapter>(), mapOf("paystack" to get(named("paystackGateway")), "mpesa" to get(named("mpesaGateway"))), get(),get()) }
+    single { InitiatePayment(get(), get<PaymentProjectAdapter>(), get<PaymentBalanceAdapter>(), mapOf("paystack" to get(named("paystackGateway")), "mpesa" to get(named("mpesaGateway"))), get(), get(), get(), get()) }
     single { ProcessPaymentEvent(get(), get(), get<PaymentProjectAdapter>(), get()) }
     single { HandlePaystackWebhook(get()) }
     single { ReplayPaystackEvent(get(), get()) }

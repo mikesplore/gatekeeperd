@@ -6,6 +6,7 @@ import io.ktor.server.application.*
 import org.slf4j.LoggerFactory
 import redis.clients.jedis.JedisPool
 import redis.clients.jedis.JedisPoolConfig
+import redis.clients.jedis.params.SetParams
 
 private val logger = LoggerFactory.getLogger("com.gatekeeper.plugins.Redis")
 
@@ -98,6 +99,14 @@ object RedisService {
     fun deleteRequired(key: String) {
         val activePool = pool ?: throw RedisUnavailableException()
         activePool.resource.use { jedis -> jedis.del(key) }
+    }
+
+    /** Atomically reserves a short-lived key for distributed cooldowns. */
+    fun setIfAbsent(key: String, value: String, ttlSeconds: Int): Boolean {
+        val activePool = pool ?: throw RedisUnavailableException()
+        return activePool.resource.use { jedis ->
+            jedis.set(key, value, SetParams.setParams().nx().ex(ttlSeconds.toLong())) == "OK"
+        }
     }
 
     fun incrementWithExpiry(key: String, ttlSeconds: Int): Long {

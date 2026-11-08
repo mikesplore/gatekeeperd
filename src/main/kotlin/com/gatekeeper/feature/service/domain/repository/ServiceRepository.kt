@@ -29,4 +29,6 @@ interface ServiceRepository {
     fun updateAccessStatus(id: UUID, status: String, blockReason: String? = null): Boolean
     fun autoBlockForPayment(projectId: UUID, id: UUID): Boolean
     fun clearAutoBlockForPayment(id: UUID): Boolean
+    /** Blocks only this service for a reversed payment, preserving manual holds. */
+    fun blockForPaymentReversal(projectId: UUID, id: UUID): Boolean
 }

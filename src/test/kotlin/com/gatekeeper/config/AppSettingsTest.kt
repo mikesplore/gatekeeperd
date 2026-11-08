@@ -42,6 +42,20 @@ class AppSettingsTest {
     }
 
     @Test
+    fun `mpesa rate limits have safe defaults and reject invalid thresholds`() {
+        val defaults = AppSettings.fromEnv(emptyMap(), loadDotenv = false).payment
+        assertEquals(60, defaults.mpesaRateLimitWindowSeconds)
+        assertEquals(120, defaults.mpesaRateLimitIpMax)
+        assertEquals(30, defaults.mpesaRateLimitServiceMax)
+        assertEquals(3, defaults.mpesaRateLimitPhoneMax)
+        assertEquals(60, defaults.mpesaInitiationCooldownSeconds)
+
+        assertFailsWith<IllegalArgumentException> {
+            AppSettings.fromEnv(mapOf("MPESA_RATE_LIMIT_PHONE_MAX" to "0"), loadDotenv = false).payment
+        }
+    }
+
+    @Test
     fun `development nginx host operations are explicitly opt in`() {
         val settings = AppSettings.fromEnv(
             mapOf(

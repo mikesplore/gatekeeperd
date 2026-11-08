@@ -20,6 +20,8 @@ import com.gatekeeper.feature.payment.domain.usecase.PaymentBalancePort
 import com.gatekeeper.feature.payment.domain.usecase.PaymentProject
 import com.gatekeeper.feature.payment.domain.usecase.PaymentProjectPort
 import com.gatekeeper.feature.payment.domain.usecase.PaymentServicePort
+import com.gatekeeper.feature.payment.domain.usecase.MpesaInitiationGuard
+import com.gatekeeper.feature.payment.domain.usecase.PaymentEligibilityPort
 import com.gatekeeper.feature.payment.domain.usecase.ProcessPaymentEvent
 import com.gatekeeper.feature.payment.domain.usecase.HandleMpesaCallback
 import com.gatekeeper.feature.payment.domain.usecase.MpesaCallbackData
@@ -183,6 +185,95 @@ class PaymentUseCasesTest {
     }
 
     @Test
+    fun `mpesa rate limiter refusal happens before provider initiation`() = runBlocking {
+        val projectId = UUID.randomUUID()
+        val serviceId = UUID.randomUUID()
+        var providerCalls = 0
+        val gateway = object : PaymentGateway {
+            override val provider = "mpesa"
+            override suspend fun initiate(command: InitiatePaymentCommand): Result<InitiatedPayment> {
+                providerCalls++
+                return Result.success(InitiatedPayment("checkout"))
+            }
+            override suspend fun verify(reference: String) = Result.failure<VerifiedPayment>(UnsupportedOperationException())
+        }
+        val useCase = InitiatePayment(
+            FakePaymentRepository(null),
+            object : PaymentProjectPort { override fun find(slug: String) = PaymentProject(projectId, slug, "KES", null) },
+            object : PaymentBalancePort { override suspend fun availableAmount(serviceRepository: ServiceRepository, projectId: UUID, requestedAmount: BigDecimal?) = BigDecimal("50") },
+            mapOf("mpesa" to gateway), unusedServiceRepository(), PaymentServicePort { _, _, _ -> true },
+            MpesaInitiationGuard { _, _, _ -> MpesaInitiationGuard.Decision.Limited(60) }
+        )
+
+        val result = useCase(InitiatePayment.Command(
+            "mpesa", "demo", phone = "0712345678", currency = "KES", serviceId = serviceId,
+            clientIp = "192.0.2.10", payerFingerprint = "fingerprint"
+        ))
+
+        assertTrue(result.exceptionOrNull() is InitiatePayment.PaymentInitiationFailure)
+        assertEquals(InitiatePayment.FailureKind.RATE_LIMITED, (result.exceptionOrNull() as InitiatePayment.PaymentInitiationFailure).kind)
+        assertEquals(0, providerCalls)
+    }
+
+    @Test
+    fun `same service and phone cannot create another pending mpesa checkout`() = runBlocking {
+        val serviceId = UUID.randomUUID()
+        val existing = payment().copy(provider = "mpesa", serviceId = serviceId, payerFingerprint = "fingerprint", status = "pending")
+        var providerCalls = 0
+        val gateway = object : PaymentGateway {
+            override val provider = "mpesa"
+            override suspend fun initiate(command: InitiatePaymentCommand): Result<InitiatedPayment> {
+                providerCalls++
+                return Result.success(InitiatedPayment("checkout-new"))
+            }
+            override suspend fun verify(reference: String) = Result.failure<VerifiedPayment>(UnsupportedOperationException())
+        }
+        val useCase = InitiatePayment(
+            FakePaymentRepository(existing),
+            object : PaymentProjectPort { override fun find(slug: String) = PaymentProject(existing.projectId, slug, "KES", null) },
+            object : PaymentBalancePort { override suspend fun availableAmount(serviceRepository: ServiceRepository, projectId: UUID, requestedAmount: BigDecimal?) = BigDecimal("50") },
+            mapOf("mpesa" to gateway), unusedServiceRepository(), PaymentServicePort { _, _, _ -> true }
+        )
+
+        val result = useCase(InitiatePayment.Command(
+            "mpesa", "demo", phone = "0712345678", currency = "KES", serviceId = serviceId,
+            payerFingerprint = "fingerprint"
+        ))
+
+        assertEquals(InitiatePayment.FailureKind.CONFLICT, (result.exceptionOrNull() as InitiatePayment.PaymentInitiationFailure).kind)
+        assertEquals(0, providerCalls)
+    }
+
+    @Test
+    fun `payment initiation refuses an ineligible service before calling provider`() = runBlocking {
+        val projectId = UUID.randomUUID()
+        val serviceId = UUID.randomUUID()
+        var providerCalls = 0
+        val gateway = object : PaymentGateway {
+            override val provider = "mpesa"
+            override suspend fun initiate(command: InitiatePaymentCommand): Result<InitiatedPayment> {
+                providerCalls++
+                return Result.success(InitiatedPayment("checkout"))
+            }
+            override suspend fun verify(reference: String) = Result.failure<VerifiedPayment>(UnsupportedOperationException())
+        }
+        val useCase = InitiatePayment(
+            FakePaymentRepository(null),
+            object : PaymentProjectPort { override fun find(slug: String) = PaymentProject(projectId, slug, "KES", null) },
+            object : PaymentBalancePort { override suspend fun availableAmount(serviceRepository: ServiceRepository, projectId: UUID, requestedAmount: BigDecimal?) = BigDecimal("50") },
+            mapOf("mpesa" to gateway), unusedServiceRepository(), PaymentServicePort { _, _, _ -> true },
+            paymentEligibility = PaymentEligibilityPort { _, _, _ -> false }
+        )
+
+        val result = useCase(InitiatePayment.Command(
+            "mpesa", "demo", phone = "0712345678", currency = "KES", serviceId = serviceId
+        ))
+
+        assertEquals(InitiatePayment.FailureKind.INVALID_REQUEST, (result.exceptionOrNull() as InitiatePayment.PaymentInitiationFailure).kind)
+        assertEquals(0, providerCalls)
+    }
+
+    @Test
     fun `payment initiation serializes balance check provider call and pending record per service`() = runBlocking {
         val projectId = UUID.randomUUID()
         val serviceId = UUID.randomUUID()
@@ -254,9 +345,44 @@ class PaymentUseCasesTest {
         )
 
         assertEquals(ProcessPaymentEvent.Outcome.PROCESSED, useCase("callback"))
+        assertEquals(ProcessPaymentEvent.Outcome.DUPLICATE, useCase("callback"))
         assertEquals("success", repository.payment?.status)
         assertEquals(1, effects.successCount)
         assertEquals("processed", events.status)
+    }
+
+    @Test
+    fun `unknown M-Pesa checkout reference cannot create or settle a payment`() = runBlocking {
+        val repository = FakePaymentRepository(null)
+        val events = FakePaymentEventRepository()
+        val useCase = HandleMpesaCallback(
+            { MpesaCallbackData("unknown-checkout", 0, BigDecimal("20"), "ABC123", LocalDateTime.now()) },
+            ProcessPaymentEvent(repository, events, object : PaymentProjectPort {
+                override fun find(slug: String) = null
+            }, ApplyWebhookEvent(repository, FakePaymentEffects())),
+            repository
+        )
+
+        assertEquals(ProcessPaymentEvent.Outcome.REJECTED, useCase("callback"))
+        assertEquals(null, repository.payment)
+        assertEquals("failed", events.status)
+    }
+
+    @Test
+    fun `M-Pesa callback amount mismatch leaves the pending payment unchanged`() = runBlocking {
+        val repository = FakePaymentRepository(payment().copy(provider = "mpesa", reference = "checkout-1", providerReference = "checkout-1"))
+        val events = FakePaymentEventRepository()
+        val useCase = HandleMpesaCallback(
+            { MpesaCallbackData("checkout-1", 0, BigDecimal("19"), "ABC123", LocalDateTime.now()) },
+            ProcessPaymentEvent(repository, events, object : PaymentProjectPort {
+                override fun find(slug: String) = null
+            }, ApplyWebhookEvent(repository, FakePaymentEffects())),
+            repository
+        )
+
+        assertEquals(ProcessPaymentEvent.Outcome.REJECTED, useCase("callback"))
+        assertEquals("pending", repository.payment?.status)
+        assertEquals("failed", events.status)
     }
 
     @Test
@@ -330,9 +456,11 @@ class PaymentUseCasesTest {
         override fun findByProviderReference(provider: String, reference: String) = payment?.takeIf { it.provider == provider && it.providerReference == reference }
         override fun findById(id: UUID) = payment?.takeIf { it.id == id }
         override fun findByReference(reference: String) = payment?.takeIf { it.reference == reference }
-        override fun create(projectId: UUID, provider: String, reference: String, amount: BigDecimal, status: String, rawPayload: String?, authorizationUrl: String?, serviceId: UUID?) =
-            (payment?.copy(projectId = projectId, provider = provider, reference = reference, providerReference = reference, amount = amount, status = status, serviceId = serviceId)
-                ?: Payment(UUID.randomUUID(), projectId, provider, reference, amount, status, serviceId = serviceId)).also { payment = it }
+        override fun create(projectId: UUID, provider: String, reference: String, amount: BigDecimal, status: String, rawPayload: String?, authorizationUrl: String?, serviceId: UUID?, payerFingerprint: String?) =
+            (payment?.copy(projectId = projectId, provider = provider, reference = reference, providerReference = reference, amount = amount, status = status, serviceId = serviceId, payerFingerprint = payerFingerprint)
+                ?: Payment(UUID.randomUUID(), projectId, provider, reference, amount, status, serviceId = serviceId, payerFingerprint = payerFingerprint)).also { payment = it }
+        override fun hasPendingMpesaPayment(serviceId: UUID, payerFingerprint: String) =
+            payment?.let { it.provider == "mpesa" && it.serviceId == serviceId && it.payerFingerprint == payerFingerprint && it.status == "pending" } == true
         override fun save(payment: Payment): Payment { this.payment = payment; return payment }
         override fun updateStatus(provider: String, reference: String, status: String, verifiedVia: String, paidAt: LocalDateTime?, amount: BigDecimal?) {
             payment = payment?.copy(status = status, amount = amount ?: payment!!.amount, paidAt = paidAt ?: payment!!.paidAt)

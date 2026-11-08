@@ -54,6 +54,9 @@ fun Application.configurePaymentRoutes() {
                     val status = when (failure?.kind) {
                         InitiatePayment.FailureKind.NOT_FOUND -> HttpStatusCode.NotFound
                         InitiatePayment.FailureKind.INVALID_REQUEST -> HttpStatusCode.BadRequest
+                        InitiatePayment.FailureKind.CONFLICT -> HttpStatusCode.Conflict
+                        InitiatePayment.FailureKind.RATE_LIMITED -> HttpStatusCode.TooManyRequests
+                        InitiatePayment.FailureKind.SERVICE_UNAVAILABLE -> HttpStatusCode.ServiceUnavailable
                         else -> HttpStatusCode.BadGateway
                     }
                     call.respondError(status, failure?.code ?: "payment_unavailable", error.message ?: "Unable to start payment")

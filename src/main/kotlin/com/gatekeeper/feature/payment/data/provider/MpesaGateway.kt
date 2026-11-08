@@ -26,7 +26,16 @@ class MpesaGateway(private val settings: AppSettings.PaymentSettings) : PaymentG
     private val logger = LoggerFactory.getLogger("com.gatekeeper.feature.payment.MpesaGateway")
     private val http = HttpClient { install(ContentNegotiation) { json(Json { ignoreUnknownKeys = true }) } }
     private val baseUrl get() = if (settings.mpesaEnvironment.equals("production", true)) "https://api.safaricom.co.ke" else "https://sandbox.safaricom.co.ke"
-    fun isConfigured() = listOf(settings.mpesaConsumerKey, settings.mpesaConsumerSecret, settings.mpesaShortCode, settings.mpesaPasskey, settings.mpesaCallbackUrl).all { it.isNotBlank() } && settings.mpesaCallbackToken.length >= 32
+    fun isConfigured(): Boolean {
+        val callbackUri = runCatching { java.net.URI(settings.mpesaCallbackUrl) }.getOrNull()
+        val callbackIsSecure = !settings.mpesaEnvironment.equals("production", ignoreCase = true) ||
+            callbackUri?.scheme.equals("https", ignoreCase = true)
+        return listOf(settings.mpesaConsumerKey, settings.mpesaConsumerSecret, settings.mpesaShortCode, settings.mpesaPasskey)
+            .all { it.isNotBlank() } &&
+            callbackUri?.host != null &&
+            settings.mpesaCallbackToken.length >= 32 &&
+            callbackIsSecure
+    }
 
     override suspend fun initiate(command: InitiatePaymentCommand): Result<InitiatedPayment> = runCatching {
         require(isConfigured()) { "M-Pesa is not configured" }
