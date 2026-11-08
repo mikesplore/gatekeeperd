@@ -117,7 +117,9 @@ gk_preflight_check_host_config() {
   sudo -u "${user}" test -r "${env_file}" \
     || gk_preflight_fail_prereq "${env_file} is not readable by service user '${user}'. Adjust ownership or group permissions."
 
-  [[ -n "${GATEWAY_URL:-}" ]] \
+  # deploy.sh maps DEPLOY_GATEWAY_URL to GATEWAY_URL itself, but the standalone
+  # systemd checker sources deploy.env and runs this preflight directly.
+  [[ -n "${DEPLOY_GATEWAY_URL:-${GATEWAY_URL:-}}" ]] \
     || gk_preflight_fail_prereq "DEPLOY_GATEWAY_URL is not set. Edit ${DEPLOY_CONFIG_FILE:-/etc/gatekeeperd/deploy.env} (see ${TARGET_DIR:-/opt/gatekeeperd}/deploy.env.example)."
 
   [[ "${BLUE_PORT:-18081}" != "${GREEN_PORT:-18082}" && "${LEGACY_PORT:-8080}" != "${BLUE_PORT:-18081}" && "${LEGACY_PORT:-8080}" != "${GREEN_PORT:-18082}" ]] \
