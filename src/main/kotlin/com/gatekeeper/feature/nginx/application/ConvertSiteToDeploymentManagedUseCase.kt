@@ -45,7 +45,10 @@ class ConvertSiteToDeploymentManagedUseCase(
         val slug = site.projectSlug ?: return false
         require(hostPort in 1..65535)
         return DistributedLock.withLock("nginx-host-mutation") {
-            val previousSite = inspectSite.inspectSite(slug).content ?: return@withLock false
+            // A site record can outlive its nginx file (for example after manual
+            // cleanup). The saved SiteRecord is enough to render a fresh config;
+            // preserve the old file only when it is still present for rollback.
+            val previousSite = inspectSite.inspectSite(slug).content
             val includes = DeploymentUpstreamIncludes(File(upstreamIncludeDirectory))
             val includeFile = includes.file(serviceId)
             val previousInclude = includeFile.takeIf { it.isFile }?.readText()
@@ -104,7 +107,10 @@ class ConvertSiteToDeploymentManagedUseCase(
                 ) { "Unable to persist deployment-managed site kind" }
                 true
             } catch (error: Exception) {
-                runCatching { nginxSiteStorage.restoreSiteConfiguration(slug, previousSite) }
+                runCatching {
+                    if (previousSite != null) nginxSiteStorage.restoreSiteConfiguration(slug, previousSite)
+                    else nginxSiteStorage.removeSite(slug)
+                }
                 runCatching { nginxSiteStorage.restoreUpstreamInclude(includes, serviceId, previousInclude) }
                 nginxServiceLogger.error("Unable to convert site {} to deployment-managed upstream", site.id, error)
                 false
