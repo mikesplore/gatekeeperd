@@ -43,6 +43,7 @@ class DeploymentVersionServiceTest {
         write("auto-deploy-failed-commit.txt", latest)
 
         assertEquals("deployment_failed", DeploymentVersionService(directory, { now }).current().status)
+        assertEquals("deployment_failed", DeploymentVersionService(directory, { now }).current().deploymentHoldReason)
     }
 
     @Test
@@ -55,6 +56,7 @@ class DeploymentVersionServiceTest {
 
         assertEquals("deployment_failed", result.status)
         assertEquals(false, result.upToDate)
+        assertEquals("rolled_back", result.deploymentHoldReason)
     }
 
     @Test

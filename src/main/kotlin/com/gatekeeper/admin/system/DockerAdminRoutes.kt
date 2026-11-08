@@ -15,12 +15,15 @@ import com.gatekeeper.docker.PortsAvailabilityRequest
 import com.gatekeeper.docker.PortsAvailabilityResponse
 import com.gatekeeper.api.respondError
 import com.gatekeeper.api.respondErrorWithData
+import com.gatekeeper.feature.audit.domain.repository.AuditRepository
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.Application
+import io.ktor.server.auth.principal
 import io.ktor.server.auth.authenticate
 import io.ktor.server.request.receive
 import io.ktor.server.response.respond
 import io.ktor.server.routing.*
+import io.ktor.server.auth.jwt.JWTPrincipal
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import java.util.UUID
@@ -28,6 +31,7 @@ import org.koin.ktor.ext.get
 
 fun Application.configureDockerAdminRoutes() {
     val docker = get<DockerAdminApplicationService>()
+    val audit = get<AuditRepository>()
     routing {
         authenticate("auth-jwt") {
             install(com.gatekeeper.rbac.presentation.RbacAuthorizationPlugin)
@@ -79,13 +83,19 @@ fun Application.configureDockerAdminRoutes() {
                     else call.respondError(result.status, result.code, result.message)
                     is ContainerCreatePlanResult.Ok -> {
                         val plan = result.plan
+                        val actor = call.principal<JWTPrincipal>()?.payload?.subject ?: "unknown"
+                        recordDockerMutation(audit, actor, "docker_container_create_requested", plan.normalizedRequest.name)
                         val job = ContainerCreationTracker.create(plan.normalizedRequest.name)
                         call.application.launch(Dispatchers.IO) {
                             try {
                                 docker.runContainerCreate(plan) { status -> ContainerCreationTracker.update(job.id, status) }
                                 ContainerCreationTracker.update(job.id, "succeeded")
+                                runCatching { audit.write(null, "docker_container_create_succeeded", actor, "operation=${job.id}") }
+                                    .onFailure { org.slf4j.LoggerFactory.getLogger("DockerAdminRoutes").error("Could not audit completed Docker container creation operation={}", job.id, it) }
                             } catch (error: Exception) {
                                 ContainerCreationTracker.update(job.id, "failed", error.message ?: "Container creation failed")
+                                runCatching { audit.write(null, "docker_container_create_failed", actor, "operation=${job.id}") }
+                                    .onFailure { org.slf4j.LoggerFactory.getLogger("DockerAdminRoutes").error("Could not audit failed Docker container creation operation={}", job.id, it) }
                             }
                         }
                         call.respond(HttpStatusCode.Accepted, mapOf("id" to job.id, "status" to "queued", "name" to plan.normalizedRequest.name))
@@ -113,18 +123,22 @@ fun Application.configureDockerAdminRoutes() {
             }
             post("/api/admin/containers/{name}/start") {
                 val name = call.parameters["name"] ?: throw HttpApiException(HttpStatusCode.BadRequest, "missing_container_name", "Missing container name path parameter")
+                call.auditDocker(audit, "docker_container_start", name)
                 call.respond(docker.start(name))
             }
             post("/api/admin/containers/{name}/stop") {
                 val name = call.parameters["name"] ?: throw HttpApiException(HttpStatusCode.BadRequest, "missing_container_name", "Missing container name path parameter")
+                call.auditDocker(audit, "docker_container_stop", name)
                 call.respond(docker.stop(name))
             }
             post("/api/admin/containers/{name}/restart") {
                 val name = call.parameters["name"] ?: throw HttpApiException(HttpStatusCode.BadRequest, "missing_container_name", "Missing container name path parameter")
+                call.auditDocker(audit, "docker_container_restart", name)
                 call.respond(docker.restart(name))
             }
             post("/api/admin/containers/{name}/delete") {
                 val name = call.parameters["name"] ?: throw HttpApiException(HttpStatusCode.BadRequest, "missing_container_name", "Missing container name path parameter")
+                call.auditDocker(audit, "docker_container_delete", name)
                 call.respond(docker.delete(name))
             }
             get("/api/admin/containers/{name}/health") {
@@ -133,6 +147,7 @@ fun Application.configureDockerAdminRoutes() {
             }
             post("/api/admin/containers/{name}/networks/move") {
                 val name = call.parameters["name"] ?: throw HttpApiException(HttpStatusCode.BadRequest, "missing_container_name", "Missing container name path parameter")
+                call.auditDocker(audit, "docker_container_network_move", name)
                 call.respond(docker.moveContainerNetwork(name, call.receive<MoveContainerNetworkRequest>()))
             }
             get("/api/admin/networks") {
@@ -142,15 +157,18 @@ fun Application.configureDockerAdminRoutes() {
                 call.respond(docker.networks(query["q"]?.trim()?.lowercase(), offset, limit))
             }
             post("/api/admin/networks/prune") {
+                call.auditDocker(audit, "docker_network_prune", "unused networks")
                 call.respond(get<DockerCleanupService>().clearUnusedNetworks("admin"))
             }
             post("/api/admin/networks") {
                 val body = call.receive<CreateNetworkRequest>()
+                call.auditDocker(audit, "docker_network_create", body.name)
                 docker.createNetwork(body)
                 call.respond(HttpStatusCode.Created, mapOf("name" to body.name, "driver" to body.driver))
             }
             delete("/api/admin/networks/{name}") {
                 val name = call.parameters["name"] ?: throw HttpApiException(HttpStatusCode.BadRequest, "invalid_request", "Network name is required")
+                call.auditDocker(audit, "docker_network_delete", name)
                 docker.deleteNetwork(name)
                 call.respond(mapOf("status" to "deleted", "name" to name))
             }
@@ -161,15 +179,18 @@ fun Application.configureDockerAdminRoutes() {
                 call.respond(docker.volumes(query["q"]?.trim()?.lowercase(), offset, limit))
             }
             post("/api/admin/volumes/prune") {
+                call.auditDocker(audit, "docker_volume_prune", "unused volumes")
                 call.respond(get<DockerCleanupService>().clearUnusedVolumes("admin"))
             }
             post("/api/admin/volumes") {
                 val body = call.receive<CreateNetworkRequest>()
+                call.auditDocker(audit, "docker_volume_create", body.name)
                 val driver = docker.createVolume(body)
                 call.respond(HttpStatusCode.Created, mapOf("name" to body.name, "driver" to driver))
             }
             delete("/api/admin/volumes/{name}") {
                 val name = call.parameters["name"] ?: throw HttpApiException(HttpStatusCode.BadRequest, "invalid_request", "Volume name is required")
+                call.auditDocker(audit, "docker_volume_delete", name)
                 docker.deleteVolume(name)
                 call.respond(mapOf("status" to "deleted", "name" to name))
             }
@@ -177,9 +198,24 @@ fun Application.configureDockerAdminRoutes() {
                 val body = call.receive<PullImageRequest>()
                 val image = body.image.trim()
                 val tag = body.tag.trim().ifBlank { "latest" }
+                call.auditDocker(audit, "docker_image_pull", "$image:$tag")
                 docker.pullImage(image, tag, body.pullViaCli)
                 call.respond(mapOf("status" to "pulled", "image" to "$image:$tag"))
             }
         }
     }
+}
+
+private fun io.ktor.server.application.ApplicationCall.auditDocker(
+    audit: AuditRepository,
+    action: String,
+    resource: String
+) {
+    val actor = principal<JWTPrincipal>()?.payload?.subject ?: "unknown"
+    recordDockerMutation(audit, actor, action, resource)
+}
+
+private fun recordDockerMutation(audit: AuditRepository, actor: String, action: String, resource: String) {
+    val safeResource = resource.filterNot { it.isISOControl() }.take(160)
+    audit.write(null, action, actor.take(200), "resource=$safeResource")
 }

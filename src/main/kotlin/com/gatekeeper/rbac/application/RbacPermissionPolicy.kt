@@ -11,6 +11,18 @@ object RbacPermissionPolicy {
         val action = if (read) "read" else "manage"
 
         fun one(code: String) = setOf(code)
+        fun dockerMutation(path: String): Set<String> {
+            val highRisk = path == "/api/admin/containers/create" ||
+                path.startsWith("/api/admin/project-setup/") && path.contains("/containers/create") ||
+                path.startsWith("/api/admin/containers/") &&
+                    (path.endsWith("/delete") || path.endsWith("/networks/move")) ||
+                path == "/api/admin/networks/prune" || path == "/api/admin/volumes/prune" ||
+                path == "/api/admin/networks" || path.startsWith("/api/admin/networks/") && method == HttpMethod.Delete ||
+                path == "/api/admin/volumes" || path.startsWith("/api/admin/volumes/") && method == HttpMethod.Delete ||
+                path == "/api/admin/images/pull"
+            return if (highRisk) setOf("docker.manage", "system.manage") else one("docker.manage")
+        }
+
         return when {
             path == "/api/admin/search" -> one("projects.read")
             path == "/api/admin/rbac/permissions" -> one("roles.read")
@@ -29,7 +41,8 @@ object RbacPermissionPolicy {
                 (path.contains("/invoice") || path.contains("/adjustments")) -> one("services.$action")
             path.startsWith("/api/admin/projects/") && path.contains("/deployments/") -> one("deployments.$action")
             path.startsWith("/api/admin/projects/") && path.contains("/secret-sets/") -> setOf("services.manage", "deployments.manage")
-            path.startsWith("/api/admin/project-setup/") && path.contains("/containers") -> one("docker.$action")
+            path.startsWith("/api/admin/project-setup/") && path.contains("/containers") ->
+                if (read) one("docker.read") else dockerMutation(path)
             path.startsWith("/api/admin/project-setup/") -> if (path.contains("/adopt-container")) {
                 setOf("projects.manage", "docker.read")
             } else if (path.endsWith("/deploy")) {
@@ -53,7 +66,7 @@ object RbacPermissionPolicy {
             path == "/api/admin/containers" || path.startsWith("/api/admin/containers/") ||
                 path == "/api/admin/networks" || path.startsWith("/api/admin/networks/") ||
                 path == "/api/admin/volumes" || path.startsWith("/api/admin/volumes/") ||
-                path.startsWith("/api/admin/images/") -> one("docker.$action")
+                path.startsWith("/api/admin/images/") -> if (read) one("docker.read") else dockerMutation(path)
             path.startsWith("/api/admin/payment-events") || path.startsWith("/api/admin/payments") ||
                 path.startsWith("/api/admin/revenue") -> one("payments.$action")
             path.startsWith("/api/admin/integrations/") || path.startsWith("/api/admin/github/") ||

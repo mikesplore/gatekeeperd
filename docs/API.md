@@ -82,7 +82,8 @@ Example response:
   "runningCommit": "0123456789abcdef0123456789abcdef01234567",
   "latestSuccessfulCommit": "0123456789abcdef0123456789abcdef01234567",
   "checkedAt": "2026-10-14T11:00:00Z",
-  "upToDate": true
+  "upToDate": true,
+  "deploymentHoldReason": null
 }
 ```
 
@@ -106,7 +107,7 @@ restart. Query `GET /api/version` again after the deployment completes to verify
 }
 ```
 
-`status` is `up_to_date`, `update_available`, `deployment_failed`, `check_stale`, or `unknown`. Commit values are nullable if marker files are missing or invalid. `check_stale` means the last GitHub check is older than 15 minutes; `unknown` means required metadata has not been recorded. This endpoint reveals commit identifiers and deployment status, but no secrets or workflow artifacts.
+`status` is `up_to_date`, `update_available`, `deployment_failed`, `check_stale`, or `unknown`. Commit values are nullable if marker files are missing or invalid. `check_stale` means the last GitHub check is older than 15 minutes; `unknown` means required metadata has not been recorded. `deploymentHoldReason` is `deployment_failed` when the latest build's rollout failed, `rolled_back` when that revision was held after rollback, or null otherwise. The latest successful commit identifies the held revision. This endpoint reveals commit identifiers and deployment status, but no secrets or workflow artifacts.
 
 ### GET /api/health/ready
 Dependency readiness check. Returns `200 OK` only when PostgreSQL and Redis are reachable; otherwise returns `503 Service Unavailable` with dependency booleans.
@@ -269,7 +270,7 @@ Replace the role's display name, description, active state, and full permission 
 #### DELETE /api/admin/rbac/roles/{key}
 Delete an unassigned custom role. Requires `roles.manage`.
 
-Permission codes follow `<resource>.<action>`; available resources are `roles`, `users`, `projects`, `customers`, `services`, `deployments`, `payments`, `nginx`, `docker`, `integrations`, `logs`, `audit`, `notifications`, `operations`, and `system`. The administrator may assign only permissions they already hold unless they are the built-in superuser. User creation and role changes enforce the same rule to prevent privilege escalation.
+Permission codes follow `<resource>.<action>`; available resources are `roles`, `users`, `projects`, `customers`, `services`, `deployments`, `payments`, `nginx`, `docker`, `integrations`, `logs`, `audit`, `notifications`, `operations`, and `system`. The administrator may assign only permissions they already hold unless they are the built-in superuser. User creation and role changes enforce the same rule to prevent privilege escalation. Raw container creation/deletion, network changes, volume changes, image pulls, and pruning require both `docker.manage` and `system.manage`; routine container start/stop/restart require `docker.manage`. Mutating raw Docker operations are written to the audit log without environment values or credentials.
 
 Some combined operations require multiple permissions. For example, project setup deployments require both `projects.manage` and `deployments.manage`; configuring a domain gateway requires project and nginx permissions.
 

@@ -31,17 +31,22 @@ class DeploymentVersionService(
         val (latestCommit, checkedAt) = latest
         val failedCommit = readCommit(deploymentDirectory.resolve("auto-deploy-failed-commit.txt"))
         val heldCommit = readCommit(deploymentDirectory.resolve("auto-deploy.hold"))
+        val holdReason = when {
+            heldCommit == latestCommit -> "rolled_back"
+            failedCommit == latestCommit -> "deployment_failed"
+            else -> null
+        }
         val age = Duration.between(checkedAt, now())
         if (age.isNegative || age > maxCheckAge) {
-            return DeploymentVersionStatus("check_stale", runningCommit, latestCommit, checkedAt.toString(), null)
+            return DeploymentVersionStatus("check_stale", runningCommit, latestCommit, checkedAt.toString(), null, holdReason)
         }
-        if ((failedCommit == latestCommit || heldCommit == latestCommit) && runningCommit != latestCommit) {
-            return DeploymentVersionStatus("deployment_failed", runningCommit, latestCommit, checkedAt.toString(), false)
+        if (holdReason != null && runningCommit != latestCommit) {
+            return DeploymentVersionStatus("deployment_failed", runningCommit, latestCommit, checkedAt.toString(), false, holdReason)
         }
         return if (runningCommit == latestCommit) {
-            DeploymentVersionStatus("up_to_date", runningCommit, latestCommit, checkedAt.toString(), true)
+            DeploymentVersionStatus("up_to_date", runningCommit, latestCommit, checkedAt.toString(), true, null)
         } else {
-            DeploymentVersionStatus("update_available", runningCommit, latestCommit, checkedAt.toString(), false)
+            DeploymentVersionStatus("update_available", runningCommit, latestCommit, checkedAt.toString(), false, null)
         }
     }
 
@@ -61,4 +66,5 @@ data class DeploymentVersionStatus(
     val latestSuccessfulCommit: String?,
     val checkedAt: String?,
     val upToDate: Boolean?,
+    val deploymentHoldReason: String? = null,
 )

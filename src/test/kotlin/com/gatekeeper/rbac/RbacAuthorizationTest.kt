@@ -93,6 +93,31 @@ class RbacAuthorizationTest {
     }
 
     @Test
+    fun `host-level Docker operations require both Docker and system management`() {
+        val hostOperations = listOf(
+            "/api/admin/containers/create",
+            "/api/admin/containers/app/delete",
+            "/api/admin/containers/app/networks/move",
+            "/api/admin/networks",
+            "/api/admin/networks/prune",
+            "/api/admin/volumes/prune",
+            "/api/admin/images/pull"
+        )
+        hostOperations.forEach { path ->
+            assertEquals(
+                setOf("docker.manage", "system.manage"),
+                RbacPermissionPolicy.permissions(HttpMethod.Post, path),
+                path
+            )
+        }
+        listOf("/api/admin/networks/data", "/api/admin/volumes/data").forEach { path ->
+            assertEquals(setOf("docker.manage", "system.manage"), RbacPermissionPolicy.permissions(HttpMethod.Delete, path), path)
+        }
+        assertEquals(setOf("docker.manage"), RbacPermissionPolicy.permissions(HttpMethod.Post, "/api/admin/containers/app/restart"))
+        assertEquals(setOf("docker.read"), RbacPermissionPolicy.permissions(HttpMethod.Get, "/api/admin/containers"))
+    }
+
+    @Test
     fun `authorization uses current role grants and administrator bypass`() {
         val repository = FakeRbacRepository()
         val service = RbacApplicationService(repository)

@@ -200,6 +200,15 @@ The checker deploys the most recent successful `main` build. It does not deploy 
 request builds or tags. A commit whose deployment failed is not retried automatically;
 deploy a newer successful commit or run `deploy.sh` manually to retry it.
 
+`GET /api/version` identifies the latest held revision in `latestSuccessfulCommit` and
+reports `deploymentHoldReason` as `deployment_failed` or `rolled_back`. Review the
+failed attempt first through the admin deployment diagnostics endpoint or the host
+journal. To intentionally retry a revision held after rollback, run
+`sudo /opt/gatekeeperd/deploy.sh --force` from an operator shell; `--force` bypasses
+the rollback hold for that attempt, and a successful deployment clears the hold.
+Prefer deploying a newer successful build after an unsuccessful rollout. Run the
+command through `sudo` so the configured sudo logging policy records the operator action.
+
 ## Verify deployment
 
 Check the public readiness endpoint:
