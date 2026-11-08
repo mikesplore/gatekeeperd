@@ -37,7 +37,9 @@ class InspectSiteConfigUseCase(
         sitesAvailablePath: String = this.sitesAvailablePath,
         sitesEnabledPath: String = this.sitesEnabledPath
     ): NginxConfigInspection {
-        require(slug.matches(Regex("[a-zA-Z0-9][a-zA-Z0-9_-]*"))) { "Invalid nginx site name" }
+        require(domainRules.isSafeConfigFilename(slug)) {
+            "Invalid nginx site name"
+        }
         val availableFile = File(sitesAvailablePath, slug)
         val enabledFile = File(sitesEnabledPath, slug)
         require(
@@ -59,9 +61,10 @@ class InspectSiteConfigUseCase(
             isSymlink = Files.isSymbolicLink(enabledFile.toPath()),
             content = content,
             blocks = content?.let(parser::extractBlocks).orEmpty(),
-            customLocations = runCatching { siteRepository.findByProjectSlug(slug)?.customNginxLocations.orEmpty() }.getOrDefault(
-                emptyList()
-            ),
+            customLocations = runCatching {
+                (siteRepository.findByProjectSlug(slug) ?: siteRepository.findByDomain(slug))
+                    ?.customNginxLocations.orEmpty()
+            }.getOrDefault(emptyList()),
             modifiedAt = availableFile.takeIf { it.exists() }
                 ?.let { Instant.ofEpochMilli(it.lastModified()).toString() },
             sizeBytes = availableFile.takeIf { it.exists() }?.length(),

@@ -36,6 +36,11 @@ fun Route.nginxManualConfigRoutes(
     rollback: RollbackSiteConfigUseCase,
     renderModelFromSite: RenderModelFromSite
 ) {
+    fun resolveConfigSlug(slug: String): String {
+        val site = siteRepository.findByProjectSlug(slug) ?: siteRepository.findByDomain(slug)
+        return site?.let(inspector::resolveSiteConfigSlug) ?: slug
+    }
+
     authenticate("auth-jwt") {
             install(com.gatekeeper.rbac.presentation.RbacAuthorizationPlugin)
     post("/api/admin/nginx/config/{slug}/custom-blocks") {
@@ -58,6 +63,7 @@ fun Route.nginxManualConfigRoutes(
                 "site_not_found",
                 "Managed site not found"
             )
+        val configSlug = inspector.resolveSiteConfigSlug(site)
         val location = NginxCustomLocation(
             java.util.UUID.randomUUID().toString(),
             body.path.trim(),
@@ -65,10 +71,10 @@ fun Route.nginxManualConfigRoutes(
         )
         val result = runCatching {
             nginxAdministrationService.updateCustomLocations(
-                slug,
+                configSlug,
                 site,
                 site.customNginxLocations + location
-            ) { updated -> renderModelFromSite.renderModelFromSite(slug, updated) }
+            ) { updated -> renderModelFromSite.renderModelFromSite(configSlug, updated) }
         }
             .getOrElse {
                 return@post call.respondError(
@@ -100,6 +106,7 @@ fun Route.nginxManualConfigRoutes(
                 "site_not_found",
                 "Managed site not found"
             )
+        val configSlug = inspector.resolveSiteConfigSlug(site)
         val location = site.customNginxLocations.firstOrNull { it.id == id }
             ?: return@delete call.respondError(
                 HttpStatusCode.NotFound,
@@ -108,11 +115,11 @@ fun Route.nginxManualConfigRoutes(
             )
         val result = runCatching {
             nginxAdministrationService.updateCustomLocations(
-                slug,
+                configSlug,
                 site,
                 site.customNginxLocations.filterNot { it.id == id }) { updated ->
                 renderModelFromSite.renderModelFromSite(
-                    slug,
+                    configSlug,
                     updated,
                 )
             }
@@ -152,7 +159,7 @@ fun Route.nginxManualConfigRoutes(
         }
         val preview = runCatching {
             preview.previewBlockUpdate(
-                slug,
+                resolveConfigSlug(slug),
                 index,
                 body.content
             )
@@ -172,7 +179,7 @@ fun Route.nginxManualConfigRoutes(
             call.respondError(HttpStatusCode.BadRequest, "missing_slug", "Missing slug path parameter")
             return@get
         }
-        val inspection = runCatching { inspector.inspectSite(slug) }.getOrElse {
+        val inspection = runCatching { inspector.inspectSite(resolveConfigSlug(slug)) }.getOrElse {
             call.respondError(HttpStatusCode.BadRequest, "invalid_slug", it.message ?: "Invalid site name")
             return@get
         }
@@ -199,7 +206,7 @@ fun Route.nginxManualConfigRoutes(
         }
         val result = runCatching {
             update.execute(
-                slug,
+                resolveConfigSlug(slug),
                 index,
                 body.content
             )
@@ -230,7 +237,7 @@ fun Route.nginxManualConfigRoutes(
                 "Missing slug path parameter"
             ); return@get
         }
-        val versions = runCatching { nginx.listBackups(slug) }.getOrElse {
+        val versions = runCatching { nginx.listBackups(resolveConfigSlug(slug)) }.getOrElse {
             call.respondError(
                 HttpStatusCode.BadRequest,
                 "invalid_slug",
@@ -252,7 +259,7 @@ fun Route.nginxManualConfigRoutes(
         }
         val result = runCatching {
             rollback.execute(
-                slug,
+                resolveConfigSlug(slug),
                 backup
             )
         }.getOrElse {
@@ -285,8 +292,10 @@ fun Route.nginxManualConfigRoutes(
             return@get
         }
 
-        val enabled =
-            listConfigArtifactsUseCase.execute().any { it.filename == slug && it.available && it.enabled }
+        val site = siteRepository.findByProjectId(project.id)
+        val configSlug = site?.let(inspector::resolveSiteConfigSlug) ?: slug
+        val enabled = listConfigArtifactsUseCase.execute(site?.let(::listOf).orEmpty())
+            .any { it.filename == configSlug && it.available && it.enabled }
 
         val domain = serviceRepository.findDefaultDomain(project.id)
         val resolvedCert = domain?.let(certificateProvisioner::resolveCertificateForDomain)
@@ -295,8 +304,8 @@ fun Route.nginxManualConfigRoutes(
         call.respond(
             NginxStatusResponse(
                 enabled = enabled,
-                configPath = "${nginxSettings.sitesAvailablePath}/$slug",
-                enabledPath = "${nginxSettings.sitesEnabledPath}/$slug",
+                configPath = "${nginxSettings.sitesAvailablePath}/$configSlug",
+                enabledPath = "${nginxSettings.sitesEnabledPath}/$configSlug",
                 port = deploymentUpstreamResolver.resolveProjectDefault(project.id, "production")?.port,
                 sslEnabled = resolvedCert != null,
                 certificateDomain = resolvedCert?.certificateDomain,

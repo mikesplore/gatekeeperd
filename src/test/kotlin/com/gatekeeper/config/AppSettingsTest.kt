@@ -75,7 +75,8 @@ class AppSettingsTest {
             mapOf(
                 "GATEKEEPERD_ENVIRONMENT" to "DEV",
                 "GATEKEEPERD_SELF_DOMAIN" to "gatekeeper.test"
-            )
+            ),
+            loadDotenv = false
         )
 
         assertEquals(false, settings.nginx.hostOperationsEnabled)
