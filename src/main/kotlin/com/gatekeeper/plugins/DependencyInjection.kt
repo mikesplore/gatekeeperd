@@ -289,13 +289,16 @@ private val applicationModule = module {
     }
     single { NginxConflictAnalyzer(get(), get(), get(), get()) }
     single {
+        val nginxSettings = get<AppSettings>().nginx
         InspectSiteConfigUseCase(
             siteRepository = get(),
-            upstreamIncludeDirectory = get<AppSettings>().nginx.upstreamIncludeDirectory,
+            upstreamIncludeDirectory = nginxSettings.upstreamIncludeDirectory,
             domainRules = get(),
             nginx = get(),
             parser = get(),
-            nginxConfigDumpRunner = { get<NginxCommandRunner>().dumpConfig() }
+            nginxConfigDumpRunner = { get<NginxCommandRunner>().dumpConfig() },
+            sitesAvailablePath = nginxSettings.sitesAvailablePath,
+            sitesEnabledPath = nginxSettings.sitesEnabledPath
         )
     }
     single {

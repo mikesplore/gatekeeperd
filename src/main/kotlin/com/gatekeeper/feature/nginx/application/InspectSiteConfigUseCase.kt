@@ -24,12 +24,14 @@ class InspectSiteConfigUseCase(
     private val domainRules: DomainRules,
     private val nginx: NginxSiteStorage,
     private val nginxConfigDumpRunner: () -> String?,
-    private val parser: NginxConfigParser
+    private val parser: NginxConfigParser,
+    private val sitesAvailablePath: String = "/etc/nginx/sites-available",
+    private val sitesEnabledPath: String = "/etc/nginx/sites-enabled"
 ) {
     fun inspectSite(
         slug: String,
-        sitesAvailablePath: String = "/etc/nginx/sites-available",
-        sitesEnabledPath: String = "/etc/nginx/sites-enabled"
+        sitesAvailablePath: String = this.sitesAvailablePath,
+        sitesEnabledPath: String = this.sitesEnabledPath
     ): NginxConfigInspection {
         require(slug.matches(Regex("[a-zA-Z0-9][a-zA-Z0-9_-]*"))) { "Invalid nginx site name" }
         val availableFile = File(sitesAvailablePath, slug)
