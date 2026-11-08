@@ -41,6 +41,7 @@ class CertbotCertificateProvisioner(
     }
 
     override fun certificateManagerIssue(): String? {
+        devCertbotDisabledMessage(policy.isDev, policy.certbotEnabled)?.let { return it }
         if (!isCertbotAvailable()) return "Certbot is not installed or is not available in the Gatekeeperd service PATH."
         val helper = File("/usr/local/sbin/gatekeeperd-certbot")
         if (!helper.isFile || !helper.canExecute()) {
@@ -237,3 +238,8 @@ class CertbotCertificateProvisioner(
         }
     }
 }
+
+internal fun devCertbotDisabledMessage(isDev: Boolean, certbotEnabled: Boolean): String? =
+    if (isDev && !certbotEnabled) {
+        "Certificate installation, renewal, and removal are disabled in DEV. Enable GATEKEEPERD_NGINX_CERTBOT_ENABLED only when the restricted Certbot helper is installed."
+    } else null

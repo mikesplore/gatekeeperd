@@ -35,6 +35,11 @@ fun Route.nginxCertificateAdminRoutes(
             return@post
         }
 
+        certificateProvisioner.certificateManagerIssue()?.let { issue ->
+            call.respondError(HttpStatusCode.ServiceUnavailable, "certificate_manager_unavailable", issue)
+            return@post
+        }
+
         when (val result = nginxAdministrationService.installCertificate(body.domain, body.email)) {
             is CertificateOperationResult.Success -> call.respond(result.value)
             CertificateOperationResult.InvalidDomain -> call.respondError(
@@ -76,6 +81,11 @@ fun Route.nginxCertificateAdminRoutes(
             return@post
         }
 
+        certificateProvisioner.certificateManagerIssue()?.let { issue ->
+            call.respondError(HttpStatusCode.ServiceUnavailable, "certificate_manager_unavailable", issue)
+            return@post
+        }
+
         when (val result = nginxAdministrationService.removeCertificate(domain)) {
             is CertificateOperationResult.Success -> call.respond(result.value)
             is CertificateOperationResult.InUse -> call.respondError(
@@ -108,6 +118,10 @@ fun Route.nginxCertificateAdminRoutes(
         val domain = call.parameters["domain"]
         if (domain == null) {
             call.respondError(HttpStatusCode.BadRequest, "missing_domain", "Missing domain path parameter")
+            return@post
+        }
+        certificateProvisioner.certificateManagerIssue()?.let { issue ->
+            call.respondError(HttpStatusCode.ServiceUnavailable, "certificate_manager_unavailable", issue)
             return@post
         }
         when (val result = nginxAdministrationService.renewCertificate(domain)) {

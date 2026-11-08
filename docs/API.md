@@ -961,6 +961,7 @@ Install an SSL certificate for a domain using certbot's nginx plugin.
 **Notes:**
 - Requires `certbot` to be installed on the host.
 - Runs the root-owned `gatekeeperd-certbot` helper through non-interactive `sudo` so Certbot can write to its system directories. The CI artifact includes the helper, and the current `deploy.sh` installs it and configures the service account's restricted sudoers rule. See the [staging deployment guide](staging-deployment.md#certbot-certificate-management) for setup.
+- In DEV, certificate install/renew/remove are disabled by default. The certificate list reports `managerReady: false` with an actionable message, and operations return `503 certificate_manager_unavailable`; opt in only when the restricted helper is configured for the environment.
 - The certificate paths follow the standard Let's Encrypt layout.
 
 ### POST /api/admin/nginx/certificate/remove/{domain}
