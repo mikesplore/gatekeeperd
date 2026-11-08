@@ -765,8 +765,16 @@ class DeploymentWorker(
             if (siteOwnerSlug != null) inspectSiteConfigUseCase.inspectSite(siteOwnerSlug) else null
         // Legacy explicit sites may already receive managed deployments. Convert them on cutover
         // so deployment changes only the stable service include after this first activation.
-        val convertsLegacySite = DeploymentSiteCutoverPolicy.convertsLegacySite(site?.upstreamKind)
-        val hasEnabledManagedSite = DeploymentSiteCutoverPolicy.hasDeploymentRoute(site?.upstreamKind) &&
+        val referencesStableUpstream = DeploymentSiteCutoverPolicy.referencesServiceUpstream(
+            existingSiteConfig?.content,
+            job.serviceId
+        )
+        val convertsLegacySite = DeploymentSiteCutoverPolicy.convertsLegacySite(
+            site?.upstreamKind,
+            referencesStableUpstream
+        )
+        val hasEnabledManagedSite =
+            (DeploymentSiteCutoverPolicy.hasDeploymentRoute(site?.upstreamKind) || referencesStableUpstream) &&
                 existingSiteConfig?.canDeploymentCutoverUpdateRoute() == true
         val managedRoute = if (hasEnabledManagedSite) {
             val managedSite = requireNotNull(site)
