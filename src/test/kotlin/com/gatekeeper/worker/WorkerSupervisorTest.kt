@@ -29,13 +29,21 @@ class WorkerSupervisorTest {
         }
 
         supervisor.start(CoroutineScope(Job()), listOf(worker))
-        withTimeout(1_000.milliseconds) {
-            while (attempts < 2) delay(1.milliseconds)
-        }
+        try {
+            withTimeout(1_000.milliseconds) {
+                while (true) {
+                    val status = supervisor.health().single()
+                    if (attempts >= 2 && status.lastFailureAt != null && status.consecutiveFailures == 0) break
+                    delay(1.milliseconds)
+                }
+            }
 
-        val status = supervisor.health().single()
-        assertTrue(attempts >= 2)
-        assertEquals(0, status.consecutiveFailures)
-        supervisor.stop()
+            val status = supervisor.health().single()
+            assertTrue(attempts >= 2)
+            assertTrue(status.lastFailureAt != null)
+            assertEquals(0, status.consecutiveFailures)
+        } finally {
+            supervisor.stop()
+        }
     }
 }
