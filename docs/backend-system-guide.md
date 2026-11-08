@@ -72,7 +72,7 @@ Browser / customer                 Admin dashboard
 Ktor route functions handle HTTP input and output. There are three broad implementation styles in the repository:
 
 1. Newer payment, customer, and gate flows use application/use-case services registered in Koin, with domain interfaces and Exposed adapters.
-2. Many administration flows call repository objects directly from route handlers. The migration toward a uniform service/repository architecture is incomplete; do not assume every feature follows the same layering.
+2. Many administration flows call repository objects directly from route handlers. The migration toward a uniform service/repository architecture is incomplete; do not assume every feature follows the same layering. For new or materially changed workflows, keep request parsing, validation, authentication context, and response mapping in routes; put business decisions and orchestration in application services/use cases; and access persistence through repository ports. Repository calls from routes remain acceptable in established legacy flows when they only load/map data and do not duplicate business rules. Refactor those flows when a concrete defect, duplicated rule, or testability/security need justifies the change, rather than migrating them for consistency alone.
 3. Host operations such as Docker and nginx call system tools and files directly behind services, often with fakes or injected runners in unit tests.
 
 ## 3. Startup, configuration, and process lifecycle
@@ -495,7 +495,7 @@ For application-only logs use dashboard Logs or `journalctl -u gatekeeperd`. For
 
 These observations are based on repository code, not an inspection of a production database or VPS:
 
-1. **Route layering is mixed.** Koin-based use cases exist for gate, customer and payment workflows, while several older admin APIs call repositories directly. Changes should follow local conventions but avoid assuming a universal domain boundary.
+1. **Route layering is mixed.** Koin-based use cases exist for gate, customer and payment workflows, while several older admin APIs call repositories directly. The preferred approach for new or security-sensitive business workflows is described in [Architecture at a glance](#2-architecture-at-a-glance); broad legacy refactors need a concrete benefit.
 2. **Nginx and Docker are host-side dependencies.** Unit tests use fakes/temp dirs for most logic, but real sudoers, nginx include placement, systemd behavior, Docker networking, DNS, Certbot validation and file ownership still need server-side verification.
 3. **Gate `FAIL_MODE` applies when PostgreSQL cannot resolve a target.** It defaults closed; explicit `open` is an availability override. Gate authorization no longer depends on Redis status entries.
 4. **The public version endpoint reports the timer's latest known successful build, not an instantaneous query to GitHub.** If the timer cannot run or GitHub is unavailable, the result becomes stale/unknown rather than being a guaranteed live CI query.

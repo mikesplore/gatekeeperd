@@ -56,6 +56,20 @@ class AppSettingsTest {
     }
 
     @Test
+    fun `mpesa shortcode uses canonical variable and preserves legacy fallback`() {
+        val canonical = AppSettings.fromEnv(mapOf("MPESA_SHORT_CODE" to "123456"), loadDotenv = false)
+        val legacy = AppSettings.fromEnv(mapOf("MPESA_SHORTCODE" to "654321"), loadDotenv = false)
+        val both = AppSettings.fromEnv(
+            mapOf("MPESA_SHORT_CODE" to "123456", "MPESA_SHORTCODE" to "654321"),
+            loadDotenv = false
+        )
+
+        assertEquals("123456", canonical.payment.mpesaShortCode)
+        assertEquals("654321", legacy.payment.mpesaShortCode)
+        assertEquals("123456", both.payment.mpesaShortCode)
+    }
+
+    @Test
     fun `development nginx host operations are explicitly opt in`() {
         val settings = AppSettings.fromEnv(
             mapOf(

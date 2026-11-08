@@ -2,10 +2,19 @@ package com.gatekeeper.feature.payment.data.provider
 
 import com.gatekeeper.config.AppSettings
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class MpesaGatewayConfigurationTest {
+    @Test
+    fun `callback template is a base URL and token is appended exactly once`() {
+        assertEquals(
+            "https://payments.example.test/api/mpesa/callback/opaque-token",
+            mpesaDarajaCallbackUrl("https://payments.example.test/api/mpesa/callback/", "opaque-token")
+        )
+    }
+
     @Test
     fun `production callback must use https`() {
         val insecure = gateway(callbackUrl = "http://payments.example.test/api/mpesa/callback", environment = "production")
@@ -27,7 +36,7 @@ class MpesaGatewayConfigurationTest {
             mapOf(
                 "MPESA_CONSUMER_KEY" to "test-key",
                 "MPESA_CONSUMER_SECRET" to "test-secret",
-                "MPESA_SHORTCODE" to "123456",
+                "MPESA_SHORT_CODE" to "123456",
                 "MPESA_PASSKEY" to "test-passkey",
                 "MPESA_CALLBACK_URL" to callbackUrl,
                 "MPESA_CALLBACK_TOKEN" to "t".repeat(40),

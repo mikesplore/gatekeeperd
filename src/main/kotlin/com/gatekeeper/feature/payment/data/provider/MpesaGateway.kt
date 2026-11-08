@@ -45,7 +45,7 @@ class MpesaGateway(private val settings: AppSettings.PaymentSettings) : PaymentG
         val password = Base64.getEncoder().encodeToString("${settings.mpesaShortCode}${settings.mpesaPasskey}$timestamp".toByteArray())
         val response = http.post("$baseUrl/mpesa/stkpush/v1/processrequest") {
             bearerAuth(token()); contentType(ContentType.Application.Json)
-            val callbackUrl = "${settings.mpesaCallbackUrl.trimEnd('/')}/${settings.mpesaCallbackToken}"
+            val callbackUrl = mpesaDarajaCallbackUrl(settings.mpesaCallbackUrl, settings.mpesaCallbackToken)
             setBody(MpesaStkRequest(settings.mpesaShortCode, password, timestamp, TransactionType = "CustomerPayBillOnline", Amount = command.amount.longValueExact(), PartyA = phone, PartyB = settings.mpesaShortCode, PhoneNumber = phone, CallBackURL = callbackUrl, AccountReference = command.projectSlug, TransactionDesc = "Gatekeeper payment"))
         }
         val responseBody = response.bodyAsText()
@@ -112,3 +112,5 @@ internal fun mpesaQueryStatus(resultCode: Int?): String = when (resultCode) {
     null -> "pending"
     else -> "failed"
 }
+
+internal fun mpesaDarajaCallbackUrl(baseUrl: String, token: String): String = "${baseUrl.trimEnd('/')}/$token"
