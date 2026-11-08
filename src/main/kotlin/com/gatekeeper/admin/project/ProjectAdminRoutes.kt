@@ -17,6 +17,7 @@ import com.gatekeeper.feature.audit.domain.repository.AuditRepository as AuditRe
 import com.gatekeeper.feature.payment.domain.usecase.ListProjectPayments
 import com.gatekeeper.feature.project.domain.repository.ProjectRepository
 import com.gatekeeper.feature.customer.domain.repository.CustomerRepository as CustomerStore
+import com.gatekeeper.feature.service.domain.repository.SiteRepository
 import com.gatekeeper.feature.project.domain.repository.ProjectAdjustmentRepository as ProjectAdjustmentStore
 import com.gatekeeper.db.tables.AdjustmentType
 import com.gatekeeper.db.tables.AccessBlockReason
@@ -70,6 +71,7 @@ fun Application.configureProjectAdminRoutes() {
     val scribed = get<ScribedIntegrationClient>()
     val nginx = get<NginxSiteStorage>()
     val removeSiteConfig = get<RemoveSiteConfigUseCase>()
+    val siteRepository = get<SiteRepository>()
     routing {
         authenticate("auth-jwt") {
             install(com.gatekeeper.rbac.presentation.RbacAuthorizationPlugin)
@@ -330,7 +332,13 @@ fun Application.configureProjectAdminRoutes() {
                 }
 
                 runCatching {
-                    val removed = removeSiteConfig.removeProject(slug)
+                    projects.findBySlug(slug, includeArchived = true)?.id?.let(siteRepository::deleteByProjectId)
+                }.onFailure { e ->
+                    projectAdminLogger.warn("Project archived but site records could not be removed for slug=$slug: ${e.message}")
+                }
+
+                runCatching {
+                    val removed = removeSiteConfig.execute(slug)
                     if (!removed) {
                         projectAdminLogger.warn("Project archived but nginx cleanup failed for slug=$slug (removeProject returned false)")
                         return@runCatching

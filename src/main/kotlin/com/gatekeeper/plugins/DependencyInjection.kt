@@ -278,9 +278,12 @@ private val applicationModule = module {
         )
     }
     single {
+        val nginxSettings = get<AppSettings>().nginx
         ClassifyConfigsUseCase(
             nginxSiteStorage = get(),
             selfDomainExclusion = get(),
+            sitesEnabledPath = nginxSettings.sitesEnabledPath,
+            sitesAvailablePath = nginxSettings.sitesAvailablePath,
             configAnalyzer = lazy { get<NginxConflictAnalyzer>() }
         )
     }
@@ -295,7 +298,15 @@ private val applicationModule = module {
             nginxConfigDumpRunner = { get<NginxCommandRunner>().dumpConfig() }
         )
     }
-    single { ListConfigArtifactsUseCase(domainRules = get(), nginxConflictAnalyzer = get()) }
+    single {
+        val nginxSettings = get<AppSettings>().nginx
+        ListConfigArtifactsUseCase(
+            sitesAvailablePath = nginxSettings.sitesAvailablePath,
+            sitesEnabledPath = nginxSettings.sitesEnabledPath,
+            domainRules = get(),
+            nginxConflictAnalyzer = get()
+        )
+    }
     single {
         ApplySiteConfigUseCase(
             commandRunner = get(),
@@ -307,11 +318,29 @@ private val applicationModule = module {
             nginxConflictAnalyzer = get()
         )
     }
-    single { RemoveSiteConfigUseCase(domainRules = get()) }
-    single { DisableProjectUseCase(domainRules = get()) }
-    single { DisableManualConfigUseCase(get(), get(), get(), get(), { get<NginxCommandRunner>().reload() }) }
-    single { InspectManualConfigUseCase(domainRules = get(), nginxConflictAnalyzer = get()) }
-    single { DeleteManualConfigUseCase(get(), get(), get()) }
+    single {
+        val nginxSettings = get<AppSettings>().nginx
+        RemoveSiteConfigUseCase(nginxSettings.sitesAvailablePath, nginxSettings.sitesEnabledPath, get())
+    }
+    single {
+        val nginxSettings = get<AppSettings>().nginx
+        DisableProjectUseCase(get(), nginxSettings.sitesAvailablePath, nginxSettings.sitesEnabledPath)
+    }
+    single {
+        val nginxSettings = get<AppSettings>().nginx
+        DisableManualConfigUseCase(
+            get(), get(), get(), get(), { get<NginxCommandRunner>().reload() },
+            nginxSettings.sitesAvailablePath, nginxSettings.sitesEnabledPath
+        )
+    }
+    single {
+        val nginxSettings = get<AppSettings>().nginx
+        InspectManualConfigUseCase(nginxSettings.sitesAvailablePath, nginxSettings.sitesEnabledPath, get(), get())
+    }
+    single {
+        val nginxSettings = get<AppSettings>().nginx
+        DeleteManualConfigUseCase(get(), get(), get(), nginxSettings.sitesAvailablePath)
+    }
     single {
         UpdateSiteConfigBlockUseCase(
             nginxSiteStorage = get(),

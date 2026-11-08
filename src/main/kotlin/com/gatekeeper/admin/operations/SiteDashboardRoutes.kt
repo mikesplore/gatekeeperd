@@ -247,7 +247,7 @@ fun Route.registerSiteDashboardRoutes(dependencies: OperationsAdminDependencies)
                 ); return@delete
             }
             val site = siteRepository.findByProjectSlug(slug) ?: siteRepository.findByDomain(slug)
-            val removed = site?.let(nginx::removeSiteArtifacts) ?: removesite.removeProject(slug)
+            val removed = site?.let(nginx::removeSiteArtifacts) ?: removesite.execute(slug)
             if (!removed) {
                 call.respondError(
                     HttpStatusCode.InternalServerError,

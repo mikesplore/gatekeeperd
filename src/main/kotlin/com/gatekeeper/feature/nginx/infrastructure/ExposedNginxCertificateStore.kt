@@ -13,7 +13,7 @@ class ExposedNginxCertificateStore(
 ) : NginxCertificateStore {
 
     override fun syncInventory(domain: String, expiresAt: LocalDateTime?, status: String) {
-        nginxServiceLogger.info("Syncing inventory for $domain")
+        nginxServiceLogger.debug("Refreshing installed certificate metadata for domain={}", domain)
         certificateRepository.syncInventory(domain, expiresAt, status)
     }
 

@@ -22,6 +22,7 @@ import java.io.File
 import java.util.*
 import com.gatekeeper.feature.customer.domain.repository.CustomerRepository as CustomerStore
 import com.gatekeeper.feature.service.domain.repository.SiteDashboardUpdate
+import com.gatekeeper.feature.service.domain.repository.SiteRecord
 
 fun Route.registerNginxConfigRoutes(dependencies: OperationsAdminDependencies) {
     val projects = dependencies.projects
@@ -40,8 +41,12 @@ fun Route.registerNginxConfigRoutes(dependencies: OperationsAdminDependencies) {
     val artifacts = dependencies.artifacts
     val inspector = dependencies.inspector
     val delManualConfigUseCase = dependencies.delManualConfigUseCase
+    fun activeSites(): List<SiteRecord> {
+        val activeProjectIds = projects.findAll().mapTo(hashSetOf()) { it.id }
+        return siteRepository.findAll().filter { it.projectId in activeProjectIds }
+    }
         get("/api/admin/nginx/configs") {
-            call.respond(artifacts.execute())
+            call.respond(artifacts.execute(activeSites()))
         }
 
         get("/api/admin/nginx/manual-configs/{filename}") {
@@ -88,7 +93,7 @@ fun Route.registerNginxConfigRoutes(dependencies: OperationsAdminDependencies) {
                     "Set confirm=true to back up and disable this manual config"
                 ); return@post
             }
-            val artifact = artifacts.execute().firstOrNull { it.filename == filename }
+            val artifact = artifacts.execute(activeSites()).firstOrNull { it.filename == filename }
                 ?: run {
                     call.respondError(
                         HttpStatusCode.NotFound,
@@ -180,7 +185,7 @@ fun Route.registerNginxConfigRoutes(dependencies: OperationsAdminDependencies) {
         }
 
         get("/api/admin/dashboard/dead-configs") {
-            call.respond(artifacts.execute().filter { it.orphaned })
+            call.respond(artifacts.execute(activeSites()).filter { it.orphaned })
         }
 
         delete("/api/admin/dashboard/dead-configs/{filename}") {
@@ -212,7 +217,7 @@ fun Route.registerNginxConfigRoutes(dependencies: OperationsAdminDependencies) {
                     "Set confirm=true to move this dead config to backup"
                 ); return@delete
             }
-            val artifact = artifacts.execute().firstOrNull { it.filename == filename }
+            val artifact = artifacts.execute(activeSites()).firstOrNull { it.filename == filename }
                 ?: run {
                     call.respondError(
                         HttpStatusCode.NotFound,

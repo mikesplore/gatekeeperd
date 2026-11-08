@@ -82,9 +82,12 @@ class DeploymentWorker(
 
     private fun cleanupInterruptedCandidate(deploymentId: UUID, candidateName: String?, reason: String): Boolean {
         return candidateName.isNullOrBlank() || runCatching {
-            docker.removeContainerIfPresent(candidateName)
-        }.onSuccess { removed ->
-            if (removed) {
+            val present = docker.listContainers(all = true).any { container ->
+                container.name.removePrefix("/") == candidateName
+            }
+            !present || docker.removeContainerIfPresent(candidateName)
+        }.onSuccess { cleaned ->
+            if (cleaned) {
                 DeploymentApplicationService.clearCandidateRuntimeAfterCutoverRecovery(deploymentId)
                 auditRepository.write(
                     null,
@@ -100,7 +103,13 @@ class DeploymentWorker(
     }
 
     private fun recoverInterruptedCutovers() {
-        for ((deploymentId, recovery) in DeploymentApplicationService.pendingCutovers()) {
+        val pending = DeploymentApplicationService.pendingCutovers()
+        if (pending.isEmpty()) return
+        val observedContainers = runCatching { docker.listContainers(all = true) }.getOrElse { error ->
+            logger.warn("Skipping interrupted cutover recovery because Docker inventory is unavailable", error)
+            return
+        }
+        for ((deploymentId, recovery) in pending) {
             val serviceId = recovery.serviceId ?: continue
             val lockKey = "deployment-service:$serviceId:${recovery.environment}"
             DistributedLock.tryWithLock(lockKey) {
@@ -108,15 +117,30 @@ class DeploymentWorker(
                 val files = recovery.files
                 val candidate = DeploymentApplicationService.candidateRuntime(deploymentId)
                 if (site == null || files == null) {
-                    cleanupInterruptedCandidate(deploymentId, candidate?.name, "missing recovery data or site")
-                    DeploymentApplicationService.updateCutoverState(
-                        deploymentId,
-                        "repair_required",
-                        "Pending upstream recovery data or site is missing"
-                    )
+                    val cleaned = cleanupInterruptedCandidate(deploymentId, candidate?.name, "missing recovery data or site")
+                    if (site == null && cleaned) {
+                        deploymentQueue.failInterruptedCutover(
+                            deploymentId,
+                            "Service site no longer exists; discarded the interrupted deployment candidate"
+                        )
+                        DeploymentApplicationService.updateCutoverState(
+                            deploymentId,
+                            "restored",
+                            "Service site no longer exists; the interrupted candidate was discarded"
+                        )
+                    } else {
+                        DeploymentApplicationService.updateCutoverState(
+                            deploymentId,
+                            "repair_required",
+                            "Pending upstream recovery data or site is missing"
+                        )
+                    }
                     return@tryWithLock
                 }
-                val candidateRunning = candidate?.name?.let { docker.containerHealth(it) == "running" } == true
+                val candidateRunning = candidate?.name?.let { name ->
+                    observedContainers.firstOrNull { it.name.removePrefix("/") == name }
+                        ?.state?.equals("running", ignoreCase = true) == true
+                } == true
                 val restoringFailedCutover = recovery.state == "repair_required"
                 val result = recoverInterruptedCutoverUseCase.execute(
                     site, files, candidateRunning && !restoringFailedCutover

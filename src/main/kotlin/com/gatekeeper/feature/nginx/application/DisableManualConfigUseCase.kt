@@ -14,15 +14,19 @@ class DisableManualConfigUseCase(
     private val inspectManualConfig: InspectManualConfigUseCase,
     private val listConfArtifacts: ListConfigArtifactsUseCase,
     private val nginxReloadRunner: () -> Boolean,
+    private val sitesAvailablePath: String = "/etc/nginx/sites-available",
+    private val sitesEnabledPath: String = "/etc/nginx/sites-enabled",
 ) {
-    fun execute(filename: String): NginxManualConfigDisableResult = disableManualConfigLocked(filename)
+    fun execute(filename: String): NginxManualConfigDisableResult = disableManualConfigLocked(
+        filename, sitesAvailablePath = sitesAvailablePath, sitesEnabledPath = sitesEnabledPath
+    )
 
     fun disableManualConfigLocked(
         filename: String, sitesAvailablePath: String = "/etc/nginx/sites-available",
         sitesEnabledPath: String = "/etc/nginx/sites-enabled",
     ): NginxManualConfigDisableResult {
         require(domainRules.isSafeConfigFilename(filename)) { "Invalid nginx config filename" }
-        val detail = inspectManualConfig.inspectManualConfig(filename)
+        val detail = inspectManualConfig.inspectManualConfig(filename, sitesAvailablePath, sitesEnabledPath)
         require(detail.enabled) { "Manual nginx config is already disabled" }
         val available = File(sitesAvailablePath, filename)
         val availableWasPresent = available.isFile
