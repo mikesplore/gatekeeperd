@@ -38,24 +38,27 @@ Pick one method. Target layout:
 
 **From your laptop (repository checkout):**
 
+Replace `USER` with your SSH username and `VPS` with the server address or SSH host
+alias. Create a staging directory owned by that SSH user, then copy the files:
+
 ```bash
 cd /path/to/gatekeeperd
-ssh USER@VPS 'sudo install -d -m 0755 /tmp/gk-deploy'
+ssh USER@VPS 'mkdir -p "$HOME/gk-deploy" && chmod 0700 "$HOME/gk-deploy"'
 scp deploy.sh scripts/gatekeeperd-deploy-preflight.sh scripts/deploy.env.example \
   scripts/gatekeeperd-auto-deploy scripts/gatekeeperd-slot@.service \
-  USER@VPS:/tmp/gk-deploy/
+  USER@VPS:~/gk-deploy/
 ```
 
 On the **VPS**:
 
 ```bash
 sudo install -d -m 0755 /opt/gatekeeperd/scripts
-sudo install -m 0755 /tmp/gk-deploy/deploy.sh /opt/gatekeeperd/deploy.sh
-sudo install -m 0755 /tmp/gk-deploy/gatekeeperd-deploy-preflight.sh \
+sudo install -m 0755 "$HOME/gk-deploy/deploy.sh" /opt/gatekeeperd/deploy.sh
+sudo install -m 0755 "$HOME/gk-deploy/gatekeeperd-deploy-preflight.sh" \
   /opt/gatekeeperd/scripts/gatekeeperd-deploy-preflight.sh
-sudo install -m 0755 /tmp/gk-deploy/gatekeeperd-auto-deploy /opt/gatekeeperd/gatekeeperd-auto-deploy
-sudo install -m 0644 /tmp/gk-deploy/deploy.env.example /opt/gatekeeperd/deploy.env.example
-sudo install -m 0644 /tmp/gk-deploy/gatekeeperd-slot@.service \
+sudo install -m 0755 "$HOME/gk-deploy/gatekeeperd-auto-deploy" /opt/gatekeeperd/gatekeeperd-auto-deploy
+sudo install -m 0644 "$HOME/gk-deploy/deploy.env.example" /opt/gatekeeperd/deploy.env.example
+sudo install -m 0644 "$HOME/gk-deploy/gatekeeperd-slot@.service" \
   /opt/gatekeeperd/gatekeeperd-slot@.service.in
 ```
 
