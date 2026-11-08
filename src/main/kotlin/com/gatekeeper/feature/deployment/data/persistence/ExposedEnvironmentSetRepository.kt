@@ -25,6 +25,12 @@ import org.jetbrains.exposed.sql.transactions.transaction
 import java.time.LocalDateTime
 import java.util.UUID
 
+internal fun belongsToServiceEnvironmentConfiguration(
+    configurationServiceId: UUID?,
+    serviceId: UUID,
+    isDefaultService: Boolean
+): Boolean = configurationServiceId == serviceId || (isDefaultService && configurationServiceId == null)
+
 /** Environment metadata readers. Values are returned only for the authenticated service editor response. */
 class ExposedEnvironmentSetRepository : EnvironmentSetRepository {
     override fun sharedMetadata(projectId: UUID, environment: String): SharedEnvironmentMetadata = transaction {
@@ -54,8 +60,12 @@ class ExposedEnvironmentSetRepository : EnvironmentSetRepository {
         }
         val configurations = DeploymentConfigurations.selectAll().where {
             (DeploymentConfigurations.projectId eq projectId) and
-                ((DeploymentConfigurations.serviceId eq serviceId) or DeploymentConfigurations.serviceId.isNull())
-        }.toList().filter { it[DeploymentConfigurations.environment] == environment }
+                (DeploymentConfigurations.environment eq environment)
+        }.toList().filter {
+            belongsToServiceEnvironmentConfiguration(
+                it[DeploymentConfigurations.serviceId], serviceId, service[Services.isDefault]
+            )
+        }
             .sortedByDescending { it[DeploymentConfigurations.serviceId] == serviceId }
         val configured = configurations.firstOrNull()
         val configuredServiceValues = when {
