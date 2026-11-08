@@ -39,6 +39,8 @@ jobs:
           tar -czf build/libs/gatekeeperd-deploy-tools.tar.gz \
             deploy.sh \
             scripts/gatekeeperd-auto-deploy \
+            scripts/gatekeeperd-deploy-preflight.sh \
+            scripts/deploy.env.example \
             scripts/gatekeeperd-auto-deploy.service \
             scripts/gatekeeperd-auto-deploy.timer \
             'scripts/gatekeeperd-slot@.service'

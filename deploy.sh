@@ -2,6 +2,7 @@
 # Gatekeeperd deploy and rollback.
 #
 #   deploy.sh [--run-id ID] [--force]   deploy latest successful build (or a specific run)
+#   deploy.sh --check                   verify prerequisites and prepare host layout (no deploy)
 #   deploy.sh --rollback [RELEASE|SHA]  switch to previous (or named) local release; no network needed
 #   deploy.sh --list                    list local releases (* = current)
 #
@@ -47,6 +48,7 @@ READY_PATH="${DEPLOY_READY_PATH:-/api/health/ready}"
 LIVE_PATH="${DEPLOY_LIVE_PATH:-/api/health/live}"
 GATEWAY_URL="${DEPLOY_GATEWAY_URL:-}"
 DEPLOY_TOOLS_DIR=""
+GK_DEPLOY_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 MODE="deploy"
 RUN_ID=""
@@ -93,8 +95,27 @@ cleanup() {
 trap cleanup EXIT
 
 usage() {
-  echo "Usage: $0 [--run-id ID] [--force] | --rollback [RELEASE|SHA] | --list" >&2
+  echo "Usage: $0 [--run-id ID] [--force] | --check | --rollback [RELEASE|SHA] | --list" >&2
   exit 2
+}
+
+load_preflight() {
+  local candidate
+  for candidate in \
+    "${GK_DEPLOY_SCRIPT_DIR}/scripts/gatekeeperd-deploy-preflight.sh" \
+    "${TARGET_DIR}/scripts/gatekeeperd-deploy-preflight.sh"; do
+    if [[ -f "${candidate}" ]]; then
+      # shellcheck source=scripts/gatekeeperd-deploy-preflight.sh
+      source "${candidate}"
+      return 0
+    fi
+  done
+  die "Preflight module is missing. Deploy a build that includes scripts/gatekeeperd-deploy-preflight.sh."
+}
+
+run_deploy_preflight() {
+  load_preflight
+  gk_preflight_run
 }
 
 # ---------------------------------------------------------------- releases
@@ -586,6 +607,9 @@ install_auto_deploy() {
   local tools_dir="$1" gh_dir
   log "Installing automatic deployment checker..."
   sudo install -o root -g root -m 0755 "${tools_dir}/deploy.sh" "${TARGET_DIR}/deploy.sh"
+  sudo install -d -o root -g root -m 0755 "${TARGET_DIR}/scripts"
+  sudo install -o root -g root -m 0755 "${tools_dir}/scripts/gatekeeperd-deploy-preflight.sh" "${TARGET_DIR}/scripts/gatekeeperd-deploy-preflight.sh"
+  sudo install -o root -g root -m 0644 "${tools_dir}/scripts/deploy.env.example" "${TARGET_DIR}/deploy.env.example"
   sudo install -o root -g root -m 0644 "${tools_dir}/scripts/gatekeeperd-slot@.service" "${TARGET_DIR}/gatekeeperd-slot@.service.in"
   sudo install -o root -g root -m 0755 "${tools_dir}/scripts/gatekeeperd-auto-deploy" "${TARGET_DIR}/gatekeeperd-auto-deploy"
   sudo install -o root -g root -m 0644 "${tools_dir}/scripts/gatekeeperd-auto-deploy.service" /etc/systemd/system/gatekeeperd-auto-deploy.service
@@ -623,8 +647,6 @@ check_sha() { # file sha-file label
 
 do_deploy() {
   local run_info run_status run_conclusion head_branch previous held current_commit
-  command -v gh >/dev/null 2>&1 || die "GitHub CLI ('gh') is required to fetch workflow artifacts."
-  command -v curl >/dev/null 2>&1 || die "curl is required for post-deploy health verification."
 
   if [[ -n "${RUN_ID}" ]]; then
     log "Verifying workflow run ${RUN_ID}..."
@@ -673,13 +695,13 @@ do_deploy() {
   mkdir -p "${tools_dir}"
   while IFS= read -r member; do
     case "${member}" in
-      deploy.sh|scripts/gatekeeperd-auto-deploy|scripts/gatekeeperd-auto-deploy.service|scripts/gatekeeperd-auto-deploy.timer|scripts/gatekeeperd-slot@.service) ;;
+      deploy.sh|scripts/gatekeeperd-auto-deploy|scripts/gatekeeperd-deploy-preflight.sh|scripts/deploy.env.example|scripts/gatekeeperd-auto-deploy.service|scripts/gatekeeperd-auto-deploy.timer|scripts/gatekeeperd-slot@.service) ;;
       *) die "Unexpected path in deployment tools archive: ${member}" ;;
     esac
   done < <(tar -tzf "${tools}")
   tar -xzf "${tools}" -C "${tools_dir}" --no-same-owner
   DEPLOY_TOOLS_DIR="${tools_dir}"
-  for f in deploy.sh scripts/gatekeeperd-auto-deploy scripts/gatekeeperd-auto-deploy.service scripts/gatekeeperd-auto-deploy.timer scripts/gatekeeperd-slot@.service; do
+  for f in deploy.sh scripts/gatekeeperd-auto-deploy scripts/gatekeeperd-deploy-preflight.sh scripts/deploy.env.example scripts/gatekeeperd-auto-deploy.service scripts/gatekeeperd-auto-deploy.timer scripts/gatekeeperd-slot@.service; do
     [[ -f "${tools_dir}/${f}" ]] || die "Deployment tools archive is missing ${f##*/}."
   done
 
@@ -743,6 +765,7 @@ main() {
         MODE="rollback"; shift
         if [[ $# -ge 1 && "$1" != --* ]]; then ROLLBACK_TARGET="$1"; shift; fi ;;
       --list) MODE="list"; shift ;;
+      --check) MODE="check"; shift ;;
       *) usage ;;
     esac
   done
@@ -759,8 +782,18 @@ main() {
   sudo mkdir -p "${TARGET_DIR}"
 
   case "${MODE}" in
-    rollback) do_rollback ;;
-    deploy) do_deploy ;;
+    check)
+      run_deploy_preflight
+      log "Host checks and preparation succeeded. Run without --check to deploy."
+      ;;
+    rollback)
+      GK_PREFLIGHT_SKIP_GH=1 run_deploy_preflight
+      do_rollback
+      ;;
+    deploy)
+      run_deploy_preflight
+      do_deploy
+      ;;
   esac
 }
 

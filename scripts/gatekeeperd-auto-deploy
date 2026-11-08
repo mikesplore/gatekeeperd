@@ -40,6 +40,8 @@ finish_attempt() {
   if [[ -n "${ATTEMPT_META}" ]]; then
     if (( exit_code == 0 )); then
       write_attempt_metadata succeeded complete 0 "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    elif (( exit_code >= 10 && exit_code < 20 )); then
+      write_attempt_metadata failed preflight "${exit_code}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     else
       write_attempt_metadata failed deployment "${exit_code}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     fi
@@ -52,13 +54,34 @@ if [[ "${EUID}" -ne 0 ]]; then
   exit 1
 fi
 
-if ! command -v gh >/dev/null 2>&1; then
-  echo "Error: GitHub CLI ('gh') is required for automatic deployment." >&2
-  exit 1
+DEPLOY_CONFIG_FILE="${DEPLOY_CONFIG_FILE:-/etc/gatekeeperd/deploy.env}"
+if [[ -r /etc/gatekeeperd/auto-deploy.env ]]; then
+  # shellcheck disable=SC1091
+  source /etc/gatekeeperd/auto-deploy.env
 fi
+if [[ -r "${DEPLOY_CONFIG_FILE}" ]]; then
+  # shellcheck disable=SC1090
+  source "${DEPLOY_CONFIG_FILE}"
+fi
+
+GK_DEPLOY_SCRIPT_DIR="${TARGET_DIR}"
+PREFLIGHT_SCRIPT="${TARGET_DIR}/scripts/gatekeeperd-deploy-preflight.sh"
+if [[ ! -f "${PREFLIGHT_SCRIPT}" && -f "$(dirname "${DEPLOY_SCRIPT}")/scripts/gatekeeperd-deploy-preflight.sh" ]]; then
+  PREFLIGHT_SCRIPT="$(dirname "${DEPLOY_SCRIPT}")/scripts/gatekeeperd-deploy-preflight.sh"
+fi
+if [[ -f "${PREFLIGHT_SCRIPT}" ]]; then
+  # shellcheck source=scripts/gatekeeperd-deploy-preflight.sh
+  source "${PREFLIGHT_SCRIPT}"
+  gk_preflight_run
+  export GK_PREFLIGHT_DONE=1
+else
+  echo "Error: ${PREFLIGHT_SCRIPT} is missing. Run 'sudo ${DEPLOY_SCRIPT} --check' from a current build artifact first." >&2
+  exit 10
+fi
+
 if [[ ! -x "${DEPLOY_SCRIPT}" ]]; then
-  echo "Error: ${DEPLOY_SCRIPT} is missing; run deploy.sh once to install auto-deploy." >&2
-  exit 1
+  echo "Error: ${DEPLOY_SCRIPT} is missing; run deploy.sh --check once to install host scripts." >&2
+  exit 10
 fi
 
 RUN_INFO="$(gh run list \
@@ -130,10 +153,15 @@ write_attempt_metadata running starting_deploy 0 ""
 trap finish_attempt EXIT
 exec > >(tee -a "${ATTEMPT_LOG}") 2>&1
 write_attempt_metadata running deployment 0 ""
-if "${DEPLOY_SCRIPT}" --run-id "${RUN_ID}"; then
+if GK_PREFLIGHT_DONE=1 "${DEPLOY_SCRIPT}" --run-id "${RUN_ID}"; then
   rm -f "${FAILED_COMMIT_FILE}"
 else
+  rc=$?
+  if (( rc >= 10 && rc < 20 )); then
+    echo "Host preflight failed during deploy; no failed-commit latch set for ${COMMIT_SHA}." >&2
+    exit "${rc}"
+  fi
   printf '%s\n' "${COMMIT_SHA}" >"${FAILED_COMMIT_FILE}"
   echo "Deployment of ${COMMIT_SHA} failed; it will not be retried automatically." >&2
-  exit 1
+  exit "${rc}"
 fi

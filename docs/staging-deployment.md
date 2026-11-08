@@ -35,15 +35,26 @@ deployment continues to use the CI artifact and blue/green cutover.
 ## Deploy the systemd service from a CI artifact
 
 `deploy.sh` downloads the JAR from the latest successful `build.yml` workflow run on
-`main`. The VPS does not need a source checkout. Authenticate GitHub CLI with
-permission to read workflow artifacts, download the deployment script, and run it:
+`main`. The first host check needs the deployment scripts and slot template alongside
+`deploy.sh`; a source checkout is not needed after bootstrap. Install **Java 21**,
+**nginx**, **GitHub CLI (`gh`)**, **curl**, and **git** for the initial bootstrap on the
+host first; the preflight checks runtime/deployment tools but does not install them.
 
 ```bash
-gh auth login
-curl -fsSLo deploy.sh https://raw.githubusercontent.com/mikesplore/gatekeeperd/main/deploy.sh
-chmod +x deploy.sh
-./deploy.sh
+git clone --depth 1 https://github.com/mikesplore/gatekeeperd.git /tmp/gatekeeperd-bootstrap
+cd /tmp/gatekeeperd-bootstrap
+sudo gh auth login   # or configure GH_CONFIG_DIR in /etc/gatekeeperd/auto-deploy.env
+sudo ./deploy.sh --check    # prerequisite checks + idempotent host prep (no deploy)
+sudo ./deploy.sh            # blue/green deploy when --check passes
 ```
+
+Before the first successful `--check`, copy application secrets to
+`/etc/gatekeeperd/gatekeeperd.env` (see [`.env.example`](../.env.example)) and point
+your Gatekeeperd nginx vhost at `proxy_pass http://gatekeeperd_backend;` (see
+[nginx reverse proxy](nginx-reverse-proxy.md)). The preflight step can create
+`/etc/gatekeeperd/deploy.env` from a template and an empty `gatekeeperd-upstream.conf`
+stub when those files are missing; set `DEPLOY_GATEWAY_URL` in `deploy.env` to your
+public API origin, then run `sudo ./deploy.sh --check` again until it succeeds.
 
 The script downloads a specific workflow artifact and checks its JAR, Certbot helper,
 and deployment-tool checksums. Systemd deployments use blue/green slots: the inactive
@@ -53,58 +64,25 @@ running as a rollback target. If the candidate fails before or after cutover, tr
 stays on or returns to the previous slot; the script never restarts the active slot to
 test a new release. It records the active commit in
 `/opt/gatekeeperd/source-commit.txt` and preserves the current and previous slot releases.
+Host preflight failures exit with code 10 or 11 and do **not** set the auto-deploy
+failed-commit latch.
 
 ### One-time systemd blue/green setup
 
-The first blue/green deployment needs a stable Nginx upstream and a shared environment
-file. Keep the current `gatekeeperd.service` running while preparing these settings.
+Keep the current `gatekeeperd.service` running for the first migration when possible.
 
-1. Copy the existing application environment to `/etc/gatekeeperd/gatekeeperd.env`.
-   Keep it readable by the same service user and group as `gatekeeperd.service`; protect
-   its secrets with appropriate file permissions. Do not set a fixed `PORT` here; each
-   slot supplies its own port.
-2. Create `/etc/gatekeeperd/deploy.env` with deployment-only settings:
-
-   ```env
-   DEPLOY_APP_ENV_FILE=/etc/gatekeeperd/gatekeeperd.env
-   DEPLOY_GATEWAY_URL=https://gateapi.example.net
-   DEPLOY_SOAK_SECONDS=30
-   DEPLOY_NGINX_DRAIN_TIMEOUT_SECONDS=620
-   ```
-
-   `DEPLOY_GATEWAY_URL` must be the public origin served by the Gatekeeperd Nginx vhost.
-   This file contains no application secrets and must be readable by the account that
-   runs `deploy.sh`.
-3. Ensure `/etc/nginx/conf.d/*.conf` is included inside Nginx's `http` block. Create
-   `/etc/nginx/conf.d/gatekeeperd-upstream.conf` with the current single-process target:
-
-   ```nginx
-   upstream gatekeeperd_backend {
-       server 127.0.0.1:8080;
-       keepalive 32;
-   }
-   ```
-
-4. In the Gatekeeperd reverse-proxy vhost, change
-   `proxy_pass http://localhost:8080;` to `proxy_pass http://gatekeeperd_backend;`.
-   Check and gracefully reload Nginx:
+1. Copy the application environment to `/etc/gatekeeperd/gatekeeperd.env` (readable by
+   the `gatekeeperd` service user; do not set a fixed `PORT` in this file).
+2. Ensure `/etc/nginx/conf.d/*.conf` is included in the `http` block and the Gatekeeperd
+   vhost uses `proxy_pass http://gatekeeperd_backend;`.
+3. Run `sudo ./deploy.sh --check`. It creates missing host files (for example
+   `deploy.env`, upstream stub, slot unit template) where safe, then reports anything
+   you must still fix manually (usually `DEPLOY_GATEWAY_URL` or nginx include wiring).
+4. Deploy once to complete legacy → blue/green migration:
 
    ```bash
-   sudo nginx -t && sudo systemctl reload nginx
+   sudo ./deploy.sh --force
    ```
-
-5. Run one manual deployment to migrate the current release into a blue/green slot and
-   verify the setup:
-
-   ```bash
-   ./deploy.sh --force
-   ```
-
-   This starts the incoming release in a second slot, checks it directly, switches Nginx
-   to it, and verifies the public readiness URL before stopping the legacy service. The
-   legacy process stays available until Nginx's old workers drain. If any check fails,
-   the request route remains on the old process. After this setup, automatic deployments
-   use the same blue/green flow.
 
 The slot systemd unit inherits the legacy service's user, group, and supplementary groups.
 Scheduled worker loops use PostgreSQL advisory locks, so only one overlapping instance
