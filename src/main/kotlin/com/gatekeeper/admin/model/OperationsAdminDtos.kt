@@ -58,7 +58,8 @@ data class DashboardSiteResponse(
     val upstreamExplicitPort: Int? = null, val runtimeHealth: String? = null,
     val resolvedUpstreamHost: String? = null, val resolvedUpstreamPort: Int? = null,
     val tlsMode: String? = null, val gateEnabled: Boolean? = null, val serviceId: String? = null,
-    val upstreamKind: String? = null, val configFilename: String? = null, val siteId: String? = null
+    val upstreamKind: String? = null, val configFilename: String? = null, val siteId: String? = null,
+    val securityWarning: String? = null
 )
 
 @Serializable
@@ -132,6 +133,7 @@ data class DashboardSiteUpdateRequest(
     val domain: String? = null, val upstreamHost: String? = null, val upstreamMode: String? = null,
     val upstreamExplicitPort: Int? = null,
     val tlsMode: String? = null, val certMode: String? = null, val certExplicitPath: String? = null,
+    val confirmGateDisable: Boolean = false,
     val gateEnabled: Boolean? = null, val bypassPaths: List<String>? = null
 )
 

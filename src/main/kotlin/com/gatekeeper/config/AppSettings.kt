@@ -26,7 +26,8 @@ class AppSettings private constructor(
         val internalNetwork: String,
         val pullViaCli: Boolean,
         val allowedRegistries: List<String>,
-        val allowedVolumeRoots: List<String>
+        val allowedVolumeRoots: List<String>,
+        val allowPublicPortBindings: Boolean = false
     )
 
     data class NginxSettings(
@@ -38,6 +39,7 @@ class AppSettings private constructor(
         val sitesAvailablePath: String,
         val sitesEnabledPath: String,
         val upstreamIncludeDirectory: String,
+        val gatekeeperAuthUpstream: String,
         val sslCertPath: String,
         val selfDomains: List<String>,
         val environment: AppEnvironment,
@@ -145,7 +147,8 @@ class AppSettings private constructor(
             optional("GATEKEEPER_INTERNAL_NETWORK", "gk-internal"),
             boolean("DOCKER_PULL_VIA_CLI", false),
             csv("DOCKER_ALLOWED_REGISTRIES", lowercase = true),
-            csv("DOCKER_ALLOWED_VOLUME_ROOTS")
+            csv("DOCKER_ALLOWED_VOLUME_ROOTS"),
+            boolean("DOCKER_ALLOW_PUBLIC_PORT_BINDINGS", false)
         )
     }
     val nginx: NginxSettings by lazy {
@@ -167,6 +170,18 @@ class AppSettings private constructor(
                 "NGINX_UPSTREAM_INCLUDE_DIR",
                 if (environment == AppEnvironment.DEV) "nginx/conf.d/gatekeeperd-upstreams" else "/etc/nginx/conf.d/gatekeeperd-upstreams"
             ),
+            gatekeeperAuthUpstream = optional(
+                "GATEKEEPER_NGINX_AUTH_UPSTREAM",
+                if (environment == AppEnvironment.DEV) "127.0.0.1:8080" else ""
+            ).also { upstream ->
+                require(upstream.matches(Regex("[A-Za-z0-9_.-]+(?::[0-9]{1,5})?"))) {
+                    "GATEKEEPER_NGINX_AUTH_UPSTREAM must be a hostname/upstream name with an optional port"
+                }
+                val port = upstream.substringAfterLast(':', "").toIntOrNull()
+                require(port == null || port in 1..65535) {
+                    "GATEKEEPER_NGINX_AUTH_UPSTREAM port must be between 1 and 65535"
+                }
+            },
             sslCertPath = if (isolatedDevelopmentNginx) localCertificateDirectory else sslCertPath(),
             customCertDirectory = if (isolatedDevelopmentNginx) localCertificateDirectory else customCertDirectory(),
             selfDomains = required("GATEKEEPERD_SELF_DOMAIN").split(',').map { it.trim().trimEnd('.').lowercase() },

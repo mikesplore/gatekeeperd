@@ -85,7 +85,8 @@ internal sealed interface ContainerCreatePlanResult {
 internal fun computeContainerCreatePlan(
     request: CreateContainerRequest,
     internalNetwork: String,
-    docker: DockerWizardInspect
+    docker: DockerWizardInspect,
+    allowPublicPortBindings: Boolean = false
 ): ContainerCreatePlanResult {
     val name = run {
         val explicit = request.name.trim()
@@ -196,6 +197,17 @@ internal fun computeContainerCreatePlan(
         )
     }
 
+    val requestedPublicBinding = request.exposePortsPublicly ||
+        request.portHostIp?.let(::isPublicPortBinding) == true ||
+        request.portHostIps.values.any(::isPublicPortBinding)
+    if (requestedPublicBinding && !allowPublicPortBindings) {
+        return ContainerCreatePlanResult.Err(
+            HttpStatusCode.Forbidden,
+            "public_port_binding_disabled",
+            "Public container ports are disabled by server policy. Use loopback bindings or ask an administrator to enable public exposure."
+        )
+    }
+
     if (hostPorts.isNotEmpty()) {
         val inUse = runCatching { docker.hostPortsInUse() }.getOrElse {
             return ContainerCreatePlanResult.Err(
@@ -249,6 +261,7 @@ internal fun computeContainerCreatePlan(
         }
         if (willPullImage) add("Image '$imageRef' is not present locally and will be pulled during create.")
         if (willCreateInternalNetworkIfMissing) add("Internal network '$internalNetwork' is missing and will be created during create.")
+        if (requestedPublicBinding) add("Public port exposure is enabled and can bypass Nginx payment gating.")
     }
 
     return ContainerCreatePlanResult.Ok(
@@ -258,7 +271,8 @@ internal fun computeContainerCreatePlan(
                 name = name,
                 image = imageRef,
                 network = requestedNetwork,
-                restartPolicy = restartPolicy
+                restartPolicy = restartPolicy,
+                portHostIp = if (request.exposePortsPublicly) "0.0.0.0" else request.portHostIp ?: "127.0.0.1"
             ),
             imageExists = imageExists,
             willPullImage = willPullImage,

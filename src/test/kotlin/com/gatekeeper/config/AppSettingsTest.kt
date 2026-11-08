@@ -88,4 +88,44 @@ class AppSettingsTest {
         assertEquals(true, settings.nginx.hostOperationsEnabled)
         assertEquals(true, settings.nginx.certbotEnabled)
     }
+
+    @Test
+    fun `production requires an explicit nginx auth upstream`() {
+        assertFailsWith<IllegalArgumentException> {
+            AppSettings.fromEnv(
+                mapOf("GATEKEEPERD_ENVIRONMENT" to "PROD", "GATEKEEPERD_SELF_DOMAIN" to "gatekeeper.test"),
+                loadDotenv = false
+            ).nginx
+        }
+    }
+
+    @Test
+    fun `nginx auth upstream is validated and configured centrally`() {
+        val settings = AppSettings.fromEnv(
+            mapOf(
+                "GATEKEEPERD_ENVIRONMENT" to "PROD",
+                "GATEKEEPERD_SELF_DOMAIN" to "gatekeeper.test",
+                "GATEKEEPER_NGINX_AUTH_UPSTREAM" to "gatekeeperd_backend"
+            ),
+            loadDotenv = false
+        )
+        assertEquals("gatekeeperd_backend", settings.nginx.gatekeeperAuthUpstream)
+        assertEquals(false, AppSettings.fromEnv(emptyMap(), loadDotenv = false).docker.allowPublicPortBindings)
+    }
+
+    @Test
+    fun `nginx auth upstream rejects unsafe syntax and invalid ports`() {
+        for (invalid in listOf("http://backend", "backend/path", "backend:99999", "")) {
+            assertFailsWith<IllegalArgumentException>(invalid) {
+                AppSettings.fromEnv(
+                    mapOf(
+                        "GATEKEEPERD_ENVIRONMENT" to "PROD",
+                        "GATEKEEPERD_SELF_DOMAIN" to "gatekeeper.test",
+                        "GATEKEEPER_NGINX_AUTH_UPSTREAM" to invalid
+                    ),
+                    loadDotenv = false
+                ).nginx
+            }
+        }
+    }
 }

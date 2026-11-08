@@ -14,6 +14,7 @@ import com.gatekeeper.feature.nginx.presentation.NginxConfigClassification
 import io.ktor.http.*
 import io.ktor.server.application.*
 import io.ktor.server.auth.*
+import io.ktor.server.auth.jwt.JWTPrincipal
 import io.ktor.server.auth.jwt.*
 import io.ktor.server.request.*
 import io.ktor.server.response.*
@@ -125,6 +126,19 @@ fun Route.registerSiteDashboardRoutes(dependencies: OperationsAdminDependencies)
                     "Invalid site update body"
                 ); return@patch
             }
+            val disablingProductionGate = requiresProductionGateDisableConfirmation(
+                nginxSettings.environment == com.gatekeeper.config.AppEnvironment.PROD,
+                site.gateEnabled,
+                body.gateEnabled
+            )
+            if (disablingProductionGate && !body.confirmGateDisable) {
+                call.respondError(
+                    HttpStatusCode.Conflict,
+                    "gate_disable_confirmation_required",
+                    "Disabling payment gating on a production site requires explicit confirmation"
+                )
+                return@patch
+            }
             val update = runCatching {
                 SiteDashboardUpdate(
                     domain = body.domain?.let { nginxValidation.requireValidHostname(it) }, upstreamHost = body.upstreamHost,
@@ -154,6 +168,16 @@ fun Route.registerSiteDashboardRoutes(dependencies: OperationsAdminDependencies)
                     "Site not found"
                 ); return@patch
             }
+            val restorePreviousGateSetting = {
+                if (updated.gateEnabled != site.gateEnabled) {
+                    runCatching {
+                        siteRepository.updateDashboard(site.id, SiteDashboardUpdate(gateEnabled = site.gateEnabled))
+                    }.onFailure { error ->
+                        org.slf4j.LoggerFactory.getLogger("GatekeeperNginxSecurity")
+                            .error("Could not restore payment gate state after failed site update for siteId={}", site.id, error)
+                    }
+                }
+            }
             val resolved =
                 if (updated.upstreamMode == UpstreamMode.DOCKER_DISCOVERY) updated.serviceId?.let {
                     deploymentUpstreamResolver.resolve(
@@ -164,6 +188,7 @@ fun Route.registerSiteDashboardRoutes(dependencies: OperationsAdminDependencies)
             val port =
                 (if (updated.upstreamMode == UpstreamMode.EXPLICIT_PORT) updated.upstreamExplicitPort else resolved?.port)
                     ?: run {
+                        restorePreviousGateSetting()
                         call.respondError(
                             HttpStatusCode.UnprocessableEntity,
                             "site_configuration_invalid",
@@ -200,6 +225,7 @@ fun Route.registerSiteDashboardRoutes(dependencies: OperationsAdminDependencies)
             )
             val siteSlug = updated.projectSlug ?: slug
             val conflicts = runCatching { conflictAnalyzer.findDomainConflicts(config, siteSlug) }.getOrElse { error ->
+                restorePreviousGateSetting()
                 call.respondError(
                     HttpStatusCode.InternalServerError,
                     "nginx_config_scan_failed",
@@ -208,11 +234,13 @@ fun Route.registerSiteDashboardRoutes(dependencies: OperationsAdminDependencies)
                 return@patch
             }
             if (conflicts.isNotEmpty()) {
+                restorePreviousGateSetting()
                 call.respondNginxDomainConflicts(conflicts)
                 return@patch
             }
             val activation = applySiteConfig.enableProjectDetailed(siteSlug, config)
             if (!activation.success) {
+                restorePreviousGateSetting()
                 val racedConflicts =
                     runCatching { conflictAnalyzer.findDomainConflicts(config, siteSlug) }.getOrNull().orEmpty()
                 if (racedConflicts.isNotEmpty()) {
@@ -225,6 +253,17 @@ fun Route.registerSiteDashboardRoutes(dependencies: OperationsAdminDependencies)
                     activation.message ?: "Validation or activation failed; previous configuration was preserved"
                 )
                 return@patch
+            }
+            if (disablingProductionGate) {
+                val actor = call.principal<JWTPrincipal>()?.payload?.subject ?: "unknown"
+                dependencies.auditRepository.write(
+                    site.projectId,
+                    "nginx_payment_gate_disabled",
+                    actor,
+                    "Payment gating disabled for production site ${updated.domain}"
+                )
+                org.slf4j.LoggerFactory.getLogger("GatekeeperNginxSecurity")
+                    .error("Payment gating disabled for production site domain={} actor={}", updated.domain, actor)
             }
             val responseSite =
                 siteRepository.findByProjectSlug(siteSlug) ?: siteRepository.findByDomain(siteSlug) ?: updated
@@ -268,3 +307,9 @@ fun Route.registerSiteDashboardRoutes(dependencies: OperationsAdminDependencies)
             call.respond(DashboardSiteDeleteResponse(deleted = true, slug = slug))
         }
 }
+
+internal fun requiresProductionGateDisableConfirmation(
+    production: Boolean,
+    currentlyEnabled: Boolean,
+    requestedEnabled: Boolean?
+): Boolean = production && currentlyEnabled && requestedEnabled == false

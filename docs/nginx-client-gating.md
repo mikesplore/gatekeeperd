@@ -18,7 +18,7 @@ If Gatekeeperd returns 403, nginx denies the protected request. If the Gatekeepe
 
 ## Example: `acw.mikesplore.me`
 
-Replace `acw` with your project slug and `9921` with your app port. This production example routes Gatekeeperd calls through the stable `gatekeeperd_backend` upstream installed by the VPS deployment. Local DEV configurations use `127.0.0.1:8080` instead.
+Replace `acw` with your project slug and `9921` with your app port. Gatekeeperd renders auth, bypass, and paywall proxy destinations from `GATEKEEPER_NGINX_AUTH_UPSTREAM`. Production should set this to the stable `gatekeeperd_backend` upstream installed by the VPS deployment; local DEV uses `127.0.0.1:8080`.
 
 ```nginx
 server {

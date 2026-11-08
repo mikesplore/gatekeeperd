@@ -63,6 +63,7 @@ class NginxServiceTest {
     }
 
     private fun renderer() = NginxConfigRenderer(
+        gatekeeperUpstream = "127.0.0.1:8080",
         sslCertPath = Files.createTempDirectory("gk-certificates").toFile().absolutePath,
         nginxValidation = NginxValidationService()
     )

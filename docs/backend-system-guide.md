@@ -321,9 +321,9 @@ Gatekeeperd-managed deployment ports come from `DEPLOYMENT_HOST_PORT_RANGE` (def
 - actual host TCP listeners;
 - Docker-published ports discovered from Docker inventory.
 
-Managed host ports bind to `127.0.0.1`, so nginx can reach them locally without publishing them on every host interface. The database stores stable ports per service/environment/slot/container-port. Blue/green deployment chooses the slot not currently active. A bind race can still occur after allocation; Docker bind failure causes a bounded reallocation attempt from the configured pool.
+Managed host ports bind to `127.0.0.1`, so nginx can reach them locally without publishing them on every host interface. The Docker wizard also defaults published ports to loopback. Public bindings require both the explicit `exposePortsPublicly` choice and `DOCKER_ALLOW_PUBLIC_PORT_BINDINGS=true`; the validation response warns that these ports bypass Nginx payment gating. The database stores stable ports per service/environment/slot/container-port. Blue/green deployment chooses the slot not currently active. A bind race can still occur after allocation; Docker bind failure causes a bounded reallocation attempt from the configured pool.
 
-Adopted containers keep their already-published host port in the active deployment record; Gatekeeperd does not retroactively reserve that port in the managed pool. If that port is within the configured pool it is observed as occupied during allocation. Adopted ports bound to `0.0.0.0` remain publicly exposed until that runtime is retired; exposure metadata is retained for the dashboard/runtime view.
+Adopted containers keep their already-published host port in the active deployment record; Gatekeeperd does not retroactively reserve that port in the managed pool. If that port is within the configured pool it is observed as occupied during allocation. Adopted ports bound to `0.0.0.0` remain publicly exposed until that runtime is retired; exposure metadata is retained for the dashboard/runtime view and flagged for operators.
 
 ### 12.2 Nginx route model
 
@@ -465,7 +465,8 @@ See [.env.example](../.env.example) for all values and deployment comments. The 
 | Customer/integrations | `GATEKEEPER_FRONTEND_URL`, optional `SCRIBED_BASE_URL` and `SCRIBED_API_CLIENT_TOKEN`, `RESEND_*`, `PASSWORD_RESET_URL` | Portal redirects, Scribed document generation and password-reset email. Prefer managing Scribed credentials in Settings; environment variables are a bootstrap fallback. |
 | GitHub | `GITHUB_APP_*`, `GITHUB_WEBHOOK_SECRET` | Private repository clone, deployment webhook and repository integration. |
 | Deployment | `DEPLOYMENT_HOST_PORT_RANGE`, `DEPLOYMENT_DRAIN_DELAY_SECONDS`, `DEPLOYMENT_STALE_MINUTES`, `DEPLOYMENT_SECRETS_KEY` | Stable host-port pool, cutover drain, job stale threshold and encrypted env storage. |
-| Docker | `DOCKER_SOCKET`, `DOCKER_PULL_VIA_CLI`, `DOCKER_ALLOWED_REGISTRIES`, `DOCKER_ALLOWED_VOLUME_ROOTS`, `GATEKEEPER_INTERNAL_NETWORK` | Host runtime access and optional allowlists. |
+| Docker | `DOCKER_SOCKET`, `DOCKER_PULL_VIA_CLI`, `DOCKER_ALLOWED_REGISTRIES`, `DOCKER_ALLOWED_VOLUME_ROOTS`, `DOCKER_ALLOW_PUBLIC_PORT_BINDINGS`, `GATEKEEPER_INTERNAL_NETWORK` | Host runtime access, optional allowlists, and explicit public port binding policy. |
+| Nginx | `GATEKEEPER_NGINX_AUTH_UPSTREAM` | The configured upstream for generated gate auth, bypass, and paywall calls; required in production. |
 | Nginx | `NGINX_DEPLOYMENT_UPSTREAMS_ENABLED`, `NGINX_UPSTREAM_INCLUDE_DIR`, `NGINX_SITES_AVAILABLE`, `NGINX_SITES_ENABLED`, `NGINX_SSL_CERT_PATH`, `GATEKEEPERD_SELF_DOMAIN` | Nginx integration, paths, stable include, and self-site exclusion. |
 | Gate/workers | `DEFAULT_GRACE_PERIOD_DAYS`, `FAIL_MODE`, `AUTOBLOCKER_INTERVAL_MINUTES`, `RECONCILIATION_STALE_MINUTES`, `RECONCILIATION_INTERVAL_MINUTES` | Payment timing, outage policy, and worker cadence. |
 | Cross-cutting | `CORS_ALLOWED_ORIGINS`, `PORT`, OTLP environment | Dashboard origins, HTTP listener and telemetry export. |

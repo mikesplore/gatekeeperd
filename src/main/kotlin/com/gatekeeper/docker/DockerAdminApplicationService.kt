@@ -102,7 +102,7 @@ class DockerAdminApplicationService(
             override fun listNetworkNames() = docker.listNetworks().map { it.name }.toSet()
             override fun hostPortsInUse() = docker.hostPortsInUse()
         }
-        return computeContainerCreatePlan(request, settings.internalNetwork, inspect)
+        return computeContainerCreatePlan(request, settings.internalNetwork, inspect, settings.allowPublicPortBindings)
     }
 
     internal fun hostPortsInUse(): Set<Int> {

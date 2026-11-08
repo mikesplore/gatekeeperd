@@ -53,6 +53,7 @@ class NginxBackfillRunner(
                 resolveCertificateForDomain = ::resolveCertificate,
                 renderer = NginxConfigRendererService(
                     NginxConfigRenderer(
+                        gatekeeperUpstream = settings.nginx.gatekeeperAuthUpstream,
                         sslCertPath = settings.nginx.sslCertPath,
                         upstreamIncludeDirectory = settings.nginx.upstreamIncludeDirectory,
                         nginxValidation = NginxValidationService()

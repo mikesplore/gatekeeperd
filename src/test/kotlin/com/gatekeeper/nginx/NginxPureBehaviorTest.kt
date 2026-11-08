@@ -23,7 +23,7 @@ class NginxPureBehaviorTest {
 
     @Test
     fun `renderer and parser preserve managed blocks`() {
-        val config = NginxConfigRenderer(nginxValidation = NginxValidationService()).render(
+        val config = NginxConfigRenderer(gatekeeperUpstream = "127.0.0.1:8080", nginxValidation = NginxValidationService()).render(
             slug = "acw",
             domain = "acw.example.com",
             appPort = 3001,

@@ -686,7 +686,7 @@ class DockerService(
         request.ports.forEach { (hostPort, containerPort) ->
             val exposed = ExposedPort.tcp(containerPort)
             exposedPorts.add(exposed)
-            val hostIp = request.portHostIps[containerPort] ?: request.portHostIp
+            val hostIp = resolvePortBindingHostIp(request, containerPort, dockerSettings.allowPublicPortBindings)
             portBindings.bind(exposed, hostIp?.let { Ports.Binding.bindIpAndPort(it, hostPort) } ?: Ports.Binding.bindPort(hostPort))
         }
         request.randomHostPorts.forEach { containerPort ->

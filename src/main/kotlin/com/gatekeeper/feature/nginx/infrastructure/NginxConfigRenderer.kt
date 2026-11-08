@@ -10,11 +10,19 @@ import java.util.UUID
 
 /** Pure renderer for Gatekeeper-managed nginx site configuration. */
 class NginxConfigRenderer(
-    private val gatekeeperUpstream: String = "127.0.0.1:8080",
+    private val gatekeeperUpstream: String,
     private val sslCertPath: String = "/etc/letsencrypt/live",
     private val upstreamIncludeDirectory: String = "/etc/nginx/conf.d/gatekeeperd-upstreams",
     private val nginxValidation: NginxValidationService
 ) {
+
+    init {
+        require(gatekeeperUpstream.matches(Regex("[A-Za-z0-9_.-]+(?::[0-9]{1,5})?"))) {
+            "Gatekeeper auth upstream must be a hostname/upstream name with an optional port"
+        }
+        val port = gatekeeperUpstream.substringAfterLast(':', "").toIntOrNull()
+        require(port == null || port in 1..65535) { "Gatekeeper auth upstream port must be between 1 and 65535" }
+    }
 
     fun render(site: NginxSiteRenderModel): String = render(
         slug = site.slug,

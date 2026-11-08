@@ -103,7 +103,8 @@ object OperationsDashboardService {
             if (site.upstreamMode == com.gatekeeper.db.tables.UpstreamMode.EXPLICIT_PORT) configuredHost else resolved?.host,
             if (site.upstreamMode == com.gatekeeper.db.tables.UpstreamMode.EXPLICIT_PORT) configuredPort else resolved?.port,
             site.tlsMode.value, site.gateEnabled, site.serviceId?.toString(), site.upstreamKind, configFilename,
-            site.id.toString()
+            site.id.toString(),
+            productionGateSecurityWarning(nginxSettings.environment == com.gatekeeper.config.AppEnvironment.PROD, site.gateEnabled)
         )
     }
 
@@ -134,3 +135,8 @@ object OperationsDashboardService {
 
 
 }
+
+internal fun productionGateSecurityWarning(production: Boolean, gateEnabled: Boolean): String? =
+    if (production && !gateEnabled)
+        "Payment gating is disabled for this production site. Direct upstream access may bypass billing enforcement."
+    else null

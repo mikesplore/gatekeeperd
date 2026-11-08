@@ -157,5 +157,52 @@ class ContainerWizardTest {
         assertTrue(ok.plan.willPullImage)
         assertEquals("nginx:latest", ok.plan.normalizedRequest.image)
     }
+
+    @Test
+    fun `published ports default to loopback`() {
+        val result = computeContainerCreatePlan(
+            CreateContainerRequest(name = "my-app", image = "nginx:latest", ports = mapOf(8080 to 80)),
+            internalNetwork,
+            FakeDocker(images = setOf("nginx:latest"), networks = setOf("bridge", internalNetwork))
+        ) as ContainerCreatePlanResult.Ok
+
+        assertEquals("127.0.0.1", result.plan.normalizedRequest.portHostIp)
+    }
+
+    @Test
+    fun `public exposure requires server policy and adds a warning`() {
+        val request = CreateContainerRequest(
+            name = "my-app", image = "nginx:latest", ports = mapOf(8080 to 80), exposePortsPublicly = true
+        )
+        val docker = FakeDocker(images = setOf("nginx:latest"), networks = setOf("bridge", internalNetwork))
+
+        val refused = computeContainerCreatePlan(request, internalNetwork, docker)
+        assertEquals(HttpStatusCode.Forbidden, (refused as ContainerCreatePlanResult.Err).status)
+        assertEquals("public_port_binding_disabled", refused.code)
+
+        val allowed = computeContainerCreatePlan(request, internalNetwork, docker, allowPublicPortBindings = true)
+            as ContainerCreatePlanResult.Ok
+        assertEquals("0.0.0.0", allowed.plan.normalizedRequest.portHostIp)
+        assertTrue(allowed.plan.warnings.any { it.contains("bypass Nginx payment gating") })
+    }
+
+    @Test
+    fun `docker host binding fails closed for public addresses`() {
+        assertEquals(
+            "127.0.0.1",
+            resolvePortBindingHostIp(CreateContainerRequest(image = "nginx"), 80, allowPublicBindings = false)
+        )
+        kotlin.test.assertFailsWith<IllegalArgumentException> {
+            resolvePortBindingHostIp(
+                CreateContainerRequest(image = "nginx", portHostIp = "0.0.0.0"), 80, allowPublicBindings = false
+            )
+        }
+        assertEquals(
+            "0.0.0.0",
+            resolvePortBindingHostIp(
+                CreateContainerRequest(image = "nginx", portHostIp = "0.0.0.0"), 80, allowPublicBindings = true
+            )
+        )
+    }
 }
 
