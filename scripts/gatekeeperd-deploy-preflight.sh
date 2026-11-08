@@ -52,6 +52,17 @@ gk_preflight_resolve_bundle_root() {
   return 1
 }
 
+gk_preflight_install_root_file() {
+  local source="$1" destination="$2" mode="$3"
+  [[ -f "${source}" ]] || return 0
+  # -ef compares file identity, not names or contents. Distinct source files are
+  # always installed, even when their basenames match; only a self-copy is skipped.
+  if [[ -e "${destination}" && "${source}" -ef "${destination}" ]]; then
+    return 0
+  fi
+  sudo install -o root -g root -m "${mode}" "${source}" "${destination}"
+}
+
 # ---------------------------------------------------------------- prerequisites
 
 gk_preflight_check_binaries() {
@@ -214,19 +225,19 @@ gk_preflight_sync_operator_scripts() {
   bundle="$(gk_preflight_resolve_bundle_root)" || return 0
   sudo install -d -o root -g root -m 0755 "${td}/scripts"
   if [[ -f "${bundle}/deploy.sh" ]]; then
-    sudo install -o root -g root -m 0755 "${bundle}/deploy.sh" "${td}/deploy.sh"
+    gk_preflight_install_root_file "${bundle}/deploy.sh" "${td}/deploy.sh" 0755
   fi
   if [[ -f "${bundle}/scripts/gatekeeperd-auto-deploy" ]]; then
-    sudo install -o root -g root -m 0755 "${bundle}/scripts/gatekeeperd-auto-deploy" "${td}/gatekeeperd-auto-deploy"
+    gk_preflight_install_root_file "${bundle}/scripts/gatekeeperd-auto-deploy" "${td}/gatekeeperd-auto-deploy" 0755
   fi
   if [[ -f "${bundle}/scripts/gatekeeperd-deploy-preflight.sh" ]]; then
-    sudo install -o root -g root -m 0755 "${bundle}/scripts/gatekeeperd-deploy-preflight.sh" "${td}/scripts/gatekeeperd-deploy-preflight.sh"
+    gk_preflight_install_root_file "${bundle}/scripts/gatekeeperd-deploy-preflight.sh" "${td}/scripts/gatekeeperd-deploy-preflight.sh" 0755
   fi
   if [[ -f "${bundle}/scripts/deploy.env.example" ]]; then
-    sudo install -o root -g root -m 0644 "${bundle}/scripts/deploy.env.example" "${td}/deploy.env.example"
+    gk_preflight_install_root_file "${bundle}/scripts/deploy.env.example" "${td}/deploy.env.example" 0644
   fi
   if [[ -f "${bundle}/scripts/gatekeeperd-slot@.service" ]]; then
-    sudo install -o root -g root -m 0644 "${bundle}/scripts/gatekeeperd-slot@.service" "${td}/gatekeeperd-slot@.service.in"
+    gk_preflight_install_root_file "${bundle}/scripts/gatekeeperd-slot@.service" "${td}/gatekeeperd-slot@.service.in" 0644
   fi
 }
 

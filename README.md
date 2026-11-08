@@ -52,8 +52,26 @@ certificate, and other files under `/etc/gatekeeperd`, preserving only
 are preserved. The script then recreates the service and Nginx setup. This causes
 downtime during the reset and requires DNS to point at the VPS for a dedicated TLS
 certificate to be issued again.
-Use `--help` for options. For normal upgrades after setup, download and run
-`deploy.sh`; do not run the preparation script as an upgrade tool.
+Use `--help` for options. Do not run the preparation script as an upgrade tool.
+
+## Upgrade an existing VPS
+
+For a server that already runs Gatekeeperd, use the CI deploy script with host
+preflight. **`--check` does not restart the app or change traffic**; it verifies Java,
+`gh`, nginx, env files, and creates missing deploy-owned paths. A normal **`deploy.sh`**
+run performs blue/green cutover.
+
+1. Merge to `main` and wait until the GitHub **`build`** workflow succeeds (the
+   downloaded artifact must include the current deploy tooling).
+2. On the VPS, install scripts under `/opt/gatekeeperd` (copy from your machine, clone
+   once, or `curl` from `main` after the release is merged). Full commands:
+   [staging deployment — upgrade an existing VPS](docs/staging-deployment.md#upgrade-an-existing-vps).
+3. `sudo /opt/gatekeeperd/deploy.sh --check` — fix anything reported (often
+   `DEPLOY_GATEWAY_URL` in `/etc/gatekeeperd/deploy.env`).
+4. `sudo /opt/gatekeeperd/deploy.sh` — downloads the JAR and blue/green deploys.
+
+Ongoing upgrades after that: `sudo /opt/gatekeeperd/deploy.sh` (or the auto-deploy
+timer). Details: [staging and VPS deployment](docs/staging-deployment.md).
 
 If setup stops at readiness, the script prints the health response and the command to
 inspect the bootstrap journal. Resolve the reported database, Redis, migration, or

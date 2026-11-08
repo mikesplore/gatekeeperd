@@ -9,7 +9,7 @@ Gatekeeperd is a Kotlin/Ktor service that applies project and service access rul
 | Understand the current system, data flows, workers, and operations | [Backend system guide](backend-system-guide.md) |
 | Call an endpoint or check its request and response shape | [API reference](API.md) |
 | Configure or run the application locally | [`.env.example`](../.env.example) and [root README](../README.md) |
-| Install or upgrade Gatekeeperd on a VPS | [VPS deployment guide](staging-deployment.md) |
+| Install or upgrade Gatekeeperd on a VPS | [VPS deployment guide](staging-deployment.md); existing servers: [upgrade steps](staging-deployment.md#upgrade-an-existing-vps) |
 | Put a client application behind nginx payment gating | [Nginx client gating](nginx-client-gating.md) |
 | Put the Gatekeeperd API behind nginx and TLS | [Nginx reverse proxy](nginx-reverse-proxy.md) |
 | Understand application deployment and cutover behavior | [Backend system guide, deployment system](backend-system-guide.md#11-deployment-system) |

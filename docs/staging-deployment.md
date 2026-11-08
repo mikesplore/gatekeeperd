@@ -9,7 +9,116 @@ This guide covers local artifact smoke checks and the supported CI-artifact depl
 - GitHub CLI authenticated on the VPS with permission to read successful Actions artifacts.
 - Application settings in `/etc/gatekeeperd/gatekeeperd.env`; use [`.env.example`](../.env.example) as the template.
 
-For a first installation, follow [the root README setup](../README.md#first-vps-install). Use `deploy.sh` for normal upgrades after setup.
+For a first installation, follow [the root README setup](../README.md#first-vps-install).
+
+## Upgrade an existing VPS
+
+Use this when a remote server already runs Gatekeeperd (legacy `gatekeeperd.service` or
+blue/green) and you need the current `deploy.sh` with host preflight. The running
+process keeps serving traffic until a **successful** `deploy.sh` cutover; `--check`
+only validates and prepares the host.
+
+### 0. Publish a build that includes the new deploy tooling
+
+On `main`, wait until the GitHub Actions **`build`** workflow succeeds. A deploy that
+downloads an **older** CI artifact will fail if the artifact tarball does not yet include
+`scripts/gatekeeperd-deploy-preflight.sh`.
+
+### 1. Install deploy scripts on the VPS (one time per tooling update)
+
+Pick one method. Target layout:
+
+```text
+/opt/gatekeeperd/deploy.sh
+/opt/gatekeeperd/gatekeeperd-auto-deploy
+/opt/gatekeeperd/deploy.env.example
+/opt/gatekeeperd/gatekeeperd-slot@.service.in
+/opt/gatekeeperd/scripts/gatekeeperd-deploy-preflight.sh
+```
+
+**From your laptop (repository checkout):**
+
+```bash
+cd /path/to/gatekeeperd
+ssh USER@VPS 'sudo install -d -m 0755 /tmp/gk-deploy'
+scp deploy.sh scripts/gatekeeperd-deploy-preflight.sh scripts/deploy.env.example \
+  scripts/gatekeeperd-auto-deploy scripts/gatekeeperd-slot@.service \
+  USER@VPS:/tmp/gk-deploy/
+```
+
+On the **VPS**:
+
+```bash
+sudo install -d -m 0755 /opt/gatekeeperd/scripts
+sudo install -m 0755 /tmp/gk-deploy/deploy.sh /opt/gatekeeperd/deploy.sh
+sudo install -m 0755 /tmp/gk-deploy/gatekeeperd-deploy-preflight.sh \
+  /opt/gatekeeperd/scripts/gatekeeperd-deploy-preflight.sh
+sudo install -m 0755 /tmp/gk-deploy/gatekeeperd-auto-deploy /opt/gatekeeperd/gatekeeperd-auto-deploy
+sudo install -m 0644 /tmp/gk-deploy/deploy.env.example /opt/gatekeeperd/deploy.env.example
+sudo install -m 0644 /tmp/gk-deploy/gatekeeperd-slot@.service \
+  /opt/gatekeeperd/gatekeeperd-slot@.service.in
+```
+
+**From the VPS (`curl`, after the release is on `main`):**
+
+```bash
+BASE=https://raw.githubusercontent.com/mikesplore/gatekeeperd/main
+sudo install -d -m 0755 /opt/gatekeeperd/scripts
+sudo curl -fsSL -o /opt/gatekeeperd/deploy.sh "${BASE}/deploy.sh"
+sudo curl -fsSL -o /opt/gatekeeperd/scripts/gatekeeperd-deploy-preflight.sh \
+  "${BASE}/scripts/gatekeeperd-deploy-preflight.sh"
+sudo curl -fsSL -o /opt/gatekeeperd/deploy.env.example "${BASE}/scripts/deploy.env.example"
+sudo curl -fsSL -o /opt/gatekeeperd/gatekeeperd-auto-deploy "${BASE}/scripts/gatekeeperd-auto-deploy"
+sudo curl -fsSL -o /opt/gatekeeperd/gatekeeperd-slot@.service.in \
+  "${BASE}/scripts/gatekeeperd-slot@.service"
+sudo chmod +x /opt/gatekeeperd/deploy.sh /opt/gatekeeperd/gatekeeperd-auto-deploy \
+  /opt/gatekeeperd/scripts/gatekeeperd-deploy-preflight.sh
+```
+
+**Shallow clone on the VPS (alternative):**
+
+```bash
+git clone --depth 1 https://github.com/mikesplore/gatekeeperd.git /tmp/gatekeeperd-bootstrap
+cd /tmp/gatekeeperd-bootstrap
+sudo ./deploy.sh --check   # installs scripts under /opt/gatekeeperd as part of preflight
+```
+
+You still need `/etc/gatekeeperd/gatekeeperd.env` and a working Gatekeeperd nginx vhost
+before `--check` can pass.
+
+### 2. Host packages (not installed by the script)
+
+Install on the VPS before `--check`: **Java 21**, **nginx**, **GitHub CLI (`gh`)**,
+**curl**, **sudo**, **systemd**. Authenticate `gh` with permission to read Actions
+artifacts (for example, `sudo gh auth login` for a manual deployment). For the
+auto-deploy timer running as root, set `GH_CONFIG_DIR` in
+`/etc/gatekeeperd/auto-deploy.env` when login was done under another user.
+
+### 3. Check and fix (no deploy, no traffic change)
+
+```bash
+sudo /opt/gatekeeperd/deploy.sh --check
+```
+
+Preflight may create `/etc/gatekeeperd/deploy.env` or an nginx upstream stub. Edit
+`DEPLOY_GATEWAY_URL` (and other values) in `/etc/gatekeeperd/deploy.env`, then rerun
+`--check` until it exits 0.
+
+### 4. Deploy (blue/green; may migrate legacy → slots)
+
+```bash
+sudo /opt/gatekeeperd/deploy.sh
+```
+
+The first cutover after legacy single-process mode may require `sudo /opt/gatekeeperd/deploy.sh --force`
+if the hold logic applies; see [automatic deployment](#automatic-deployment-from-successful-builds) below.
+
+After a successful deploy, `/opt/gatekeeperd/` receives refreshed scripts from the CI
+artifact. Later upgrades are usually only:
+
+```bash
+sudo /opt/gatekeeperd/deploy.sh
+```
 
 ## Test the built JAR locally before production deployment
 
@@ -35,17 +144,14 @@ deployment continues to use the CI artifact and blue/green cutover.
 ## Deploy the systemd service from a CI artifact
 
 `deploy.sh` downloads the JAR from the latest successful `build.yml` workflow run on
-`main`. The first host check needs the deployment scripts and slot template alongside
-`deploy.sh`; a source checkout is not needed after bootstrap. Install **Java 21**,
-**nginx**, **GitHub CLI (`gh`)**, **curl**, and **git** for the initial bootstrap on the
-host first; the preflight checks runtime/deployment tools but does not install them.
+`main`. If the server already runs Gatekeeperd but lacks the current deploy tooling, follow
+[Upgrade an existing VPS](#upgrade-an-existing-vps) first. Otherwise, when
+`/opt/gatekeeperd/deploy.sh` and `scripts/gatekeeperd-deploy-preflight.sh` are already
+installed:
 
 ```bash
-git clone --depth 1 https://github.com/mikesplore/gatekeeperd.git /tmp/gatekeeperd-bootstrap
-cd /tmp/gatekeeperd-bootstrap
-sudo gh auth login   # or configure GH_CONFIG_DIR in /etc/gatekeeperd/auto-deploy.env
-sudo ./deploy.sh --check    # prerequisite checks + idempotent host prep (no deploy)
-sudo ./deploy.sh            # blue/green deploy when --check passes
+sudo /opt/gatekeeperd/deploy.sh --check    # optional; verifies host before download
+sudo /opt/gatekeeperd/deploy.sh            # blue/green deploy
 ```
 
 Before the first successful `--check`, copy application secrets to
