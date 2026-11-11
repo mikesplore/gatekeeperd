@@ -49,9 +49,7 @@ data class PaymentRequiredResponse(
     val service: String = ""
 )
 
-private val timestampFormatter = DateTimeFormatter.ISO_LOCAL_DATE_TIME
-
-fun currentErrorTimestamp(): String = LocalDateTime.now().format(timestampFormatter)
+fun currentErrorTimestamp(): String = ApiTimestamp.format(LocalDateTime.now())
 
 fun errorResponse(error: String, message: String): ErrorResponse = ErrorResponse(
     error = error,

@@ -50,7 +50,7 @@ fun Route.adminUserRoutes(
             val q = call.request.queryParameters["q"]?.trim()
             val (records, total) = authUsers.listUsers(q, limit, offset.toLong())
             val users = records.map { user ->
-                AdminUserResponse(user.id.toString(), user.email, user.role, user.totpEnabled, user.createdAt.toString(), user.active)
+                AdminUserResponse(user.id.toString(), user.email, user.role, user.totpEnabled, com.gatekeeper.api.ApiTimestamp.format(user.createdAt), user.active)
             }
             call.respond(AdminUsersPageResponse(users, total, limit, offset, offset + users.size < total))
         }
@@ -102,7 +102,7 @@ fun Route.adminUserRoutes(
             )
             call.respond(
                 HttpStatusCode.Created,
-                AdminUserResponse(created.id.toString(), newEmail, newRole, false, created.createdAt.toString())
+                AdminUserResponse(created.id.toString(), newEmail, newRole, false, com.gatekeeper.api.ApiTimestamp.format(created.createdAt))
             )
         }
 

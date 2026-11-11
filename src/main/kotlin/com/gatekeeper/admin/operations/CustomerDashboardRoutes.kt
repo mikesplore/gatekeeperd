@@ -295,8 +295,8 @@ fun Route.registerCustomerDashboardRoutes(dependencies: OperationsAdminDependenc
                     payment.status,
                     payment.provider,
                     payment.providerReference,
-                    payment.paidAt?.toString(),
-                    payment.createdAt?.toString().orEmpty()
+                    payment.paidAt?.let { com.gatekeeper.api.ApiTimestamp.format(it) },
+                    payment.createdAt?.let { com.gatekeeper.api.ApiTimestamp.format(it) }.orEmpty()
                 )
             }
         }.sortedByDescending { it.createdAt }

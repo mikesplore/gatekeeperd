@@ -1,4 +1,6 @@
-nected# Gatekeeperd — API Documentation
+# Gatekeeperd — API Documentation
+
+API timestamps use ISO-8601 values with an explicit UTC offset. Database timestamps are returned in East Africa Time (`+03:00`).
 
 Base URL: `http://localhost:8080` (development)  
 Content-Type: `application/json` unless noted otherwise
@@ -51,7 +53,7 @@ Get the authenticated admin user's profile (JWT required).
 {
   "email": "admin@gatekeeper.local",
   "role": "admin",
-  "createdAt": "2026-07-28T12:00:00"
+  "createdAt": "2026-07-28T12:00:00+03:00"
 }
 ```
 
@@ -126,7 +128,7 @@ When `domain` is supplied, Gatekeeperd resolves the configured site by domain, t
     {
       "error": "payment_required",
       "message": "Access is temporarily paused.",
-      "timestamp": "2026-07-28T12:00:00",
+      "timestamp": "2026-07-28T12:00:00+03:00",
       "payment_link": "https://paystack.com/pay/xxxx",
       "block_reason": "manual_hold",
       "reason_source": "service",
@@ -140,7 +142,7 @@ When `domain` is supplied, Gatekeeperd resolves the configured site by domain, t
   {
     "error": "unknown_project",
     "message": "The requested project is not recognized.",
-    "timestamp": "2026-07-28T12:00:00"
+    "timestamp": "2026-07-28T12:00:00+03:00"
   }
   ```
 
@@ -300,8 +302,8 @@ List all projects with their status, client info, and due dates.
     "currency": "KES",
     "dueDate": "2026-08-01",
     "gracePeriodDays": 3,
-    "createdAt": "2026-07-28T12:00:00",
-    "updatedAt": "2026-07-28T12:00:00"
+    "createdAt": "2026-07-28T12:00:00+03:00",
+    "updatedAt": "2026-07-28T12:00:00+03:00"
   }
 ]
 ```
@@ -322,7 +324,7 @@ Project responses include independent `deploymentMode`, `serviceMode`, `lifecycl
       "paystackReference": "ref_xxx",
       "amount": 5000.00,
       "status": "success",
-      "paidAt": "2026-07-28T12:00:00",
+      "paidAt": "2026-07-28T12:00:00+03:00",
       "rawWebhookPayload": "...",
       "createdAt": "2026-07-28T11:00:00"
     }
@@ -334,7 +336,7 @@ Project responses include independent `deploymentMode`, `serviceMode`, `lifecycl
       "action": "payment_received",
       "actor": "system",
       "reason": "payment_received via webhook",
-      "createdAt": "2026-07-28T12:00:00"
+      "createdAt": "2026-07-28T12:00:00+03:00"
     }
   ]
 }
@@ -598,7 +600,7 @@ Get audit log for a project.
     "action": "payment_received",
     "actor": "system",
     "reason": "payment_received via webhook",
-    "createdAt": "2026-07-28T12:00:00"
+    "createdAt": "2026-07-28T12:00:00+03:00"
   }
 ]
 ```
@@ -657,7 +659,7 @@ Return the Gatekeeper invoice and payment summary for a service. Admin payment c
       "amount": 5000.00,
       "gatewayStatus": "success",
       "verifiedVia": "webhook",
-      "paidAt": "2026-07-28T12:00:00",
+      "paidAt": "2026-07-28T12:00:00+03:00",
       "createdAt": "2026-07-28T11:00:00"
     }
   ],
@@ -1414,7 +1416,7 @@ All error responses return JSON with a consistent shape:
 {
   "error": "error_code",
   "message": "Human-readable description",
-  "timestamp": "2026-07-28T12:00:00",
+  "timestamp": "2026-07-28T12:00:00+03:00",
   "data": { "details": "Additional structured context when provided" }
 }
 ```
@@ -1427,7 +1429,7 @@ Payment-required responses for blocked backend projects extend this format:
 {
   "error": "payment_required",
   "message": "Access has been temporarily paused.",
-  "timestamp": "2026-07-28T12:00:00",
+  "timestamp": "2026-07-28T12:00:00+03:00",
   "payment_link": "https://paystack.com/pay/xxxx",
   "block_reason": "manual_hold",
   "reason_source": "service",

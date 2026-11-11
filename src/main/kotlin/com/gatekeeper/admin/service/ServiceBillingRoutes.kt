@@ -267,7 +267,7 @@ fun Route.registerServiceBillingRoutes(dependencies: ServiceAdminDependencies) {
                 amount.toDouble(),
                 adjustment.reason,
                 actor,
-                adjustment.createdAt.toString()
+                com.gatekeeper.api.ApiTimestamp.format(adjustment.createdAt)
             )
         )
     }

@@ -79,7 +79,7 @@ fun Route.registerProjectDeploymentRoutes(dependencies: ProjectSetupDependencies
                         id = item.id.toString(), projectId = item.projectId.toString(), projectSlug = slug,
                         environment = item.environment, sourceCommit = item.sourceCommit, imageName = item.imageName,
                         imageTag = item.imageTag, imageDigest = item.imageDigest, trigger = item.triggerSource,
-                        status = item.status, createdAt = item.createdAt.toString(), activeAt = item.activeAt?.toString(),
+                        status = item.status, createdAt = com.gatekeeper.api.ApiTimestamp.format(item.createdAt), activeAt = item.activeAt?.let { com.gatekeeper.api.ApiTimestamp.format(it) },
                         healthCheckResult = item.healthCheckResult, failureReason = item.failureReason,
                         credentialSetId = item.credentialSetId?.toString(), credentialSetVersion = item.credentialSetVersion,
                         secretSetId = item.secretSetId?.toString(), secretSetVersion = item.secretSetVersion,
@@ -180,7 +180,7 @@ fun Route.registerProjectDeploymentRoutes(dependencies: ProjectSetupDependencies
             ),
             ProjectOverviewCurrentDeployment(
                 active?.id?.toString(), active?.status ?: "none", active?.environment ?: "production", active?.triggerSource,
-                active?.createdAt?.toString(), active?.activeAt?.toString(), active?.imageName, active?.imageTag,
+                active?.createdAt?.let { com.gatekeeper.api.ApiTimestamp.format(it) }, active?.activeAt?.let { com.gatekeeper.api.ApiTimestamp.format(it) }, active?.imageName, active?.imageTag,
                 active?.imageDigest, active?.commitSha, dockerHealth,
                 upstream?.host, upstream?.port, publicExposure, active?.credentialSetId?.toString(), active?.credentialSetVersion,
                 active?.secretSetId?.toString(),
@@ -247,8 +247,8 @@ fun Route.registerProjectDeploymentRoutes(dependencies: ProjectSetupDependencies
             } ?: true
             ProjectDeploymentHistoryItem(
                 item.id.toString(), item.environment, item.sourceCommit, item.imageName, item.imageTag,
-                item.imageDigest, item.triggerSource, item.actor, item.status, item.createdAt.toString(),
-                item.activeAt?.toString(), item.healthCheckResult, item.failureReason,
+                item.imageDigest, item.triggerSource, item.actor, item.status, com.gatekeeper.api.ApiTimestamp.format(item.createdAt),
+                item.activeAt?.let { com.gatekeeper.api.ApiTimestamp.format(it) }, item.healthCheckResult, item.failureReason,
                 item.credentialSetId?.toString(), item.credentialSetVersion,
                 item.secretSetId?.toString(), item.secretSetVersion, item.configurationId.toString(),
                 buildList {

@@ -14,6 +14,6 @@ internal fun PaymentWithProject.toAdminResponse() = PaymentAdminResponse(
     amount = payment.amount.toDouble(),
     gatewayStatus = payment.status,
     verifiedVia = payment.verifiedVia,
-    paidAt = payment.paidAt?.toString(),
-    createdAt = payment.createdAt?.toString().orEmpty()
+    paidAt = payment.paidAt?.let { com.gatekeeper.api.ApiTimestamp.format(it) },
+    createdAt = payment.createdAt?.let { com.gatekeeper.api.ApiTimestamp.format(it) }.orEmpty()
 )

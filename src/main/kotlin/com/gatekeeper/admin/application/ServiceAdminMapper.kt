@@ -17,11 +17,11 @@ internal fun ServiceDomainRepository.Binding.toView() = ServiceDomainBindingView
 )
 
 internal fun EnvironmentVersionMetadata.toView() =
-    EnvironmentVersionView(id.toString(), version, environment, keys, createdAt.toString(), createdBy)
+    EnvironmentVersionView(id.toString(), version, environment, keys, com.gatekeeper.api.ApiTimestamp.format(createdAt), createdBy)
 
 internal fun ActiveDeploymentInspection.toView() = ActiveDeploymentInspectionView(
     deploymentId.toString(), status, containerName, serviceId.toString(), environment,
     publishedPorts.mapKeys { it.key.toString() }, imageName, imageTag, imageDigest, commitSha,
-    activeAt?.toString(), sharedSetId?.toString(), sharedSetVersion, serviceSetId?.toString(), serviceSetVersion,
+    activeAt?.let { com.gatekeeper.api.ApiTimestamp.format(it) }, sharedSetId?.toString(), sharedSetVersion, serviceSetId?.toString(), serviceSetVersion,
     variables.map { FingerprintedEnvironmentVariableView(it.key, it.source, it.fingerprint) }, publicExposure
 )

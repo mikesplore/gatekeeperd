@@ -116,7 +116,7 @@ fun Application.configureCustomerRoutes() {
                     CustomerAccountPayment(
                         id = payment.id.toString(), serviceName = serviceName,
                         amount = payment.amount.toPlainString(), currency = payment.currency ?: project.currency,
-                        status = payment.status, createdAt = payment.createdAt?.toString(), paidAt = payment.paidAt?.toString(),
+                        status = payment.status, createdAt = payment.createdAt?.let { com.gatekeeper.api.ApiTimestamp.format(it) }, paidAt = payment.paidAt?.let { com.gatekeeper.api.ApiTimestamp.format(it) },
                         receiptUrl = payment.takeIf { it.status.equals("success", true) }?.let {
                             "/api/customer/projects/${project.slug}/payments/${it.id}/receipt"
                         }
@@ -177,7 +177,7 @@ fun Application.configureCustomerRoutes() {
                 CustomerPaymentResponse(
                     id = payment.id.toString(), reference = payment.providerReference,
                     amount = payment.amount.toDouble(), currency = project.currency,
-                    status = payment.status, paidAt = payment.paidAt?.toString(),
+                    status = payment.status, paidAt = payment.paidAt?.let { com.gatekeeper.api.ApiTimestamp.format(it) },
                     receiptUrl = "/api/customer/projects/$slug/payments/${payment.id}/receipt"
                 )
             }

@@ -70,6 +70,6 @@ private fun com.gatekeeper.rbac.domain.AccessRole.toResponse() = RoleResponse(
     superAdmin = superAdmin,
     active = active,
     permissions = permissions,
-    createdAt = createdAt.toString(),
-    updatedAt = updatedAt.toString()
+    createdAt = com.gatekeeper.api.ApiTimestamp.format(createdAt),
+    updatedAt = com.gatekeeper.api.ApiTimestamp.format(updatedAt)
 )

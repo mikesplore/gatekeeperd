@@ -177,8 +177,8 @@ fun Application.configurePaymentAdminRoutes() {
                             processingStatus = event.processingStatus,
                             processingAttempts = event.processingAttempts,
                             processingError = event.processingError,
-                            receivedAt = event.receivedAt.toString(),
-                            processedAt = event.processedAt?.toString()
+                            receivedAt = com.gatekeeper.api.ApiTimestamp.format(event.receivedAt),
+                            processedAt = event.processedAt?.let { com.gatekeeper.api.ApiTimestamp.format(it) }
                         )
                     }
                 val total = page.total

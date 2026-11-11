@@ -418,7 +418,7 @@ fun Application.configureAuthRoutes() {
                         displayName = user.displayName,
                         avatarUrl = AuthSupport.gravatarUrl(user.email),
                         totpEnabled = user.totpEnabled,
-                        createdAt = user.createdAt.toString(),
+                        createdAt = com.gatekeeper.api.ApiTimestamp.format(user.createdAt),
                         permissions = rbac.permissionsForUser(user.email)
                     )
                 )

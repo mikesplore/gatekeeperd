@@ -50,7 +50,7 @@ fun Route.registerNotificationAdminRoutes(dependencies: OperationsAdminDependenc
                 row.message,
                 row.severity,
                 row.action,
-                row.createdAt.toString(),
+                com.gatekeeper.api.ApiTimestamp.format(row.createdAt),
                 row.readAt != null
             )
         }
@@ -110,7 +110,7 @@ fun Route.registerNotificationAdminRoutes(dependencies: OperationsAdminDependenc
                                 it.message,
                                 it.severity,
                                 it.action,
-                                it.createdAt.toString(),
+                                com.gatekeeper.api.ApiTimestamp.format(it.createdAt),
                                 it.readAt != null
                             )
                         }
