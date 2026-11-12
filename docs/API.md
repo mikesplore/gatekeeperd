@@ -432,7 +432,7 @@ Add a service domain binding. Accepts `domain`, optional `serviceId` (omitted se
 
 #### POST /api/admin/project-setup/projects/{projectId}/deploy?serviceId={uuid}
 
-Queue a deployment from the saved desired configuration. `serviceId` is optional and defaults to the project's default service. Returns `202 Accepted` with `{ "deploymentId": "<uuid>", "status": "queued" }`.
+Queue a deployment from the saved desired configuration and current commit on its configured Git ref. `serviceId` is optional and defaults to the project's default service. The deployment history trigger is `manual_latest_commit`. Returns `202 Accepted` with `{ "deploymentId": "<uuid>", "status": "queued" }`.
 
 ### GET /api/admin/projects/{slug}/overview
 

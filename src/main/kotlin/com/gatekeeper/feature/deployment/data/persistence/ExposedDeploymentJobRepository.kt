@@ -715,7 +715,7 @@ class ExposedDeploymentJobRepository : DeploymentJobRepository {
                 restartPolicy = row[DeploymentConfigurations.restartPolicy],
                 projectId = projectId.toString(), autoDeploy = row[DeploymentConfigurations.autoDeploy],
                 serviceId = serviceId.toString(),
-                triggerSource = "manual_redeploy",
+                triggerSource = "manual_latest_commit",
                 env = if (serviceSet == null) runCatching { Json.decodeFromString<Map<String, String>>(row[DeploymentConfigurations.envJson]) }.getOrDefault(emptyMap()) else emptyMap(),
                 secretEnv = if (serviceSet == null) row[DeploymentConfigurations.secretEnvEncrypted]?.let { encrypted ->
                     Json.decodeFromString<Map<String, String>>(SecretValueCipher.decrypt(encrypted))
@@ -732,7 +732,7 @@ class ExposedDeploymentJobRepository : DeploymentJobRepository {
                 readinessProbeTimeoutMillis = row[DeploymentConfigurations.readinessProbeTimeoutMillis]
             )
             if (serviceSet == null && (request.env.isNotEmpty() || request.secretEnv.isNotEmpty())) {
-                val createdSecretSet = createSecretSetVersion(projectId, request.environment, request.env + request.secretEnv, "manual_redeploy", serviceId)
+                val createdSecretSet = createSecretSetVersion(projectId, request.environment, request.env + request.secretEnv, "manual_latest_commit", serviceId)
                 serviceSet = createdSecretSet
                 DeploymentConfigurations.update({ DeploymentConfigurations.id eq id }) {
                     it[DeploymentConfigurations.secretSetId] = createdSecretSet.id
